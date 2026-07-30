@@ -1,0 +1,18 @@
+:root {
+  --colour-sage: #7d8f7a;
+  --colour-sage-dark: #566b58;
+  --colour-sage-soft: #e7ebe4;
+  --colour-terracotta: #e07a5f;
+  --colour-mustard: #e9b44c;
+  --colour-cream: #f2ede3;
+  --colour-cream-light: #faf7f1;
+  --colour-slate: #1f2933;
+  --colour-muted: #62706f;
+  --colour-white: #fffefb;
+  --colour-danger: #a33e2b;
+  --shadow-card: 0 10px 30px rgb(31 41 51 / 8%);
+  --radius-small: 0.625rem;
+  --radius-card: 1rem;
+  --radius-shell: 1.5rem;
+}
+
