@@ -1,0 +1,49 @@
+import uuid
+from dataclasses import dataclass
+
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from mykhaya.config import Settings, get_settings
+from mykhaya.db import get_db
+from mykhaya.models import Membership, Role, Session, User
+from mykhaya.security import current_user, require_csrf
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    user: User
+    session: Session
+
+
+async def auth_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthContext:
+    require_csrf(request, settings)
+    user, session = await current_user(request, db, settings)
+    return AuthContext(user, session)
+
+
+async def membership_for(
+    group_id: uuid.UUID,
+    auth: AuthContext,
+    db: AsyncSession,
+    roles: set[Role] | None = None,
+) -> Membership:
+    membership = await db.scalar(
+        select(Membership)
+        .options(selectinload(Membership.group), selectinload(Membership.user))
+        .where(
+            Membership.group_id == group_id,
+            Membership.user_id == auth.user.id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    # Deliberately return the same response for absent and unauthorised Homes.
+    if membership is None or (roles is not None and membership.role not in roles):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    return membership

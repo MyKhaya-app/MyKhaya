@@ -72,6 +72,10 @@ class MemberResponse(BaseModel):
     role: Role
 
 
+class MemberRoleUpdate(StrictModel):
+    role: Role
+
+
 class InvitationCreate(StrictModel):
     group_id: uuid.UUID
     email: EmailStr
@@ -86,6 +90,10 @@ class InvitationResponse(BaseModel):
     expires_at: datetime
 
 
+class InvitationAccept(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+
+
 class SessionResponse(BaseModel):
     id: uuid.UUID
     created_at: datetime
@@ -98,3 +106,6 @@ class SessionResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
+
+class RegistrationResponse(MessageResponse):
+    verification_required: bool

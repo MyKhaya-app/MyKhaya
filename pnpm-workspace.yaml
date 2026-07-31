@@ -2,4 +2,3 @@ packages:
   - apps/web
   - apps/mobile
   - packages/*
-

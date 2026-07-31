@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "MyKhaya",
+    "slug": "mykhaya",
+    "version": "0.1.0",
+    "scheme": "mykhaya",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": ["expo-router", "expo-secure-store"],
+    "experiments": { "typedRoutes": true },
+    "ios": { "supportsTablet": true, "bundleIdentifier": "app.mykhaya.mobile" },
+    "android": { "package": "app.mykhaya.mobile" }
+  }
+}

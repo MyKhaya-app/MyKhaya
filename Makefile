@@ -1,0 +1,40 @@
+.PHONY: init up down logs build migrate test lint typecheck format seed reset prod backup restore generate-client
+init:
+	@test -f .env || cp .env.example .env
+	docker compose build
+up:
+	docker compose up --build -d
+down:
+	docker compose down
+logs:
+	docker compose logs -f --tail=200
+build:
+	docker compose build
+migrate:
+	docker compose run --rm migrate
+test:
+	pnpm test
+	docker compose --profile tools run --rm test
+lint:
+	pnpm lint
+	docker compose --profile tools run --rm test ruff check mykhaya tests
+typecheck:
+	pnpm typecheck
+	docker compose --profile tools run --rm test mypy mykhaya
+format:
+	pnpm format
+	docker compose --profile tools run --rm test ruff format mykhaya tests
+seed:
+	docker compose exec api python -m mykhaya.seed
+reset:
+	docker compose down -v
+	docker compose up --build -d
+prod:
+	docker compose -f compose.yml -f compose.production.yml up --build -d
+backup:
+	sh infrastructure/scripts/backup.sh
+restore:
+	@test -n "$(FILE)" || (echo "Use make restore FILE=/absolute/path/backup.sql.gz" && exit 1)
+	sh infrastructure/scripts/restore.sh "$(FILE)"
+generate-client:
+	docker compose exec api python -c "import json; from mykhaya.main import app; print(json.dumps(app.openapi()))" > apps/api/openapi.json

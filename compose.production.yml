@@ -1,0 +1,24 @@
+services:
+  caddy:
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      [
+        "./infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro",
+        "caddy_data:/data",
+        "caddy_config:/config",
+      ]
+  api:
+    environment: &production_api_environment
+      MYKHAYA_ENVIRONMENT: production
+      MYKHAYA_COOKIE_SECURE: "true"
+      MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN}"
+      MYKHAYA_CORS_ORIGINS: '["https://${WEB_DOMAIN}"]'
+      MYKHAYA_TRUSTED_HOSTS: '["api","${WEB_DOMAIN}","${API_DOMAIN}"]'
+  worker:
+    environment: *production_api_environment
+  scheduler:
+    environment: *production_api_environment
+  migrate:
+    environment: *production_api_environment
+  mailpit:
+    profiles: [development-only]

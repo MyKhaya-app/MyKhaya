@@ -1,0 +1,13 @@
+.next/
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+backups/
+apps/api/
+docs/
+infrastructure/
+*.md
+*.csv
+FILE-MANIFEST.txt

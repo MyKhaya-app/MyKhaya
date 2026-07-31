@@ -1,16 +1,28 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
 
 
-class Role(str, enum.Enum):
+class Role(StrEnum):
     owner = "owner"
     administrator = "administrator"
     adult_member = "adult_member"
@@ -18,7 +30,7 @@ class Role(str, enum.Enum):
     guest = "guest"
 
 
-class TokenPurpose(str, enum.Enum):
+class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
 
@@ -26,7 +38,9 @@ class TokenPurpose(str, enum.Enum):
 class UuidTimeMixin:
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class User(UuidTimeMixin, Base):
@@ -40,19 +54,27 @@ class User(UuidTimeMixin, Base):
 
 class AuthIdentity(UuidTimeMixin, Base):
     __tablename__ = "auth_identities"
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
     password_hash: Mapped[str] = mapped_column(Text)
-    password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Session(UuidTimeMixin, Base):
     __tablename__ = "sessions"
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     ip_prefix: Mapped[str | None] = mapped_column(String(80))
@@ -60,7 +82,9 @@ class Session(UuidTimeMixin, Base):
 
 class ActionToken(UuidTimeMixin, Base):
     __tablename__ = "action_tokens"
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     purpose: Mapped[TokenPurpose] = mapped_column(Enum(TokenPurpose, name="token_purpose"))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -81,7 +105,9 @@ class Membership(UuidTimeMixin, Base):
         Index("ix_membership_group_role", "group_id", "role"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     role: Mapped[Role] = mapped_column(Enum(Role, name="membership_role"))
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     group: Mapped[Group] = relationship(back_populates="memberships")
@@ -107,7 +133,9 @@ class AuditEvent(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
-    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     action: Mapped[str] = mapped_column(String(100))
     target_type: Mapped[str | None] = mapped_column(String(80))
     target_id: Mapped[uuid.UUID | None]
@@ -122,7 +150,9 @@ class OutboxEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     topic: Mapped[str] = mapped_column(String(100))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(String(500))
@@ -132,10 +162,11 @@ class WorkerJobRecord(Base):
     __tablename__ = "worker_job_records"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    outbox_event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("outbox_events.id", ondelete="SET NULL"), unique=True)
+    outbox_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("outbox_events.id", ondelete="SET NULL"), unique=True
+    )
     topic: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(30), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(String(500))
-

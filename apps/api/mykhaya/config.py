@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     smtp_host: str = "mailpit"
     smtp_port: int = 1025
     email_from: str = "MyKhaya <hello@mykhaya.local>"
+    email_verification_enabled: bool = True
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
+    rate_limit_login: int = Field(default=10, ge=1, le=100)
+    rate_limit_register: int = Field(default=5, ge=1, le=100)
+    trusted_proxy_cidrs: list[str] = []
 
-    @field_validator("cors_origins", "trusted_hosts", mode="before")
+    @field_validator("cors_origins", "trusted_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
     def split_csv(cls, value: object) -> object:
         if isinstance(value, str) and not value.startswith("["):
@@ -39,8 +43,15 @@ class Settings(BaseSettings):
             raise ValueError("MYKHAYA_SECRET_KEY must not be a documented placeholder")
         return value
 
+    @field_validator("cookie_secure")
+    @classmethod
+    def secure_cookie_in_production(cls, value: bool, info: object) -> bool:
+        data = getattr(info, "data", {})
+        if data.get("environment") == "production" and not value:
+            raise ValueError("MYKHAYA_COOKIE_SECURE must be true in production")
+        return value
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
-
+    return Settings()

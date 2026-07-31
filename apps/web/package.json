@@ -1,0 +1,33 @@
+{
+  "name": "@mykhaya/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@mykhaya/api-client": "workspace:*",
+    "@mykhaya/design-tokens": "workspace:*",
+    "@mykhaya/shared-types": "workspace:*",
+    "next": "15.5.21",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@mykhaya/eslint-config": "workspace:*",
+    "@mykhaya/typescript-config": "workspace:*",
+    "@playwright/test": "1.54.2",
+    "@types/node": "22.17.0",
+    "@types/react": "19.1.9",
+    "@types/react-dom": "19.1.7",
+    "eslint": "9.32.0",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  }
+}

@@ -3,9 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit" },
-  "dependencies": { "@mykhaya/shared-types": "workspace:*" },
-  "devDependencies": { "@mykhaya/typescript-config": "workspace:*", "typescript": "5.9.2" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mykhaya/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@mykhaya/typescript-config": "workspace:*",
+    "typescript": "5.8.3"
+  }
 }
-

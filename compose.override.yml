@@ -1,0 +1,16 @@
+services:
+  caddy:
+    ports: ["127.0.0.1:3000:8080", "127.0.0.1:8080:8080"]
+  mailpit:
+    ports: ["127.0.0.1:8025:8025"]
+  web:
+    environment: { NODE_ENV: development }
+  api:
+    environment:
+      { MYKHAYA_ENVIRONMENT: development, MYKHAYA_COOKIE_SECURE: "false" }
+  worker:
+    environment:
+      { MYKHAYA_ENVIRONMENT: development, MYKHAYA_COOKIE_SECURE: "false" }
+  scheduler:
+    environment:
+      { MYKHAYA_ENVIRONMENT: development, MYKHAYA_COOKIE_SECURE: "false" }

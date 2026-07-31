@@ -1,0 +1,25 @@
+FROM python:3.13.5-slim-bookworm AS builder
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+WORKDIR /build
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+COPY apps/api/pyproject.toml ./
+COPY apps/api/mykhaya ./mykhaya
+RUN pip install --upgrade pip && pip install .
+
+FROM builder AS test
+RUN pip install '.[dev]'
+COPY apps/api/tests ./tests
+CMD ["python", "-m", "pytest"]
+
+FROM python:3.13.5-slim-bookworm AS runtime
+ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN groupadd --system --gid 10001 mykhaya && useradd --system --uid 10001 --gid mykhaya --home-dir /app mykhaya
+COPY --from=builder /opt/venv /opt/venv
+WORKDIR /app
+COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
+COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
+USER 10001:10001
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"
+CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000","--proxy-headers","--forwarded-allow-ips","10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]

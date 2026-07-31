@@ -2,7 +2,9 @@
   "name": "mykhaya",
   "private": true,
   "packageManager": "pnpm@10.14.0",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "build": "pnpm -r --if-present build",
     "dev": "pnpm --filter @mykhaya/web dev",
@@ -12,6 +14,7 @@
     "format:check": "prettier --check .",
     "format": "prettier --write ."
   },
-  "devDependencies": { "prettier": "3.6.2" }
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
 }
-

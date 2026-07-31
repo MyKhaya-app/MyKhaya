@@ -11,6 +11,7 @@ dependencies = [
   "alembic>=1.16,<2",
   "asyncpg>=0.30,<1",
   "fastapi>=0.116,<1",
+  "email-validator>=2.2,<3",
   "greenlet>=3.2,<4",
   "httpx>=0.28,<1",
   "pwdlib[argon2]>=0.2,<1",
@@ -31,13 +32,19 @@ dev = [
   "ruff>=0.12,<1"
 ]
 
+[project.scripts]
+mykhaya-worker = "mykhaya.worker:main"
+mykhaya-scheduler = "mykhaya.scheduler:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["mykhaya"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 addopts = "--strict-markers --cov=mykhaya --cov-report=term-missing"
+cache_dir = "/tmp/.pytest_cache"
 
 [tool.ruff]
 line-length = 100
@@ -45,10 +52,15 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
-ignore = ["S101"]
+ignore = ["S101", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"mykhaya/models.py" = ["S105"]
+"mykhaya/security.py" = ["S106"]
+"mykhaya/routers/invitations.py" = ["S106"]
+"tests/*.py" = ["S105"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
-

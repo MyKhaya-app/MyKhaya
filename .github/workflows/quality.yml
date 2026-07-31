@@ -1,0 +1,25 @@
+name: quality
+on:
+  pull_request:
+  push: { branches: [main] }
+permissions: { contents: read }
+jobs:
+  application:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Prepare test configuration
+        run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
+      - name: Compose validation
+        run: docker compose config --quiet
+      - name: Web lint, type check, test and production build
+        run: docker build --target check -f apps/web/Dockerfile .
+      - name: API lint, types and tests
+        run: docker compose --profile tools run --rm test sh -c 'ruff check mykhaya tests && ruff format --check mykhaya tests && mypy mykhaya && python -m pytest'
+      - name: Production images
+        run: docker compose build web api worker scheduler migrate
+      - name: Migration rollback smoke test
+        run: docker compose run --rm migrate sh -c 'alembic downgrade base && alembic upgrade head'
+      - name: Shut down
+        if: always()
+        run: docker compose --profile tools down -v

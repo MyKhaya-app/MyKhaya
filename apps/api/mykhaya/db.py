@@ -7,7 +7,9 @@ from sqlalchemy.orm import DeclarativeBase
 from mykhaya.config import get_settings
 
 settings = get_settings()
-engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=10)
+engine = create_async_engine(
+    settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=10
+)
 
 
 @event.listens_for(engine.sync_engine, "connect")
@@ -27,4 +29,3 @@ class Base(DeclarativeBase):
 async def get_db() -> AsyncIterator[AsyncSession]:
     async with SessionFactory() as session:
         yield session
-

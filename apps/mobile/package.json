@@ -1,0 +1,32 @@
+{
+  "name": "@mykhaya/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "build": "expo export",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@mykhaya/api-client": "workspace:*",
+    "@mykhaya/design-tokens": "workspace:*",
+    "@mykhaya/shared-types": "workspace:*",
+    "expo": "~53.0.20",
+    "expo-router": "~5.1.4",
+    "expo-secure-store": "~14.2.3",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1"
+  },
+  "devDependencies": {
+    "@mykhaya/eslint-config": "workspace:*",
+    "@mykhaya/typescript-config": "workspace:*",
+    "@types/react": "~19.0.10",
+    "eslint": "9.32.0",
+    "typescript": "~5.8.3"
+  }
+}

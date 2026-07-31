@@ -1,0 +1,30 @@
+name: security
+on:
+  pull_request:
+  push: { branches: [main] }
+  schedule: [{ cron: "17 4 * * 1" }]
+permissions: { contents: read, security-events: write }
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Secrets
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-banner
+      - name: Python dependencies
+        run: docker run --rm -v "$PWD/apps/api:/src" -w /src python:3.13.5-slim-bookworm sh -c "pip install '.[dev]' && pip-audit"
+      - name: Filesystem dependencies and configuration
+        run: docker run --rm -v "$PWD:/src" aquasec/trivy:0.64.1 fs --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig /src
+      - name: Static analysis
+        run: docker run --rm -v "$PWD:/src" semgrep/semgrep:1.129.0 semgrep scan --config p/owasp-top-ten --error /src/apps
+      - name: Compose and IaC
+        run: docker run --rm -v "$PWD:/src" bridgecrew/checkov:3.2.451 -d /src --framework dockerfile docker_compose github_actions --quiet
+      - name: SBOM
+        run: docker run --rm -v "$PWD:/src" anchore/syft:v1.30.0 dir:/src -o cyclonedx-json=/src/mykhaya-sbom.cdx.json
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          {
+            name: mykhaya-sbom,
+            path: mykhaya-sbom.cdx.json,
+            retention-days: 30,
+          }
