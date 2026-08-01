@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from mykhaya.models import Role
+from mykhaya.models import FeatureFlagKey, PlatformRole, Role
 
 
 class StrictModel(BaseModel):
@@ -109,3 +109,59 @@ class MessageResponse(BaseModel):
 
 class RegistrationResponse(MessageResponse):
     verification_required: bool
+
+
+class HomeFeatureResponse(BaseModel):
+    key: FeatureFlagKey
+    enabled: bool
+    source: str
+
+
+class HomeFeaturesEnvelope(BaseModel):
+    home_id: uuid.UUID
+    features: list[HomeFeatureResponse]
+
+
+class PlatformFeatureResponse(BaseModel):
+    key: FeatureFlagKey
+    display_name: str
+    description: str
+    globally_enabled: bool
+
+
+class PlatformFeatureUpdate(StrictModel):
+    enabled: bool
+    reason: str = Field(min_length=10, max_length=300)
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def require_confirmation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Please confirm before saving this change.")
+        return value
+
+
+class PlatformFeatureOverrideResponse(BaseModel):
+    key: FeatureFlagKey
+    home_id: uuid.UUID
+    enabled: bool
+    source: str
+
+
+class PlatformFeatureOverrideUpdate(StrictModel):
+    enabled: bool
+    reason: str = Field(min_length=10, max_length=300)
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def require_confirmation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Please confirm before saving this change.")
+        return value
+
+
+class PlatformOperatorResponse(BaseModel):
+    user_id: uuid.UUID
+    role: PlatformRole

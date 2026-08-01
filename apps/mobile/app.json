@@ -2,7 +2,7 @@
   "expo": {
     "name": "MyKhaya",
     "slug": "mykhaya",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "scheme": "mykhaya",
     "orientation": "portrait",
     "userInterfaceStyle": "light",

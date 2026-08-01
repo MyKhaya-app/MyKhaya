@@ -1,14 +1,15 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import ActionToken, TokenPurpose, User
+from mykhaya.models import ActionToken, PlatformMembership, PlatformRole, TokenPurpose, User
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -23,8 +24,11 @@ async def client() -> AsyncIterator[AsyncClient]:
         yield value
 
 
-async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: object):
-    headers = dict(kwargs.pop("headers", {}))
+async def unsafe(
+    client: AsyncClient, method: str, path: str, **kwargs: Any
+) -> Response:
+    raw_headers = kwargs.pop("headers", {})
+    headers: dict[str, str] = dict(raw_headers) if isinstance(raw_headers, dict) else {}
     csrf = client.cookies.get("mk_csrf")
     if csrf:
         headers["X-CSRF-Token"] = csrf
@@ -61,6 +65,20 @@ async def create_verified_user(client: AsyncClient, email: str, name: str) -> No
     assert login.status_code == 200
     assert client.cookies.get("mk_session")
     assert client.cookies.get("mk_csrf")
+
+
+async def assign_platform_role(email: str, role: PlatformRole) -> None:
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        existing = await db.scalar(
+            select(PlatformMembership).where(PlatformMembership.user_id == user.id)
+        )
+        if existing is None:
+            db.add(PlatformMembership(user_id=user.id, role=role))
+        else:
+            existing.role = role
+        await db.commit()
 
 
 @pytest.mark.asyncio
@@ -207,3 +225,76 @@ async def test_csrf_cors_reset_replay_and_session_rotation(client: AsyncClient) 
             json={"token": reset_token, "password": PASSWORD},
         )
     ).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_feature_flags_user_visibility_and_platform_overrides(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    owner_email = f"flags-owner-{suffix}@example.com"
+    admin_email = f"flags-admin-{suffix}@example.com"
+
+    await create_verified_user(client, owner_email, "Flag Owner")
+    created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Feature Home"})
+    assert created.status_code == 201
+    home_id = created.json()["id"]
+
+    initial = await client.get(f"/api/v1/homes/{home_id}/features")
+    assert initial.status_code == 200
+    initial_calendar = next(item for item in initial.json()["features"] if item["key"] == "calendar")
+    assert initial_calendar["key"] == "calendar"
+    assert initial_calendar["source"] == "global"
+    assert isinstance(initial_calendar["enabled"], bool)
+
+    denied = await client.get("/api/v1/platform/features")
+    assert denied.status_code == 403
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as admin_client:
+        await create_verified_user(admin_client, admin_email, "Flag Admin")
+        await assign_platform_role(admin_email, PlatformRole.administrator)
+
+        listed = await admin_client.get("/api/v1/platform/features")
+        assert listed.status_code == 200
+        assert any(item["key"] == "calendar" for item in listed.json())
+
+        global_enable = await unsafe(
+            admin_client,
+            "PATCH",
+            "/api/v1/platform/features/calendar",
+            json={
+                "enabled": True,
+                "reason": "Enable the first pilot for validation.",
+                "confirm": True,
+            },
+        )
+        assert global_enable.status_code == 200
+        assert global_enable.json()["globally_enabled"] is True
+
+        override_disable = await unsafe(
+            admin_client,
+            "PATCH",
+            f"/api/v1/platform/features/calendar/homes/{home_id}",
+            json={
+                "enabled": False,
+                "reason": "Temporarily disable for this home during support.",
+                "confirm": True,
+            },
+        )
+        assert override_disable.status_code == 200
+        assert override_disable.json()["source"] == "home_override"
+
+        clear = await unsafe(
+            admin_client,
+            "DELETE",
+            f"/api/v1/platform/features/calendar/homes/{home_id}",
+            json={},
+        )
+        assert clear.status_code == 200
+
+    overridden = await client.get(f"/api/v1/homes/{home_id}/features")
+    assert overridden.status_code == 200
+    overridden_calendar = next(
+        item for item in overridden.json()["features"] if item["key"] == "calendar"
+    )
+    assert overridden_calendar == {"key": "calendar", "enabled": True, "source": "global"}

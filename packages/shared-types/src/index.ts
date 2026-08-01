@@ -24,3 +24,24 @@ export interface Member {
   email: string;
   role: MembershipRole;
 }
+
+export type FeatureKey =
+  | "calendar"
+  | "tasks"
+  | "shopping"
+  | "meals"
+  | "plans"
+  | "wish_lists"
+  | "notifications"
+  | "external_sharing";
+
+export interface HomeFeature {
+  key: FeatureKey;
+  enabled: boolean;
+  source: "global" | "home_override";
+}
+
+export interface HomeFeaturesEnvelope {
+  home_id: string;
+  features: HomeFeature[];
+}

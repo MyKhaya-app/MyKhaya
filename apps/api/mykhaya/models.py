@@ -30,9 +30,27 @@ class Role(StrEnum):
     guest = "guest"
 
 
+class PlatformRole(StrEnum):
+    owner = "owner"
+    administrator = "administrator"
+    support_operator = "support_operator"
+    read_only_operator = "read_only_operator"
+
+
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
+
+
+class FeatureFlagKey(StrEnum):
+    calendar = "calendar"
+    tasks = "tasks"
+    shopping = "shopping"
+    meals = "meals"
+    plans = "plans"
+    wish_lists = "wish_lists"
+    notifications = "notifications"
+    external_sharing = "external_sharing"
 
 
 class UuidTimeMixin:
@@ -98,6 +116,18 @@ class Group(UuidTimeMixin, Base):
     memberships: Mapped[list["Membership"]] = relationship(back_populates="group")
 
 
+class PlatformMembership(UuidTimeMixin, Base):
+    __tablename__ = "platform_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_platform_membership_user"),
+        Index("ix_platform_membership_role", "role"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[PlatformRole] = mapped_column(Enum(PlatformRole, name="platform_role"))
+
+
 class Membership(UuidTimeMixin, Base):
     __tablename__ = "group_memberships"
     __table_args__ = (
@@ -125,6 +155,39 @@ class Invitation(UuidTimeMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FeatureFlag(UuidTimeMixin, Base):
+    __tablename__ = "feature_flags"
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_feature_flag_key"),
+        Index("ix_feature_flag_enabled", "enabled"),
+    )
+    key: Mapped[FeatureFlagKey] = mapped_column(Enum(FeatureFlagKey, name="feature_key"))
+    display_name: Mapped[str] = mapped_column(String(80))
+    description: Mapped[str] = mapped_column(String(300))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    updated_by_platform_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class FeatureFlagHomeOverride(UuidTimeMixin, Base):
+    __tablename__ = "feature_flag_home_overrides"
+    __table_args__ = (
+        UniqueConstraint("feature_flag_id", "group_id", name="uq_feature_override_home_flag"),
+        Index("ix_feature_override_group", "group_id"),
+    )
+    feature_flag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("feature_flags.id", ondelete="CASCADE"), index=True
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    updated_by_platform_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class AuditEvent(Base):

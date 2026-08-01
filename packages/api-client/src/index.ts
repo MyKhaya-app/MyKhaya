@@ -1,4 +1,9 @@
-import type { Home, Member, User } from "@mykhaya/shared-types";
+import type {
+  Home,
+  HomeFeaturesEnvelope,
+  Member,
+  User,
+} from "@mykhaya/shared-types";
 
 export class ApiError extends Error {
   constructor(
@@ -44,6 +49,10 @@ export class MyKhayaClient {
 
   me = () => this.request<User>("/users/me");
   homes = () => this.request<Home[]>("/groups");
+  homeFeatures = (homeId: string) =>
+    this.request<HomeFeaturesEnvelope>(
+      `/homes/${encodeURIComponent(homeId)}/features`,
+    );
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
   post = <T>(path: string, body: unknown) =>

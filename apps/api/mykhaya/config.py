@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     default_timezone: str = "Europe/London"
     default_locale: str = "en-GB"
     week_start: Literal["monday", "sunday"] = "monday"
+    commit_sha: str = "unknown"
+    build_time: str = "unknown"
+    build_channel: Literal["development", "stable"] = "development"
 
     @field_validator("cors_origins", "trusted_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
