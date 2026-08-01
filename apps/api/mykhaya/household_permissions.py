@@ -106,10 +106,14 @@ def legacy_role(relationship: HouseholdRelationship) -> Role:
 
 async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capability]:
     capabilities = set(PROFILE_CAPABILITIES[membership.permission_profile])
-    if membership.relationship in {
-        HouseholdRelationship.extended_family,
-        HouseholdRelationship.friend,
-    } and "calendar" in membership.shared_resources:
+    if (
+        membership.relationship
+        in {
+            HouseholdRelationship.extended_family,
+            HouseholdRelationship.friend,
+        }
+        and "calendar" in membership.shared_resources
+    ):
         capabilities.add(Capability.calendar_view)
         capabilities.add(Capability.calendar_view_all)
     if membership.relationship == HouseholdRelationship.child:

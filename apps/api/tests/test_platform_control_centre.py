@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from starlette.datastructures import Headers
 
 from mykhaya.config import Settings, get_settings
@@ -14,13 +14,16 @@ from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
     AdministrativeNote,
+    Group,
     PlatformAdministrator,
     PlatformRole,
     PlatformSession,
     SecurityEvent,
+    User,
 )
 from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
+from mykhaya.routers import platform as platform_router
 from mykhaya.security import password_hash
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
@@ -106,6 +109,163 @@ async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: object):
 
 
 @pytest.mark.asyncio
+async def test_overview_uses_live_database_counts_and_omits_missing_metadata(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    before = (await admin_client.get("/api/v1/platform/overview")).json()
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    async with SessionFactory() as db:
+        user = User(
+            email=f"overview-{suffix}@example.com",
+            display_name="Overview User",
+            email_verified_at=datetime.now(UTC),
+            is_active=False,
+        )
+        db.add(user)
+        await db.flush()
+        home = Group(name="Overview Home", created_by=user.id, is_active=False)
+        db.add(home)
+        await db.commit()
+        user_id, home_id = user.id, home.id
+    try:
+        response = await admin_client.get("/api/v1/platform/overview")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["users"]["total"] == before["users"]["total"] + 1
+        assert payload["users"]["suspended"] == before["users"]["suspended"] + 1
+        assert payload["homes"]["total"] == before["homes"]["total"] + 1
+        assert payload["homes"]["suspended"] == before["homes"]["suspended"] + 1
+        assert "unknown" not in response.text.casefold()
+        assert "commit" not in payload["deployment"]
+        assert "build_time" not in payload["deployment"]
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(Group).where(Group.id == home_id))
+            await db.execute(delete(User).where(User.id == user_id))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_overview_exposes_configured_build_metadata_but_production_hides_debug_fields(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    configured = get_settings().model_copy(
+        update={
+            "environment": "development",
+            "version": "1.2.3",
+            "commit_sha": "abc123def456",
+            "build_time": "2026-08-01T12:00:00Z",
+            "build_channel": "stable",
+        }
+    )
+    app.dependency_overrides[get_settings] = lambda: configured
+    try:
+        payload = (await admin_client.get("/api/v1/platform/overview")).json()
+        assert payload["deployment"]["version"] == "1.2.3"
+        assert payload["deployment"]["commit"] == "abc123def456"
+        production = configured.model_copy(update={"environment": "production"})
+        app.dependency_overrides[get_settings] = lambda: production
+        production_payload = (await admin_client.get("/api/v1/platform/overview")).json()
+        assert production_payload["deployment"] == {"version": "1.2.3", "channel": "stable"}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.mark.asyncio
+async def test_health_reports_live_states_without_unknown_placeholders(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    response = await admin_client.get("/api/v1/platform/health")
+    assert response.status_code == 200
+    services = {item["service"]: item for item in response.json()["services"]}
+    assert services["Application process"]["state"] == "Healthy"
+    assert services["Database"]["state"] == "Healthy"
+    assert services["Backup service"]["state"] == "Not configured"
+    assert "unknown" not in response.text.casefold()
+
+
+@pytest.mark.asyncio
+async def test_overview_failed_login_metric_uses_the_last_24_hours(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    recent_id = uuid.uuid4()
+    old_id = uuid.uuid4()
+    async with SessionFactory() as db:
+        db.add_all(
+            [
+                SecurityEvent(
+                    id=recent_id,
+                    created_at=datetime.now(UTC) - timedelta(hours=2),
+                    event_type="login_failed",
+                    severity="medium",
+                    outcome="denied",
+                ),
+                SecurityEvent(
+                    id=old_id,
+                    created_at=datetime.now(UTC) - timedelta(days=2),
+                    event_type="login_failed",
+                    severity="medium",
+                    outcome="denied",
+                ),
+            ]
+        )
+        await db.commit()
+        expected = await db.scalar(
+            select(func.count(SecurityEvent.id)).where(
+                SecurityEvent.event_type.in_(["login_failed", "administrator_login_failed"]),
+                SecurityEvent.created_at >= datetime.now(UTC) - timedelta(hours=24),
+            )
+        )
+    try:
+        payload = (await admin_client.get("/api/v1/platform/overview")).json()
+        assert payload["security"]["failed_logins_24h"] == expected
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(SecurityEvent).where(SecurityEvent.id.in_([recent_id, old_id])))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_queue_metric_is_not_reported_as_zero(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+
+    class UnavailableRedis:
+        async def llen(self, _: str) -> int:
+            raise ConnectionError
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        platform_router.Redis,
+        "from_url",
+        lambda *args, **kwargs: UnavailableRedis(),
+    )
+    response = await admin_client.get("/api/v1/platform/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operations"]["queue_depth"] is None
+    assert any(item["title"] == "Queue state is unavailable" for item in payload["actions"])
+
+
+@pytest.mark.asyncio
 async def test_household_cookie_and_hostname_do_not_grant_platform_access() -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app, client=("127.0.0.1", 44001)),
@@ -133,23 +293,25 @@ async def test_readonly_role_cannot_suspend_user_and_admin_action_is_audited(
 
 
 @pytest.mark.asyncio
-async def test_feature_flags_default_off_require_operator_confirmation_and_are_audited(
+async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
 ) -> None:
     readonly = await admin_factory(PlatformRole.readonly)
     await login(admin_client, readonly)
-    listed = await admin_client.get("/api/v1/platform/feature-flags")
+    listed = await admin_client.get("/api/v1/platform/modules")
     assert listed.status_code == 200
-    # Hidden modules are absent even from the operator catalogue.
-    assert {item["key"] for item in listed.json()} == {"calendar"}
-    assert all(item["enabled"] is False for item in listed.json())
+    assert {item["key"] for item in listed.json()} >= {"calendar", "tasks"}
+    assert (
+        next(item for item in listed.json() if item["key"] == "tasks")["release_state"] == "hidden"
+    )
     denied = await unsafe(
         admin_client,
         "PUT",
-        "/api/v1/platform/feature-flags/calendar",
+        "/api/v1/platform/modules/calendar",
         json={
             "enabled": True,
+            "release_state": "beta",
             "reason": "Readonly operators cannot enable previews.",
             "confirmed": True,
         },
@@ -162,28 +324,33 @@ async def test_feature_flags_default_off_require_operator_confirmation_and_are_a
     unconfirmed = await unsafe(
         admin_client,
         "PUT",
-        "/api/v1/platform/feature-flags/calendar",
-        json={"enabled": True, "reason": "Enable the Calendar pilot safely."},
+        "/api/v1/platform/modules/calendar",
+        json={
+            "enabled": True,
+            "release_state": "beta",
+            "reason": "Enable the Calendar pilot safely.",
+        },
     )
     assert unconfirmed.status_code == 422
     enabled = await unsafe(
         admin_client,
         "PUT",
-        "/api/v1/platform/feature-flags/calendar",
+        "/api/v1/platform/modules/calendar",
         json={
             "enabled": True,
+            "release_state": "beta",
             "reason": "Enable the Calendar pilot safely.",
             "confirmed": True,
         },
     )
     assert enabled.status_code == 200
-    assert enabled.json() == {"key": "calendar", "enabled": True}
+    assert enabled.json() == {"key": "calendar", "enabled": True, "release_state": "beta"}
     async with SessionFactory() as db:
         event = await db.scalar(
             select(AdministrativeAuditEvent)
             .where(
                 AdministrativeAuditEvent.administrator_id == owner.id,
-                AdministrativeAuditEvent.action == "feature_flag.updated",
+                AdministrativeAuditEvent.action == "module.updated",
             )
             .order_by(AdministrativeAuditEvent.created_at.desc())
         )
@@ -193,9 +360,10 @@ async def test_feature_flags_default_off_require_operator_confirmation_and_are_a
     disabled = await unsafe(
         admin_client,
         "PUT",
-        "/api/v1/platform/feature-flags/calendar",
+        "/api/v1/platform/modules/calendar",
         json={
             "enabled": False,
+            "release_state": "released",
             "reason": "Restore the default after this test.",
             "confirmed": True,
         },

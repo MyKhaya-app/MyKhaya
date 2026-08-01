@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from mykhaya.models import FeatureKey, PlatformRole, ServiceState
+from mykhaya.module_registry import ReleaseState
 from mykhaya.schemas import StrictModel
 
 
@@ -45,10 +46,21 @@ class SettingUpdate(StrictModel):
     confirmed: Literal[True]
 
 
+class ModuleUpdate(StrictModel):
+    enabled: bool
+    release_state: ReleaseState
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
 class FeatureFlagUpdate(StrictModel):
     enabled: bool
     reason: str = Field(min_length=10, max_length=500)
     confirmed: Literal[True]
+
+
+class TestEmailRequest(SensitiveActionRequest):
+    recipient: EmailStr
 
 
 class IncidentCreate(StrictModel):

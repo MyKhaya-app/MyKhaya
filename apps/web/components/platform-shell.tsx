@@ -8,7 +8,7 @@ import { platformApi } from "@mykhaya/api-client";
 const navigation = [
   ["Overview", "/"], ["Users", "/users"], ["Homes", "/homes"],
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"],
-  ["Settings", "/settings"], ["Feature Flags", "/feature-flags"],
+  ["Settings", "/settings"], ["Modules & Features", "/modules"],
   ["Security", "/security"], ["Audit", "/audit"],
   ["Administrators", "/administrators"], ["Public Status", "/incidents"],
 ] as const;
@@ -46,7 +46,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <div className="platform-main">
-        <header><strong>MyKhaya Platform Control Centre</strong><span>Restricted operator access</span></header>
+        <header><strong>MyKhaya Platform Control Centre</strong></header>
         {children}
       </div>
     </div>

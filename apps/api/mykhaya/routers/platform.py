@@ -1,7 +1,13 @@
+import asyncio
+import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 
+import structlog
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, text, update
@@ -10,10 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import outbox
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
+from mykhaya.mailer import send_email
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
     AdministrativeNote,
+    AuditEvent,
+    AuthIdentity,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -39,6 +48,7 @@ from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
     IncidentCreate,
     IncidentUpdate,
+    ModuleUpdate,
     NoteRequest,
     PageResponse,
     PlatformActorResponse,
@@ -46,6 +56,7 @@ from mykhaya.platform_schemas import (
     PlatformReauthenticateRequest,
     SensitiveActionRequest,
     SettingUpdate,
+    TestEmailRequest,
 )
 from mykhaya.platform_security import (
     PlatformContext,
@@ -67,6 +78,7 @@ from mykhaya.security import (
 )
 
 router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
+log = structlog.get_logger()
 ALL_ROLES = tuple(PlatformRole)
 OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
 SUPPORT = (*OPERATORS, PlatformRole.support)
@@ -94,7 +106,7 @@ async def login(
 ) -> PlatformActorResponse:
     enforce_admin_host(request, settings)
     source_ip = enforce_admin_network(request, settings)
-    await enforce_rate_limit(request, settings, "platform-login", 5, 300)
+    await enforce_rate_limit(request, settings, "platform-login", settings.rate_limit_login, 300)
     admin = await db.scalar(
         select(PlatformAdministrator).where(
             PlatformAdministrator.email == normalise_email(str(body.email))
@@ -239,6 +251,7 @@ async def overview(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
+    last_day = now - timedelta(hours=24)
     user_counts = (
         await db.execute(
             select(
@@ -259,14 +272,235 @@ async def overview(
             )
         )
     ).one()
-    failed_logins = await db.scalar(
-        select(func.count(SecurityEvent.id)).where(
-            SecurityEvent.event_type.in_(["login_failed", "administrator_login_failed"])
+    failed_logins = (
+        await db.scalar(
+            select(func.count(SecurityEvent.id)).where(
+                SecurityEvent.event_type.in_(["login_failed", "administrator_login_failed"]),
+                SecurityEvent.created_at >= last_day,
+            )
         )
+        or 0
     )
-    queue_depth = await db.scalar(
-        select(func.count(OutboxEvent.id)).where(OutboxEvent.processed_at.is_(None))
+    locked_accounts = (
+        await db.scalar(
+            select(func.count(AuthIdentity.user_id)).where(AuthIdentity.locked_until > now)
+        )
+        or 0
     )
+    active_sessions = (
+        await db.scalar(
+            select(func.count(Session.id)).where(
+                Session.revoked_at.is_(None), Session.expires_at > now
+            )
+        )
+        or 0
+    )
+    active_admin_sessions = (
+        await db.scalar(
+            select(func.count(PlatformSession.id)).where(
+                PlatformSession.revoked_at.is_(None),
+                PlatformSession.idle_expires_at > now,
+                PlatformSession.absolute_expires_at > now,
+            )
+        )
+        or 0
+    )
+    admin_counts = (
+        await db.execute(
+            select(
+                func.count(PlatformAdministrator.id).filter(
+                    PlatformAdministrator.is_active.is_(True)
+                ),
+                func.count(PlatformAdministrator.id).filter(
+                    PlatformAdministrator.is_active.is_(True),
+                    PlatformAdministrator.mfa_enrolled.is_(True),
+                ),
+            )
+        )
+    ).one()
+    failed_jobs = (
+        await db.scalar(
+            select(func.count(WorkerJobRecord.id)).where(WorkerJobRecord.status == "failed")
+        )
+        or 0
+    )
+    pending_outbox = (
+        await db.scalar(
+            select(func.count(OutboxEvent.id)).where(
+                OutboxEvent.processed_at.is_(None), OutboxEvent.available_at <= now
+            )
+        )
+        or 0
+    )
+    queue_depth: int | None = None
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        queue_depth = int(await redis.llen("mykhaya:jobs")) + pending_outbox
+    except Exception as exc:
+        await log.awarning(
+            "platform_metric_unavailable", metric="queue_depth", error=type(exc).__name__
+        )
+    finally:
+        await redis.aclose()
+
+    heartbeats = {
+        row.service: row for row in (await db.scalars(select(OperationalHeartbeat))).all()
+    }
+    service_states: list[dict[str, str]] = [{"service": "Database", "state": "Healthy"}]
+    actions: list[dict[str, str]] = []
+    for service in ("worker", "scheduler"):
+        heartbeat = heartbeats.get(service)
+        stale = heartbeat is None or (now - heartbeat.observed_at).total_seconds() > 30
+        state = "Unavailable" if heartbeat is None else ("Degraded" if stale else "Healthy")
+        service_states.append({"service": service.title(), "state": state})
+        if stale:
+            actions.append(
+                {
+                    "severity": "critical" if heartbeat is None else "warning",
+                    "title": f"{service.title()} heartbeat is missing or stale",
+                    "detail": f"Check the {service} service process.",
+                    "href": "/health",
+                }
+            )
+    service_states.append(
+        {
+            "service": "Queue",
+            "state": "Unavailable"
+            if queue_depth is None
+            else ("Warning" if failed_jobs else "Healthy"),
+        }
+    )
+    email_configured = bool(
+        settings.email_delivery_configured
+        and settings.smtp_host.strip()
+        and settings.email_from.strip()
+    )
+    service_states.append(
+        {"service": "Email", "state": "Healthy" if email_configured else "Not configured"}
+    )
+    if failed_jobs:
+        actions.append(
+            {
+                "severity": "warning",
+                "title": f"{failed_jobs} background job{'s' if failed_jobs != 1 else ''} failed",
+                "detail": "Inspect the safe failure details and retry eligible jobs.",
+                "href": "/jobs",
+            }
+        )
+    if queue_depth is None:
+        actions.append(
+            {
+                "severity": "critical",
+                "title": "Queue state is unavailable",
+                "detail": "Check the Redis service and network path.",
+                "href": "/health",
+            }
+        )
+    if not email_configured:
+        actions.append(
+            {
+                "severity": "warning",
+                "title": "Email is not configured",
+                "detail": "Configure a transport before enabling email-dependent journeys.",
+                "href": "/mail",
+            }
+        )
+
+    metadata_candidates = {
+        "version": settings.version,
+        "channel": settings.build_channel,
+    }
+    if settings.environment != "production":
+        metadata_candidates.update(
+            {
+                "commit": settings.commit_sha,
+                "build_time": settings.build_time,
+                "environment": settings.environment,
+            }
+        )
+    valid_metadata = {
+        key: value
+        for key, value in metadata_candidates.items()
+        if isinstance(value, str) and value.strip() and value.casefold() != "unknown"
+    }
+    if settings.environment == "production" and "version" not in valid_metadata:
+        actions.append(
+            {
+                "severity": "warning",
+                "title": "Deployment version metadata is missing",
+                "detail": "Populate the release build arguments in the deployment workflow.",
+                "href": "/health",
+            }
+        )
+
+    admin_activity = (
+        await db.scalars(
+            select(AdministrativeAuditEvent)
+            .where(AdministrativeAuditEvent.outcome == "succeeded")
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+            .limit(8)
+        )
+    ).all()
+    household_activity = (
+        await db.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.action.in_(["user.registered", "group.created"]))
+            .order_by(AuditEvent.created_at.desc())
+            .limit(8)
+        )
+    ).all()
+    failed_job_activity = (
+        await db.scalars(
+            select(WorkerJobRecord)
+            .where(WorkerJobRecord.status == "failed")
+            .order_by(WorkerJobRecord.finished_at.desc())
+            .limit(5)
+        )
+    ).all()
+    recent_activity_rows: list[dict[str, Any]] = [
+        {
+            "id": str(row.id),
+            "action": row.action,
+            "target_type": row.target_type,
+            "created_at": row.created_at,
+        }
+        for row in admin_activity
+    ]
+    recent_activity_rows.extend(
+        [
+            {
+                "id": str(row.id),
+                "action": row.action,
+                "target_type": row.target_type,
+                "created_at": row.created_at,
+            }
+            for row in household_activity
+        ]
+    )
+    recent_activity_rows.extend(
+        [
+            {
+                "id": str(row.id),
+                "action": "email.delivery_failed"
+                if row.topic.startswith("email.")
+                else "job.failed",
+                "target_type": "job",
+                "created_at": row.finished_at or row.created_at,
+            }
+            for row in failed_job_activity
+        ]
+    )
+    recent_activity = sorted(
+        recent_activity_rows,
+        key=lambda item: item["created_at"],
+        reverse=True,
+    )[:8]
+
+    overall = "Healthy"
+    if any(item["state"] in {"Unavailable", "Degraded"} for item in service_states):
+        overall = "Degraded"
+    elif actions:
+        overall = "Warning"
     return {
         "users": dict(
             zip(
@@ -274,16 +508,25 @@ async def overview(
             )
         ),
         "homes": dict(zip(("total", "active", "suspended"), group_counts, strict=True)),
-        "security": {"failed_logins": failed_logins or 0},
-        "operations": {"queue_depth": queue_depth or 0},
-        "system": {
-            "version": settings.version,
-            "commit": settings.commit_sha,
-            "build_time": settings.build_time,
-            "channel": settings.build_channel,
-            "environment": settings.environment,
-            "checked_at": now,
+        "metrics": {
+            "users": user_counts[0],
+            "homes": group_counts[0],
+            "active_sessions": active_sessions,
+            "failed_jobs": failed_jobs,
         },
+        "security": {
+            "failed_logins_24h": failed_logins,
+            "locked_accounts": locked_accounts,
+            "active_administrator_sessions": active_admin_sessions,
+            "administrators_with_mfa": admin_counts[1],
+            "active_administrators": admin_counts[0],
+        },
+        "operations": {"queue_depth": queue_depth},
+        "status": {"state": overall, "checked_at": now},
+        "health": service_states,
+        "actions": actions,
+        "recent_activity": recent_activity,
+        "deployment": valid_metadata,
     }
 
 
@@ -884,99 +1127,260 @@ async def internal_health(
 ) -> dict[str, Any]:
     checked = datetime.now(UTC)
     services: list[dict[str, Any]] = []
+
+    def observation(
+        service: str,
+        state: str,
+        explanation: str,
+        *,
+        last_success: datetime | None = None,
+        last_failure: datetime | None = None,
+        action: str | None = None,
+    ) -> None:
+        services.append(
+            {
+                "service": service,
+                "state": state,
+                "explanation": explanation,
+                "last_checked": checked,
+                "last_success": last_success,
+                "last_failure": last_failure,
+                "recommended_action": action,
+            }
+        )
+
+    observation(
+        "Application process",
+        "Healthy",
+        "The authenticated diagnostics request completed.",
+        last_success=checked,
+    )
     try:
         await db.execute(text("SELECT 1"))
-        services.append(
-            {
-                "service": "PostgreSQL",
-                "state": "Healthy",
-                "explanation": "Database connectivity check succeeded.",
-                "last_checked": checked,
-                "last_success": checked,
-                "recommended_action": None,
-            }
+        observation(
+            "Database",
+            "Healthy",
+            "Database connectivity check succeeded.",
+            last_success=checked,
         )
-    except Exception:
-        services.append(
-            {
-                "service": "PostgreSQL",
-                "state": "Unavailable",
-                "explanation": "Database connectivity check failed.",
-                "last_checked": checked,
-                "last_success": None,
-                "recommended_action": "Check database service health and credentials.",
-            }
+    except Exception as exc:
+        await log.awarning(
+            "platform_health_check_failed", service="database", error=type(exc).__name__
         )
+        observation(
+            "Database",
+            "Unavailable",
+            "Database connectivity check failed.",
+            last_failure=checked,
+            action="Check the database service and deployment credentials.",
+        )
+
+    try:
+        revision = await db.scalar(text("SELECT version_num FROM alembic_version"))
+        config_path = next(
+            (
+                candidate
+                for candidate in (Path.cwd() / "alembic.ini", Path.cwd() / "apps/api/alembic.ini")
+                if candidate.exists()
+            ),
+            None,
+        )
+        expected_heads: set[str] | None = None
+        if config_path:
+            alembic_config = AlembicConfig(str(config_path))
+            alembic_config.set_main_option(
+                "script_location", str(config_path.parent / "migrations")
+            )
+            expected_heads = set(ScriptDirectory.from_config(alembic_config).get_heads())
+        migration_current = bool(revision and expected_heads and revision in expected_heads)
+        observation(
+            "Migration state",
+            "Healthy"
+            if migration_current
+            else ("Not configured" if expected_heads is None else "Warning"),
+            "The database schema is at the current migration head."
+            if migration_current
+            else (
+                "Migration scripts are not available in this diagnostics runtime."
+                if expected_heads is None
+                else "The database schema is not at the current migration head."
+            ),
+            last_success=checked if migration_current else None,
+            action=None
+            if migration_current
+            else (
+                "Include migration scripts in the runtime diagnostics image."
+                if expected_heads is None
+                else "Run the deployment migration step before serving traffic."
+            ),
+        )
+    except Exception as exc:
+        await log.awarning(
+            "platform_health_check_failed", service="migrations", error=type(exc).__name__
+        )
+        observation(
+            "Migration state",
+            "Unavailable",
+            "The applied database migration revision could not be read.",
+            last_failure=checked,
+            action="Verify the Alembic migration table and deployment migration step.",
+        )
+
     redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
     try:
         await redis.ping()
-        services.append(
-            {
-                "service": "Redis",
-                "state": "Healthy",
-                "explanation": "Coordination service responded.",
-                "last_checked": checked,
-                "last_success": checked,
-                "recommended_action": None,
-            }
+        queued = int(await redis.llen("mykhaya:jobs"))
+        observation(
+            "Cache",
+            "Healthy",
+            "Redis responded to the live connectivity check.",
+            last_success=checked,
         )
-    except Exception:
-        services.append(
-            {
-                "service": "Redis",
-                "state": "Unavailable",
-                "explanation": "Coordination service did not respond.",
-                "last_checked": checked,
-                "last_success": None,
-                "recommended_action": "Check Redis service health.",
-            }
+        observation(
+            "Queue",
+            "Healthy",
+            f"The live queue contains {queued} job{'s' if queued != 1 else ''}.",
+            last_success=checked,
+        )
+    except Exception as exc:
+        await log.awarning(
+            "platform_health_check_failed", service="redis", error=type(exc).__name__
+        )
+        observation(
+            "Cache",
+            "Unavailable",
+            "Redis did not respond to the live connectivity check.",
+            last_failure=checked,
+            action="Check the Redis service and network path.",
+        )
+        observation(
+            "Queue",
+            "Unavailable",
+            "Live queue depth could not be retrieved.",
+            last_failure=checked,
+            action="Restore Redis connectivity before retrying jobs.",
         )
     finally:
         await redis.aclose()
+
     heartbeats = (await db.scalars(select(OperationalHeartbeat))).all()
     by_service = {row.service: row for row in heartbeats}
     for name in ("worker", "scheduler"):
         row = by_service.get(name)
         stale = row is None or (checked - row.observed_at).total_seconds() > 30
-        services.append(
-            {
-                "service": name.title(),
-                "state": "Unknown" if row is None else ("Degraded" if stale else "Healthy"),
-                "explanation": "No heartbeat has been recorded."
-                if row is None
-                else ("Heartbeat is stale." if stale else "Heartbeat is current."),
-                "last_checked": checked,
-                "last_success": row.last_success_at if row else None,
-                "recommended_action": "Check the service process." if stale else None,
-            }
+        observation(
+            name.title(),
+            "Unavailable" if row is None else ("Degraded" if stale else "Healthy"),
+            "No heartbeat has been recorded."
+            if row is None
+            else ("The last heartbeat is stale." if stale else "The heartbeat is current."),
+            last_success=row.last_success_at if row else None,
+            action=f"Check the {name} service process." if stale else None,
         )
-    for name, action in (
-        ("Backup freshness", "Configure backup metadata reporting."),
-        ("Migration state", "Run Alembic verification in deployment."),
-        ("Email transport", "Use the test-connection action before release."),
-        ("Disk capacity", "Configure host capacity monitoring."),
+
+    last_email_success = await db.scalar(
+        select(func.max(WorkerJobRecord.finished_at)).where(
+            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "completed"
+        )
+    )
+    last_email_failure = await db.scalar(
+        select(func.max(WorkerJobRecord.finished_at)).where(
+            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "failed"
+        )
+    )
+    email_configured = bool(
+        settings.email_delivery_configured
+        and settings.smtp_host.strip()
+        and settings.email_from.strip()
+    )
+    observation(
+        "Email",
+        "Healthy" if email_configured else "Not configured",
+        "The email transport is configured; delivery history is shown on the Email page."
+        if email_configured
+        else "No email transport is configured.",
+        last_success=last_email_success,
+        last_failure=last_email_failure,
+        action=None if email_configured else "Configure the deployment email transport.",
+    )
+    for service, action in (
+        ("Push notifications", "Configure a push provider and delivery instrumentation."),
+        ("File storage", "Configure storage capacity and availability monitoring."),
+        ("Backup service", "Configure backup completion reporting."),
+        ("External dependencies", "Configure dependency probes for integrated services."),
     ):
-        services.append(
-            {
-                "service": name,
-                "state": "Unknown",
-                "explanation": "No authoritative observation source is configured.",
-                "last_checked": checked,
-                "last_success": None,
-                "recommended_action": action,
-            }
+        observation(
+            service,
+            "Not configured",
+            "No authoritative monitoring source is configured.",
+            action=action,
         )
-    return {"services": services, "checked_at": checked}
+    observation(
+        "Public status service",
+        "Healthy" if settings.status_public_enabled else "Not configured",
+        "The public status route is enabled in this application process."
+        if settings.status_public_enabled
+        else "The public status route is disabled.",
+        last_success=checked if settings.status_public_enabled else None,
+        action=None
+        if settings.status_public_enabled
+        else "Enable the public status service if required.",
+    )
+    overall = "Healthy"
+    if any(row["state"] == "Unavailable" for row in services):
+        overall = "Degraded"
+    elif any(row["state"] == "Degraded" for row in services):
+        overall = "Warning"
+    return {"overall": overall, "services": services, "checked_at": checked}
 
 
-@router.get("/jobs", response_model=PageResponse)
+@router.get("/jobs")
 async def jobs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
     db: AsyncSession = Depends(get_db),
-) -> PageResponse:
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
     total = await db.scalar(select(func.count(WorkerJobRecord.id))) or 0
+    state_counts = (
+        await db.execute(
+            select(WorkerJobRecord.status, func.count(WorkerJobRecord.id)).group_by(
+                WorkerJobRecord.status
+            )
+        )
+    ).all()
+    pending = (
+        await db.scalar(
+            select(func.count(OutboxEvent.id)).where(
+                OutboxEvent.processed_at.is_(None), OutboxEvent.available_at <= now
+            )
+        )
+        or 0
+    )
+    scheduled = (
+        await db.scalar(
+            select(func.count(OutboxEvent.id)).where(
+                OutboxEvent.processed_at.is_(None), OutboxEvent.available_at > now
+            )
+        )
+        or 0
+    )
+    redis_depth: int | None = None
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        redis_depth = int(await redis.llen("mykhaya:jobs"))
+    except Exception as exc:
+        await log.awarning(
+            "platform_metric_unavailable", metric="jobs_queue", error=type(exc).__name__
+        )
+    finally:
+        await redis.aclose()
+    worker_heartbeat = await db.get(OperationalHeartbeat, "worker")
+    last_success = await db.scalar(
+        select(func.max(WorkerJobRecord.finished_at)).where(WorkerJobRecord.status == "completed")
+    )
     rows = (
         await db.scalars(
             select(WorkerJobRecord)
@@ -985,8 +1389,15 @@ async def jobs(
             .limit(page_size)
         )
     ).all()
-    return PageResponse(
-        items=[
+    return {
+        "summary": {
+            **{str(state): count for state, count in state_counts},
+            "queued": None if redis_depth is None else redis_depth + pending,
+            "scheduled": scheduled,
+            "worker_heartbeat": worker_heartbeat.observed_at if worker_heartbeat else None,
+            "last_successful_execution": last_success,
+        },
+        "items": [
             {
                 "id": row.id,
                 "job_type": row.topic,
@@ -998,10 +1409,59 @@ async def jobs(
             }
             for row in rows
         ],
-        page=page,
-        page_size=page_size,
-        total=total,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(
+    job_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    job = await db.get(WorkerJobRecord, job_id, with_for_update=True)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That job could not be found.")
+    if job.status != "failed" or job.outbox_event_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only failed queued jobs can be retried.")
+    event = await db.get(OutboxEvent, job.outbox_event_id)
+    if event is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The source event is no longer available.")
+    job.status = "queued"
+    job.finished_at = None
+    job.error = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "job.retry_requested",
+        "job",
+        job.id,
+        reason=body.reason,
+        previous={"status": "failed"},
+        new={"status": "queued"},
     )
+    await db.commit()
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        await redis.rpush("mykhaya:jobs", json.dumps({"event_id": str(event.id)}))
+    except Exception as exc:
+        job.status = "failed"
+        job.error = "QueueUnavailable"
+        await db.commit()
+        await log.awarning("job_retry_enqueue_failed", job_id=str(job.id), error=type(exc).__name__)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The queue is unavailable."
+        ) from exc
+    finally:
+        await redis.aclose()
+    return {"id": job.id, "state": "queued"}
 
 
 SETTING_RULES: dict[str, tuple[type[Any], str]] = {
@@ -1111,56 +1571,76 @@ async def update_setting(
     return {"key": key, "value": body.value, "category": rule[1]}
 
 
-@router.get("/feature-flags")
-async def feature_flags(
+@router.get("/modules")
+async def modules(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
 ) -> list[dict[str, Any]]:
     rows = {row.key: row for row in (await db.scalars(select(FeatureFlag))).all()}
     return [
         {
             "key": FeatureKey(module.id),
+            "name": module.name,
+            "description": module.description,
+            "category": module.category,
+            "dependencies": module.dependencies,
             "enabled": rows[FeatureKey(module.id)].enabled
             if FeatureKey(module.id) in rows
             else False,
-            "release_state": module.release_state.value,
+            "release_state": (
+                rows[FeatureKey(module.id)].release_state or module.release_state.value
+                if FeatureKey(module.id) in rows
+                else module.release_state.value
+            ),
         }
         for module in feature_modules()
-        if module.release_state != ReleaseState.hidden
     ]
 
 
-@router.put("/feature-flags/{key}")
-async def update_feature_flag(
+@router.put("/modules/{key}")
+async def update_module(
     key: FeatureKey,
-    body: FeatureFlagUpdate,
+    body: ModuleUpdate,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    if module_definition(key.value).release_state == ReleaseState.hidden:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == key).with_for_update())
     previous = row.enabled if row else False
+    previous_state = (
+        row.release_state
+        if row and row.release_state
+        else module_definition(key.value).release_state.value
+    )
     if row is None:
-        row = FeatureFlag(key=key, enabled=body.enabled, updated_by=context.administrator.id)
+        row = FeatureFlag(
+            key=key,
+            enabled=body.enabled,
+            release_state=body.release_state.value,
+            updated_by=context.administrator.id,
+        )
         db.add(row)
     else:
         row.enabled = body.enabled
+        row.release_state = body.release_state.value
         row.updated_by = context.administrator.id
     platform_audit(
         db,
         request,
         context,
-        "feature_flag.updated",
-        "feature_flag",
+        "module.updated",
+        "module",
         reason=body.reason,
-        previous={"key": key.value, "enabled": previous},
-        new={"key": key.value, "enabled": body.enabled},
+        previous={"key": key.value, "enabled": previous, "release_state": previous_state},
+        new={
+            "key": key.value,
+            "enabled": body.enabled,
+            "release_state": body.release_state.value,
+        },
     )
     await db.commit()
-    return {"key": key, "enabled": body.enabled}
+    return {"key": key, "enabled": body.enabled, "release_state": body.release_state}
 
 
 @router.get("/security", response_model=PageResponse)
@@ -1290,23 +1770,110 @@ async def administrators(
 @router.get("/mail")
 async def mail_configuration(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    pending = (
+        await db.scalar(
+            select(func.count(OutboxEvent.id)).where(
+                OutboxEvent.topic.like("email.%"), OutboxEvent.processed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    last_success = await db.scalar(
+        select(func.max(WorkerJobRecord.finished_at)).where(
+            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "completed"
+        )
+    )
+    failures = (
+        await db.scalars(
+            select(WorkerJobRecord)
+            .where(
+                WorkerJobRecord.topic.like("email.%"),
+                WorkerJobRecord.status == "failed",
+            )
+            .order_by(WorkerJobRecord.finished_at.desc())
+            .limit(10)
+        )
+    ).all()
+    configured = bool(
+        settings.email_delivery_configured
+        and settings.smtp_host.strip()
+        and settings.email_from.strip()
+    )
     return {
-        "source": "environment",
-        "editable": False,
-        "restart_required": True,
-        "smtp_hostname": settings.smtp_host,
-        "port": settings.smtp_port,
-        "sender_identity": settings.email_from,
-        "credential_configured": False,
-        "credential": "[NOT RETURNED]",
-        "delivery_events": [],
-        "limitations": [
-            "SMTP credentials are environment-managed.",
-            "Delivery event persistence and safe retry are not yet implemented.",
+        "configured": configured,
+        "transport": "SMTP" if configured else None,
+        "sender_identity": settings.email_from if configured else None,
+        "queue_depth": pending,
+        "last_successful_delivery": last_success,
+        "recent_failures": [
+            {
+                "id": row.id,
+                "job_type": row.topic,
+                "failed_at": row.finished_at,
+                "safe_failure_message": row.error,
+            }
+            for row in failures
         ],
+        "managed_by": "deployment environment",
     }
+
+
+@router.post("/mail/test")
+async def send_test_email(
+    body: TestEmailRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    await enforce_rate_limit(request, settings, "platform-test-email", 3, 300)
+    if (
+        not settings.email_delivery_configured
+        or not settings.smtp_host.strip()
+        or not settings.email_from.strip()
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
+    try:
+        await asyncio.to_thread(
+            send_email,
+            settings,
+            str(body.recipient),
+            "MyKhaya test email",
+            "This test confirms that the MyKhaya deployment can deliver email.",
+        )
+    except Exception as exc:
+        platform_audit(
+            db,
+            request,
+            context,
+            "email.test_failed",
+            "email_transport",
+            reason=body.reason,
+            new={"recipient_domain": str(body.recipient).rsplit("@", 1)[-1]},
+            outcome="failure",
+            failure_category=type(exc).__name__,
+        )
+        await db.commit()
+        await log.awarning("platform_test_email_failed", error=type(exc).__name__)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "The test email could not be delivered. Check the email transport.",
+        ) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "email.test_sent",
+        "email_transport",
+        reason=body.reason,
+        new={"recipient_domain": str(body.recipient).rsplit("@", 1)[-1]},
+    )
+    await db.commit()
+    return {"message": "Test email delivered successfully."}
 
 
 @router.get("/incidents")

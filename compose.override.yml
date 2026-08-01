@@ -9,6 +9,7 @@ services:
     environment:
       MYKHAYA_ENVIRONMENT: development
       MYKHAYA_BUILD_CHANNEL: development
+      MYKHAYA_EMAIL_DELIVERY_CONFIGURED: "true"
       MYKHAYA_COOKIE_SECURE: "false"
       MYKHAYA_REGISTRATION_MODE: open
       MYKHAYA_ADMIN_URL: http://admin.localhost:8080

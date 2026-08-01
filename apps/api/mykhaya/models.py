@@ -463,6 +463,7 @@ class FeatureFlag(UuidTimeMixin, Base):
     __tablename__ = "feature_flags"
     key: Mapped[FeatureKey] = mapped_column(Enum(FeatureKey, name="feature_key"), unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    release_state: Mapped[str | None] = mapped_column(String(30))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
@@ -500,9 +501,7 @@ class ChildProfile(UuidTimeMixin, Base):
 class GuardianAssignment(UuidTimeMixin, Base):
     __tablename__ = "guardian_assignments"
     __table_args__ = (
-        UniqueConstraint(
-            "child_profile_id", "guardian_membership_id", name="uq_child_guardian"
-        ),
+        UniqueConstraint("child_profile_id", "guardian_membership_id", name="uq_child_guardian"),
     )
     child_profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True

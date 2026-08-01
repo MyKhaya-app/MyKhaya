@@ -39,6 +39,7 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+        MYKHAYA_EMAIL_DELIVERY_CONFIGURED: "${MYKHAYA_EMAIL_DELIVERY_CONFIGURED:-false}",
       }
     depends_on: { api: { condition: service_healthy } }
     networks: [app]

@@ -15,6 +15,12 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Validate release version
         run: python infrastructure/scripts/validate_version.py
+      - name: Export release metadata
+        run: |
+          echo "MYKHAYA_VERSION=$(tr -d '\n\r' < VERSION)" >> "$GITHUB_ENV"
+          echo "MYKHAYA_COMMIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "MYKHAYA_BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+          echo "MYKHAYA_BUILD_CHANNEL=stable" >> "$GITHUB_ENV"
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/release-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/release-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/release-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/release-runtime-password/' .env
       - name: Quality checks

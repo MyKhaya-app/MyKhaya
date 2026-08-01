@@ -8,6 +8,9 @@ class ReleaseState(StrEnum):
     core = "core"
     released = "released"
     beta = "beta"
+    early_access = "early_access"
+    internal = "internal"
+    deprecated = "deprecated"
     hidden = "hidden"
 
 
@@ -26,7 +29,11 @@ class ModuleDefinition:
 
     @property
     def household_toggleable(self) -> bool:
-        return self.release_state in {ReleaseState.released, ReleaseState.beta}
+        return self.release_state in {
+            ReleaseState.released,
+            ReleaseState.beta,
+            ReleaseState.early_access,
+        }
 
 
 MODULES: tuple[ModuleDefinition, ...] = (

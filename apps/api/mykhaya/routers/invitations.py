@@ -32,6 +32,8 @@ from mykhaya.schemas import (
 from mykhaya.security import decode_derived_token, derived_token, hash_secret, normalise_email
 
 router = APIRouter(prefix="/invitations", tags=["invitations"])
+
+
 @router.post("", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
 async def invite(
     body: InvitationCreate,

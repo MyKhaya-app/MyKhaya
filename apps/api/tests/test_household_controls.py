@@ -138,9 +138,7 @@ async def test_home_admin_features_relationships_and_managed_child(
 
     async with SessionFactory() as db:
         actions = set(
-            await db.scalars(
-                select(AuditEvent.action).where(AuditEvent.group_id == home_id)
-            )
+            await db.scalars(select(AuditEvent.action).where(AuditEvent.group_id == home_id))
         )
     assert {
         "feature.enabled",

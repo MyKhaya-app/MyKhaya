@@ -135,9 +135,7 @@ async def update_group(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> GroupResponse:
-    membership = await require_capability(
-        group_id, Capability.household_manage, auth, db
-    )
+    membership = await require_capability(group_id, Capability.household_manage, auth, db)
     membership.group.name = body.name
     audit(db, request, "group.updated", auth.user.id, group_id, "group", group_id)
     await db.commit()
@@ -165,9 +163,7 @@ async def members(
             membership_id=membership.id,
             user_id=user.id,
             display_name=user.display_name,
-            email=None
-            if membership.relationship == HouseholdRelationship.child
-            else user.email,
+            email=None if membership.relationship == HouseholdRelationship.child else user.email,
             role=membership.role,
             relationship=membership.relationship,
             permission_profile=membership.permission_profile,
@@ -187,9 +183,7 @@ async def update_member(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    await require_capability(
-        group_id, Capability.members_manage_relationships, auth, db
-    )
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
     target = await db.scalar(
         select(Membership)
         .where(
@@ -265,9 +259,7 @@ async def remove_member(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    await require_capability(
-        group_id, Capability.members_manage_relationships, auth, db
-    )
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
     target = await db.scalar(
         select(Membership)
         .where(

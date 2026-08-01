@@ -16,6 +16,12 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Validate VERSION
         run: python infrastructure/scripts/validate_version.py
+      - name: Export build metadata
+        run: |
+          echo "MYKHAYA_VERSION=$(tr -d '\n\r' < VERSION)" >> "$GITHUB_ENV"
+          echo "MYKHAYA_COMMIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "MYKHAYA_BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+          echo "MYKHAYA_BUILD_CHANNEL=development" >> "$GITHUB_ENV"
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
       - name: Compose validation

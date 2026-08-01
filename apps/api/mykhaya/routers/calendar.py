@@ -503,9 +503,7 @@ async def update_event(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventOccurrence:
-    membership = await require_capability(
-        home_id, Capability.calendar_edit_own, auth, db
-    )
+    membership = await require_capability(home_id, Capability.calendar_edit_own, auth, db)
     _validate_timezone(body.timezone)
     if body.end_at <= body.start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")

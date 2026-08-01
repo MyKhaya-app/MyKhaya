@@ -33,6 +33,9 @@ async def process(event_id: uuid.UUID) -> None:
         job = existing or WorkerJobRecord(
             id=event.id, outbox_event_id=event.id, topic=event.topic, status="running"
         )
+        job.status = "running"
+        job.finished_at = None
+        job.error = None
         db.add(job)
 
         try:

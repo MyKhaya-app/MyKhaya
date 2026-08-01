@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
     smtp_host: str = "mailpit"
     smtp_port: int = 1025
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_starttls: bool = False
+    email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
     email_verification_enabled: bool = True
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)

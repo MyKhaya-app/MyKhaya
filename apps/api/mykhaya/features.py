@@ -52,9 +52,7 @@ async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKe
     }
 
 
-async def enabled_dependents(
-    db: AsyncSession, home_id: uuid.UUID, module_id: str
-) -> list[str]:
+async def enabled_dependents(db: AsyncSession, home_id: uuid.UUID, module_id: str) -> list[str]:
     result: list[str] = []
     for definition in feature_modules():
         if module_id in definition.dependencies and await is_feature_enabled(
