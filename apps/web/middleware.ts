@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 export function middleware(request: NextRequest) {
+  const host = ((request.headers.get("host") ?? "").split(":")[0] ?? "").toLowerCase();
+  const adminHost = host === "admin.mykhaya.app" || host === "admin.localhost";
+  const statusHost = host === "status.mykhaya.app" || host === "status.localhost";
+  const internalAdminPath = request.nextUrl.pathname.startsWith("/control-centre");
+  const internalStatusPath = request.nextUrl.pathname.startsWith("/service-status");
   const nonce = btoa(crypto.randomUUID());
   const production = process.env.NODE_ENV === "production";
   const tls =
@@ -8,7 +13,7 @@ export function middleware(request: NextRequest) {
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${production ? "" : " 'unsafe-eval'"}`,
-    "style-src 'self' 'unsafe-inline'",
+    adminHost ? "style-src 'self'" : "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
     "connect-src 'self'",
@@ -23,7 +28,20 @@ export function middleware(request: NextRequest) {
   const headers = new Headers(request.headers);
   headers.set("x-nonce", nonce);
   headers.set("Content-Security-Policy", csp);
-  const response = NextResponse.next({ request: { headers } });
+  let response: NextResponse;
+  if (adminHost) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/control-centre${url.pathname === "/" ? "" : url.pathname}`;
+    response = NextResponse.rewrite(url, { request: { headers } });
+  } else if (statusHost) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/service-status";
+    response = NextResponse.rewrite(url, { request: { headers } });
+  } else if (internalAdminPath || internalStatusPath) {
+    return new NextResponse("Not found", { status: 404 });
+  } else {
+    response = NextResponse.next({ request: { headers } });
+  }
   response.headers.set("Content-Security-Policy", csp);
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -31,6 +49,8 @@ export function middleware(request: NextRequest) {
     "Permissions-Policy",
     "camera=(), microphone=(), geolocation=()",
   );
+  if (adminHost) response.headers.set("Cache-Control", "no-store");
+  if (statusHost) response.headers.set("Cache-Control", "public, max-age=30");
   return response;
 }
 export const config = {

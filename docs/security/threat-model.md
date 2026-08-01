@@ -25,3 +25,5 @@ Browser, native mobile client, Caddy, FastAPI, workers, scheduler, PostgreSQL, R
 - Insufficient logging and exceptional-condition handling
 
 Threat modelling must be updated for every new domain and public sharing feature.
+
+The platform management plane and public status origin add privileged-session theft, insider metadata access, proxy-header bypass, unsafe global action, audit destruction, status misinformation and internal-diagnostic disclosure threats. See `platform-administration-threat-model.md` for mitigations and blockers.

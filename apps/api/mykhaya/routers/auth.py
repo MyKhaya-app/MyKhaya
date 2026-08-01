@@ -147,6 +147,8 @@ async def login(
             status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
         )
     await issue_session(db, response, request, user, settings)
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
     await db.commit()
     return user_response(user)
 

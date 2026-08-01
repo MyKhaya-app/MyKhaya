@@ -1,13 +1,21 @@
 name: quality
 on:
   pull_request:
-  push: { branches: [main] }
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
 permissions: { contents: read }
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   application:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
       - name: Compose validation

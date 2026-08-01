@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.models import Membership, Role, Session, User
+from mykhaya.models import Group, Membership, Role, Session, User
 from mykhaya.security import current_user, require_csrf
 
 
@@ -36,11 +36,13 @@ async def membership_for(
 ) -> Membership:
     membership = await db.scalar(
         select(Membership)
+        .join(Group, Group.id == Membership.group_id)
         .options(selectinload(Membership.group), selectinload(Membership.user))
         .where(
             Membership.group_id == group_id,
             Membership.user_id == auth.user.id,
             Membership.removed_at.is_(None),
+            Group.is_active.is_(True),
         )
     )
     # Deliberately return the same response for absent and unauthorised Homes.

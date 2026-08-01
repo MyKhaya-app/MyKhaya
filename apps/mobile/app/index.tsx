@@ -5,6 +5,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Constants from "expo-constants";
+
+const appVersion =
+  (Constants.expoConfig?.extra?.mykhayaVersion as string | undefined) ?? "unknown";
+
 export default function Home() {
   return (
     <SafeAreaView style={styles.page}>
@@ -38,6 +43,7 @@ export default function Home() {
       <Text style={styles.note}>
         Credentials will be stored only in platform secure storage.
       </Text>
+      <Text style={styles.version}>MyKhaya {appVersion}</Text>
     </SafeAreaView>
   );
 }
@@ -99,6 +105,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     padding: 20,
+    textAlign: "center",
+  },
+  version: {
+    color: "#62706F",
+    fontSize: 11,
     textAlign: "center",
   },
 });
