@@ -36,7 +36,7 @@ export default function Onboarding() {
             Home name
             <input
               name="name"
-              placeholder="Hales Home"
+              placeholder="Our Home"
               maxLength={100}
               required
               autoFocus

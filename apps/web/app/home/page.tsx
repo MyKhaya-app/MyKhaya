@@ -1,121 +1,99 @@
 "use client";
+
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { Home, User } from "@mykhaya/shared-types";
+import type { HomeSummary, User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
-const today = [
-  ["▣", "Alyssa – Swimming", "18:00 – 19:00", "in 45 min"],
-  ["🛒", "Shopping list", "Ready for your first items", "Today"],
-  ["☑", "Take the bins out", "A gentle reminder", "Today"],
-  ["♨", "Meal planning", "Make the week feel easier", "This week"],
-];
+import { useActiveHome } from "@/components/use-active-home";
+
+function eventTime(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: timezone,
+  }).format(new Date(value));
+}
+
 export default function HomePage() {
-  const [user, setUser] = useState<User | null>(null),
-    [home, setHome] = useState<Home | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const [error, setError] = useState("");
+  const { activeHomeId, activeHome } = useActiveHome();
+
   useEffect(() => {
-    Promise.all([api.me(), api.homes()]).then(([u, h]) => {
-      setUser(u);
-      setHome(h[0] ?? null);
-    });
+    api.me().then(setUser).catch(() => setUser(null));
   }, []);
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    setError("");
+    api
+      .homeSummary(activeHomeId)
+      .then(setSummary)
+      .catch((reason: Error) => setError(reason.message));
+  }, [activeHomeId]);
+
   return (
     <AppShell>
       <main className="home-page">
         <div className="page-intro">
-          <p>Good evening,</p>
+          <p>Good day,</p>
           <h1>
             {user?.display_name ?? "there"} <span aria-hidden="true">👋</span>
           </h1>
-          <small>Here’s what’s happening in {home?.name ?? "your Home"}</small>
+          <small>
+            {activeHome ? `Here is what is happening in ${activeHome.name}` : "Select a Home to continue"}
+          </small>
         </div>
-        <div className="home-grid">
-          <section className="activity">
-            <h2>Today</h2>
-            <div className="card list-card">
-              {today.map(([icon, title, detail, time]) => (
-                <article key={title}>
-                  <i>{icon}</i>
-                  <div>
-                    <strong>{title}</strong>
-                    <small>{detail}</small>
-                  </div>
-                  <time>{time}</time>
-                </article>
-              ))}
-            </div>
-          </section>
-          <section className="upcoming">
-            <h2>Upcoming</h2>
-            <div className="card list-card">
-              <article>
-                <i>♙</i>
-                <div>
-                  <strong>Family lunch</strong>
-                  <small>Sunday · 13:00</small>
-                </div>
-              </article>
-              <article>
-                <i>▣</i>
-                <div>
-                  <strong>School inset day</strong>
-                  <small>Friday</small>
-                </div>
-              </article>
-              <article>
-                <i>♥</i>
-                <div>
-                  <strong>Birthday</strong>
-                  <small>Add an important date</small>
-                </div>
-              </article>
-            </div>
-          </section>
-        </div>
-        <section className="quick">
-          <h2>Quick add</h2>
-          <div className="card actions">
-            <button>▣ Event</button>
-            <button>☑ Task</button>
-            <button>🛒 Shopping item</button>
-            <button>♨ Meal</button>
-            <button>▤ Note</button>
-          </div>
-        </section>
-        <div className="summary-grid">
-          <section className="card">
-            <h2>
-              Tasks <a href="/tasks">View all</a>
-            </h2>
-            <div className="empty-mini">
-              Nothing urgent. A lovely place to start.
-            </div>
-          </section>
-          <section className="card">
-            <h2>
-              Shopping <a href="/shopping">View list</a>
-            </h2>
-            <ul>
-              <li>○ Milk</li>
-              <li>○ Bread</li>
-              <li>＋ Add item</li>
-            </ul>
-          </section>
-          <section className="card">
-            <h2>
-              People <a href="/people">View everyone</a>
-            </h2>
+
+        {error && <p className="notice error">{error}</p>}
+
+        <section className="home-grid">
+          <article className="card details">
+            <h2>Today in your Home</h2>
+            {!summary?.today_events?.length ? (
+              <p className="hint">No events yet. Add your first family event to get started.</p>
+            ) : (
+              <div className="list-card">
+                {summary.today_events.map((event) => (
+                  <article key={event.occurrence_id}>
+                    <i aria-hidden="true">▣</i>
+                    <div>
+                      <strong>{event.title}</strong>
+                      <small>{eventTime(event.start_at, event.timezone)}</small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </article>
+
+          <article className="card details">
+            <h2>Overview</h2>
+            <p>{summary?.member_count ?? 0} members in this Home</p>
             <p>
-              {home?.member_count ?? 1}{" "}
-              {home?.member_count === 1 ? "person" : "people"} in this Home
+              Pending invitations: {summary?.pending_invitations ?? 0}
             </p>
-          </section>
-        </div>
-        <blockquote className="home-quote">
-          ♥{" "}
-          <span>
-            Coming together is a beginning. Keeping together is progress.
-          </span>
-        </blockquote>
+            {summary?.next_event ? (
+              <p>
+                Next event: <strong>{summary.next_event.title}</strong>
+                <br />
+                <small>{eventTime(summary.next_event.start_at, summary.next_event.timezone)}</small>
+              </p>
+            ) : (
+              <p className="hint">Nothing planned next yet.</p>
+            )}
+            <div className="actions compact-actions">
+              <Link className="button" href="/calendar">
+                Quick Add Event
+              </Link>
+              <Link className="button secondary" href="/people">
+                Invite Family
+              </Link>
+            </div>
+          </article>
+        </section>
       </main>
     </AppShell>
   );

@@ -1,8 +1,9 @@
 import hmac
 import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +11,17 @@ from mykhaya.audit import audit, outbox
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
-from mykhaya.models import Invitation, Membership, Role
-from mykhaya.schemas import InvitationAccept, InvitationCreate, InvitationResponse, MessageResponse
+from mykhaya.models import Group, Invitation, Membership, Role, User
+from mykhaya.schemas import (
+    InvitationAccept,
+    InvitationCreate,
+    InvitationListItem,
+    InvitationResend,
+    InvitationResponse,
+    InvitationRevoke,
+    InvitationTokenPreview,
+    MessageResponse,
+)
 from mykhaya.security import decode_derived_token, derived_token, hash_secret, normalise_email
 
 router = APIRouter(prefix="/invitations", tags=["invitations"])
@@ -31,6 +41,21 @@ async def invite(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Ownership cannot be assigned by invitation."
         )
+    active = await db.scalar(
+        select(Invitation).where(
+            Invitation.group_id == body.group_id,
+            Invitation.email == normalise_email(str(body.email)),
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+            Invitation.expires_at > datetime.now(UTC),
+        )
+    )
+    if active is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An active invitation already exists for that address.",
+        )
+
     row = Invitation(
         group_id=body.group_id,
         email=normalise_email(str(body.email)),
@@ -48,6 +73,126 @@ async def invite(
     await db.commit()
     return InvitationResponse(
         id=row.id, group_id=row.group_id, email=row.email, role=row.role, expires_at=row.expires_at
+    )
+
+
+@router.get("/group/{group_id}", response_model=list[InvitationListItem])
+async def list_invitations(
+    group_id: uuid.UUID,
+    include_revoked: bool = False,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> list[InvitationListItem]:
+    await membership_for(group_id, auth, db, MANAGERS)
+    filters = [Invitation.group_id == group_id]
+    if not include_revoked:
+        filters.append(Invitation.revoked_at.is_(None))
+    rows = (
+        await db.execute(
+            select(Invitation, User)
+            .join(User, User.id == Invitation.invited_by)
+            .where(*filters)
+            .order_by(Invitation.created_at.desc())
+            .limit(200)
+        )
+    ).all()
+    return [
+        InvitationListItem(
+            id=invitation.id,
+            group_id=invitation.group_id,
+            email=invitation.email,
+            role=invitation.role,
+            expires_at=invitation.expires_at,
+            accepted_at=invitation.accepted_at,
+            revoked_at=invitation.revoked_at,
+            inviter_display_name=inviter.display_name,
+            join_link=None,
+        )
+        for invitation, inviter in rows
+    ]
+
+
+@router.post("/resend", response_model=InvitationResponse)
+async def resend_invitation(
+    body: InvitationResend,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> InvitationResponse:
+    row = await db.scalar(
+        select(Invitation).where(Invitation.id == body.invitation_id).with_for_update()
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That invitation could not be found.")
+    await membership_for(row.group_id, auth, db, MANAGERS)
+    if row.accepted_at is not None or row.revoked_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This invitation is no longer active.")
+    row.expires_at = datetime.now(UTC) + timedelta(days=7)
+    outbox(db, "email.invitation", {"invitation_id": str(row.id)})
+    audit(db, request, "invitation.resent", auth.user.id, row.group_id, "invitation", row.id)
+    await db.commit()
+    return InvitationResponse(
+        id=row.id,
+        group_id=row.group_id,
+        email=row.email,
+        role=row.role,
+        expires_at=row.expires_at,
+    )
+
+
+@router.post("/revoke", response_model=MessageResponse)
+async def revoke_invitation(
+    body: InvitationRevoke,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    row = await db.scalar(
+        select(Invitation).where(Invitation.id == body.invitation_id).with_for_update()
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That invitation could not be found.")
+    await membership_for(row.group_id, auth, db, MANAGERS)
+    if row.accepted_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Accepted invitations cannot be revoked.")
+    row.revoked_at = datetime.now(UTC)
+    audit(db, request, "invitation.revoked", auth.user.id, row.group_id, "invitation", row.id)
+    await db.commit()
+    return MessageResponse(message="Invitation revoked.")
+
+
+@router.get("/preview", response_model=InvitationTokenPreview)
+async def preview_invitation(
+    token: str = Query(min_length=30, max_length=500),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> InvitationTokenPreview:
+    identifier = decode_derived_token(token, "invitation", settings.secret_key.get_secret_value())
+    row = (
+        await db.scalar(select(Invitation).where(Invitation.id == identifier))
+        if identifier
+        else None
+    )
+    if (
+        row is None
+        or row.accepted_at is not None
+        or row.revoked_at is not None
+        or row.expires_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This invitation is invalid or has expired.",
+        )
+    group = await db.get(Group, row.group_id)
+    inviter = await db.get(User, row.invited_by)
+    assert group is not None and inviter is not None
+    return InvitationTokenPreview(
+        group_id=row.group_id,
+        group_name=group.name,
+        invited_by_display_name=inviter.display_name,
+        email=row.email,
+        role=row.role,
+        expires_at=row.expires_at,
     )
 
 

@@ -46,6 +46,79 @@ export class MyKhayaClient {
   homes = () => this.request<Home[]>("/groups");
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
+  homeSummary = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HomeSummary>(
+      `/homes/${encodeURIComponent(homeId)}/summary`,
+    );
+  listInvitations = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").InvitationListItem[]>(
+      `/invitations/group/${encodeURIComponent(homeId)}`,
+    );
+  createLabel = (homeId: string, body: { name: string; color: string }) =>
+    this.request<import("@mykhaya/shared-types").EventLabel>(
+      `/homes/${encodeURIComponent(homeId)}/event-labels`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  listLabels = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").EventLabel[]>(
+      `/homes/${encodeURIComponent(homeId)}/event-labels`,
+    );
+  listEvents = (
+    homeId: string,
+    params: {
+      start_at: string;
+      end_at: string;
+      page?: number;
+      page_size?: number;
+      q?: string;
+    },
+  ) => {
+    const search = new URLSearchParams({
+      start_at: params.start_at,
+      end_at: params.end_at,
+      page: String(params.page ?? 1),
+      page_size: String(params.page_size ?? 200),
+    });
+    if (params.q) search.set("q", params.q);
+    return this.request<import("@mykhaya/shared-types").EventListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/events?${search.toString()}`,
+    );
+  };
+  createEvent = (homeId: string, body: import("@mykhaya/shared-types").EventPayload) =>
+    this.request<import("@mykhaya/shared-types").EventOccurrence>(
+      `/homes/${encodeURIComponent(homeId)}/events`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateEvent = (
+    homeId: string,
+    eventId: string,
+    body: import("@mykhaya/shared-types").EventUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventOccurrence>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteEvent = (homeId: string, eventId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
+      { method: "DELETE" },
+    );
+  eventDetail = (homeId: string, eventId: string) =>
+    this.request<import("@mykhaya/shared-types").EventDetailResponse>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
+    );
+  previewInvitation = (token: string) =>
+    this.request<import("@mykhaya/shared-types").InvitationPreview>(
+      `/invitations/preview?token=${encodeURIComponent(token)}`,
+    );
+  resendInvitation = (invitationId: string) =>
+    this.post<import("@mykhaya/shared-types").InvitationResponse>("/invitations/resend", {
+      invitation_id: invitationId,
+    });
+  revokeInvitation = (invitationId: string) =>
+    this.post<{ message: string }>("/invitations/revoke", {
+      invitation_id: invitationId,
+    });
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   patch = <T>(path: string, body: unknown) =>

@@ -9,7 +9,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from mykhaya.config import get_settings
-from mykhaya.routers import auth, groups, health, invitations, users
+from mykhaya.routers import auth, calendar, groups, health, invitations, users
 
 settings = get_settings()
 log = structlog.get_logger()
@@ -67,5 +67,12 @@ async def security_and_limits(
     return response
 
 
-for router in (health.router, auth.router, users.router, groups.router, invitations.router):
+for router in (
+    health.router,
+    auth.router,
+    users.router,
+    groups.router,
+    invitations.router,
+    calendar.router,
+):
     app.include_router(router, prefix="/api/v1")

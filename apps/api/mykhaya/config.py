@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
+    registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = "0.1.0"
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
@@ -27,6 +28,9 @@ class Settings(BaseSettings):
     rate_limit_login: int = Field(default=10, ge=1, le=100)
     rate_limit_register: int = Field(default=5, ge=1, le=100)
     trusted_proxy_cidrs: list[str] = []
+    default_timezone: str = "Europe/London"
+    default_locale: str = "en-GB"
+    week_start: Literal["monday", "sunday"] = "monday"
 
     @field_validator("cors_origins", "trusted_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
@@ -50,7 +54,6 @@ class Settings(BaseSettings):
         if data.get("environment") == "production" and not value:
             raise ValueError("MYKHAYA_COOKIE_SECURE must be true in production")
         return value
-
 
 @lru_cache
 def get_settings() -> Settings:
