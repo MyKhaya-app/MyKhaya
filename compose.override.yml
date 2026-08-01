@@ -10,17 +10,22 @@ services:
       MYKHAYA_ENVIRONMENT: development
       MYKHAYA_BUILD_CHANNEL: development
       MYKHAYA_COOKIE_SECURE: "false"
+      MYKHAYA_REGISTRATION_MODE: open
       MYKHAYA_ADMIN_URL: http://admin.localhost:8080
       MYKHAYA_STATUS_URL: http://status.localhost:8080
       MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]'
       MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost","api"]'
       MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128","172.16.0.0/12"]'
       MYKHAYA_ADMIN_MFA_REQUIRED: "false"
+      MYKHAYA_DEFAULT_TIMEZONE: Europe/London
+      MYKHAYA_DEFAULT_LOCALE: en-GB
+      MYKHAYA_WEEK_START: monday
   worker:
     environment:
       MYKHAYA_ENVIRONMENT: development
       MYKHAYA_BUILD_CHANNEL: development
       MYKHAYA_COOKIE_SECURE: "false"
+      MYKHAYA_REGISTRATION_MODE: open
       MYKHAYA_ADMIN_URL: http://admin.localhost:8080
       MYKHAYA_STATUS_URL: http://status.localhost:8080
       MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost","api"]'
@@ -29,6 +34,7 @@ services:
       MYKHAYA_ENVIRONMENT: development
       MYKHAYA_BUILD_CHANNEL: development
       MYKHAYA_COOKIE_SECURE: "false"
+      MYKHAYA_REGISTRATION_MODE: open
       MYKHAYA_ADMIN_URL: http://admin.localhost:8080
       MYKHAYA_STATUS_URL: http://status.localhost:8080
       MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost","api"]'

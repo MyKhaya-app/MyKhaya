@@ -1,6 +1,6 @@
 "use client";
 export const dynamic = "force-dynamic";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -9,8 +9,22 @@ import { FormStatus } from "@/components/form-status";
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
+  const invitation = params.get("invitation");
   const [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [inviteContext, setInviteContext] = useState<{
+      group_name: string;
+      invited_by_display_name: string;
+      email: string;
+    } | null>(null);
+
+  useEffect(() => {
+    if (!invitation) return;
+    api
+      .previewInvitation(invitation)
+      .then((result) => setInviteContext(result))
+      .catch((reason: ApiError) => setError(reason.message));
+  }, [invitation]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -21,7 +35,6 @@ export default function Login() {
         email: d.get("email"),
         password: d.get("password"),
       });
-      const invitation = params.get("invitation");
       if (invitation)
         await api.post("/invitations/accept", { token: invitation });
       router.push((await api.homes()).length ? "/home" : "/onboarding");
@@ -35,7 +48,6 @@ export default function Login() {
       setBusy(false);
     }
   }
-  const invitation = params.get("invitation");
   return (
     <AuthCard
       title="Welcome back"
@@ -58,6 +70,11 @@ export default function Login() {
         </>
       }
     >
+      {inviteContext && (
+        <p className="notice success">
+          Continue signing in to join {inviteContext.group_name}.
+        </p>
+      )}
       <form onSubmit={submit}>
         <label>
           Email

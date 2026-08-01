@@ -5,7 +5,6 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
-
 revision: str = "0002_platform_control_centre"
 down_revision: str | None = "0001_initial"
 branch_labels: str | Sequence[str] | None = None

@@ -10,7 +10,7 @@ from mykhaya.audit import audit, outbox
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.models import ActionToken, AuthIdentity, Session, TokenPurpose, User
+from mykhaya.models import ActionToken, AuthIdentity, Invitation, Session, TokenPurpose, User
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     ForgotRequest,
@@ -28,6 +28,7 @@ from mykhaya.security import (
     clear_auth_cookies,
     consume_action_token,
     create_action_token,
+    decode_derived_token,
     hash_secret,
     new_session_token,
     normalise_email,
@@ -75,6 +76,38 @@ async def register(
 ) -> RegistrationResponse:
     await enforce_rate_limit(request, settings, "register", settings.rate_limit_register, 300)
     email = normalise_email(str(body.email))
+
+    invitation_row: Invitation | None = None
+    if settings.registration_mode == "closed":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
+    if settings.registration_mode == "invitation_only":
+        if not body.invitation_token:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Registration is invitation-only during this pilot.",
+            )
+        invitation_id = decode_derived_token(
+            body.invitation_token, "invitation", settings.secret_key.get_secret_value()
+        )
+        invitation_row = (
+            await db.scalar(
+                select(Invitation).where(Invitation.id == invitation_id).with_for_update()
+            )
+            if invitation_id
+            else None
+        )
+        if (
+            invitation_row is None
+            or invitation_row.revoked_at is not None
+            or invitation_row.accepted_at is not None
+            or invitation_row.expires_at <= datetime.now(UTC)
+            or invitation_row.email != email
+        ):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This invitation is invalid for the supplied email address.",
+            )
+
     existing = await db.scalar(select(User).where(User.email == email))
     if existing is None:
         user = User(

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { Home, User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { Logo } from "./logo";
+import { useActiveHome } from "./use-active-home";
 const nav = [
   ["⌂", "Home", "/home"],
   ["▣", "Calendar", "/calendar"],
@@ -20,17 +21,22 @@ const nav = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname(),
     router = useRouter();
-  const [user, setUser] = useState<User | null>(null),
-    [homes, setHomes] = useState<Home[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const { homes, activeHome, activeHomeId, setActiveHomeId, loading } =
+    useActiveHome();
   useEffect(() => {
-    Promise.all([api.me(), api.homes()])
-      .then(([u, h]) => {
+    api
+      .me()
+      .then((u) => {
         setUser(u);
-        setHomes(h);
-        if (!h.length && path !== "/onboarding") router.replace("/onboarding");
       })
       .catch(() => router.replace("/login"));
-  }, [path, router]);
+  }, [router]);
+  useEffect(() => {
+    if (!loading && !homes.length && path !== "/onboarding") {
+      router.replace("/onboarding");
+    }
+  }, [homes, loading, path, router]);
   async function logout() {
     await api.post("/auth/logout", {});
     router.push("/login");
@@ -58,7 +64,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <i>{user?.display_name?.[0] ?? "?"}</i>
             <i>+</i>
           </div>
-          <strong>{homes[0]?.name ?? "Your Home"}</strong>
+          <strong>{activeHome?.name ?? "Your Home"}</strong>
+          {homes.length > 1 && (
+            <label className="home-select">
+              Active Home
+              <select
+                value={activeHomeId ?? ""}
+                onChange={(event) => setActiveHomeId(event.target.value)}
+              >
+                {homes.map((home: Home) => (
+                  <option key={home.id} value={home.id}>
+                    {home.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button className="link-button" onClick={logout}>
             Sign out
           </button>

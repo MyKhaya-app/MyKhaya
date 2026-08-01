@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
+    registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = _read_repo_version()
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
     rate_limit_login: int = Field(default=10, ge=1, le=100)
     rate_limit_register: int = Field(default=5, ge=1, le=100)
     trusted_proxy_cidrs: list[str] = []
+    default_timezone: str = "Europe/London"
+    default_locale: str = "en-GB"
+    week_start: Literal["monday", "sunday"] = "monday"
     admin_allowed_networks: list[str] = ["127.0.0.0/8", "::1/128"]
     admin_session_idle_minutes: int = Field(default=15, ge=5, le=60)
     admin_session_absolute_minutes: int = Field(default=480, ge=15, le=720)

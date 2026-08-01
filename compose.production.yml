@@ -15,6 +15,10 @@ services:
   api:
     environment: &production_api_environment
       MYKHAYA_ENVIRONMENT: production
+      MYKHAYA_REGISTRATION_MODE: invitation_only
+      MYKHAYA_DEFAULT_TIMEZONE: Europe/London
+      MYKHAYA_DEFAULT_LOCALE: en-GB
+      MYKHAYA_WEEK_START: monday
       MYKHAYA_BUILD_CHANNEL: stable
       MYKHAYA_COOKIE_SECURE: "true"
       MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN:-mykhaya.app}"
