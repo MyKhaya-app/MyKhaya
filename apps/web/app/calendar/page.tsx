@@ -255,11 +255,6 @@ function EventForm({
   );
 }
 
-function formString(form: FormData, key: string, fallback = "") {
-  const value = form.get(key);
-  return typeof value === "string" ? value : fallback;
-}
-
 export default function CalendarPage() {
   const router = useRouter();
   const { activeHome, activeHomeId } = useActiveHome();
@@ -357,37 +352,14 @@ export default function CalendarPage() {
       setError("End must be after start.");
       return;
     }
-    setBusy(true);
     setError("");
-    const form = new FormData(e.currentTarget);
-    const start = new Date(formString(form, "start"));
-    const end = new Date(formString(form, "end"));
-    const recurrence = formString(form, "recurrence", "none") as RecurrencePattern;
-    const title = formString(form, "title").trim();
-    const description = formString(form, "description");
-    const location = formString(form, "location");
-    const labelId = formString(form, "label");
-    const validLabelIds = new Set(labels.map((label) => label.id));
-    const safeLabelId = labelId && validLabelIds.has(labelId) ? labelId : null;
-    const reminderRaw = formString(form, "reminder");
-
+    setBusy(true);
     try {
-      await api.createEvent(activeHomeId, {
-        title: String(form.get("title") || "").trim(),
-        start_at: start.toISOString(),
-        end_at: end.toISOString(),
-        timezone: "Europe/London",
-        is_all_day: form.get("allDay") === "on",
-        description: String(form.get("description") || "") || null,
-        location_text: String(form.get("location") || "") || null,
-        label_id: String(form.get("label") || "") || null,
-        reminder_minutes: Number(form.get("reminder") || "") || null,
-        recurrence,
-        recurrence_interval: 1,
-      });
-      (e.currentTarget as HTMLFormElement).reset();
-      await reload();
-    } catch (reason) {
+      await api.createEvent(activeHomeId, payload);
+      setEditorDay(null);
+      setSelectedDay(null);
+      await load();
+    } catch (cause) {
       setError(
         cause instanceof ApiError
           ? cause.message
@@ -400,6 +372,11 @@ export default function CalendarPage() {
 
   async function update(payload: EventPayload) {
     if (!activeHomeId || !selectedEvent) return;
+    if (new Date(payload.end_at) <= new Date(payload.start_at)) {
+      setError("End must be after start.");
+      return;
+    }
+    setError("");
     setBusy(true);
     try {
       await api.updateEvent(activeHomeId, selectedEvent.event_id, {
@@ -410,38 +387,27 @@ export default function CalendarPage() {
       await load();
     } catch (cause) {
       setError(
-        reason instanceof ApiError ? reason.message : "Could not delete event.",
+        cause instanceof ApiError
+          ? cause.message
+          : "This event changed. Reload and try again.",
       );
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function saveSelected(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!activeHomeId || !selected) return;
-    const form = new FormData(e.currentTarget);
-    const start = new Date(String(form.get("start")));
-    const end = new Date(String(form.get("end")));
+  async function remove() {
+    if (
+      !activeHomeId ||
+      !selectedEvent ||
+      !window.confirm("Delete this event?")
+    )
+      return;
     try {
-      const updated = await api.updateEvent(activeHomeId, selected.event_id, {
-        title: String(form.get("title") || "").trim(),
-        start_at: start.toISOString(),
-        end_at: end.toISOString(),
-        timezone: selected.timezone,
-        is_all_day: form.get("allDay") === "on",
-        description: String(form.get("description") || "") || null,
-        location_text: String(form.get("location") || "") || null,
-        label_id: String(form.get("label") || "") || null,
-        member_ids: selected.member_ids,
-        reminder_minutes: Number(form.get("reminder") || "") || null,
-        recurrence: String(form.get("recurrence") || "none") as RecurrencePattern,
-        recurrence_interval: 1,
-        recurrence_until: null,
-        recurrence_count: null,
-        expected_updated_at: selected.updated_at,
-      });
-      setSelected(updated);
-      await reload();
-    } catch (reason) {
+      await api.deleteEvent(activeHomeId, selectedEvent.event_id);
+      setSelectedEvent(null);
+      await load();
+    } catch (cause) {
       setError(
         cause instanceof ApiError
           ? cause.message
