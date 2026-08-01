@@ -1,15 +1,29 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _read_repo_version() -> str:
+    here = Path(__file__).resolve()
+    candidates = [Path("/app/VERSION"), Path.cwd() / "VERSION"]
+    candidates.extend(parent / "VERSION" for parent in here.parents[:4])
+    for path in candidates:
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+    return "0.1.0-dev"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
-    version: str = "0.1.0"
+    registration_mode: Literal["closed", "invitation_only", "open"] = "open"
+    version: str = _read_repo_version()
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
@@ -27,6 +41,9 @@ class Settings(BaseSettings):
     rate_limit_login: int = Field(default=10, ge=1, le=100)
     rate_limit_register: int = Field(default=5, ge=1, le=100)
     trusted_proxy_cidrs: list[str] = []
+    default_timezone: str = "Europe/London"
+    default_locale: str = "en-GB"
+    week_start: Literal["monday", "sunday"] = "monday"
 
     @field_validator("cors_origins", "trusted_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
