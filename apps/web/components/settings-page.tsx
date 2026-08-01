@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell } from "./app-shell";
+import { AppVersion } from "./app-version";
 const links = [
   ["Profile", "Your name and account details", "/settings/profile"],
   ["Security", "Password and signed-in devices", "/settings/security"],
@@ -34,6 +35,7 @@ export function SettingsPage({
             ))}
           </div>
         )}
+        <AppVersion />
       </main>
     </AppShell>
   );

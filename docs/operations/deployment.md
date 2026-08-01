@@ -22,4 +22,18 @@ For Cloudflare, restrict origin ingress to Cloudflare IP ranges, configure Caddy
 4. Exercise login, Home membership and a cross-Home denial check.
 5. To roll back, restore prior image digests. If a migration is not backward compatible, stop writes and restore the verified pre-upgrade database backup. Never improvise schema rollback against live data.
 
+## Release channels and tags
+
+- Development deployments may run from `dev` and should identify themselves as non-production.
+- Stable production deployments must run from `main` or a stable tag.
+- Stable tags follow `vMAJOR.MINOR.PATCH` and map to the same value in `VERSION`.
+- Do not publish development builds as `latest`.
+
+If registry publishing is introduced, prefer:
+
+- development tags: `mykhaya:dev`, optional `mykhaya:dev-<sha>`
+- stable tags: `mykhaya:latest`, `mykhaya:<major>.<minor>.<patch>`, `mykhaya:<major>.<minor>`, `mykhaya:<major>`
+
+Only advance `latest` after an approved stable release.
+
 Containers log JSON or structured records to stdout. Alert on health failures, repeated authentication denials, queue failures, backup failures and storage capacity. Keep exactly one scheduler replica.

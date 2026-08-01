@@ -28,3 +28,5 @@ Next.js   FastAPI
 - Deployment: Docker Compose initially
 
 The same production images must run on the home test server and VPS. Environment configuration changes; source architecture does not.
+
+Production has three customer/operator origins routed by Caddy: `mykhaya.app` for the public and household product, `admin.mykhaya.app` for the restricted management plane, and `status.mykhaya.app` for deliberately limited public availability information. All currently reuse the modular-monolith images, but hostname, API, cookie, identity, authorization and response boundaries are explicit.

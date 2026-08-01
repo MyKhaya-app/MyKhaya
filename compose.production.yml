@@ -1,6 +1,11 @@
 services:
   caddy:
     ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      WEB_DOMAIN: "${WEB_DOMAIN:-mykhaya.app}"
+      API_DOMAIN: "${API_DOMAIN:-api.mykhaya.app}"
+      ADMIN_DOMAIN: "${ADMIN_DOMAIN:-admin.mykhaya.app}"
+      STATUS_DOMAIN: "${STATUS_DOMAIN:-status.mykhaya.app}"
     volumes:
       [
         "./infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro",
@@ -14,10 +19,13 @@ services:
       MYKHAYA_DEFAULT_TIMEZONE: Europe/London
       MYKHAYA_DEFAULT_LOCALE: en-GB
       MYKHAYA_WEEK_START: monday
+      MYKHAYA_BUILD_CHANNEL: stable
       MYKHAYA_COOKIE_SECURE: "true"
-      MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN}"
-      MYKHAYA_CORS_ORIGINS: '["https://${WEB_DOMAIN}"]'
-      MYKHAYA_TRUSTED_HOSTS: '["api","${WEB_DOMAIN}","${API_DOMAIN}"]'
+      MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN:-mykhaya.app}"
+      MYKHAYA_ADMIN_URL: "https://${ADMIN_DOMAIN:-admin.mykhaya.app}"
+      MYKHAYA_STATUS_URL: "https://${STATUS_DOMAIN:-status.mykhaya.app}"
+      MYKHAYA_CORS_ORIGINS: '["https://${WEB_DOMAIN:-mykhaya.app}","https://${ADMIN_DOMAIN:-admin.mykhaya.app}"]'
+      MYKHAYA_TRUSTED_HOSTS: '["api","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]'
   worker:
     environment: *production_api_environment
   scheduler:

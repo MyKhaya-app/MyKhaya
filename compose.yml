@@ -19,8 +19,27 @@ services:
     read_only: true
     tmpfs: [/tmp]
   web:
-    build: { context: ., dockerfile: apps/web/Dockerfile }
-    environment: { API_INTERNAL_URL: "http://api:8000", NODE_ENV: production }
+    build:
+      {
+        context: .,
+        dockerfile: apps/web/Dockerfile,
+        args:
+          {
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+            MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+            MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+          },
+      }
+    environment:
+      {
+        API_INTERNAL_URL: "http://api:8000",
+        NODE_ENV: production,
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+        MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+        MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+      }
     depends_on: { api: { condition: service_healthy } }
     networks: [app]
     restart: unless-stopped
@@ -29,11 +48,26 @@ services:
     read_only: true
     tmpfs: [/tmp]
   api: &api
-    build: { context: ., dockerfile: apps/api/Dockerfile }
+    build:
+      {
+        context: .,
+        dockerfile: apps/api/Dockerfile,
+        args:
+          {
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+            MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+            MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+          },
+      }
     env_file: [.env]
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya",
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+        MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+        MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
       }
     depends_on:
       {
@@ -56,11 +90,26 @@ services:
     command: ["python", "-m", "mykhaya.scheduler"]
     healthcheck: { disable: true }
   migrate:
-    build: { context: ., dockerfile: apps/api/Dockerfile }
+    build:
+      {
+        context: .,
+        dockerfile: apps/api/Dockerfile,
+        args:
+          {
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+            MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+            MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+          },
+      }
     env_file: [.env]
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_migrator:${MYKHAYA_MIGRATION_DB_PASSWORD}@postgres:5432/mykhaya",
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
+        MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
+        MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
       }
     command: ["alembic", "upgrade", "head"]
     depends_on: { postgres: { condition: service_healthy } }
@@ -77,6 +126,11 @@ services:
       MYKHAYA_RATE_LIMIT_LOGIN: "100"
       MYKHAYA_RATE_LIMIT_REGISTER: "100"
       MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
+      MYKHAYA_ADMIN_URL: "http://admin.localhost:8080"
+      MYKHAYA_STATUS_URL: "http://status.localhost:8080"
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]'
+      MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128"]'
       COVERAGE_FILE: /tmp/.coverage
       RUFF_CACHE_DIR: /tmp/.ruff_cache
       MYPY_CACHE_DIR: /tmp/.mypy_cache

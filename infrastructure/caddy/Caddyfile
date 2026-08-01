@@ -1,16 +1,50 @@
-:8080 {
-  encode zstd gzip
-  @api path /api/*
-  reverse_proxy @api api:8000
-  reverse_proxy web:3000
-  header {
-    -Server
-    X-Content-Type-Options nosniff
-    Referrer-Policy strict-origin-when-cross-origin
-    Permissions-Policy "camera=(), microphone=(), geolocation=()"
-  }
-  log {
-    output stdout
-    format json
-  }
+http://localhost:8080, http://127.0.0.1:8080, http://mykhaya.localhost:8080 {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+http://admin.localhost:8080 {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+http://status.localhost:8080 {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	log {
+		output stdout
+		format json
+	}
 }

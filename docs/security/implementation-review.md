@@ -22,3 +22,9 @@ NCSC Software Security Code of Practice themes are represented by documented req
 - MFA, account export/deletion, Home ownership transfer/deletion, retention automation, monitoring integrations and native authentication are not complete.
 - Independent authorisation/session testing, WSTG testing, penetration testing and an observed off-host restore are still required before broad hosted release.
 - Image signing/provenance, protected CI environments and a private vulnerability-reporting address require repository/operator configuration.
+
+## Platform administration review
+
+Implemented evidence includes isolated platform identities/roles/sessions, hostname and trusted-proxy-aware network gates, short idle/absolute timeouts, revocation, strict role dependencies, recent-auth/reason/confirmation checks, a dedicated redacting audit trail, privacy-minimised metadata APIs, typed settings/feature keys, internal health separation and a deliberately limited public status contract.
+
+Open blockers are mandatory WebAuthn/passkey enrolment and verification, safe administrator lifecycle endpoints, external tamper-resistant audit export, delivery-event persistence and encrypted database-managed mail secrets, job retry idempotency registration, automated retention/rights workflows, authoritative backup/migration/capacity/performance telemetry, independently hosted status delivery and independent security/privacy/legal review. The Control Centre must not be described as production-ready.

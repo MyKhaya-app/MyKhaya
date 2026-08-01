@@ -1,0 +1,27 @@
+changelog:
+  exclude:
+    labels:
+      - skip-release-notes
+  categories:
+    - title: New Features
+      labels:
+        - feature
+    - title: Improvements
+      labels:
+        - improvement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Security
+      labels:
+        - security
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Internal and Maintenance
+      labels:
+        - maintenance
+        - breaking-change
+    - title: Other Changes
+      labels:
+        - "*"

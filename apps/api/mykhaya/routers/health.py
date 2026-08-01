@@ -3,7 +3,6 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya import __version__
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 
@@ -32,5 +31,16 @@ async def ready(
 
 
 @router.get("/version")
-async def version() -> dict[str, str]:
-    return {"version": __version__}
+async def version(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+    return {"version": settings.version}
+
+
+@router.get("/health/build", include_in_schema=False)
+async def build(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+    return {
+        "version": settings.version,
+        "commit": settings.commit_sha,
+        "build_time": settings.build_time,
+        "environment": settings.environment,
+        "channel": settings.build_channel,
+    }

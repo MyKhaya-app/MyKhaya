@@ -8,7 +8,15 @@ from redis.asyncio import Redis
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.mailer import send_email
-from mykhaya.models import ActionToken, Group, Invitation, OutboxEvent, User, WorkerJobRecord
+from mykhaya.models import (
+    ActionToken,
+    Group,
+    Invitation,
+    OperationalHeartbeat,
+    OutboxEvent,
+    User,
+    WorkerJobRecord,
+)
 from mykhaya.security import derived_token
 
 
@@ -93,6 +101,16 @@ async def run() -> None:
     try:
         while True:
             item = await redis.blpop("mykhaya:jobs", timeout=5)
+            async with SessionFactory() as db:
+                await db.merge(
+                    OperationalHeartbeat(
+                        service="worker",
+                        observed_at=datetime.now(UTC),
+                        last_success_at=datetime.now(UTC),
+                        safe_detail="Worker loop is active.",
+                    )
+                )
+                await db.commit()
             if item:
                 payload = json.loads(item[1])
                 try:

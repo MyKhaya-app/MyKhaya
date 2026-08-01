@@ -1,13 +1,6 @@
 import type { Home, Member, User } from "@mykhaya/shared-types";
-
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+import { ApiError } from "./errors";
+export { ApiError } from "./errors";
 
 export class MyKhayaClient {
   constructor(private readonly baseUrl = "/api/v1") {}
@@ -127,3 +120,5 @@ export class MyKhayaClient {
 }
 
 export const api = new MyKhayaClient();
+
+export { platformApi, PlatformClient } from "./platform";
