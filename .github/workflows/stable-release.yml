@@ -1,0 +1,45 @@
+name: stable-release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable tag to release (for example v0.1.0)
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: stable-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+      - name: Confirm tag matches trigger
+        run: test "$(git describe --tags --exact-match)" = "${{ inputs.tag }}"
+      - name: Validate release version
+        env:
+          GITHUB_REF: refs/tags/${{ inputs.tag }}
+          GITHUB_REF_NAME: ${{ inputs.tag }}
+        run: python infrastructure/scripts/validate_version.py
+      - name: Prepare test configuration
+        run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/release-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/release-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/release-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/release-runtime-password/' .env && sed -i 's/^MYKHAYA_VERSION=.*/MYKHAYA_VERSION=/' .env
+      - name: Resolve build metadata
+        run: echo "MYKHAYA_VERSION=$(cat VERSION)" >> $GITHUB_ENV && echo "MYKHAYA_COMMIT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV && echo "MYKHAYA_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV && echo "MYKHAYA_BUILD_CHANNEL=stable" >> $GITHUB_ENV
+      - name: Quality checks
+        run: docker compose config --quiet && make test && make lint && make typecheck
+      - name: Validate Alembic heads
+        run: docker compose run --rm migrate alembic heads | tee /tmp/alembic-heads.txt && test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
+      - name: Build production images from tag
+        run: docker compose build web api worker scheduler migrate
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ inputs.tag }}" --verify-tag --generate-notes --title "MyKhaya ${{ inputs.tag }}"
+      - name: Shut down
+        if: always()
+        run: docker compose --profile tools down -v

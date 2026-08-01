@@ -1,0 +1,24 @@
+name: version-validation
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: version-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Validate versioning rules
+        run: python infrastructure/scripts/validate_version.py
+      - name: Validate Alembic heads
+        run: docker compose run --rm migrate alembic heads | tee /tmp/alembic-heads.txt && test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
