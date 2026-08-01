@@ -73,7 +73,9 @@ async def admin_factory() -> AsyncIterator[
                 )
             )
             await db.execute(
-                delete(AdministrativeNote).where(AdministrativeNote.administrator_id.in_(identifiers))
+                delete(AdministrativeNote).where(
+                    AdministrativeNote.administrator_id.in_(identifiers)
+                )
             )
             await db.execute(
                 delete(SecurityEvent).where(SecurityEvent.administrator_id.in_(identifiers))
