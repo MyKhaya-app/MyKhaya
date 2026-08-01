@@ -1,84 +1,108 @@
 "use client";
-import { useEffect, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { FeatureKey, Home, User } from "@mykhaya/shared-types";
+import type { Home, HouseholdModule, User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { Logo } from "./logo";
 import { useActiveHome } from "./use-active-home";
-const nav: readonly [string, string, string, FeatureKey | null][] = [
-  ["⌂", "Home", "/home", null],
-  ["▣", "Calendar", "/calendar", "calendar"],
-  ["☑", "Tasks", "/tasks", "tasks"],
-  ["🛒", "Shopping", "/shopping", "shopping"],
-  ["♨", "Meals", "/meals", "meals"],
-  ["◇", "Plans", "/plans", "plans"],
-  ["♧", "Wish Lists", "/wish-lists", "wish_lists"],
-  ["♙", "People", "/people", null],
-  ["♢", "Notifications", "/notifications", "notifications"],
-  ["⚙", "Settings", "/settings", null],
-] as const;
+
+const icons: Record<string, string> = {
+  dashboard: "⌂",
+  calendar: "▣",
+  household_members: "♙",
+  security: "◈",
+};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const path = usePathname(),
-    router = useRouter();
+  const path = usePathname();
+  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [features, setFeatures] = useState<Partial<Record<FeatureKey, boolean>>>({});
+  const [modules, setModules] = useState<HouseholdModule[]>([]);
   const { homes, activeHome, activeHomeId, setActiveHomeId, loading } =
     useActiveHome();
+
   useEffect(() => {
     api
       .me()
-      .then((u) => {
-        setUser(u);
-      })
+      .then(setUser)
       .catch(() => router.replace("/login"));
   }, [router]);
+
   useEffect(() => {
-    if (!loading && !homes.length && path !== "/onboarding") {
+    if (!loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
-    }
   }, [homes, loading, path, router]);
+
   useEffect(() => {
     if (!activeHomeId) {
-      setFeatures({});
+      setModules([]);
       return;
     }
     api
-      .featureMatrix(activeHomeId)
-      .then((matrix) =>
-        setFeatures(
-          Object.fromEntries(matrix.features.map((item) => [item.feature, item.enabled])),
-        ),
-      )
-      .catch(() => setFeatures({}));
+      .navigationModules(activeHomeId)
+      .then(setModules)
+      .catch(() => setModules([]));
   }, [activeHomeId]);
-  const visibleNav = nav.filter(([, , , feature]) => !feature || features[feature] === true);
+
+  const navigation = useMemo(
+    () => modules.filter((module) => module.route),
+    [modules],
+  );
+  const mobileNavigation = navigation.filter((module) =>
+    ["dashboard", "calendar", "household_members", "notifications"].includes(
+      module.id,
+    ),
+  );
+  const canAccessControlCentre = activeHome?.relationship === "home_admin";
+
   async function logout() {
     await api.post("/auth/logout", {});
     router.push("/login");
   }
+
   return (
     <div className="app-shell">
       <aside>
         <Logo />
         <nav aria-label="Main navigation">
-          {visibleNav.map(([icon, label, url]) => (
+          {navigation.map((module) => (
             <Link
-              key={url}
-              href={url}
+              key={module.id}
+              href={module.route!}
               className={
-                path === url || path.startsWith(`${url}/`) ? "active" : ""
+                path === module.route || path.startsWith(`${module.route}/`)
+                  ? "active"
+                  : ""
               }
             >
-              <span aria-hidden="true">{icon}</span>
-              {label}
+              <span aria-hidden="true">{icons[module.id] ?? "•"}</span>
+              {module.name}
             </Link>
           ))}
+          <Link
+            href="/settings"
+            className={path.startsWith("/settings") ? "active" : ""}
+          >
+            <span aria-hidden="true">⚙</span>
+            Settings
+          </Link>
+          {canAccessControlCentre && (
+            <Link
+              href="/khaya-control-centre"
+              className={
+                path.startsWith("/khaya-control-centre") ? "active" : ""
+              }
+            >
+              <span aria-hidden="true">◇</span>
+              Khaya Control Centre
+            </Link>
+          )}
         </nav>
         <div className="home-switch">
           <div className="avatars" aria-hidden="true">
             <i>{user?.display_name?.[0] ?? "?"}</i>
-            <i>+</i>
           </div>
           <strong>{activeHome?.name ?? "Your Home"}</strong>
           {homes.length > 1 && (
@@ -96,32 +120,55 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </select>
             </label>
           )}
-          <button className="link-button" onClick={logout}>
+          <button className="link-button" onClick={logout} type="button">
             Sign out
           </button>
         </div>
       </aside>
       <div className="app-main">
         <header>
-          <button className="mobile-logo" aria-label="Open menu">
+          <Link className="mobile-logo" aria-label="Go to Home" href="/home">
             <Logo compact />
-          </button>
-          <div className="search" aria-label="Search is coming soon">
-            Search your Home… <span>⌕</span>
-          </div>
+          </Link>
+          <span className="mobile-home-name">
+            {activeHome?.name ?? "MyKhaya"}
+          </span>
           <span className="hello">{user?.display_name ?? "Welcome"}</span>
         </header>
         {children}
         <nav className="mobile-nav" aria-label="Mobile navigation">
-          {visibleNav.slice(0, 4).map(([icon, label, url]) => (
-            <Link key={url} href={url} className={path === url ? "active" : ""}>
-              <span>{icon}</span>
-              {label}
-            </Link>
-          ))}
-          <Link href="/settings">
-            <span>•••</span>More
+          {mobileNavigation
+            .slice(0, canAccessControlCentre ? 3 : 4)
+            .map((module) => (
+              <Link
+                key={module.id}
+                href={module.route!}
+                className={path === module.route ? "active" : ""}
+              >
+                <span aria-hidden="true">{icons[module.id] ?? "•"}</span>
+                {module.name === "Household members"
+                  ? "Household"
+                  : module.name}
+              </Link>
+            ))}
+          <Link
+            href="/settings"
+            className={path.startsWith("/settings") ? "active" : ""}
+          >
+            <span aria-hidden="true">•••</span>
+            More
           </Link>
+          {canAccessControlCentre && (
+            <Link
+              href="/khaya-control-centre"
+              className={
+                path.startsWith("/khaya-control-centre") ? "active" : ""
+              }
+            >
+              <span aria-hidden="true">Control</span>
+              Control
+            </Link>
+          )}
         </nav>
       </div>
     </div>

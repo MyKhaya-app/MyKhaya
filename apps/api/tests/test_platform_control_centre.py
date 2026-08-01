@@ -141,16 +141,8 @@ async def test_feature_flags_default_off_require_operator_confirmation_and_are_a
     await login(admin_client, readonly)
     listed = await admin_client.get("/api/v1/platform/feature-flags")
     assert listed.status_code == 200
-    assert {item["key"] for item in listed.json()} == {
-        "calendar",
-        "tasks",
-        "shopping",
-        "meals",
-        "plans",
-        "wish_lists",
-        "notifications",
-        "external_sharing",
-    }
+    # Hidden modules are absent even from the operator catalogue.
+    assert {item["key"] for item in listed.json()} == {"calendar"}
     assert all(item["enabled"] is False for item in listed.json())
     denied = await unsafe(
         admin_client,

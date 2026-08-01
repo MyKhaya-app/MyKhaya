@@ -6,6 +6,19 @@ export type MembershipRole =
   | "adult_member"
   | "member"
   | "guest";
+export type HouseholdRelationship =
+  | "home_admin"
+  | "partner"
+  | "child"
+  | "extended_family"
+  | "friend"
+  | "review_required";
+export type PermissionProfile =
+  | "home_admin"
+  | "standard_partner"
+  | "child_restricted"
+  | "explicit_sharing"
+  | "review_required";
 export interface User {
   id: string;
   email: string;
@@ -16,13 +29,21 @@ export interface Home {
   id: string;
   name: string;
   role: MembershipRole;
+  relationship: HouseholdRelationship;
+  permission_profile: PermissionProfile;
+  capabilities: string[];
   member_count: number;
 }
 export interface Member {
+  membership_id: string;
   user_id: string;
   display_name: string;
-  email: string;
+  email: string | null;
   role: MembershipRole;
+  relationship: HouseholdRelationship;
+  permission_profile: PermissionProfile;
+  permission_overrides: Record<string, boolean>;
+  shared_resources: string[];
 }
 
 export type RecurrencePattern =
@@ -103,6 +124,9 @@ export interface InvitationResponse {
   group_id: string;
   email: string;
   role: MembershipRole;
+  relationship: HouseholdRelationship;
+  permission_profile: PermissionProfile;
+  shared_resources: string[];
   expires_at: string;
 }
 
@@ -119,6 +143,7 @@ export interface InvitationPreview {
   invited_by_display_name: string;
   email: string;
   role: MembershipRole;
+  relationship: HouseholdRelationship;
   expires_at: string;
 }
 
@@ -147,4 +172,33 @@ export interface FeatureEvaluation {
 
 export interface FeatureMatrix {
   features: FeatureEvaluation[];
+}
+
+export type ReleaseState = "core" | "released" | "beta" | "hidden";
+
+export interface HouseholdModule {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  release_state: ReleaseState;
+  enabled: boolean;
+  toggleable: boolean;
+  introduced_version: string | null;
+  dependencies: string[];
+  permissions: string[];
+  route: string | null;
+}
+
+export type ChildAgeBand = "under_13" | "13_to_15" | "16_to_17";
+export type ChildTransitionStatus = "child" | "review_due" | "converted";
+
+export interface ChildProfile {
+  membership_id: string;
+  user_id: string;
+  display_name: string;
+  age_band: ChildAgeBand;
+  permissions: Record<string, boolean>;
+  guardian_membership_ids: string[];
+  transition_status: ChildTransitionStatus;
 }

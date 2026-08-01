@@ -1,9 +1,17 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from mykhaya.models import RecurrencePattern, Role
+from mykhaya.models import (
+    ChildAgeBand,
+    ChildTransitionStatus,
+    HouseholdRelationship,
+    PermissionProfile,
+    RecurrencePattern,
+    Role,
+)
 
 
 class StrictModel(BaseModel):
@@ -63,24 +71,40 @@ class GroupResponse(BaseModel):
     id: uuid.UUID
     name: str
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    capabilities: list[str]
     member_count: int
 
 
 class MemberResponse(BaseModel):
+    membership_id: uuid.UUID
     user_id: uuid.UUID
     display_name: str
-    email: EmailStr
+    email: EmailStr | None
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    permission_overrides: dict[str, bool]
+    shared_resources: list[str]
 
 
-class MemberRoleUpdate(StrictModel):
-    role: Role
+class MemberRelationshipUpdate(StrictModel):
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile | None = None
+    permission_overrides: dict[str, bool] = Field(default_factory=dict)
+    shared_resources: list[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
 
 
 class InvitationCreate(StrictModel):
     group_id: uuid.UUID
     email: EmailStr
-    role: Role = Role.adult_member
+    relationship: HouseholdRelationship = HouseholdRelationship.partner
+    shared_resources: list[str] = Field(default_factory=list, max_length=20)
+    # Accepted during the compatibility window; authority is derived from relationship.
+    role: Role | None = None
 
 
 class InvitationResponse(BaseModel):
@@ -88,6 +112,9 @@ class InvitationResponse(BaseModel):
     group_id: uuid.UUID
     email: EmailStr
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    shared_resources: list[str]
     expires_at: datetime
 
 
@@ -104,7 +131,71 @@ class InvitationTokenPreview(BaseModel):
     invited_by_display_name: str
     email: EmailStr
     role: Role
+    relationship: HouseholdRelationship
     expires_at: datetime
+
+
+class ChildCreate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=100)
+    age_band: ChildAgeBand
+    guardian_membership_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+
+
+class ChildPermissionUpdate(StrictModel):
+    permissions: dict[str, bool]
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildAgeBandUpdate(StrictModel):
+    age_band: ChildAgeBand
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class GuardianUpdate(StrictModel):
+    guardian_membership_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildTransitionRequest(StrictModel):
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildDeleteRequest(ChildTransitionRequest):
+    pass
+
+
+class ChildResponse(BaseModel):
+    membership_id: uuid.UUID
+    user_id: uuid.UUID
+    display_name: str
+    age_band: ChildAgeBand
+    permissions: dict[str, bool]
+    guardian_membership_ids: list[uuid.UUID]
+    transition_status: ChildTransitionStatus
+
+
+class HouseholdModuleResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    release_state: str
+    enabled: bool
+    toggleable: bool
+    introduced_version: str | None
+    dependencies: list[str]
+    permissions: list[str]
+    route: str | None
+
+
+class HouseholdFeatureUpdate(StrictModel):
+    enabled: bool
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
 
 
 class InvitationResend(StrictModel):

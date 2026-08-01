@@ -5,6 +5,9 @@ export default defineConfig({
   retries: 1,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:8080",
+    extraHTTPHeaders: process.env.PLAYWRIGHT_HOST_HEADER
+      ? { Host: process.env.PLAYWRIGHT_HOST_HEADER }
+      : undefined,
     trace: "retain-on-failure",
   },
   projects: [

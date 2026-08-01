@@ -12,6 +12,7 @@ from mykhaya.config import get_settings
 from mykhaya.routers import (
     auth,
     calendar,
+    children,
     features,
     groups,
     health,
@@ -36,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
 )
 
@@ -86,6 +87,7 @@ for router in (
     groups.router,
     invitations.router,
     calendar.router,
+    children.router,
     features.router,
     platform.router,
     status_router.router,

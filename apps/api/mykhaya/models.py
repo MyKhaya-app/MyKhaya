@@ -17,7 +17,8 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import relationship as orm_relationship
 
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
@@ -38,6 +39,35 @@ class Role(StrEnum):
     adult_member = "adult_member"
     member = "member"
     guest = "guest"
+
+
+class HouseholdRelationship(StrEnum):
+    home_admin = "home_admin"
+    partner = "partner"
+    child = "child"
+    extended_family = "extended_family"
+    friend = "friend"
+    review_required = "review_required"
+
+
+class PermissionProfile(StrEnum):
+    home_admin = "home_admin"
+    standard_partner = "standard_partner"
+    child_restricted = "child_restricted"
+    explicit_sharing = "explicit_sharing"
+    review_required = "review_required"
+
+
+class ChildAgeBand(StrEnum):
+    under_13 = "under_13"
+    age_13_15 = "13_to_15"
+    age_16_17 = "16_to_17"
+
+
+class ChildTransitionStatus(StrEnum):
+    child = "child"
+    review_due = "review_due"
+    converted = "converted"
 
 
 class TokenPurpose(StrEnum):
@@ -89,7 +119,7 @@ class User(UuidTimeMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
+    memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
 
 
 class AuthIdentity(UuidTimeMixin, Base):
@@ -138,7 +168,7 @@ class Group(UuidTimeMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    memberships: Mapped[list["Membership"]] = relationship(back_populates="group")
+    memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
 
 
 class Membership(UuidTimeMixin, Base):
@@ -152,9 +182,19 @@ class Membership(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     role: Mapped[Role] = mapped_column(Enum(Role, name="membership_role"))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship"),
+        default=HouseholdRelationship.review_required,
+    )
+    permission_profile: Mapped[PermissionProfile] = mapped_column(
+        Enum(PermissionProfile, name="permission_profile"),
+        default=PermissionProfile.review_required,
+    )
+    permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    group: Mapped[Group] = relationship(back_populates="memberships")
-    user: Mapped[User] = relationship(back_populates="memberships")
+    group: Mapped[Group] = orm_relationship(back_populates="memberships")
+    user: Mapped[User] = orm_relationship(back_populates="memberships")
 
 
 class HomeCalendar(UuidTimeMixin, Base):
@@ -267,6 +307,13 @@ class Invitation(UuidTimeMixin, Base):
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     email: Mapped[str] = mapped_column(String(320))
     role: Mapped[Role] = mapped_column(Enum(Role, name="membership_role", create_type=False))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    permission_profile: Mapped[PermissionProfile] = mapped_column(
+        Enum(PermissionProfile, name="permission_profile", create_type=False)
+    )
+    shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -431,6 +478,40 @@ class FeatureOverride(UuidTimeMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class ChildProfile(UuidTimeMixin, Base):
+    __tablename__ = "child_profiles"
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    age_band: Mapped[ChildAgeBand] = mapped_column(Enum(ChildAgeBand, name="child_age_band"))
+    permissions: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    transition_status: Mapped[ChildTransitionStatus] = mapped_column(
+        Enum(ChildTransitionStatus, name="child_transition_status"),
+        default=ChildTransitionStatus.child,
+    )
+
+
+class GuardianAssignment(UuidTimeMixin, Base):
+    __tablename__ = "guardian_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "child_profile_id", "guardian_membership_id", name="uq_child_guardian"
+        ),
+    )
+    child_profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True
+    )
+    guardian_membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), index=True
+    )
+    assigned_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
     )
 
 

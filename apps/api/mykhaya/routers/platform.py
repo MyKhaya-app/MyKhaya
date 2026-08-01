@@ -33,6 +33,7 @@ from mykhaya.models import (
     User,
     WorkerJobRecord,
 )
+from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
@@ -807,6 +808,8 @@ async def update_home_feature_flag(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    if module_definition(key.value).release_state == ReleaseState.hidden:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     if await db.get(Group, group_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
     row = await db.scalar(
@@ -1114,7 +1117,15 @@ async def feature_flags(
 ) -> list[dict[str, Any]]:
     rows = {row.key: row for row in (await db.scalars(select(FeatureFlag))).all()}
     return [
-        {"key": key, "enabled": rows[key].enabled if key in rows else False} for key in FeatureKey
+        {
+            "key": FeatureKey(module.id),
+            "enabled": rows[FeatureKey(module.id)].enabled
+            if FeatureKey(module.id) in rows
+            else False,
+            "release_state": module.release_state.value,
+        }
+        for module in feature_modules()
+        if module.release_state != ReleaseState.hidden
     ]
 
 
@@ -1128,6 +1139,8 @@ async def update_feature_flag(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    if module_definition(key.value).release_state == ReleaseState.hidden:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == key).with_for_update())
     previous = row.enabled if row else False
     if row is None:

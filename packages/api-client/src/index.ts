@@ -47,6 +47,96 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").FeatureMatrix>(
       `/features/${encodeURIComponent(homeId)}`,
     );
+  featureManagement = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HouseholdModule[]>(
+      `/features/${encodeURIComponent(homeId)}/modules/management`,
+    );
+  navigationModules = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HouseholdModule[]>(
+      `/features/${encodeURIComponent(homeId)}/modules/navigation`,
+    );
+  updateHouseholdFeature = (
+    homeId: string,
+    feature: import("@mykhaya/shared-types").FeatureKey,
+    body: { enabled: boolean; reason: string; confirmed: true },
+  ) =>
+    this.request<import("@mykhaya/shared-types").HouseholdModule>(
+      `/features/${encodeURIComponent(homeId)}/${encodeURIComponent(feature)}/household`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  children = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile[]>(
+      `/groups/${encodeURIComponent(homeId)}/children`,
+    );
+  createChild = (
+    homeId: string,
+    body: {
+      display_name: string;
+      age_band: import("@mykhaya/shared-types").ChildAgeBand;
+      guardian_membership_ids: string[];
+    },
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateChildPermissions = (
+    homeId: string,
+    membershipId: string,
+    body: {
+      permissions: Record<string, boolean>;
+      reason: string;
+      confirmed: true;
+    },
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/permissions`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  updateChildAgeBand = (
+    homeId: string,
+    membershipId: string,
+    body: {
+      age_band: import("@mykhaya/shared-types").ChildAgeBand;
+      reason: string;
+      confirmed: true;
+    },
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/age-band`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  updateChildGuardians = (
+    homeId: string,
+    membershipId: string,
+    body: {
+      guardian_membership_ids: string[];
+      reason: string;
+      confirmed: true;
+    },
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/guardians`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  requestChildAdultReview = (
+    homeId: string,
+    membershipId: string,
+    body: { reason: string; confirmed: true },
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/adult-transition-review`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  anonymiseChild = (
+    homeId: string,
+    membershipId: string,
+    body: { reason: string; confirmed: true },
+  ) =>
+    this.request<void>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}`,
+      { method: "DELETE", body: JSON.stringify(body) },
+    );
   listInvitations = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").InvitationListItem[]>(
       `/invitations/group/${encodeURIComponent(homeId)}`,
@@ -81,7 +171,10 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events?${search.toString()}`,
     );
   };
-  createEvent = (homeId: string, body: import("@mykhaya/shared-types").EventPayload) =>
+  createEvent = (
+    homeId: string,
+    body: import("@mykhaya/shared-types").EventPayload,
+  ) =>
     this.request<import("@mykhaya/shared-types").EventOccurrence>(
       `/homes/${encodeURIComponent(homeId)}/events`,
       { method: "POST", body: JSON.stringify(body) },
@@ -109,9 +202,12 @@ export class MyKhayaClient {
       `/invitations/preview?token=${encodeURIComponent(token)}`,
     );
   resendInvitation = (invitationId: string) =>
-    this.post<import("@mykhaya/shared-types").InvitationResponse>("/invitations/resend", {
-      invitation_id: invitationId,
-    });
+    this.post<import("@mykhaya/shared-types").InvitationResponse>(
+      "/invitations/resend",
+      {
+        invitation_id: invitationId,
+      },
+    );
   revokeInvitation = (invitationId: string) =>
     this.post<{ message: string }>("/invitations/revoke", {
       invitation_id: invitationId,
@@ -120,6 +216,8 @@ export class MyKhayaClient {
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   patch = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+  put = <T>(path: string, body: unknown) =>
+    this.request<T>(path, { method: "PUT", body: JSON.stringify(body) });
   delete = (path: string) => this.request<void>(path, { method: "DELETE" });
 }
 

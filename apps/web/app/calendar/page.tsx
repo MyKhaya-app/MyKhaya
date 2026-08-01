@@ -1,52 +1,258 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { EventLabel, EventOccurrence, RecurrencePattern } from "@mykhaya/shared-types";
+import type {
+  EventLabel,
+  EventOccurrence,
+  EventPayload,
+  Member,
+  RecurrencePattern,
+} from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
+import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
+import {
+  agendaRange,
+  dateKey,
+  dayRange,
+  eventsForDay,
+  groupEventsByDay,
+  monthCells,
+  monthRange,
+  weekRange,
+} from "./calendar-utils";
 
-type ViewMode = "month" | "week" | "agenda";
+type ViewMode = "month" | "week" | "day" | "agenda";
+const VIEW_STORAGE = "mykhaya.calendar.view";
 
-function isoDate(value: Date) {
-  return value.toISOString();
+function formText(data: FormData, name: string) {
+  const value = data.get(name);
+  return typeof value === "string" ? value : "";
 }
 
-function dateLabel(value: string, timezone: string) {
+function displayDate(
+  value: Date | string,
+  options: Intl.DateTimeFormatOptions,
+) {
   return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: timezone,
-  }).format(new Date(value));
+    timeZone: "UTC",
+    ...options,
+  }).format(typeof value === "string" ? new Date(value) : value);
 }
 
-function monthRange(base: Date) {
-  const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 1));
-  return { start, end };
+function eventTime(event: EventOccurrence) {
+  if (event.is_all_day) return "All day";
+  return displayDate(event.start_at, { hour: "2-digit", minute: "2-digit" });
 }
 
-function weekRange(base: Date) {
-  const day = (base.getUTCDay() + 6) % 7;
-  const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - day));
-  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + 7));
-  return { start, end };
+function localInput(value: string | Date) {
+  return (typeof value === "string" ? new Date(value) : value)
+    .toISOString()
+    .slice(0, 16);
 }
 
-function agendaRange(base: Date) {
-  const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - 14));
-  const end = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() + 45));
-  return { start, end };
-}
+function EventForm({
+  labels,
+  members,
+  initial,
+  initialDay,
+  busy,
+  submitLabel,
+  onSubmit,
+  onCancel,
+  onDelete,
+}: {
+  labels: EventLabel[];
+  members: Member[];
+  initial?: EventOccurrence;
+  initialDay: Date;
+  busy: boolean;
+  submitLabel: string;
+  onSubmit: (payload: EventPayload) => Promise<void>;
+  onCancel: () => void;
+  onDelete?: () => Promise<void>;
+}) {
+  const startDefault = initial
+    ? localInput(initial.start_at)
+    : localInput(
+        new Date(
+          Date.UTC(
+            initialDay.getUTCFullYear(),
+            initialDay.getUTCMonth(),
+            initialDay.getUTCDate(),
+            9,
+          ),
+        ),
+      );
+  const endDefault = initial
+    ? localInput(initial.end_at)
+    : localInput(
+        new Date(
+          Date.UTC(
+            initialDay.getUTCFullYear(),
+            initialDay.getUTCMonth(),
+            initialDay.getUTCDate(),
+            10,
+          ),
+        ),
+      );
 
-function dayKey(value: string) {
-  return value.slice(0, 10);
-}
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const title = formText(data, "title").trim();
+    const start = new Date(formText(data, "start"));
+    const end = new Date(formText(data, "end"));
+    await onSubmit({
+      title,
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+      timezone: initial?.timezone ?? "Europe/London",
+      is_all_day: data.get("allDay") === "on",
+      member_ids: data.getAll("members").map(String),
+      label_id: formText(data, "label") || null,
+      location_text: formText(data, "location") || null,
+      reminder_minutes: formText(data, "reminder")
+        ? Number(formText(data, "reminder"))
+        : null,
+      recurrence: (formText(data, "recurrence") || "none") as RecurrencePattern,
+      recurrence_interval: 1,
+      recurrence_until: null,
+      recurrence_count: null,
+      description: formText(data, "notes") || null,
+    });
+  }
 
-function formString(form: FormData, key: string, fallback = "") {
-  const value = form.get(key);
-  return typeof value === "string" ? value : fallback;
+  return (
+    <form className="event-form" onSubmit={submit}>
+      <label className="form-wide">
+        Title
+        <input
+          name="title"
+          defaultValue={initial?.title ?? ""}
+          required
+          maxLength={180}
+          autoFocus
+        />
+      </label>
+      <label>
+        Starts
+        <input
+          name="start"
+          type="datetime-local"
+          defaultValue={startDefault}
+          required
+        />
+      </label>
+      <label>
+        Ends
+        <input
+          name="end"
+          type="datetime-local"
+          defaultValue={endDefault}
+          required
+        />
+      </label>
+      <label className="check-row form-wide">
+        <input
+          name="allDay"
+          type="checkbox"
+          defaultChecked={initial?.is_all_day}
+        />
+        All-day event
+      </label>
+      {members.length > 0 && (
+        <fieldset className="form-wide">
+          <legend>Household members</legend>
+          <div className="member-checks">
+            {members.map((member) => (
+              <label className="check-row" key={member.user_id}>
+                <input
+                  name="members"
+                  type="checkbox"
+                  value={member.user_id}
+                  defaultChecked={initial?.member_ids.includes(member.user_id)}
+                />
+                {member.display_name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      <label>
+        Calendar or category
+        <select name="label" defaultValue={initial?.label?.id ?? ""}>
+          <option value="">Family calendar</option>
+          {labels.map((label) => (
+            <option key={label.id} value={label.id}>
+              {label.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Location
+        <input
+          name="location"
+          maxLength={200}
+          defaultValue={initial?.location_text ?? ""}
+        />
+      </label>
+      <details className="form-wide event-advanced">
+        <summary>Reminder, repeat and notes</summary>
+        <div className="event-form advanced-fields">
+          <label>
+            Reminder
+            <select
+              name="reminder"
+              defaultValue={initial?.reminder_minutes ?? ""}
+            >
+              <option value="">None</option>
+              <option value="0">At event time</option>
+              <option value="15">15 minutes before</option>
+              <option value="60">1 hour before</option>
+              <option value="1440">1 day before</option>
+            </select>
+          </label>
+          <label>
+            Repeat
+            <select
+              name="recurrence"
+              defaultValue={initial?.recurrence ?? "none"}
+            >
+              <option value="none">Does not repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="weekdays">Weekdays</option>
+            </select>
+          </label>
+          <label className="form-wide">
+            Notes
+            <textarea
+              name="notes"
+              maxLength={2000}
+              defaultValue={initial?.description ?? ""}
+            />
+          </label>
+        </div>
+      </details>
+      <div className="sheet-actions form-wide">
+        <button disabled={busy}>{busy ? "Saving…" : submitLabel}</button>
+        <button className="secondary" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        {onDelete && (
+          <button className="danger-link" type="button" onClick={onDelete}>
+            Delete event
+          </button>
+        )}
+      </div>
+    </form>
+  );
 }
 
 export default function CalendarPage() {
@@ -55,110 +261,107 @@ export default function CalendarPage() {
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [featureChecked, setFeatureChecked] = useState(false);
   const [view, setView] = useState<ViewMode>("month");
-  const [focusDate, setFocusDate] = useState<Date>(new Date());
+  const [focusDate, setFocusDate] = useState(new Date());
   const [events, setEvents] = useState<EventOccurrence[]>([]);
   const [labels, setLabels] = useState<EventLabel[]>([]);
-  const [selected, setSelected] = useState<EventOccurrence | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [editorDay, setEditorDay] = useState<Date | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<EventOccurrence | null>(
+    null,
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(VIEW_STORAGE) as ViewMode | null;
+    if (stored && ["month", "week", "day", "agenda"].includes(stored))
+      setView(stored);
+    else if (window.matchMedia("(max-width: 600px)").matches) setView("agenda");
+  }, []);
+
+  function chooseView(next: ViewMode) {
+    setView(next);
+    window.localStorage.setItem(VIEW_STORAGE, next);
+  }
 
   const range = useMemo(() => {
     if (view === "month") return monthRange(focusDate);
     if (view === "week") return weekRange(focusDate);
+    if (view === "day") return dayRange(focusDate);
     return agendaRange(focusDate);
   }, [focusDate, view]);
 
-  const eventsByDay = useMemo(() => {
-    const output = new Map<string, EventOccurrence[]>();
-    for (const event of events) {
-      const key = dayKey(event.start_at);
-      const current = output.get(key) ?? [];
-      current.push(event);
-      output.set(key, current);
-    }
-    return output;
-  }, [events]);
-
-  async function reload() {
+  const load = useCallback(async () => {
     if (!activeHomeId || !featureEnabled) return;
-    const [labelRows, eventRows] = await Promise.all([
+    const [labelRows, eventRows, memberRows] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
-        start_at: isoDate(range.start),
-        end_at: isoDate(range.end),
+        start_at: range.start.toISOString(),
+        end_at: range.end.toISOString(),
         page_size: 300,
       }),
+      api.members(activeHomeId).catch(() => []),
     ]);
     setLabels(labelRows);
     setEvents(eventRows.items);
-  }
+    setMembers(memberRows);
+  }, [activeHomeId, featureEnabled, range.end, range.start]);
 
   useEffect(() => {
-    if (!activeHomeId) {
-      setFeatureEnabled(false);
-      setFeatureChecked(false);
-      return;
-    }
+    if (!activeHomeId) return;
     setFeatureChecked(false);
     api
       .featureMatrix(activeHomeId)
       .then((matrix) => {
-        const enabled =
-          matrix.features.find((item) => item.feature === "calendar")?.enabled === true;
+        const enabled = matrix.features.some(
+          (item) => item.feature === "calendar" && item.enabled,
+        );
         setFeatureEnabled(enabled);
         setFeatureChecked(true);
         if (!enabled) router.replace("/home");
       })
-      .catch(() => {
-        setFeatureEnabled(false);
-        setFeatureChecked(true);
-        router.replace("/home");
-      });
+      .catch(() => router.replace("/home"));
   }, [activeHomeId, router]);
 
   useEffect(() => {
-    if (!activeHomeId || !featureEnabled) return;
     setError("");
-    reload().catch((reason: Error) => setError(reason.message));
-  }, [activeHomeId, featureEnabled, range.start.toISOString(), range.end.toISOString()]);
+    load().catch((cause: Error) => setError(cause.message));
+  }, [load]);
 
-  async function createEvent(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  const byDay = useMemo(() => groupEventsByDay(events), [events]);
+  const cells = useMemo(() => monthCells(focusDate), [focusDate]);
+  const memberNames = useMemo(
+    () =>
+      new Map(members.map((member) => [member.user_id, member.display_name])),
+    [members],
+  );
+
+  function move(direction: -1 | 1) {
+    const next = new Date(focusDate);
+    if (view === "month") next.setUTCMonth(next.getUTCMonth() + direction);
+    else if (view === "week")
+      next.setUTCDate(next.getUTCDate() + direction * 7);
+    else next.setUTCDate(next.getUTCDate() + direction);
+    setFocusDate(next);
+  }
+
+  async function create(payload: EventPayload) {
     if (!activeHomeId) return;
+    if (new Date(payload.end_at) <= new Date(payload.start_at)) {
+      setError("End must be after start.");
+      return;
+    }
     setBusy(true);
-    setError("");
-    const form = new FormData(e.currentTarget);
-    const start = new Date(formString(form, "start"));
-    const end = new Date(formString(form, "end"));
-    const recurrence = formString(form, "recurrence", "none") as RecurrencePattern;
-    const title = formString(form, "title").trim();
-    const description = formString(form, "description");
-    const location = formString(form, "location");
-    const labelId = formString(form, "label");
-    const validLabelIds = new Set(labels.map((label) => label.id));
-    const safeLabelId = labelId && validLabelIds.has(labelId) ? labelId : null;
-    const reminderRaw = formString(form, "reminder");
-
     try {
-      await api.createEvent(activeHomeId, {
-        title,
-        start_at: start.toISOString(),
-        end_at: end.toISOString(),
-        timezone: "Europe/London",
-        is_all_day: form.get("allDay") === "on",
-        description: description || null,
-        location_text: location || null,
-        label_id: safeLabelId,
-        reminder_minutes: reminderRaw ? Number(reminderRaw) : null,
-        recurrence,
-        recurrence_interval: 1,
-      });
-      (e.currentTarget as HTMLFormElement).reset();
-      await reload();
-    } catch (reason) {
+      await api.createEvent(activeHomeId, payload);
+      setEditorDay(null);
+      setSelectedDay(null);
+      await load();
+    } catch (cause) {
       setError(
-        reason instanceof ApiError
-          ? reason.message
+        cause instanceof ApiError
+          ? cause.message
           : "We could not save your event.",
       );
     } finally {
@@ -166,321 +369,392 @@ export default function CalendarPage() {
     }
   }
 
-  async function deleteEvent() {
-    if (!activeHomeId || !selected) return;
-    if (!window.confirm("Delete event?")) return;
+  async function update(payload: EventPayload) {
+    if (!activeHomeId || !selectedEvent) return;
+    setBusy(true);
     try {
-      await api.deleteEvent(activeHomeId, selected.event_id);
-      setSelected(null);
-      await reload();
-    } catch (reason) {
-      setError(
-        reason instanceof ApiError ? reason.message : "Could not delete event.",
-      );
-    }
-  }
-
-  async function saveSelected(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!activeHomeId || !selected) return;
-    const form = new FormData(e.currentTarget);
-    const start = new Date(formString(form, "start"));
-    const end = new Date(formString(form, "end"));
-    const title = formString(form, "title").trim();
-    const description = formString(form, "description");
-    const location = formString(form, "location");
-    const labelId = formString(form, "label");
-    const validLabelIds = new Set(labels.map((label) => label.id));
-    const safeLabelId = labelId && validLabelIds.has(labelId) ? labelId : null;
-    const reminderRaw = formString(form, "reminder");
-    const recurrence = formString(form, "recurrence", "none") as RecurrencePattern;
-    try {
-      const updated = await api.updateEvent(activeHomeId, selected.event_id, {
-        title,
-        start_at: start.toISOString(),
-        end_at: end.toISOString(),
-        timezone: selected.timezone,
-        is_all_day: form.get("allDay") === "on",
-        description: description || null,
-        location_text: location || null,
-        label_id: safeLabelId,
-        member_ids: selected.member_ids,
-        reminder_minutes: reminderRaw ? Number(reminderRaw) : null,
-        recurrence,
-        recurrence_interval: 1,
-        recurrence_until: null,
-        recurrence_count: null,
-        expected_updated_at: selected.updated_at,
+      await api.updateEvent(activeHomeId, selectedEvent.event_id, {
+        ...payload,
+        expected_updated_at: selectedEvent.updated_at,
       });
-      setSelected(updated);
-      await reload();
-    } catch (reason) {
+      setSelectedEvent(null);
+      await load();
+    } catch (cause) {
       setError(
-        reason instanceof ApiError
-          ? reason.message
+        cause instanceof ApiError
+          ? cause.message
           : "This event changed. Reload and try again.",
       );
+    } finally {
+      setBusy(false);
     }
   }
 
-  const monthCells = useMemo(() => {
-    const current = monthRange(focusDate);
-    const start = new Date(current.start);
-    const shift = (start.getUTCDay() + 6) % 7;
-    start.setUTCDate(start.getUTCDate() - shift);
-    return Array.from({ length: 42 }, (_, index) => {
-      const day = new Date(start);
-      day.setUTCDate(start.getUTCDate() + index);
-      return day;
-    });
-  }, [focusDate]);
+  async function remove() {
+    if (
+      !activeHomeId ||
+      !selectedEvent ||
+      !window.confirm("Delete this event?")
+    )
+      return;
+    try {
+      await api.deleteEvent(activeHomeId, selectedEvent.event_id);
+      setSelectedEvent(null);
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "The event could not be deleted.",
+      );
+    }
+  }
+
+  function openDay(day: Date) {
+    setFocusDate(day);
+    setSelectedDay(day);
+  }
 
   if (!featureChecked || !featureEnabled) {
     return (
       <AppShell>
-        <main className="standard-page"><p role="status">Checking feature availability…</p></main>
+        <main className="standard-page">
+          <p role="status">Checking Calendar access...</p>
+        </main>
       </AppShell>
     );
   }
 
+  const focusedEvents = eventsForDay(events, focusDate);
+
   return (
     <AppShell>
-      <main className="standard-page">
-        <div className="page-heading">
+      <main className="standard-page calendar-page">
+        <header className="calendar-heading">
           <div>
             <p className="eyebrow">{activeHome?.name ?? "Home"}</p>
             <h1>Calendar</h1>
-            <p>Shared events for your Home.</p>
           </div>
-          <div className="calendar-actions">
-            <button className={view === "month" ? "" : "secondary"} onClick={() => setView("month")} type="button">Month</button>
-            <button className={view === "week" ? "" : "secondary"} onClick={() => setView("week")} type="button">Week</button>
-            <button className={view === "agenda" ? "" : "secondary"} onClick={() => setView("agenda")} type="button">Agenda</button>
-            <button className="secondary" onClick={() => setFocusDate(new Date())} type="button">Today</button>
+          <button type="button" onClick={() => setEditorDay(focusDate)}>
+            Add event
+          </button>
+        </header>
+
+        <div className="calendar-toolbar" aria-label="Calendar controls">
+          <div
+            className="view-switcher"
+            role="group"
+            aria-label="Calendar view"
+          >
+            {(["month", "week", "day", "agenda"] as ViewMode[]).map((mode) => (
+              <button
+                type="button"
+                key={mode}
+                className={view === mode ? "active" : "secondary"}
+                aria-pressed={view === mode}
+                onClick={() => chooseView(mode)}
+              >
+                {mode[0]!.toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div className="date-navigation">
+            <button
+              className="icon-button secondary"
+              type="button"
+              onClick={() => move(-1)}
+              aria-label="Previous period"
+            >
+              ‹
+            </button>
+            <button
+              className="secondary today-button"
+              type="button"
+              onClick={() => setFocusDate(new Date())}
+            >
+              Today
+            </button>
+            <button
+              className="icon-button secondary"
+              type="button"
+              onClick={() => move(1)}
+              aria-label="Next period"
+            >
+              ›
+            </button>
           </div>
         </div>
 
-        <div className="calendar-nav">
-          <button type="button" onClick={() => setFocusDate(new Date(focusDate.getTime() - 86400000 * (view === "week" ? 7 : 30)))}>
-            Previous
-          </button>
-          <strong>
-            {new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(focusDate)}
-          </strong>
-          <button type="button" onClick={() => setFocusDate(new Date(focusDate.getTime() + 86400000 * (view === "week" ? 7 : 30)))}>
-            Next
-          </button>
-        </div>
+        <h2 className="calendar-period">
+          {view === "day"
+            ? displayDate(focusDate, {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })
+            : displayDate(focusDate, { month: "long", year: "numeric" })}
+        </h2>
+        {error && (
+          <p className="notice error" role="alert">
+            {error}
+          </p>
+        )}
 
-        {error && <p className="notice error">{error}</p>}
-
-        <section className="card calendar-panel">
-          {view === "month" && (
-            <>
-              <div className="calendar-weekdays">
-                {"Mon Tue Wed Thu Fri Sat Sun".split(" ").map((label) => (
-                  <span key={label}>{label}</span>
-                ))}
-              </div>
-              <div className="calendar-grid">
-                {monthCells.map((day) => {
-                  const key = day.toISOString().slice(0, 10);
-                  const dayEvents = eventsByDay.get(key) ?? [];
-                  const isToday = key === new Date().toISOString().slice(0, 10);
-                  return (
-                    <article key={key} className={isToday ? "calendar-day today" : "calendar-day"}>
-                      <header>{day.getUTCDate()}</header>
-                      <div>
-                        {dayEvents.slice(0, 3).map((event) => (
-                          <button key={event.occurrence_id} type="button" className="calendar-event" onClick={() => setSelected(event)}>
-                            {event.is_all_day ? "All day" : new Date(event.start_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} {event.title}
-                          </button>
-                        ))}
-                        {dayEvents.length > 3 && <small>+{dayEvents.length - 3} more</small>}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </>
-          )}
-
-          {view === "week" && (
-            <div className="agenda-list">
-              {Array.from({ length: 7 }, (_, index) => {
-                const day = new Date(range.start);
-                day.setUTCDate(day.getUTCDate() + index);
-                const key = day.toISOString().slice(0, 10);
-                const dayEvents = eventsByDay.get(key) ?? [];
+        {view === "month" && (
+          <section className="calendar-month" aria-label="Month view">
+            <div className="calendar-weekdays" aria-hidden="true">
+              {"Mon Tue Wed Thu Fri Sat Sun".split(" ").map((label) => (
+                <span key={label}>{label}</span>
+              ))}
+            </div>
+            <div className="calendar-grid">
+              {cells.map((day) => {
+                const key = dateKey(day);
+                const dayEvents = byDay.get(key) ?? [];
+                const today = key === dateKey(new Date());
+                const outside = day.getUTCMonth() !== focusDate.getUTCMonth();
                 return (
-                  <article key={key}>
-                    <h2>{new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short" }).format(day)}</h2>
-                    {!dayEvents.length ? (
-                      <p className="hint">No events</p>
-                    ) : (
-                      dayEvents.map((event) => (
-                        <button key={event.occurrence_id} type="button" className="calendar-event" onClick={() => setSelected(event)}>
-                          <strong>{event.title}</strong>
-                          <small>{dateLabel(event.start_at, event.timezone)}</small>
+                  <article
+                    className={`calendar-day${today ? " today" : ""}${outside ? " outside" : ""}`}
+                    key={key}
+                  >
+                    <button
+                      className="day-number"
+                      type="button"
+                      onClick={() => openDay(day)}
+                      aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long" })}, ${dayEvents.length} events`}
+                    >
+                      <span>{day.getUTCDate()}</span>
+                    </button>
+                    <div className="month-events">
+                      {dayEvents.slice(0, 3).map((event) => (
+                        <button
+                          key={event.occurrence_id}
+                          type="button"
+                          className="month-event"
+                          style={
+                            {
+                              "--event-color": event.label?.color ?? "#456b76",
+                            } as React.CSSProperties
+                          }
+                          onClick={() => setSelectedEvent(event)}
+                          aria-label={`${eventTime(event)} ${event.title}`}
+                        >
+                          <span aria-hidden="true" />
+                          <b>{eventTime(event)}</b> {event.title}
                         </button>
-                      ))
-                    )}
+                      ))}
+                      {dayEvents.length > 3 && (
+                        <button
+                          className="overflow-events"
+                          type="button"
+                          onClick={() => openDay(day)}
+                        >
+                          +{dayEvents.length - 3} more
+                        </button>
+                      )}
+                    </div>
                   </article>
                 );
               })}
             </div>
-          )}
+          </section>
+        )}
 
-          {view === "agenda" && (
-            <div className="agenda-list">
-              {!events.length ? (
-                <p className="hint">No events yet. Add your first family event to get started.</p>
-              ) : (
-                events.map((event) => (
-                  <article key={event.occurrence_id}>
-                    <button className="calendar-event" type="button" onClick={() => setSelected(event)}>
-                      <strong>{event.title}</strong>
-                      <small>{dateLabel(event.start_at, event.timezone)}</small>
-                    </button>
+        {view === "week" && (
+          <section className="week-grid" aria-label="Week view">
+            {Array.from({ length: 7 }, (_, index) => {
+              const day = new Date(range.start);
+              day.setUTCDate(day.getUTCDate() + index);
+              const dayEvents = eventsForDay(events, day);
+              return (
+                <article
+                  className={
+                    dateKey(day) === dateKey(new Date()) ? "today" : ""
+                  }
+                  key={dateKey(day)}
+                >
+                  <button
+                    className="week-day-heading"
+                    type="button"
+                    onClick={() => openDay(day)}
+                  >
+                    <span>{displayDate(day, { weekday: "short" })}</span>
+                    <strong>{day.getUTCDate()}</strong>
+                  </button>
+                  <EventList
+                    events={dayEvents}
+                    memberNames={memberNames}
+                    onSelect={setSelectedEvent}
+                    compact
+                  />
+                </article>
+              );
+            })}
+          </section>
+        )}
+
+        {view === "day" && (
+          <section className="day-view card" aria-label="Day view">
+            <EventList
+              events={focusedEvents}
+              memberNames={memberNames}
+              onSelect={setSelectedEvent}
+            />
+          </section>
+        )}
+
+        {view === "agenda" && (
+          <section className="agenda-view" aria-label="Upcoming events">
+            {events.length === 0 ? (
+              <p className="card hint">No upcoming events.</p>
+            ) : (
+              Array.from(byDay.entries())
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([key, rows]) => (
+                  <article className="agenda-day" key={key}>
+                    <h2>
+                      {displayDate(`${key}T00:00:00Z`, {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long",
+                      })}
+                    </h2>
+                    <EventList
+                      events={rows}
+                      memberNames={memberNames}
+                      onSelect={setSelectedEvent}
+                    />
                   </article>
                 ))
-              )}
-            </div>
-          )}
-        </section>
-
-        <section className="card details">
-          <h2>Add event</h2>
-          <form onSubmit={createEvent}>
-            <label>
-              Title
-              <input name="title" required maxLength={180} />
-            </label>
-            <label>
-              Start
-              <input name="start" type="datetime-local" required />
-            </label>
-            <label>
-              End
-              <input name="end" type="datetime-local" required />
-            </label>
-            <label>
-              All day
-              <input name="allDay" type="checkbox" />
-            </label>
-            <label>
-              Label
-              <select name="label" defaultValue="">
-                <option value="">None</option>
-                {labels.map((label) => (
-                  <option key={label.id} value={label.id}>{label.name}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Repeat
-              <select name="recurrence" defaultValue="none">
-                <option value="none">Does not repeat</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-                <option value="weekdays">Weekdays</option>
-              </select>
-            </label>
-            <label>
-              Reminder
-              <select name="reminder" defaultValue="">
-                <option value="">None</option>
-                <option value="0">At time of event</option>
-                <option value="5">5 minutes before</option>
-                <option value="15">15 minutes before</option>
-                <option value="30">30 minutes before</option>
-                <option value="60">1 hour before</option>
-                <option value="1440">1 day before</option>
-              </select>
-            </label>
-            <label>
-              Location
-              <input name="location" maxLength={200} />
-            </label>
-            <label>
-              Description
-              <textarea name="description" maxLength={2000} />
-            </label>
-            <button disabled={busy}>{busy ? "Saving…" : "Save event"}</button>
-          </form>
-        </section>
-
-        {selected && (
-          <section className="card details">
-            <h2>Event details</h2>
-            <form onSubmit={saveSelected}>
-              <label>
-                Title
-                <input name="title" defaultValue={selected.title} required maxLength={180} />
-              </label>
-              <label>
-                Start
-                <input name="start" type="datetime-local" defaultValue={new Date(selected.start_at).toISOString().slice(0, 16)} required />
-              </label>
-              <label>
-                End
-                <input name="end" type="datetime-local" defaultValue={new Date(selected.end_at).toISOString().slice(0, 16)} required />
-              </label>
-              <label>
-                All day
-                <input name="allDay" type="checkbox" defaultChecked={selected.is_all_day} />
-              </label>
-              <label>
-                Repeat
-                <select name="recurrence" defaultValue={selected.recurrence}>
-                  <option value="none">Does not repeat</option>
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="yearly">Yearly</option>
-                  <option value="weekdays">Weekdays</option>
-                </select>
-              </label>
-              <label>
-                Label
-                <select name="label" defaultValue={selected.label?.id ?? ""}>
-                  <option value="">None</option>
-                  {labels.map((label) => (
-                    <option key={label.id} value={label.id}>{label.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Reminder
-                <select name="reminder" defaultValue={selected.reminder_minutes ?? ""}>
-                  <option value="">None</option>
-                  <option value="0">At time of event</option>
-                  <option value="5">5 minutes before</option>
-                  <option value="15">15 minutes before</option>
-                  <option value="30">30 minutes before</option>
-                  <option value="60">1 hour before</option>
-                  <option value="1440">1 day before</option>
-                </select>
-              </label>
-              <label>
-                Location
-                <input name="location" maxLength={200} defaultValue={selected.location_text ?? ""} />
-              </label>
-              <label>
-                Description
-                <textarea name="description" maxLength={2000} defaultValue={selected.description ?? ""} />
-              </label>
-              <div className="actions compact-actions">
-                <button type="submit">Save changes</button>
-                <button type="button" className="secondary" onClick={deleteEvent}>Delete event</button>
-                <button type="button" className="secondary" onClick={() => setSelected(null)}>Close</button>
-              </div>
-            </form>
+            )}
           </section>
+        )}
+
+        <button
+          className="calendar-fab"
+          type="button"
+          onClick={() => setEditorDay(focusDate)}
+          aria-label="Add calendar event"
+        >
+          +
+        </button>
+
+        {selectedDay && (
+          <BottomSheet
+            title={displayDate(selectedDay, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })}
+            onDismiss={() => setSelectedDay(null)}
+          >
+            <EventList
+              events={eventsForDay(events, selectedDay)}
+              memberNames={memberNames}
+              onSelect={(event) => {
+                setSelectedDay(null);
+                setSelectedEvent(event);
+              }}
+            />
+            <button
+              className="sheet-primary"
+              type="button"
+              onClick={() => {
+                setEditorDay(selectedDay);
+                setSelectedDay(null);
+              }}
+            >
+              Add event on this day
+            </button>
+          </BottomSheet>
+        )}
+
+        {editorDay && (
+          <BottomSheet
+            title="Add event"
+            onDismiss={() => setEditorDay(null)}
+            fullHeight
+          >
+            <EventForm
+              labels={labels}
+              members={members}
+              initialDay={editorDay}
+              busy={busy}
+              submitLabel="Save event"
+              onSubmit={create}
+              onCancel={() => setEditorDay(null)}
+            />
+          </BottomSheet>
+        )}
+
+        {selectedEvent && (
+          <BottomSheet
+            title="Event details"
+            onDismiss={() => setSelectedEvent(null)}
+            fullHeight
+          >
+            <EventForm
+              labels={labels}
+              members={members}
+              initial={selectedEvent}
+              initialDay={new Date(selectedEvent.start_at)}
+              busy={busy}
+              submitLabel="Save changes"
+              onSubmit={update}
+              onCancel={() => setSelectedEvent(null)}
+              onDelete={remove}
+            />
+          </BottomSheet>
         )}
       </main>
     </AppShell>
+  );
+}
+
+function EventList({
+  events,
+  memberNames,
+  onSelect,
+  compact = false,
+}: {
+  events: EventOccurrence[];
+  memberNames: Map<string, string>;
+  onSelect: (event: EventOccurrence) => void;
+  compact?: boolean;
+}) {
+  if (!events.length) return <p className="hint">No events</p>;
+  return (
+    <div className={`event-list${compact ? " compact" : ""}`}>
+      {events.map((event) => {
+        const people = event.member_ids
+          .map((id) => memberNames.get(id))
+          .filter(Boolean);
+        return (
+          <button
+            className="event-row"
+            type="button"
+            key={event.occurrence_id}
+            onClick={() => onSelect(event)}
+          >
+            <span
+              className="event-colour"
+              style={{ background: event.label?.color ?? "#456b76" }}
+              aria-label={event.label?.name ?? "Family event"}
+            />
+            <span className="event-time">{eventTime(event)}</span>
+            <span className="event-copy">
+              <strong>{event.title}</strong>
+              <small>
+                {[people.join(", "), event.location_text]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </small>
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

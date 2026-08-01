@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.models import FeatureFlag, FeatureKey, FeatureOverride
+from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
 
 
 async def is_feature_enabled(
@@ -16,6 +17,10 @@ async def is_feature_enabled(
     try:
         key = feature_key if isinstance(feature_key, FeatureKey) else FeatureKey(feature_key)
     except ValueError:
+        return False
+
+    definition = module_definition(key.value)
+    if definition.release_state == ReleaseState.hidden:
         return False
 
     if home_id is not None:
@@ -40,7 +45,23 @@ async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKe
             await db.scalars(select(FeatureOverride).where(FeatureOverride.group_id == home_id))
         ).all()
     }
-    return {key: overrides.get(key, flags.get(key, False)) for key in FeatureKey}
+    return {
+        key: overrides.get(key, flags.get(key, False))
+        for key in FeatureKey
+        if module_definition(key.value).release_state != ReleaseState.hidden
+    }
+
+
+async def enabled_dependents(
+    db: AsyncSession, home_id: uuid.UUID, module_id: str
+) -> list[str]:
+    result: list[str] = []
+    for definition in feature_modules():
+        if module_id in definition.dependencies and await is_feature_enabled(
+            db, definition.id, home_id
+        ):
+            result.append(definition.id)
+    return result
 
 
 async def require_feature(

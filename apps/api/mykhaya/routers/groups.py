@@ -8,17 +8,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
-from mykhaya.models import CalendarEventLabel, Group, HomeCalendar, Membership, Role, User
+from mykhaya.household_permissions import (
+    Capability,
+    capabilities_for,
+    default_profile,
+    home_admin_count,
+    legacy_role,
+    require_capability,
+)
+from mykhaya.models import (
+    CalendarEventLabel,
+    Group,
+    HomeCalendar,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
+    User,
+)
 from mykhaya.schemas import (
     GroupCreate,
     GroupResponse,
     GroupUpdate,
+    MemberRelationshipUpdate,
     MemberResponse,
-    MemberRoleUpdate,
 )
 
 router = APIRouter(prefix="/groups", tags=["Homes"])
-MANAGERS = {Role.owner, Role.administrator}
 DEFAULT_LABELS = [
     ("Family", "#456B76"),
     ("School", "#7A5C99"),
@@ -37,7 +53,15 @@ async def group_response(db: AsyncSession, group: Group, membership: Membership)
         .where(Membership.group_id == group.id, Membership.removed_at.is_(None))
     )
     return GroupResponse(
-        id=group.id, name=group.name, role=membership.role, member_count=count or 0
+        id=group.id,
+        name=group.name,
+        role=membership.role,
+        relationship=membership.relationship,
+        permission_profile=membership.permission_profile,
+        capabilities=sorted(
+            capability.value for capability in await capabilities_for(db, membership)
+        ),
+        member_count=count or 0,
     )
 
 
@@ -67,7 +91,13 @@ async def create_group(
     group = Group(name=body.name, created_by=auth.user.id)
     db.add(group)
     await db.flush()
-    membership = Membership(group_id=group.id, user_id=auth.user.id, role=Role.owner)
+    membership = Membership(
+        group_id=group.id,
+        user_id=auth.user.id,
+        role=Role.owner,
+        relationship=HouseholdRelationship.home_admin,
+        permission_profile=PermissionProfile.home_admin,
+    )
     db.add(membership)
     calendar = HomeCalendar(group_id=group.id, name="Home Calendar")
     db.add(calendar)
@@ -105,7 +135,9 @@ async def update_group(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> GroupResponse:
-    membership = await membership_for(group_id, auth, db, MANAGERS)
+    membership = await require_capability(
+        group_id, Capability.household_manage, auth, db
+    )
     membership.group.name = body.name
     audit(db, request, "group.updated", auth.user.id, group_id, "group", group_id)
     await db.commit()
@@ -118,7 +150,7 @@ async def members(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[MemberResponse]:
-    await membership_for(group_id, auth, db)
+    await require_capability(group_id, Capability.members_view, auth, db)
     rows = (
         await db.execute(
             select(Membership, User)
@@ -130,7 +162,17 @@ async def members(
     ).all()
     return [
         MemberResponse(
-            user_id=user.id, display_name=user.display_name, email=user.email, role=membership.role
+            membership_id=membership.id,
+            user_id=user.id,
+            display_name=user.display_name,
+            email=None
+            if membership.relationship == HouseholdRelationship.child
+            else user.email,
+            role=membership.role,
+            relationship=membership.relationship,
+            permission_profile=membership.permission_profile,
+            permission_overrides=membership.permission_overrides,
+            shared_resources=membership.shared_resources,
         )
         for membership, user in rows
     ]
@@ -140,12 +182,92 @@ async def members(
 async def update_member(
     group_id: uuid.UUID,
     user_id: uuid.UUID,
-    body: MemberRoleUpdate,
+    body: MemberRelationshipUpdate,
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    actor = await membership_for(group_id, auth, db, MANAGERS)
+    await require_capability(
+        group_id, Capability.members_manage_relationships, auth, db
+    )
+    target = await db.scalar(
+        select(Membership)
+        .where(
+            Membership.group_id == group_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
+    if body.relationship == HouseholdRelationship.child:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Use the child setup flow to create a Child profile.",
+        )
+    if (
+        target.relationship == HouseholdRelationship.home_admin
+        and body.relationship != HouseholdRelationship.home_admin
+        and await home_admin_count(db, group_id) <= 1
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Assign another Home Admin before changing the final Home Admin.",
+        )
+    previous = {
+        "relationship": target.relationship.value,
+        "permission_profile": target.permission_profile.value,
+    }
+    target.relationship = body.relationship
+    target.permission_profile = body.permission_profile or default_profile(body.relationship)
+    target.permission_overrides = body.permission_overrides
+    target.shared_resources = body.shared_resources
+    target.role = legacy_role(body.relationship)
+    user = await db.get(User, user_id)
+    assert user is not None
+    audit(
+        db,
+        request,
+        "membership.relationship_changed",
+        auth.user.id,
+        group_id,
+        "user",
+        user_id,
+        {
+            "previous": previous,
+            "new": {
+                "relationship": target.relationship.value,
+                "permission_profile": target.permission_profile.value,
+            },
+            "reason": body.reason,
+        },
+    )
+    await db.commit()
+    return MemberResponse(
+        membership_id=target.id,
+        user_id=user.id,
+        display_name=user.display_name,
+        email=user.email,
+        role=target.role,
+        relationship=target.relationship,
+        permission_profile=target.permission_profile,
+        permission_overrides=target.permission_overrides,
+        shared_resources=target.shared_resources,
+    )
+
+
+@router.delete("/{group_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await require_capability(
+        group_id, Capability.members_manage_relationships, auth, db
+    )
     target = await db.scalar(
         select(Membership)
         .where(
@@ -158,52 +280,13 @@ async def update_member(
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
     if (
-        target.role == Role.owner
-        or body.role == Role.owner
-        or (actor.role != Role.owner and body.role == Role.administrator)
+        target.relationship == HouseholdRelationship.home_admin
+        and await home_admin_count(db, group_id) <= 1
     ):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Home owner can make that change.")
-    target.role = body.role
-    user = await db.get(User, user_id)
-    assert user is not None
-    audit(
-        db,
-        request,
-        "membership.role_changed",
-        auth.user.id,
-        group_id,
-        "user",
-        user_id,
-        {"role": body.role.value},
-    )
-    await db.commit()
-    return MemberResponse(
-        user_id=user.id, display_name=user.display_name, email=user.email, role=target.role
-    )
-
-
-@router.delete("/{group_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_member(
-    group_id: uuid.UUID,
-    user_id: uuid.UUID,
-    request: Request,
-    auth: AuthContext = Depends(auth_context),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    await membership_for(group_id, auth, db, MANAGERS)
-    target = await db.scalar(
-        select(Membership)
-        .where(
-            Membership.group_id == group_id,
-            Membership.user_id == user_id,
-            Membership.removed_at.is_(None),
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Assign another Home Admin before removing the final Home Admin.",
         )
-        .with_for_update()
-    )
-    if target is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
-    if target.role == Role.owner:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "The Home owner cannot be removed.")
     target.removed_at = datetime.now(UTC)
     audit(db, request, "membership.removed", auth.user.id, group_id, "user", user_id)
     await db.commit()
