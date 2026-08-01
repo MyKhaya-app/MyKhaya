@@ -1,31 +1,67 @@
 {$WEB_DOMAIN:mykhaya.app} {
-  encode zstd gzip
-  @api path /api/*
-  reverse_proxy @api api:8000
-  reverse_proxy web:3000
-  header {
-    -Server
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    X-Content-Type-Options nosniff
-    Referrer-Policy strict-origin-when-cross-origin
-    Permissions-Policy "camera=(), microphone=(), geolocation=()"
-  }
-  log {
-    output stdout
-    format json
-  }
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	log {
+		output stdout
+		format json
+	}
 }
 {$API_DOMAIN:api.mykhaya.app} {
-  encode zstd gzip
-  reverse_proxy api:8000
-  header {
-    -Server
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    X-Content-Type-Options nosniff
-    Referrer-Policy strict-origin-when-cross-origin
-  }
-  log {
-    output stdout
-    format json
-  }
+	encode zstd gzip
+	reverse_proxy api:8000
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$ADMIN_DOMAIN:admin.mykhaya.app} {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$STATUS_DOMAIN:status.mykhaya.app} {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000
+	reverse_proxy web:3000
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	log {
+		output stdout
+		format json
+	}
 }

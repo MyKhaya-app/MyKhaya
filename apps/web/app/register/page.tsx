@@ -1,6 +1,6 @@
 "use client";
 export const dynamic = "force-dynamic";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -9,8 +9,21 @@ import { FormStatus } from "@/components/form-status";
 export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
+  const invitation = params.get("invitation");
   const [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [inviteContext, setInviteContext] = useState<{
+      group_name: string;
+      invited_by_display_name: string;
+      email: string;
+    } | null>(null);
+  useEffect(() => {
+    if (!invitation) return;
+    api
+      .previewInvitation(invitation)
+      .then((result) => setInviteContext(result))
+      .catch((reason: ApiError) => setError(reason.message));
+  }, [invitation]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -29,8 +42,8 @@ export default function Register() {
         email: d.get("email"),
         display_name: d.get("name"),
         password: d.get("password"),
+        invitation_token: invitation,
       });
-      const invitation = params.get("invitation");
       router.push(
         result.verification_required
           ? invitation
@@ -50,7 +63,6 @@ export default function Register() {
       setBusy(false);
     }
   }
-  const invitation = params.get("invitation");
   return (
     <AuthCard
       title="Create your account"
@@ -70,6 +82,11 @@ export default function Register() {
         </span>
       }
     >
+      {inviteContext && (
+        <p className="notice success">
+          {inviteContext.invited_by_display_name} invited you to join {inviteContext.group_name}.
+        </p>
+      )}
       <form onSubmit={submit}>
         <label>
           Your name
@@ -80,6 +97,7 @@ export default function Register() {
           <input
             name="email"
             type="email"
+            defaultValue={inviteContext?.email ?? ""}
             autoComplete="email"
             required
             maxLength={320}

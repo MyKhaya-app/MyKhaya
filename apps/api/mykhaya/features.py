@@ -1,67 +1,52 @@
 import uuid
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.models import FeatureFlag, FeatureFlagHomeOverride, FeatureFlagKey
-
-FEATURE_KEYS: tuple[FeatureFlagKey, ...] = tuple(FeatureFlagKey)
+from mykhaya.models import FeatureFlag, FeatureKey, FeatureOverride
 
 
 async def is_feature_enabled(
-    db: AsyncSession, feature_key: str, home_id: uuid.UUID | None = None
+    db: AsyncSession,
+    feature_key: FeatureKey | str,
+    home_id: uuid.UUID | None = None,
 ) -> bool:
-    """Return whether a feature is enabled, failing closed for unknown keys."""
+    """Evaluate Home override, then global state, failing closed for unknown keys."""
     try:
-        typed_key = FeatureFlagKey(feature_key)
+        key = feature_key if isinstance(feature_key, FeatureKey) else FeatureKey(feature_key)
     except ValueError:
         return False
 
-    global_flag = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == typed_key))
-    if global_flag is None:
-        return False
-    if home_id is None:
-        return bool(global_flag.enabled)
-
-    override = await db.scalar(
-        select(FeatureFlagHomeOverride.enabled)
-        .join(FeatureFlag, FeatureFlag.id == FeatureFlagHomeOverride.feature_flag_id)
-        .where(FeatureFlag.key == typed_key, FeatureFlagHomeOverride.group_id == home_id)
-    )
-    if override is None:
-        return bool(global_flag.enabled)
-    return bool(override)
-
-
-async def home_feature_matrix(
-    db: AsyncSession, home_id: uuid.UUID
-) -> list[tuple[FeatureFlagKey, bool, str]]:
-    rows = (
-        await db.execute(
-            select(
-                FeatureFlag.key,
-                FeatureFlag.enabled,
-                FeatureFlagHomeOverride.enabled,
+    if home_id is not None:
+        override = await db.scalar(
+            select(FeatureOverride.enabled).where(
+                FeatureOverride.group_id == home_id,
+                FeatureOverride.feature_key == key,
             )
-            .outerjoin(
-                FeatureFlagHomeOverride,
-                (FeatureFlagHomeOverride.feature_flag_id == FeatureFlag.id)
-                & (FeatureFlagHomeOverride.group_id == home_id),
-            )
-            .order_by(FeatureFlag.key)
         )
-    ).all()
+        if override is not None:
+            return bool(override)
 
-    result: list[tuple[FeatureFlagKey, bool, str]] = []
-    for key, global_enabled, home_override in rows:
-        if home_override is None:
-            result.append((key, bool(global_enabled), "global"))
-        else:
-            result.append((key, bool(home_override), "home_override"))
+    global_value = await db.scalar(select(FeatureFlag.enabled).where(FeatureFlag.key == key))
+    return bool(global_value) if global_value is not None else False
 
-    existing = {key for key, _, _ in result}
-    for key in FEATURE_KEYS:
-        if key not in existing:
-            result.append((key, False, "global"))
-    result.sort(key=lambda item: item[0].value)
-    return result
+
+async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKey, bool]:
+    flags = {row.key: bool(row.enabled) for row in (await db.scalars(select(FeatureFlag))).all()}
+    overrides = {
+        row.feature_key: bool(row.enabled)
+        for row in (
+            await db.scalars(select(FeatureOverride).where(FeatureOverride.group_id == home_id))
+        ).all()
+    }
+    return {key: overrides.get(key, flags.get(key, False)) for key in FeatureKey}
+
+
+async def require_feature(
+    db: AsyncSession,
+    feature_key: FeatureKey,
+    home_id: uuid.UUID,
+) -> None:
+    if not await is_feature_enabled(db, feature_key, home_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")

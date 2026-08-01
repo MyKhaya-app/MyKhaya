@@ -11,3 +11,5 @@ enabled.
 Browser authentication uses Secure, HttpOnly, appropriately scoped cookies and CSRF protection where required. Mobile clients use secure platform storage.
 
 Reusable tokens are high entropy, expiring, revocable and stored only as hashes. Account status and Home membership are checked server-side for protected operations rather than trusted solely from long-lived token claims.
+
+Platform administration does not use this session. It has separate identities, `mk_admin_*` host-only cookies, idle and absolute deadlines, recent-auth state, revocation and mandatory-MFA enforcement as documented in `administrative-authentication.md`.

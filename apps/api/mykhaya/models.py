@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -22,6 +23,15 @@ from mykhaya.db import Base
 from mykhaya.ids import uuid7
 
 
+class RecurrencePattern(StrEnum):
+    none = "none"
+    daily = "daily"
+    weekly = "weekly"
+    monthly = "monthly"
+    yearly = "yearly"
+    weekdays = "weekdays"
+
+
 class Role(StrEnum):
     owner = "owner"
     administrator = "administrator"
@@ -30,19 +40,28 @@ class Role(StrEnum):
     guest = "guest"
 
 
-class PlatformRole(StrEnum):
-    owner = "owner"
-    administrator = "administrator"
-    support_operator = "support_operator"
-    read_only_operator = "read_only_operator"
-
-
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
 
 
-class FeatureFlagKey(StrEnum):
+class PlatformRole(StrEnum):
+    owner = "platform_owner"
+    administrator = "platform_administrator"
+    support = "support_operator"
+    security = "security_operator"
+    readonly = "read_only_operator"
+
+
+class ServiceState(StrEnum):
+    operational = "operational"
+    degraded = "degraded_performance"
+    partial_outage = "partial_outage"
+    major_outage = "major_outage"
+    maintenance = "maintenance"
+
+
+class FeatureKey(StrEnum):
     calendar = "calendar"
     tasks = "tasks"
     shopping = "shopping"
@@ -67,6 +86,9 @@ class User(UuidTimeMixin, Base):
     display_name: Mapped[str] = mapped_column(String(100))
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
 
 
@@ -113,19 +135,10 @@ class Group(UuidTimeMixin, Base):
     __tablename__ = "groups"
     name: Mapped[str] = mapped_column(String(100))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = relationship(back_populates="group")
-
-
-class PlatformMembership(UuidTimeMixin, Base):
-    __tablename__ = "platform_memberships"
-    __table_args__ = (
-        UniqueConstraint("user_id", name="uq_platform_membership_user"),
-        Index("ix_platform_membership_role", "role"),
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
-    role: Mapped[PlatformRole] = mapped_column(Enum(PlatformRole, name="platform_role"))
 
 
 class Membership(UuidTimeMixin, Base):
@@ -144,6 +157,110 @@ class Membership(UuidTimeMixin, Base):
     user: Mapped[User] = relationship(back_populates="memberships")
 
 
+class HomeCalendar(UuidTimeMixin, Base):
+    __tablename__ = "home_calendars"
+    __table_args__ = (UniqueConstraint("group_id", "is_primary", name="uq_home_primary_calendar"),)
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(80), default="Home Calendar")
+    timezone: Mapped[str] = mapped_column(String(100), default="Europe/London")
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+
+class CalendarEventLabel(UuidTimeMixin, Base):
+    __tablename__ = "calendar_event_labels"
+    __table_args__ = (
+        UniqueConstraint("group_id", "name", name="uq_event_label_group_name"),
+        Index("ix_event_label_group_sort", "group_id", "sort_order"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(40))
+    color: Mapped[str] = mapped_column(String(7), default="#456B76")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
+
+
+class CalendarEvent(UuidTimeMixin, Base):
+    __tablename__ = "calendar_events"
+    __table_args__ = (
+        Index("ix_calendar_event_group_start", "group_id", "start_at"),
+        Index("ix_calendar_event_group_end", "group_id", "end_at"),
+        Index("ix_calendar_event_group_active", "group_id", "deleted_at"),
+        CheckConstraint("char_length(title) >= 1", name="ck_calendar_event_title_nonempty"),
+        CheckConstraint("end_at >= start_at", name="ck_calendar_event_valid_range"),
+        CheckConstraint("recurrence_interval >= 1", name="ck_calendar_event_recur_interval"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    calendar_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="CASCADE"), index=True
+    )
+    label_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("calendar_event_labels.id", ondelete="SET NULL"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(180))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_all_day: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    timezone: Mapped[str] = mapped_column(String(100), default="Europe/London")
+    location_text: Mapped[str | None] = mapped_column(String(200))
+    reminder_minutes: Mapped[int | None] = mapped_column(Integer)
+    recurrence: Mapped[RecurrencePattern] = mapped_column(
+        Enum(RecurrencePattern, name="recurrence_pattern"),
+        default=RecurrencePattern.none,
+        server_default=RecurrencePattern.none.value,
+    )
+    recurrence_interval: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    recurrence_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recurrence_count: Mapped[int | None] = mapped_column(Integer)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    last_edited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class CalendarEventMember(UuidTimeMixin, Base):
+    __tablename__ = "calendar_event_members"
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", name="uq_event_member"),
+        Index("ix_event_member_group_user", "group_id", "user_id"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+
+
+class CalendarEventActivity(UuidTimeMixin, Base):
+    __tablename__ = "calendar_event_activity"
+    __table_args__ = (Index("ix_event_activity_event_created", "event_id", "created_at"),)
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(String(80))
+    summary: Mapped[str] = mapped_column(String(300))
+
+
 class Invitation(UuidTimeMixin, Base):
     __tablename__ = "group_invitations"
     __table_args__ = (Index("ix_invitation_group_email", "group_id", "email"),)
@@ -155,39 +272,6 @@ class Invitation(UuidTimeMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class FeatureFlag(UuidTimeMixin, Base):
-    __tablename__ = "feature_flags"
-    __table_args__ = (
-        UniqueConstraint("key", name="uq_feature_flag_key"),
-        Index("ix_feature_flag_enabled", "enabled"),
-    )
-    key: Mapped[FeatureFlagKey] = mapped_column(Enum(FeatureFlagKey, name="feature_key"))
-    display_name: Mapped[str] = mapped_column(String(80))
-    description: Mapped[str] = mapped_column(String(300))
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    updated_by_platform_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
-
-
-class FeatureFlagHomeOverride(UuidTimeMixin, Base):
-    __tablename__ = "feature_flag_home_overrides"
-    __table_args__ = (
-        UniqueConstraint("feature_flag_id", "group_id", name="uq_feature_override_home_flag"),
-        Index("ix_feature_override_group", "group_id"),
-    )
-    feature_flag_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("feature_flags.id", ondelete="CASCADE"), index=True
-    )
-    group_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("groups.id", ondelete="CASCADE"), index=True
-    )
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    updated_by_platform_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
 
 
 class AuditEvent(Base):
@@ -233,3 +317,145 @@ class WorkerJobRecord(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(String(500))
+
+
+class PlatformAdministrator(UuidTimeMixin, Base):
+    __tablename__ = "platform_administrators"
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[PlatformRole] = mapped_column(
+        Enum(
+            PlatformRole,
+            name="platform_role",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    mfa_enrolled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlatformSession(UuidTimeMixin, Base):
+    __tablename__ = "platform_sessions"
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    authenticated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
+    source_ip: Mapped[str] = mapped_column(String(64))
+
+
+class AdministrativeAuditEvent(Base):
+    __tablename__ = "administrative_audit_events"
+    __table_args__ = (
+        Index("ix_admin_audit_created", "created_at"),
+        Index("ix_admin_audit_target", "target_type", "target_id"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    administrator_role: Mapped[str] = mapped_column(String(40))
+    action: Mapped[str] = mapped_column(String(100))
+    target_type: Mapped[str | None] = mapped_column(String(80))
+    target_id: Mapped[uuid.UUID | None]
+    outcome: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str | None] = mapped_column(String(500))
+    source_ip: Mapped[str] = mapped_column(String(64))
+    request_id: Mapped[str | None] = mapped_column(String(80))
+    session_reference: Mapped[str | None] = mapped_column(String(64))
+    previous_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    new_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    failure_category: Mapped[str | None] = mapped_column(String(80))
+
+
+class AdministrativeNote(UuidTimeMixin, Base):
+    __tablename__ = "administrative_notes"
+    __table_args__ = (Index("ix_admin_note_target", "target_type", "target_id"),)
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="RESTRICT")
+    )
+    target_type: Mapped[str] = mapped_column(String(30))
+    target_id: Mapped[uuid.UUID]
+    body: Mapped[str] = mapped_column(String(1000))
+
+
+class SecurityEvent(Base):
+    __tablename__ = "security_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    severity: Mapped[str] = mapped_column(String(20), index=True)
+    outcome: Mapped[str] = mapped_column(String(30))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    request_id: Mapped[str | None] = mapped_column(String(80))
+    safe_detail: Mapped[str | None] = mapped_column(String(500))
+
+
+class PlatformSetting(UuidTimeMixin, Base):
+    __tablename__ = "platform_settings"
+    key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class FeatureFlag(UuidTimeMixin, Base):
+    __tablename__ = "feature_flags"
+    key: Mapped[FeatureKey] = mapped_column(Enum(FeatureKey, name="feature_key"), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class FeatureOverride(UuidTimeMixin, Base):
+    __tablename__ = "feature_overrides"
+    __table_args__ = (UniqueConstraint("feature_key", "group_id", name="uq_feature_group"),)
+    feature_key: Mapped[FeatureKey] = mapped_column(
+        Enum(FeatureKey, name="feature_key", create_type=False)
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class PublicIncident(UuidTimeMixin, Base):
+    __tablename__ = "public_incidents"
+    title: Mapped[str] = mapped_column(String(160))
+    message: Mapped[str] = mapped_column(String(1000))
+    service: Mapped[str] = mapped_column(String(40))
+    state: Mapped[ServiceState] = mapped_column(
+        Enum(
+            ServiceState,
+            name="service_state",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="RESTRICT")
+    )
+
+
+class OperationalHeartbeat(Base):
+    __tablename__ = "operational_heartbeats"
+    service: Mapped[str] = mapped_column(String(40), primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_detail: Mapped[str | None] = mapped_column(String(300))

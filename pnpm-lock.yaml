@@ -25,6 +25,9 @@ importers:
       expo:
         specifier: ~53.0.20
         version: 53.0.27(@babel/core@7.29.7)(@expo/metro-runtime@5.0.5(react-native@0.79.5(@babel/core@7.29.7)(@types/react@19.0.14)(react@19.0.0)))(react-native@0.79.5(@babel/core@7.29.7)(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+      expo-constants:
+        specifier: ~17.1.8
+        version: 17.1.8(expo@53.0.27(@babel/core@7.29.7)(@expo/metro-runtime@5.0.5(react-native@0.79.5(@babel/core@7.29.7)(@types/react@19.0.14)(react@19.0.0)))(react-native@0.79.5(@babel/core@7.29.7)(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.79.5(@babel/core@7.29.7)(@types/react@19.0.14)(react@19.0.0))
       expo-router:
         specifier: ~5.1.4
         version: 5.1.11(eb56411fedb3757b726190e49f36e0ea)

@@ -261,3 +261,7 @@ This is a coverage inventory, not a compliance claim. â€œImplementedâ€ 
 | v5.0.0-V17.3.2 | 2 | Signaling | Review required | TBD | Not assessed |
 
 Inventory count: 253 Level 1/2 requirements. Regenerate with `powershell -File infrastructure/scripts/generate-asvs-matrix.ps1`.
+
+## Platform administration evidence addendum
+
+This addendum does not change the generated inventory or claim verification. Relevant new implementation evidence includes host-only Strict admin cookies and isolated sessions (`platform_security.py`), server-side operation authorization (`routers/platform.py`), trusted-proxy/network validation (`platform_security.py`), strict bounded schemas (`platform_schemas.py`), secret-shaped audit redaction (`platform_audit.py`), public/internal response separation (`routers/status.py`) and production configuration validation (`config.py`). WebAuthn, external log protection and independent verification remain unimplemented or unassessed.

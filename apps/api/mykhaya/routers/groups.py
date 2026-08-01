@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
-from mykhaya.models import Group, Membership, Role, User
+from mykhaya.models import CalendarEventLabel, Group, HomeCalendar, Membership, Role, User
 from mykhaya.schemas import (
     GroupCreate,
     GroupResponse,
@@ -19,6 +19,15 @@ from mykhaya.schemas import (
 
 router = APIRouter(prefix="/groups", tags=["Homes"])
 MANAGERS = {Role.owner, Role.administrator}
+DEFAULT_LABELS = [
+    ("Family", "#456B76"),
+    ("School", "#7A5C99"),
+    ("Work", "#476A3A"),
+    ("Appointment", "#A05A2C"),
+    ("Birthday", "#A03F6A"),
+    ("Activity", "#336D9A"),
+    ("Other", "#666666"),
+]
 
 
 async def group_response(db: AsyncSession, group: Group, membership: Membership) -> GroupResponse:
@@ -60,6 +69,19 @@ async def create_group(
     await db.flush()
     membership = Membership(group_id=group.id, user_id=auth.user.id, role=Role.owner)
     db.add(membership)
+    calendar = HomeCalendar(group_id=group.id, name="Home Calendar")
+    db.add(calendar)
+    await db.flush()
+    for index, (name, color) in enumerate(DEFAULT_LABELS):
+        db.add(
+            CalendarEventLabel(
+                group_id=group.id,
+                name=name,
+                color=color,
+                is_system=True,
+                sort_order=(index + 1) * 10,
+            )
+        )
     audit(db, request, "group.created", auth.user.id, group.id, "group", group.id)
     await db.commit()
     return await group_response(db, group, membership)

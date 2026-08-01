@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from mykhaya.models import FeatureFlagKey, PlatformRole, Role
+from mykhaya.models import RecurrencePattern, Role
 
 
 class StrictModel(BaseModel):
@@ -14,6 +14,7 @@ class RegisterRequest(StrictModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=12, max_length=128)
+    invitation_token: str | None = Field(default=None, min_length=30, max_length=500)
 
     @field_validator("display_name")
     @classmethod
@@ -90,6 +91,30 @@ class InvitationResponse(BaseModel):
     expires_at: datetime
 
 
+class InvitationListItem(InvitationResponse):
+    accepted_at: datetime | None
+    revoked_at: datetime | None
+    inviter_display_name: str
+    join_link: str | None = None
+
+
+class InvitationTokenPreview(BaseModel):
+    group_id: uuid.UUID
+    group_name: str
+    invited_by_display_name: str
+    email: EmailStr
+    role: Role
+    expires_at: datetime
+
+
+class InvitationResend(StrictModel):
+    invitation_id: uuid.UUID
+
+
+class InvitationRevoke(StrictModel):
+    invitation_id: uuid.UUID
+
+
 class InvitationAccept(StrictModel):
     token: str = Field(min_length=30, max_length=500)
 
@@ -111,57 +136,93 @@ class RegistrationResponse(MessageResponse):
     verification_required: bool
 
 
-class HomeFeatureResponse(BaseModel):
-    key: FeatureFlagKey
-    enabled: bool
-    source: str
+class EventLabelCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=40)
+    color: str = Field(default="#456B76", min_length=7, max_length=7)
 
 
-class HomeFeaturesEnvelope(BaseModel):
-    home_id: uuid.UUID
-    features: list[HomeFeatureResponse]
+class EventLabelResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    color: str
+    is_active: bool
+    sort_order: int
 
 
-class PlatformFeatureResponse(BaseModel):
-    key: FeatureFlagKey
-    display_name: str
-    description: str
-    globally_enabled: bool
+class EventCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=180)
+    start_at: datetime
+    end_at: datetime
+    timezone: str = Field(min_length=1, max_length=100)
+    is_all_day: bool = False
+    description: str | None = Field(default=None, max_length=2000)
+    location_text: str | None = Field(default=None, max_length=200)
+    label_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
+    recurrence: RecurrencePattern = RecurrencePattern.none
+    recurrence_interval: int = Field(default=1, ge=1, le=365)
+    recurrence_until: datetime | None = None
+    recurrence_count: int | None = Field(default=None, ge=1, le=1000)
 
 
-class PlatformFeatureUpdate(StrictModel):
-    enabled: bool
-    reason: str = Field(min_length=10, max_length=300)
-    confirm: bool
-
-    @field_validator("confirm")
-    @classmethod
-    def require_confirmation(cls, value: bool) -> bool:
-        if not value:
-            raise ValueError("Please confirm before saving this change.")
-        return value
-
-
-class PlatformFeatureOverrideResponse(BaseModel):
-    key: FeatureFlagKey
-    home_id: uuid.UUID
-    enabled: bool
-    source: str
+class EventUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=180)
+    start_at: datetime
+    end_at: datetime
+    timezone: str = Field(min_length=1, max_length=100)
+    is_all_day: bool = False
+    description: str | None = Field(default=None, max_length=2000)
+    location_text: str | None = Field(default=None, max_length=200)
+    label_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
+    recurrence: RecurrencePattern = RecurrencePattern.none
+    recurrence_interval: int = Field(default=1, ge=1, le=365)
+    recurrence_until: datetime | None = None
+    recurrence_count: int | None = Field(default=None, ge=1, le=1000)
+    expected_updated_at: datetime
 
 
-class PlatformFeatureOverrideUpdate(StrictModel):
-    enabled: bool
-    reason: str = Field(min_length=10, max_length=300)
-    confirm: bool
+class EventOccurrence(BaseModel):
+    occurrence_id: str
+    event_id: uuid.UUID
+    title: str
+    start_at: datetime
+    end_at: datetime
+    is_all_day: bool
+    timezone: str
+    description: str | None
+    location_text: str | None
+    label: EventLabelResponse | None
+    member_ids: list[uuid.UUID]
+    recurrence: RecurrencePattern
+    reminder_minutes: int | None
+    created_by: uuid.UUID
+    updated_at: datetime
 
-    @field_validator("confirm")
-    @classmethod
-    def require_confirmation(cls, value: bool) -> bool:
-        if not value:
-            raise ValueError("Please confirm before saving this change.")
-        return value
+
+class EventActivityResponse(BaseModel):
+    id: uuid.UUID
+    action: str
+    summary: str
+    actor_user_id: uuid.UUID | None
+    created_at: datetime
 
 
-class PlatformOperatorResponse(BaseModel):
-    user_id: uuid.UUID
-    role: PlatformRole
+class EventDetailResponse(BaseModel):
+    event: EventOccurrence
+    activity: list[EventActivityResponse]
+
+
+class EventListResponse(BaseModel):
+    items: list[EventOccurrence]
+    next_page: int | None
+
+
+class HomeSummaryResponse(BaseModel):
+    home_name: str
+    member_count: int
+    pending_invitations: int | None
+    today_events: list[EventOccurrence]
+    next_event: EventOccurrence | None

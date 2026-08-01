@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.models import OutboxEvent
+from mykhaya.models import OperationalHeartbeat, OutboxEvent
 
 
 async def run() -> None:
@@ -31,6 +31,14 @@ async def run() -> None:
                 for row in rows:
                     await redis.rpush("mykhaya:jobs", json.dumps({"event_id": str(row.id)}))
                     row.processed_at = datetime.now(UTC)
+                await db.merge(
+                    OperationalHeartbeat(
+                        service="scheduler",
+                        observed_at=datetime.now(UTC),
+                        last_success_at=datetime.now(UTC),
+                        safe_detail="Scheduler cycle completed.",
+                    )
+                )
                 await db.commit()
             await asyncio.sleep(2)
     finally:

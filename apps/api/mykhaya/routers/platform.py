@@ -1,0 +1,1388 @@
+import uuid
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from redis.asyncio import Redis
+from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.audit import outbox
+from mykhaya.config import Settings, get_settings
+from mykhaya.db import get_db
+from mykhaya.models import (
+    ActionToken,
+    AdministrativeAuditEvent,
+    AdministrativeNote,
+    FeatureFlag,
+    FeatureKey,
+    FeatureOverride,
+    Group,
+    Invitation,
+    Membership,
+    OperationalHeartbeat,
+    OutboxEvent,
+    PlatformAdministrator,
+    PlatformRole,
+    PlatformSession,
+    PlatformSetting,
+    PublicIncident,
+    SecurityEvent,
+    Session,
+    TokenPurpose,
+    User,
+    WorkerJobRecord,
+)
+from mykhaya.platform_audit import platform_audit
+from mykhaya.platform_schemas import (
+    FeatureFlagUpdate,
+    IncidentCreate,
+    IncidentUpdate,
+    NoteRequest,
+    PageResponse,
+    PlatformActorResponse,
+    PlatformLoginRequest,
+    PlatformReauthenticateRequest,
+    SensitiveActionRequest,
+    SettingUpdate,
+)
+from mykhaya.platform_security import (
+    PlatformContext,
+    clear_admin_cookies,
+    enforce_admin_host,
+    enforce_admin_network,
+    new_admin_session,
+    platform_context,
+    require_recent_auth,
+    require_roles,
+    set_admin_cookies,
+)
+from mykhaya.rate_limit import enforce_rate_limit
+from mykhaya.security import (
+    DUMMY_HASH,
+    create_action_token,
+    normalise_email,
+    verify_password,
+)
+
+router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
+ALL_ROLES = tuple(PlatformRole)
+OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
+SUPPORT = (*OPERATORS, PlatformRole.support)
+SECURITY = (PlatformRole.owner, PlatformRole.security)
+SETTINGS = (PlatformRole.owner,)
+
+
+def actor_response(admin: PlatformAdministrator) -> PlatformActorResponse:
+    return PlatformActorResponse(
+        id=admin.id,
+        email=admin.email,
+        display_name=admin.display_name,
+        role=admin.role,
+        mfa_enrolled=admin.mfa_enrolled,
+    )
+
+
+@router.post("/auth/login", response_model=PlatformActorResponse)
+async def login(
+    body: PlatformLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PlatformActorResponse:
+    enforce_admin_host(request, settings)
+    source_ip = enforce_admin_network(request, settings)
+    await enforce_rate_limit(request, settings, "platform-login", 5, 300)
+    admin = await db.scalar(
+        select(PlatformAdministrator).where(
+            PlatformAdministrator.email == normalise_email(str(body.email))
+        )
+    )
+    valid = verify_password(body.password, admin.password_hash if admin else DUMMY_HASH)
+    if admin is None or not valid or not admin.is_active:
+        db.add(
+            SecurityEvent(
+                event_type="administrator_login_failed",
+                severity="medium",
+                outcome="denied",
+                administrator_id=admin.id if admin else None,
+                source_ip=source_ip,
+                request_id=getattr(request.state, "request_id", None),
+                safe_detail="Administrator credentials were rejected.",
+            )
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
+    if settings.admin_mfa_required and not admin.mfa_enrolled:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Mandatory MFA enrolment is required before Control Centre access.",
+        )
+    session, raw, csrf = new_admin_session(admin, request, settings, source_ip)
+    db.add(session)
+    admin.last_login_at = datetime.now(UTC)
+    await db.flush()
+    context = PlatformContext(admin, session, source_ip)
+    platform_audit(db, request, context, "administrator.signed_in", "administrator", admin.id)
+    await db.commit()
+    set_admin_cookies(response, raw, csrf, settings)
+    return actor_response(admin)
+
+
+@router.get("/auth/me", response_model=PlatformActorResponse)
+async def me(context: PlatformContext = Depends(platform_context)) -> PlatformActorResponse:
+    return actor_response(context.administrator)
+
+
+@router.post("/auth/reauthenticate", response_model=PlatformActorResponse)
+async def reauthenticate(
+    body: PlatformReauthenticateRequest,
+    request: Request,
+    context: PlatformContext = Depends(platform_context),
+    db: AsyncSession = Depends(get_db),
+) -> PlatformActorResponse:
+    if not verify_password(body.password, context.administrator.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The password is not correct.")
+    context.session.authenticated_at = datetime.now(UTC)
+    platform_audit(
+        db,
+        request,
+        context,
+        "administrator.reauthenticated",
+        "administrator",
+        context.administrator.id,
+    )
+    await db.commit()
+    return actor_response(context.administrator)
+
+
+@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: Request,
+    response: Response,
+    context: PlatformContext = Depends(platform_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    context.session.revoked_at = datetime.now(UTC)
+    platform_audit(db, request, context, "administrator.signed_out", "session", context.session.id)
+    await db.commit()
+    clear_admin_cookies(response)
+
+
+@router.get("/auth/sessions")
+async def list_sessions(
+    context: PlatformContext = Depends(platform_context), db: AsyncSession = Depends(get_db)
+) -> list[dict[str, Any]]:
+    rows = (
+        await db.scalars(
+            select(PlatformSession)
+            .where(
+                PlatformSession.administrator_id == context.administrator.id,
+                PlatformSession.revoked_at.is_(None),
+                PlatformSession.absolute_expires_at > datetime.now(UTC),
+            )
+            .order_by(PlatformSession.last_seen_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "created_at": row.created_at,
+            "last_seen_at": row.last_seen_at,
+            "absolute_expires_at": row.absolute_expires_at,
+            "user_agent": row.user_agent,
+            "source_ip": row.source_ip,
+            "current": row.id == context.session.id,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/auth/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_all_admin_sessions(
+    body: SensitiveActionRequest,
+    request: Request,
+    response: Response,
+    context: PlatformContext = Depends(platform_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    require_recent_auth(context, settings)
+    await db.execute(
+        update(PlatformSession)
+        .where(
+            PlatformSession.administrator_id == context.administrator.id,
+            PlatformSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "administrator.sessions_revoked",
+        "administrator",
+        context.administrator.id,
+        reason=body.reason,
+    )
+    await db.commit()
+    clear_admin_cookies(response)
+
+
+@router.get("/overview")
+async def overview(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    user_counts = (
+        await db.execute(
+            select(
+                func.count(User.id),
+                func.count(User.id).filter(User.email_verified_at.is_not(None)),
+                func.count(User.id).filter(User.email_verified_at.is_(None)),
+                func.count(User.id).filter(User.is_active.is_(True)),
+                func.count(User.id).filter(User.is_active.is_(False)),
+            )
+        )
+    ).one()
+    group_counts = (
+        await db.execute(
+            select(
+                func.count(Group.id),
+                func.count(Group.id).filter(Group.is_active.is_(True)),
+                func.count(Group.id).filter(Group.is_active.is_(False)),
+            )
+        )
+    ).one()
+    failed_logins = await db.scalar(
+        select(func.count(SecurityEvent.id)).where(
+            SecurityEvent.event_type.in_(["login_failed", "administrator_login_failed"])
+        )
+    )
+    queue_depth = await db.scalar(
+        select(func.count(OutboxEvent.id)).where(OutboxEvent.processed_at.is_(None))
+    )
+    return {
+        "users": dict(
+            zip(
+                ("total", "verified", "unverified", "active", "suspended"), user_counts, strict=True
+            )
+        ),
+        "homes": dict(zip(("total", "active", "suspended"), group_counts, strict=True)),
+        "security": {"failed_logins": failed_logins or 0},
+        "operations": {"queue_depth": queue_depth or 0},
+        "system": {
+            "version": settings.version,
+            "commit": settings.commit_sha,
+            "build_time": settings.build_time,
+            "channel": settings.build_channel,
+            "environment": settings.environment,
+            "checked_at": now,
+        },
+    }
+
+
+@router.get("/users", response_model=PageResponse)
+async def users(
+    q: str | None = Query(default=None, max_length=100),
+    verified: bool | None = None,
+    active: bool | None = None,
+    sort: Literal["created_at", "email", "display_name", "last_login_at"] = "created_at",
+    direction: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    filters: list[Any] = []
+    if q:
+        term = f"%{q.strip()}%"
+        filters.append(or_(User.email.ilike(term), User.display_name.ilike(term)))
+    if verified is not None:
+        filters.append(
+            User.email_verified_at.is_not(None) if verified else User.email_verified_at.is_(None)
+        )
+    if active is not None:
+        filters.append(User.is_active.is_(active))
+    where = and_(*filters)
+    total = await db.scalar(select(func.count(User.id)).where(where)) or 0
+    column = getattr(User, sort)
+    order = column.asc() if direction == "asc" else column.desc()
+    rows = (
+        await db.scalars(
+            select(User)
+            .where(where)
+            .order_by(order, User.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    ids = [row.id for row in rows]
+    home_counts: dict[uuid.UUID, int] = (
+        {
+            user_id: count
+            for user_id, count in (
+                await db.execute(
+                    select(Membership.user_id, func.count(Membership.id))
+                    .where(Membership.user_id.in_(ids), Membership.removed_at.is_(None))
+                    .group_by(Membership.user_id)
+                )
+            ).all()
+        }
+        if ids
+        else {}
+    )
+    session_counts: dict[uuid.UUID, int] = (
+        {
+            user_id: count
+            for user_id, count in (
+                await db.execute(
+                    select(Session.user_id, func.count(Session.id))
+                    .where(
+                        Session.user_id.in_(ids),
+                        Session.revoked_at.is_(None),
+                        Session.expires_at > datetime.now(UTC),
+                    )
+                    .group_by(Session.user_id)
+                )
+            ).all()
+        }
+        if ids
+        else {}
+    )
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "email": row.email,
+                "display_name": row.display_name,
+                "verified": row.email_verified_at is not None,
+                "active": row.is_active,
+                "created_at": row.created_at,
+                "last_login_at": row.last_login_at,
+                "last_activity_at": row.last_activity_at,
+                "home_count": home_counts.get(row.id, 0),
+                "session_count": session_counts.get(row.id, 0),
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/users/{user_id}")
+async def user_detail(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    memberships = (
+        await db.execute(
+            select(Membership, Group)
+            .join(Group, Group.id == Membership.group_id)
+            .where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            .limit(100)
+        )
+    ).all()
+    sessions = (
+        await db.scalars(
+            select(Session)
+            .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+            .order_by(Session.last_seen_at.desc())
+            .limit(50)
+        )
+    ).all()
+    notes = (
+        await db.scalars(
+            select(AdministrativeNote)
+            .where(
+                AdministrativeNote.target_type == "user", AdministrativeNote.target_id == user_id
+            )
+            .order_by(AdministrativeNote.created_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "verified": user.email_verified_at is not None,
+        "active": user.is_active,
+        "created_at": user.created_at,
+        "last_login_at": user.last_login_at,
+        "last_activity_at": user.last_activity_at,
+        "homes": [
+            {"id": group.id, "name": group.name, "role": membership.role}
+            for membership, group in memberships
+        ],
+        "sessions": [
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "last_seen_at": row.last_seen_at,
+                "expires_at": row.expires_at,
+                "user_agent": row.user_agent,
+            }
+            for row in sessions
+        ],
+        "notes": [
+            {
+                "id": row.id,
+                "body": row.body,
+                "created_at": row.created_at,
+                "administrator_id": row.administrator_id,
+            }
+            for row in notes
+        ],
+    }
+
+
+async def _user_state_action(
+    user_id: uuid.UUID,
+    active: bool,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext,
+    db: AsyncSession,
+    settings: Settings,
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    previous = user.is_active
+    user.is_active = active
+    user.suspended_at = None if active else datetime.now(UTC)
+    if not active:
+        await db.execute(
+            update(Session)
+            .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.reactivated" if active else "user.suspended",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"active": previous},
+        new={"active": active},
+    )
+    await db.commit()
+    return {"message": "User reactivated." if active else "User suspended and sessions revoked."}
+
+
+@router.post("/users/{user_id}/suspend")
+async def suspend_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    return await _user_state_action(user_id, False, body, request, context, db, settings)
+
+
+@router.post("/users/{user_id}/reactivate")
+async def reactivate_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    return await _user_state_action(user_id, True, body, request, context, db, settings)
+
+
+@router.post("/users/{user_id}/revoke-sessions")
+async def revoke_user_sessions(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    if await db.get(User, user_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    platform_audit(
+        db, request, context, "user.sessions_revoked", "user", user_id, reason=body.reason
+    )
+    await db.commit()
+    return {"message": "All user sessions were revoked."}
+
+
+async def _enqueue_user_mail(
+    user_id: uuid.UUID,
+    purpose: TokenPurpose,
+    topic: str,
+    action: str,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext,
+    db: AsyncSession,
+    settings: Settings,
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if purpose == TokenPurpose.verify_email and user.email_verified_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That email address is already verified.")
+    await db.execute(
+        update(ActionToken)
+        .where(
+            ActionToken.user_id == user.id,
+            ActionToken.purpose == purpose,
+            ActionToken.consumed_at.is_(None),
+        )
+        .values(consumed_at=datetime.now(UTC))
+    )
+    token = await create_action_token(db, user.id, purpose, settings, 30)
+    outbox(db, topic, {"token_id": str(token.id)})
+    platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
+    await db.commit()
+    return {"message": "The email was queued safely."}
+
+
+@router.post("/users/{user_id}/resend-verification")
+async def resend_verification(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    return await _enqueue_user_mail(
+        user_id,
+        TokenPurpose.verify_email,
+        "email.verify",
+        "user.verification_resent",
+        body,
+        request,
+        context,
+        db,
+        settings,
+    )
+
+
+@router.post("/users/{user_id}/send-password-reset")
+async def send_password_reset(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    return await _enqueue_user_mail(
+        user_id,
+        TokenPurpose.reset_password,
+        "email.reset",
+        "user.password_reset_sent",
+        body,
+        request,
+        context,
+        db,
+        settings,
+    )
+
+
+@router.post("/users/{user_id}/notes", status_code=status.HTTP_201_CREATED)
+async def add_user_note(
+    user_id: uuid.UUID,
+    body: NoteRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    if await db.get(User, user_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    note = AdministrativeNote(
+        administrator_id=context.administrator.id,
+        target_type="user",
+        target_id=user_id,
+        body=body.body.strip(),
+    )
+    db.add(note)
+    await db.flush()
+    platform_audit(db, request, context, "user.note_added", "user", user_id)
+    await db.commit()
+    return {"id": note.id, "created_at": note.created_at}
+
+
+@router.get("/homes", response_model=PageResponse)
+async def homes(
+    q: str | None = Query(default=None, max_length=100),
+    active: bool | None = None,
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    filters: list[Any] = []
+    if q:
+        filters.append(Group.name.ilike(f"%{q.strip()}%"))
+    if active is not None:
+        filters.append(Group.is_active.is_(active))
+    where = and_(*filters)
+    total = await db.scalar(select(func.count(Group.id)).where(where)) or 0
+    rows = (
+        await db.scalars(
+            select(Group)
+            .where(where)
+            .order_by(Group.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    items: list[dict[str, Any]] = []
+    for group in rows:
+        owner = (
+            await db.execute(
+                select(User)
+                .join(Membership, Membership.user_id == User.id)
+                .where(
+                    Membership.group_id == group.id,
+                    Membership.role == "owner",
+                    Membership.removed_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        member_count = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == group.id, Membership.removed_at.is_(None)
+                )
+            )
+            or 0
+        )
+        invitation_count = (
+            await db.scalar(
+                select(func.count(Invitation.id)).where(
+                    Invitation.group_id == group.id,
+                    Invitation.accepted_at.is_(None),
+                    Invitation.revoked_at.is_(None),
+                )
+            )
+            or 0
+        )
+        items.append(
+            {
+                "id": group.id,
+                "name": group.name,
+                "owner": {"id": owner.id, "email": owner.email, "display_name": owner.display_name}
+                if owner
+                else None,
+                "created_at": group.created_at,
+                "last_activity_at": group.last_activity_at,
+                "member_count": member_count,
+                "invitation_count": invitation_count,
+                "active": group.is_active,
+            }
+        )
+    return PageResponse(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get("/homes/{group_id}")
+async def home_detail(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    members = (
+        await db.execute(
+            select(Membership, User)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.group_id == group_id, Membership.removed_at.is_(None))
+            .limit(200)
+        )
+    ).all()
+    invitations = (
+        await db.scalars(
+            select(Invitation)
+            .where(
+                Invitation.group_id == group_id,
+                Invitation.accepted_at.is_(None),
+                Invitation.revoked_at.is_(None),
+            )
+            .limit(200)
+        )
+    ).all()
+    overrides = (
+        await db.scalars(select(FeatureOverride).where(FeatureOverride.group_id == group_id))
+    ).all()
+    notes = (
+        await db.scalars(
+            select(AdministrativeNote)
+            .where(
+                AdministrativeNote.target_type == "home",
+                AdministrativeNote.target_id == group_id,
+            )
+            .order_by(AdministrativeNote.created_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return {
+        "id": group.id,
+        "name": group.name,
+        "created_at": group.created_at,
+        "last_activity_at": group.last_activity_at,
+        "active": group.is_active,
+        "members": [
+            {
+                "user_id": user.id,
+                "display_name": user.display_name,
+                "email": user.email,
+                "role": membership.role,
+            }
+            for membership, user in members
+        ],
+        "pending_invitations": [
+            {"id": row.id, "email": row.email, "role": row.role, "expires_at": row.expires_at}
+            for row in invitations
+        ],
+        "feature_overrides": [
+            {"feature": row.feature_key, "enabled": row.enabled} for row in overrides
+        ],
+        "notes": [{"id": row.id, "body": row.body, "created_at": row.created_at} for row in notes],
+    }
+
+
+@router.post("/homes/{group_id}/notes", status_code=status.HTTP_201_CREATED)
+async def add_home_note(
+    group_id: uuid.UUID,
+    body: NoteRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    note = AdministrativeNote(
+        administrator_id=context.administrator.id,
+        target_type="home",
+        target_id=group_id,
+        body=body.body.strip(),
+    )
+    db.add(note)
+    await db.flush()
+    platform_audit(db, request, context, "home.note_added", "home", group_id)
+    await db.commit()
+    return {"id": note.id, "created_at": note.created_at}
+
+
+@router.put("/homes/{group_id}/feature-flags/{key}")
+async def update_home_feature_flag(
+    group_id: uuid.UUID,
+    key: FeatureKey,
+    body: FeatureFlagUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    row = await db.scalar(
+        select(FeatureOverride)
+        .where(FeatureOverride.group_id == group_id, FeatureOverride.feature_key == key)
+        .with_for_update()
+    )
+    previous = row.enabled if row else None
+    if row is None:
+        row = FeatureOverride(
+            feature_key=key,
+            group_id=group_id,
+            enabled=body.enabled,
+            updated_by=context.administrator.id,
+        )
+        db.add(row)
+    else:
+        row.enabled = body.enabled
+        row.updated_by = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "feature_flag.home_override_updated",
+        "home",
+        group_id,
+        reason=body.reason,
+        previous={"key": key.value, "enabled": previous},
+        new={"key": key.value, "enabled": body.enabled},
+    )
+    await db.commit()
+    return {"key": key, "home_id": group_id, "enabled": body.enabled}
+
+
+@router.post("/homes/{group_id}/{action}")
+async def home_state(
+    group_id: uuid.UUID,
+    action: Literal["suspend", "reactivate"],
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    group = await db.get(Group, group_id, with_for_update=True)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    previous = group.is_active
+    group.is_active = action == "reactivate"
+    group.suspended_at = None if group.is_active else datetime.now(UTC)
+    platform_audit(
+        db,
+        request,
+        context,
+        f"home.{action}d" if action == "suspend" else "home.reactivated",
+        "home",
+        group.id,
+        reason=body.reason,
+        previous={"active": previous},
+        new={"active": group.is_active},
+    )
+    await db.commit()
+    return {"message": f"Home {action}d." if action == "suspend" else "Home reactivated."}
+
+
+@router.get("/health")
+async def internal_health(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    checked = datetime.now(UTC)
+    services: list[dict[str, Any]] = []
+    try:
+        await db.execute(text("SELECT 1"))
+        services.append(
+            {
+                "service": "PostgreSQL",
+                "state": "Healthy",
+                "explanation": "Database connectivity check succeeded.",
+                "last_checked": checked,
+                "last_success": checked,
+                "recommended_action": None,
+            }
+        )
+    except Exception:
+        services.append(
+            {
+                "service": "PostgreSQL",
+                "state": "Unavailable",
+                "explanation": "Database connectivity check failed.",
+                "last_checked": checked,
+                "last_success": None,
+                "recommended_action": "Check database service health and credentials.",
+            }
+        )
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        await redis.ping()
+        services.append(
+            {
+                "service": "Redis",
+                "state": "Healthy",
+                "explanation": "Coordination service responded.",
+                "last_checked": checked,
+                "last_success": checked,
+                "recommended_action": None,
+            }
+        )
+    except Exception:
+        services.append(
+            {
+                "service": "Redis",
+                "state": "Unavailable",
+                "explanation": "Coordination service did not respond.",
+                "last_checked": checked,
+                "last_success": None,
+                "recommended_action": "Check Redis service health.",
+            }
+        )
+    finally:
+        await redis.aclose()
+    heartbeats = (await db.scalars(select(OperationalHeartbeat))).all()
+    by_service = {row.service: row for row in heartbeats}
+    for name in ("worker", "scheduler"):
+        row = by_service.get(name)
+        stale = row is None or (checked - row.observed_at).total_seconds() > 30
+        services.append(
+            {
+                "service": name.title(),
+                "state": "Unknown" if row is None else ("Degraded" if stale else "Healthy"),
+                "explanation": "No heartbeat has been recorded."
+                if row is None
+                else ("Heartbeat is stale." if stale else "Heartbeat is current."),
+                "last_checked": checked,
+                "last_success": row.last_success_at if row else None,
+                "recommended_action": "Check the service process." if stale else None,
+            }
+        )
+    for name, action in (
+        ("Backup freshness", "Configure backup metadata reporting."),
+        ("Migration state", "Run Alembic verification in deployment."),
+        ("Email transport", "Use the test-connection action before release."),
+        ("Disk capacity", "Configure host capacity monitoring."),
+    ):
+        services.append(
+            {
+                "service": name,
+                "state": "Unknown",
+                "explanation": "No authoritative observation source is configured.",
+                "last_checked": checked,
+                "last_success": None,
+                "recommended_action": action,
+            }
+        )
+    return {"services": services, "checked_at": checked}
+
+
+@router.get("/jobs", response_model=PageResponse)
+async def jobs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    total = await db.scalar(select(func.count(WorkerJobRecord.id))) or 0
+    rows = (
+        await db.scalars(
+            select(WorkerJobRecord)
+            .order_by(WorkerJobRecord.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "job_type": row.topic,
+                "state": row.status,
+                "created_at": row.created_at,
+                "completed_at": row.finished_at,
+                "retry_count": row.attempts,
+                "safe_failure_message": row.error,
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+SETTING_RULES: dict[str, tuple[type[Any], str]] = {
+    "platform_display_name": (str, "safe_live"),
+    "support_contact_address": (str, "safe_live"),
+    "registration_enabled": (bool, "sensitive_live"),
+    "invite_only_mode": (bool, "sensitive_live"),
+    "email_verification_required": (bool, "sensitive_live"),
+    "allowed_registration_domains": (list, "sensitive_live"),
+    "maximum_homes_per_user": (int, "safe_live"),
+    "maximum_members_per_home": (int, "safe_live"),
+    "invitation_expiry_days": (int, "safe_live"),
+    "maintenance_mode": (bool, "sensitive_live"),
+    "default_locale": (str, "safe_live"),
+    "default_timezone": (str, "safe_live"),
+    "privacy_notice_version": (str, "safe_live"),
+    "terms_version": (str, "safe_live"),
+}
+
+
+@router.get("/settings")
+async def settings_list(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    rows = {row.key: row for row in (await db.scalars(select(PlatformSetting))).all()}
+    return {
+        "settings": [
+            {
+                "key": key,
+                "value": rows[key].value.get("value") if key in rows else None,
+                "category": category,
+                "editable": True,
+            }
+            for key, (_, category) in SETTING_RULES.items()
+        ],
+        "environment": [
+            {
+                "key": "public_url",
+                "value": settings.public_web_url,
+                "category": "environment_controlled",
+                "editable": False,
+            },
+            {
+                "key": "admin_url",
+                "value": settings.admin_url,
+                "category": "environment_controlled",
+                "editable": False,
+            },
+            {
+                "key": "status_url",
+                "value": settings.status_url,
+                "category": "environment_controlled",
+                "editable": False,
+            },
+        ],
+    }
+
+
+@router.put("/settings/{key}")
+async def update_setting(
+    key: str,
+    body: SettingUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    rule = SETTING_RULES.get(key)
+    if (
+        rule is None
+        or not isinstance(body.value, rule[0])
+        or (rule[0] is int and isinstance(body.value, bool))
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "That setting or value is not valid."
+        )
+    if isinstance(body.value, int) and not 1 <= body.value <= 10_000:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "That numeric value is outside the allowed range."
+        )
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == key).with_for_update()
+    )
+    previous = row.value.get("value") if row else None
+    if row is None:
+        row = PlatformSetting(
+            key=key, value={"value": body.value}, updated_by=context.administrator.id
+        )
+        db.add(row)
+    else:
+        row.value = {"value": body.value}
+        row.updated_by = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "setting.updated",
+        "setting",
+        reason=body.reason,
+        previous={key: previous},
+        new={key: body.value},
+    )
+    await db.commit()
+    return {"key": key, "value": body.value, "category": rule[1]}
+
+
+@router.get("/feature-flags")
+async def feature_flags(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
+) -> list[dict[str, Any]]:
+    rows = {row.key: row for row in (await db.scalars(select(FeatureFlag))).all()}
+    return [
+        {"key": key, "enabled": rows[key].enabled if key in rows else False} for key in FeatureKey
+    ]
+
+
+@router.put("/feature-flags/{key}")
+async def update_feature_flag(
+    key: FeatureKey,
+    body: FeatureFlagUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == key).with_for_update())
+    previous = row.enabled if row else False
+    if row is None:
+        row = FeatureFlag(key=key, enabled=body.enabled, updated_by=context.administrator.id)
+        db.add(row)
+    else:
+        row.enabled = body.enabled
+        row.updated_by = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "feature_flag.updated",
+        "feature_flag",
+        reason=body.reason,
+        previous={"key": key.value, "enabled": previous},
+        new={"key": key.value, "enabled": body.enabled},
+    )
+    await db.commit()
+    return {"key": key, "enabled": body.enabled}
+
+
+@router.get("/security", response_model=PageResponse)
+async def security_events(
+    event_type: str | None = Query(default=None, max_length=80),
+    severity: str | None = Query(default=None, max_length=20),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SECURITY)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    filters = []
+    if event_type:
+        filters.append(SecurityEvent.event_type == event_type)
+    if severity:
+        filters.append(SecurityEvent.severity == severity)
+    where = and_(*filters)
+    total = await db.scalar(select(func.count(SecurityEvent.id)).where(where)) or 0
+    rows = (
+        await db.scalars(
+            select(SecurityEvent)
+            .where(where)
+            .order_by(SecurityEvent.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "event_type": row.event_type,
+                "severity": row.severity,
+                "outcome": row.outcome,
+                "user_id": row.user_id,
+                "administrator_id": row.administrator_id,
+                "source_ip": row.source_ip,
+                "request_id": row.request_id,
+                "detail": row.safe_detail,
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/audit", response_model=PageResponse)
+async def audit_events(
+    action: str | None = Query(default=None, max_length=100),
+    outcome: str | None = Query(default=None, max_length=30),
+    request_id: str | None = Query(default=None, max_length=80),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SECURITY)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    filters = []
+    if action:
+        filters.append(AdministrativeAuditEvent.action == action)
+    if outcome:
+        filters.append(AdministrativeAuditEvent.outcome == outcome)
+    if request_id:
+        filters.append(AdministrativeAuditEvent.request_id == request_id)
+    where = and_(*filters)
+    total = await db.scalar(select(func.count(AdministrativeAuditEvent.id)).where(where)) or 0
+    rows = (
+        await db.scalars(
+            select(AdministrativeAuditEvent)
+            .where(where)
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "administrator_id": row.administrator_id,
+                "administrator_role": row.administrator_role,
+                "action": row.action,
+                "target_type": row.target_type,
+                "target_id": row.target_id,
+                "outcome": row.outcome,
+                "reason": row.reason,
+                "source_ip": row.source_ip,
+                "request_id": row.request_id,
+                "session_reference": row.session_reference,
+                "previous_values": row.previous_values,
+                "new_values": row.new_values,
+                "failure_category": row.failure_category,
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/administrators")
+async def administrators(
+    _: PlatformContext = Depends(require_roles(PlatformRole.owner)),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    rows = (
+        await db.scalars(select(PlatformAdministrator).order_by(PlatformAdministrator.created_at))
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "email": row.email,
+            "display_name": row.display_name,
+            "role": row.role,
+            "active": row.is_active,
+            "mfa_enrolled": row.mfa_enrolled,
+            "last_login_at": row.last_login_at,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/mail")
+async def mail_configuration(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return {
+        "source": "environment",
+        "editable": False,
+        "restart_required": True,
+        "smtp_hostname": settings.smtp_host,
+        "port": settings.smtp_port,
+        "sender_identity": settings.email_from,
+        "credential_configured": False,
+        "credential": "[NOT RETURNED]",
+        "delivery_events": [],
+        "limitations": [
+            "SMTP credentials are environment-managed.",
+            "Delivery event persistence and safe retry are not yet implemented.",
+        ],
+    }
+
+
+@router.get("/incidents")
+async def incidents(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
+) -> list[dict[str, Any]]:
+    rows = (
+        await db.scalars(
+            select(PublicIncident).order_by(PublicIncident.starts_at.desc()).limit(100)
+        )
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "title": row.title,
+            "message": row.message,
+            "service": row.service,
+            "state": row.state,
+            "starts_at": row.starts_at,
+            "resolved_at": row.resolved_at,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/incidents", status_code=status.HTTP_201_CREATED)
+async def create_incident(
+    body: IncidentCreate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = PublicIncident(
+        title=body.title.strip(),
+        message=body.message.strip(),
+        service=body.service,
+        state=body.state,
+        starts_at=body.starts_at or datetime.now(UTC),
+        created_by=context.administrator.id,
+    )
+    db.add(row)
+    await db.flush()
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_created",
+        "incident",
+        row.id,
+        reason=body.reason,
+        new={"title": row.title, "service": row.service, "state": row.state.value},
+    )
+    await db.commit()
+    return {"id": row.id, "title": row.title, "state": row.state}
+
+
+@router.patch("/incidents/{incident_id}")
+async def update_incident(
+    incident_id: uuid.UUID,
+    body: IncidentUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = await db.get(PublicIncident, incident_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    previous = {
+        "message": row.message,
+        "state": row.state.value,
+        "resolved": row.resolved_at is not None,
+    }
+    row.message = body.message.strip()
+    row.state = body.state
+    row.resolved_at = datetime.now(UTC) if body.resolved else None
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_updated",
+        "incident",
+        row.id,
+        reason=body.reason,
+        previous=previous,
+        new={"message": row.message, "state": row.state.value, "resolved": body.resolved},
+    )
+    await db.commit()
+    return {"id": row.id, "state": row.state, "resolved_at": row.resolved_at}

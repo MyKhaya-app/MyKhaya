@@ -1,20 +1,32 @@
 name: quality
 on:
   pull_request:
-  push: { branches: [main, dev] }
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
 permissions: { contents: read }
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   application:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { fetch-depth: 0 }
+      - name: Validate VERSION
+        run: python infrastructure/scripts/validate_version.py
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
       - name: Compose validation
-        run: docker compose config --quiet
-      - name: Web lint, type check, test and production build
+        run: docker compose config --quiet && docker compose -f compose.yml -f compose.production.yml config --quiet
+      - name: Alembic head validation
+        run: docker compose run --rm migrate alembic heads | tee /tmp/alembic-heads.txt && test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
+      - name: Web lint, type check, tests and build
         run: docker build --target check -f apps/web/Dockerfile .
-      - name: API lint, types and tests
+      - name: Mobile lint and type check
+        run: docker build --target mobile-check -f apps/web/Dockerfile .
+      - name: API lint, formatting, types and tests
         run: docker compose --profile tools run --rm test sh -c 'ruff check mykhaya tests && ruff format --check mykhaya tests && mypy mykhaya && python -m pytest'
       - name: Production images
         run: docker compose build web api worker scheduler migrate

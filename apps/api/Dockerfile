@@ -3,6 +3,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
+COPY VERSION ./VERSION
 COPY apps/api/pyproject.toml ./
 COPY apps/api/mykhaya ./mykhaya
 RUN pip install --upgrade pip && pip install .
@@ -13,10 +14,21 @@ COPY apps/api/tests ./tests
 CMD ["python", "-m", "pytest"]
 
 FROM python:3.13.5-slim-bookworm AS runtime
+ARG MYKHAYA_VERSION=unknown
+ARG MYKHAYA_COMMIT_SHA=unknown
+ARG MYKHAYA_BUILD_TIME=unknown
+ARG MYKHAYA_BUILD_CHANNEL=development
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+LABEL org.opencontainers.image.title="MyKhaya API" \
+	org.opencontainers.image.description="MyKhaya FastAPI application, worker and scheduler runtime" \
+	org.opencontainers.image.version="$MYKHAYA_VERSION" \
+	org.opencontainers.image.revision="$MYKHAYA_COMMIT_SHA" \
+	org.opencontainers.image.created="$MYKHAYA_BUILD_TIME" \
+	org.opencontainers.image.source="https://github.com"
 RUN groupadd --system --gid 10001 mykhaya && useradd --system --uid 10001 --gid mykhaya --home-dir /app mykhaya
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
+COPY --chown=mykhaya:mykhaya VERSION /app/VERSION
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
 COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
 USER 10001:10001

@@ -22,11 +22,26 @@ Where implementation and documentation conflict, stop, identify the correct inte
 - Avoid unnecessary dependencies and abstractions.
 - Treat rollback and operational impact as part of implementation.
 
+## Branching and release gates
+
+- `dev` is the default target for normal development pull requests.
+- Codex performs all normal work directly on `dev` unless Anthony asks for a short-lived branch.
+- `main` is stable; only Anthony merges, tags and deploys it.
+- Do not create release or hotfix branches, automate promotion, force-push or rewrite history.
+- Stable releases require semantic versioning and stable tags (`vMAJOR.MINOR.PATCH`).
+- `VERSION` is branch-independent and every component must use the same value.
+- Version, commit and build metadata must be safe to expose internally and must not include secrets.
+- Public status endpoints must not expose internal build identifiers.
+
 ## Architecture
 
 MyKhaya begins as a modular monolith. Do not introduce microservices or Kubernetes without measured need and an approved architectural decision record.
 
 PostgreSQL is authoritative. API and web processes are stateless. Redis is used only for cache, coordination, rate limiting and durable worker infrastructure where configured appropriately.
+
+Privileged platform administration is a separate management-plane boundary. Household roles, sessions, routes and layouts must never be reused as platform authorization. Public status contracts must be constructed independently of internal diagnostic contracts.
+
+Every unfinished module must be enforced through the central server-side feature evaluator. Hiding a navigation link is not authorization or feature enforcement.
 
 ## Definition of quality
 

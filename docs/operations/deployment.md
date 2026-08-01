@@ -22,4 +22,8 @@ For Cloudflare, restrict origin ingress to Cloudflare IP ranges, configure Caddy
 4. Exercise login, Home membership and a cross-Home denial check.
 5. To roll back, restore prior image digests. If a migration is not backward compatible, stop writes and restore the verified pre-upgrade database backup. Never improvise schema rollback against live data.
 
+## Release ownership
+
+Codex validates and reports `dev` readiness. Anthony alone merges `dev` to `main`, creates the matching `v<VERSION>` tag and deploys that tagged revision. Workflows validate and build; they do not publish or deploy automatically.
+
 Containers log JSON or structured records to stdout. Alert on health failures, repeated authentication denials, queue failures, backup failures and storage capacity. Keep exactly one scheduler replica.

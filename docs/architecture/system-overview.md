@@ -29,10 +29,6 @@ Next.js   FastAPI
 
 The same production images must run on the home test server and VPS. Environment configuration changes; source architecture does not.
 
-## Feature flag control plane
+Production has three customer/operator origins routed by Caddy: `mykhaya.app` for the public and household product, `admin.mykhaya.app` for the restricted management plane, and `status.mykhaya.app` for deliberately limited public availability information. All currently reuse the modular-monolith images, but hostname, API, cookie, identity, authorization and response boundaries are explicit.
 
-- Feature flags are stored centrally in the API database and default to disabled.
-- Evaluation is server-side, with optional Home-level overrides for controlled rollout.
-- User clients fetch Home feature availability from the API, so navigation and module access are driven by authoritative backend state.
-- Platform operators manage global flags and Home overrides through privileged API endpoints that require confirmation and an audit reason.
-- Unknown feature keys fail closed and are treated as disabled.
+Unfinished product modules remain inside the monolith but are disabled through the central server-side feature evaluator. Home overrides take precedence over global state, and unknown flags fail closed.

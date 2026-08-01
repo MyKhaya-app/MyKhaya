@@ -8,7 +8,15 @@ from redis.asyncio import Redis
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.mailer import send_email
-from mykhaya.models import ActionToken, Invitation, OutboxEvent, User, WorkerJobRecord
+from mykhaya.models import (
+    ActionToken,
+    Group,
+    Invitation,
+    OperationalHeartbeat,
+    OutboxEvent,
+    User,
+    WorkerJobRecord,
+)
 from mykhaya.security import derived_token
 
 
@@ -21,10 +29,12 @@ async def process(event_id: uuid.UUID) -> None:
         existing = await db.get(WorkerJobRecord, event_id)
         if existing and existing.status == "completed":
             return
+
         job = existing or WorkerJobRecord(
             id=event.id, outbox_event_id=event.id, topic=event.topic, status="running"
         )
         db.add(job)
+
         try:
             if event.topic in {"email.verify", "email.reset"}:
                 token = await db.get(ActionToken, uuid.UUID(event.payload["token_id"]))
@@ -54,6 +64,10 @@ async def process(event_id: uuid.UUID) -> None:
                 invitation = await db.get(Invitation, uuid.UUID(event.payload["invitation_id"]))
                 if invitation is None:
                     raise ValueError("invitation not found")
+                home = await db.get(Group, invitation.group_id)
+                inviter = await db.get(User, invitation.invited_by)
+                if home is None or inviter is None:
+                    raise ValueError("invitation context not found")
                 raw = derived_token(
                     invitation.id, "invitation", settings.secret_key.get_secret_value()
                 )
@@ -62,9 +76,13 @@ async def process(event_id: uuid.UUID) -> None:
                     settings,
                     invitation.email,
                     "You are invited to a MyKhaya Home",
-                    "Someone has invited you to their Home. Open this secure link:\n\n"
-                    f"{settings.public_web_url}/register?invitation={raw}",
+                    f"{inviter.display_name} invited you to join {home.name}.\n\n"
+                    "Use this secure link to accept the invitation:\n\n"
+                    f"{settings.public_web_url}/register?invitation={raw}\n\n"
+                    f"This invitation expires on {invitation.expires_at.isoformat()}.\n\n"
+                    "If you were not expecting this invitation, you can ignore this email.",
                 )
+
             job.status = "completed"
             job.finished_at = datetime.now(UTC)
         except Exception as exc:
@@ -74,6 +92,7 @@ async def process(event_id: uuid.UUID) -> None:
             job.finished_at = datetime.now(UTC)
             await db.commit()
             raise
+
         await db.commit()
 
 
@@ -82,6 +101,16 @@ async def run() -> None:
     try:
         while True:
             item = await redis.blpop("mykhaya:jobs", timeout=5)
+            async with SessionFactory() as db:
+                await db.merge(
+                    OperationalHeartbeat(
+                        service="worker",
+                        observed_at=datetime.now(UTC),
+                        last_success_at=datetime.now(UTC),
+                        safe_detail="Worker loop is active.",
+                    )
+                )
+                await db.commit()
             if item:
                 payload = json.loads(item[1])
                 try:
