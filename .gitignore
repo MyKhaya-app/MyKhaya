@@ -6,6 +6,7 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.dev.example
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -17,4 +18,3 @@ playwright-report/
 test-results/
 backups/
 *.sql.gz
-

@@ -1,4 +1,4 @@
-.PHONY: init up down logs build migrate test lint typecheck format seed reset prod backup restore generate-client version-check
+.PHONY: init up down logs build migrate test lint typecheck format seed reset prod backup restore generate-client version-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
 init:
 	@test -f .env || cp .env.example .env
 	docker compose build
@@ -40,3 +40,21 @@ generate-client:
 	docker compose exec api python -c "import json; from mykhaya.main import app; print(json.dumps(app.openapi()))" > apps/api/openapi.json
 version-check:
 	python infrastructure/scripts/validate_version.py
+
+dev-preflight:
+	sh infrastructure/scripts/dev-deploy.sh preflight
+
+dev-up:
+	sh infrastructure/scripts/dev-deploy.sh up
+
+dev-down:
+	sh infrastructure/scripts/dev-deploy.sh down
+
+dev-logs:
+	sh infrastructure/scripts/dev-deploy.sh logs
+
+dev-health:
+	sh infrastructure/scripts/dev-deploy.sh health
+
+dev-update:
+	sh infrastructure/scripts/update-dev.sh

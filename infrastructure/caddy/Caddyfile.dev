@@ -1,0 +1,67 @@
+{
+	http_port 8080
+	servers {
+		trusted_proxies static {$MYKHAYA_DEV_PROXY_TRUSTED_CIDRS:100.64.0.0/10}
+		client_ip_headers X-Forwarded-For
+		trusted_proxies_strict
+	}
+}
+
+(security_headers) {
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
+(public_development_site) {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {client_ip}
+	}
+	reverse_proxy web:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {client_ip}
+	}
+	import security_headers
+	log {
+		output stdout
+		format json
+	}
+}
+
+http://dev.mykhaya.app,
+http://admin.dev.mykhaya.app,
+http://status.dev.mykhaya.app {
+	import public_development_site
+}
+
+http://localhost, http://127.0.0.1 {
+	encode zstd gzip
+	@api path /api/*
+	reverse_proxy @api api:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto http
+		header_up X-Forwarded-For {remote_host}
+	}
+	reverse_proxy web:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto http
+		header_up X-Forwarded-For {remote_host}
+	}
+	import security_headers
+	log {
+		output stdout
+		format json
+	}
+}

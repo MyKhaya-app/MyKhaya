@@ -11,27 +11,32 @@ MyKhaya is a private coordination application for households, families and close
 
 Official flow: develop and test on `dev` → Anthony reviews → Anthony merges to `main` → Anthony tags → Anthony deploys. There is no automatic promotion and no normal use of release, hotfix or long-lived feature branches.
 
-## Start locally
+## Persistent development server
 
-Requirements: Docker Compose. Copy `.env.example` to `.env`, replace every placeholder, then run:
+Requirements: Git, Make, Docker Compose v2, Python 3, and curl or wget. Use the tracked
+development overlay; no `compose.override.yml` is required:
 
 ```sh
-make up
+cp .env.dev.example .env
+# Edit every CHANGE_ME value.
+make dev-up
 ```
 
 Email verification is enabled by default. For local development without email delivery,
 set `MYKHAYA_EMAIL_VERIFICATION_ENABLED=false` in `.env`; new accounts will be ready
 immediately and existing unverified accounts can sign in. Keep it enabled in production.
 
-- Product: `http://localhost:3000` (`http://localhost:8080` is also available)
-- Control Centre: `http://admin.localhost:8080` (network allow-list and separate operator account required)
-- Public status: `http://status.localhost:8080`
+- Product: `https://dev.mykhaya.app`
+- Control Centre: `https://admin.dev.mykhaya.app` (network allow-list and separate operator account required)
+- Public status: `https://status.dev.mykhaya.app`
 - Mailpit (loopback only): `http://localhost:8025`
-- Liveness: `http://localhost:3000/api/v1/health/live`
-- Readiness: `http://localhost:3000/api/v1/health/ready`
-- Build metadata: `http://localhost:3000/api/v1/health/build`
+- Liveness: `http://localhost:8080/api/v1/health/live`
+- Readiness: `http://localhost:8080/api/v1/health/ready`
+- Build metadata: `http://localhost:8080/api/v1/health/build`
 
-Use `make logs`, `make test`, `make lint`, `make typecheck`, `make backup` and `make prod`. PostgreSQL and Redis have no host port mappings.
+Use `make dev-update`, `make dev-logs`, `make test`, `make lint`, `make typecheck`,
+`make backup` and `make prod`. PostgreSQL and Redis have no host port mappings. See
+`docs/operations/dev-deployment.md` for NetBird Proxy, backups, rollback, and troubleshooting.
 
 ## Structure
 

@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 export function middleware(request: NextRequest) {
-  const host = ((request.headers.get("host") ?? "").split(":")[0] ?? "").toLowerCase();
-  const adminHost = host === "admin.mykhaya.app" || host === "admin.localhost";
-  const statusHost = host === "status.mykhaya.app" || host === "status.localhost";
-  const internalAdminPath = request.nextUrl.pathname.startsWith("/control-centre");
-  const internalStatusPath = request.nextUrl.pathname.startsWith("/service-status");
+  const host = (
+    (request.headers.get("host") ?? "").split(":")[0] ?? ""
+  ).toLowerCase();
+  const adminHost =
+    host === "admin.mykhaya.app" ||
+    host === "admin.dev.mykhaya.app" ||
+    host === "admin.localhost";
+  const statusHost =
+    host === "status.mykhaya.app" ||
+    host === "status.dev.mykhaya.app" ||
+    host === "status.localhost";
+  const internalAdminPath =
+    request.nextUrl.pathname.startsWith("/control-centre");
+  const internalStatusPath =
+    request.nextUrl.pathname.startsWith("/service-status");
   const nonce = btoa(crypto.randomUUID());
   const production = process.env.NODE_ENV === "production";
   const tls =

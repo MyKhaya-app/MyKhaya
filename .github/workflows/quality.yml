@@ -25,7 +25,17 @@ jobs:
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
       - name: Compose validation
-        run: docker compose config --quiet && docker compose -f compose.yml -f compose.production.yml config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.yml -f compose.dev.yml config --quiet
+          docker compose -f compose.yml -f compose.production.yml config --quiet
+      - name: Development deployment validation
+        run: |
+          python -m unittest discover -s infrastructure/tests -v
+          docker run --rm \
+            -e MYKHAYA_DEV_PROXY_TRUSTED_CIDRS=100.64.0.0/10 \
+            -v "$PWD/infrastructure/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
       - name: Alembic head validation
         run: docker compose run --rm migrate alembic heads | tee /tmp/alembic-heads.txt && test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
       - name: Web lint, type check, tests and build

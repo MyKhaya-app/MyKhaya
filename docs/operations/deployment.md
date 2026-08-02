@@ -1,12 +1,15 @@
 # Deployment and Operations
 
-## Local foundation
+## Persistent development foundation
 
-1. Copy `.env.example` to `.env` and replace every placeholder with independently generated secrets.
-2. Run `make up`; use `http://localhost:8080` and local-only Mailpit at `http://localhost:8025`.
+1. Copy `.env.dev.example` to `.env` and replace every placeholder with independently generated secrets.
+2. Run `make dev-up`; public HTTPS is provided by NetBird Proxy and Mailpit stays local-only at `http://localhost:8025`.
 3. Run `make test`, `make lint` and `make typecheck` before publishing changes.
 
-Development HTTP is deliberately marked by `MYKHAYA_ENVIRONMENT=development` and non-secure cookies. Hosted and home-server production-like deployments use HTTPS and `compose.production.yml`; configuration refuses production startup with insecure cookies.
+The persistent development server uses `compose.dev.yml`, HTTPS public URLs, and secure
+cookies. See `dev-deployment.md` for the supported installation and one-command update
+workflow. Production deployments continue to use `compose.production.yml`; configuration
+refuses production startup with insecure cookies.
 
 ## Home server and VPS
 

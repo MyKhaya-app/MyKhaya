@@ -1,3 +1,4 @@
+.env.dev.example
 .env.example
 .github/workflows/quality.yml
 .github/workflows/security.yml
@@ -113,7 +114,7 @@ apps/web/components/use-active-home.ts
 apps/web/playwright.config.ts
 apps/web/tsconfig.json
 apps/web/vitest.config.ts
-compose.override.yml
+compose.dev.yml
 compose.production.yml
 compose.yml
 docs/architecture/adr/0001-modular-monolith.md
@@ -155,6 +156,7 @@ docs/engineering/versioning-and-releases.md
 docs/operations/backup-and-restore.md
 docs/operations/control-centre-access.md
 docs/operations/control-centre-deployment.md
+docs/operations/dev-deployment.md
 docs/operations/deployment.md
 docs/operations/hotfix-process.md
 docs/operations/platform-health.md
@@ -184,12 +186,16 @@ docs/security/threat-model.md
 docs/security/vulnerability-management.md
 FILE-MANIFEST.txt
 infrastructure/caddy/Caddyfile
+infrastructure/caddy/Caddyfile.dev
 infrastructure/caddy/Caddyfile.production
 infrastructure/docker/init-db.sh
 infrastructure/scripts/backup.sh
+infrastructure/scripts/dev-deploy.sh
 infrastructure/scripts/generate-asvs-matrix.ps1
 infrastructure/scripts/restore.sh
+infrastructure/scripts/update-dev.sh
 infrastructure/scripts/validate_version.py
+infrastructure/tests/test_dev_deployment.py
 Makefile
 package.json
 packages/api-client/package.json
