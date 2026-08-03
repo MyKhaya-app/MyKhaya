@@ -150,3 +150,9 @@ persistent volumes.
 - **Control Centre returns 404:** confirm the client address forwarded through NetBird
   is included in `MYKHAYA_ADMIN_ALLOWED_NETWORKS`. A 404 is the deliberate network
   boundary response.
+
+docker compose -f compose.yml -f compose.dev.yml run --rm --no-deps \
+  -e MYKHAYA_ADMIN_BOOTSTRAP_ENABLED=true \
+  api python -m mykhaya.bootstrap_platform_owner \
+  --email you@example.com \
+  --display-name "Your Name"
