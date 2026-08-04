@@ -1,24 +1,18 @@
 # Expo Go Setup (Windows)
 
-`apps/mobile` currently targets **Expo SDK 53** (see
-[expo-and-device-development-audit.md](./expo-and-device-development-audit.md#sdk-rollback-57--53)
-for why - a deliberate early-stabilisation step, not a permanent decision).
-The Expo Go app currently on the Play Store / App Store targets a newer SDK
-generation (SDK 54+ as of this writing), so:
-
-- **Android**: install the SDK-53-specific Expo Go build directly from Expo
-  (not the Play Store) - see
-  [Android: SDK 53 Expo Go installation](#android-sdk-53-expo-go-installation)
-  below.
-- **iPhone**: Apple's platform restrictions mean only the current Play
-  Store / App Store build of Expo Go can be installed - there is no
-  supported way to sideload an older SDK-specific build on iOS. Use Android
-  for now, or wait for a future SDK bump / EAS development build.
+`apps/mobile` targets **Expo SDK 54** (see
+[expo-and-device-development-audit.md](./expo-and-device-development-audit.md)
+for the full version history - briefly SDK 53, corrected to SDK 54 to match
+what the Expo Go Play Store / App Store build actually supports). This
+means **the plain Expo Go app from the Play Store or App Store works
+directly on both Android and iPhone** - no SDK-specific sideload APK
+needed. The "Android: SDK 53 Expo Go installation" section below is kept
+for reference only, in case a future rollback to an older SDK happens
+again; skip it under normal circumstances.
 
 EAS development-build setup (for when Expo Go isn't enough - custom native
-modules, production-grade push notification testing, or iPhone testing
-against an older SDK) is a later, separate piece of work and isn't
-documented yet.
+modules, production-grade push notification testing) is a later, separate
+piece of work and isn't documented yet.
 
 ## What this covers
 
@@ -69,12 +63,14 @@ pnpm --filter @mykhaya/mobile start
 
 `expo start` will print a QR code in the terminal and open Expo Dev Tools.
 
-## Android: SDK 53 Expo Go installation
+## Android: SDK 53 Expo Go installation (reference only - not currently needed)
 
-Expo officially publishes SDK-specific Expo Go builds for Android outside
-the Play Store, precisely for this situation (a project pinned to an older
-SDK than the current Play Store release). This is Expo's own domain, not a
-third-party APK site.
+**Not required while `apps/mobile` is on SDK 54** - the plain Play Store
+Expo Go app works directly. Kept here in case a future rollback to an
+older SDK happens again. Expo officially publishes SDK-specific Expo Go
+builds for Android outside the Play Store for exactly that situation (a
+project pinned to an older SDK than the current Play Store release). This
+is Expo's own domain, not a third-party APK site.
 
 1. On the Android phone, open a browser and go to:
    `https://expo.dev/go?sdkVersion=53&platform=android&device=true`
@@ -101,9 +97,8 @@ third-party APK site.
 
 ## On the phone
 
-1. Open Expo Go (the SDK-53 build on Android, per above; the Play Store
-   build on iPhone - see the SDK/platform note at the top of this document
-   for the current iPhone limitation).
+1. Open Expo Go (the plain Play Store / App Store build - no special
+   version needed while on SDK 54).
 2. Sign in to the same Expo account, if prompted (only needed for
    EAS-linked features like update channels; plain Expo Go LAN dev works
    without it too).

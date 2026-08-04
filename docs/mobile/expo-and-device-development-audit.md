@@ -1,13 +1,51 @@
 # Expo and Device Development Audit
 
-Status: **`apps/mobile` is back on Expo SDK 53** as of the SDK rollback
-(see "SDK rollback: 57 → 53" below). The "SDK upgrade outcome" section
-further down is kept as an accurate historical record of the 53→57 upgrade
-that was done, decided against, and reverted — read it for that history,
-not as the current state. EAS linkage (Phase 3) has not been done — it
-requires an authenticated Expo CLI session under Anthony's own account.
+Status: **`apps/mobile` is on Expo SDK 54** (see "Correction: 53 → 54"
+immediately below). It was briefly on SDK 53 for a short window (see "SDK
+rollback: 57 → 53" further down) before Anthony corrected the target SDK to
+54, which matches what the current Expo Go Play Store / App Store build
+actually supports — so the SDK-53-specific Android sideload APK route
+documented below is no longer necessary; plain Expo Go from the app store
+works directly. The "SDK upgrade outcome" section further down is kept as
+an accurate historical record of the original 53→57 upgrade that was done,
+decided against, and reverted — read it for that history, not as the
+current state. EAS linkage (Phase 3) has not been done — it requires an
+authenticated Expo CLI session under Anthony's own account.
 
-## SDK rollback: 57 → 53
+## Correction: 53 → 54
+
+Single-step upgrade from the just-completed SDK 53 rollback, using the same
+official incremental process (`pnpm add expo@^54.0.0`, `npx expo install
+--fix`, `npx expo-doctor`) as the original 53→54 step of the earlier 53→57
+upgrade — so the target versions are already known-good from that prior
+run:
+
+| Package | 54 (current) | 53 (previous) |
+| --- | --- | --- |
+| expo | ~54.0.36 | ~53.0.20 |
+| react | 19.1.0 | 19.0.0 |
+| react-native | 0.81.5 | 0.79.6 |
+| expo-router | ~6.0.24 | ~5.1.4 |
+| expo-constants | ~18.0.13 | ~17.1.8 |
+| expo-secure-store | ~15.0.8 | ~14.2.3 |
+| expo-status-bar | ~3.0.9 | ~2.2.3 |
+| expo-linking | ~8.0.12 | ~7.1.7 |
+| react-native-screens | ~4.16.0 | ~4.11.1 |
+| react-native-safe-area-context | 5.6.2 | 5.4.0 |
+| @types/react | ~19.1.17 | ~19.0.10 |
+| typescript | ~5.9.3 | ~5.8.3 |
+| @expo/metro-runtime | ~6.1.2 *(new, required peer of expo-router from SDK 54)* | *(not present)* |
+
+`app.config.ts` needed no changes — `expo-doctor` (18/18 clean) didn't flag
+any new required plugin registration at SDK 54 (unlike SDK 57, which
+required registering `expo-status-bar` as a plugin). `@types/node` and
+`tsconfig.json`'s `"types": ["node"]` remain unchanged (SDK-independent
+fix). Full validation re-run: mobile lint/typecheck clean, `pnpm -r lint`
+clean across all workspaces, `apps/web` vitest 7/7, full API suite via
+Docker 36/36 (including all 13 mobile-auth tests, confirming ADR 0010's
+implementation is unaffected by this second SDK change).
+
+## SDK rollback: 57 → 53 (superseded — see "Correction: 53 → 54" above)
 
 The SDK 53→57 upgrade below was completed and merged (`dev` PR #5), but
 before any physical-device testing had happened, Anthony decided the
