@@ -9,9 +9,9 @@ piece of work and isn't documented yet.
 ## What this covers
 
 Getting `apps/mobile` open on Anthony's physical phone via Expo Go, from a
-Windows development machine, against the local MyKhaya backend. Does **not**
-cover signing in — see "Known limitation: no mobile authentication yet"
-below.
+Windows development machine, against the local MyKhaya backend, and signing
+in (see "Signing in" below - implemented per
+[ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md)).
 
 ## One-time setup
 
@@ -87,20 +87,24 @@ pnpm --filter @mykhaya/mobile start
   connectivity troubleshooting — it is not the production network
   architecture and should not be treated as a permanent workflow.
 
-## Known limitation: no mobile authentication yet
+## Signing in
 
-`docs/architecture/authentication.md` states "Mobile clients use secure
-platform storage," but as of this branch, `apps/api`'s `POST /auth/login`
-only issues HttpOnly session cookies and returns a `UserResponse` body — it
-does not return any token a native app could store via `expo-secure-store`.
-There is no `Authorization: Bearer` handling anywhere in `apps/api`.
+Implemented per
+[ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md):
+`POST /api/v1/auth/mobile/login` returns an opaque bearer token in the
+response body (never a cookie), which the app stores via `expo-secure-store`
+(`apps/mobile/src/auth/tokenStore.ts`) and attaches as
+`Authorization: Bearer <token>` on every subsequent request
+(`apps/mobile/src/api/authorizedFetch.ts`).
 
-This means the mobile app can currently prove it can *reach* the API
-(the health check above) but **cannot sign a user in or make any
-household-scoped request**. This blocks all further mobile work that
-requires an authenticated user - the Calendar view, event creation, member
-data, everything past the placeholder home screen. A proposed design is
-written up in
-[docs/architecture/adr/0010-mobile-bearer-session-tokens.md](../architecture/adr/0010-mobile-bearer-session-tokens.md)
-(Status: Proposed, awaiting review) before Phase 6 onward proceeds with real
-data.
+On the home screen, the sign-in form (email + password, plain React Native
+components - not yet styled with Khaya UI, which is a later phase) calls
+this endpoint directly. A successful sign-in immediately fetches
+`GET /api/v1/users/me` via the same bearer token to confirm the round trip
+works end to end. Sign out calls `POST /api/v1/auth/mobile/logout` and always
+clears the local token even if that call fails (offline-safe, per ADR 0010).
+
+To test manually: register and verify an account on the web app first
+(`https://dev.mykhaya.app`, or via `MYKHAYA_EMAIL_VERIFICATION_ENABLED=false`
+for local dev without email delivery), then use the same credentials in the
+mobile app's sign-in form.

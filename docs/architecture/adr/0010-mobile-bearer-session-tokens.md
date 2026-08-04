@@ -1,6 +1,6 @@
 # ADR 0010: Mobile Bearer Session Tokens
 
-**Status:** Proposed (revision 2) — awaiting Anthony's review before any `apps/api` implementation. Not yet built. Written in response to a security design checkpoint raised while building the mobile Calendar foundation (`docs/mobile/expo-go-setup.md` documents the current gap in practice). Revision 2 incorporates review feedback from Anthony (with architectural input from a separate reviewer) on the original proposal; every numbered change below traces to a specific point raised in that review.
+**Status:** Accepted and implemented (revision 2 approved by Anthony). Written in response to a security design checkpoint raised while building the mobile Calendar foundation. Revision 2 incorporated review feedback from Anthony (with architectural input from a separate reviewer) on the original proposal; every numbered change below traces to a specific point raised in that review. Implementation: `apps/api/mykhaya/security.py`, `dependencies.py`, `routers/auth.py`, `schemas.py`, `apps/api/tests/test_mobile_auth.py`, `apps/mobile/src/auth/`, `apps/mobile/src/api/`. One documented deviation - see "Deviation from this ADR" at the end.
 
 ## Problem
 
@@ -150,6 +150,10 @@ All existing authentication tests (`apps/api/tests/test_calendar.py` and whateve
 
 Mobile-side (once the client wrapper exists): a unit test for the compare-and-clear 401 handler covering exactly the race described above (stale 401 for Token A must not delete a newly-rotated Token B already in SecureStore).
 
-## Scope of implementation, once approved
+## Scope of implementation
 
-`apps/api/mykhaya/routers/auth.py` (new `/auth/mobile/login`, `/auth/mobile/logout`, `/auth/mobile/sessions/rotate` endpoints; extraction of shared `authenticate_credentials`), `apps/api/mykhaya/security.py` (`resolve_session` replacing ad hoc `current_user`/`require_csrf` calls, forwarded-scheme check), `apps/api/mykhaya/dependencies.py` (`AuthContext` gains `transport`), `apps/api/mykhaya/schemas.py` (new mobile login/rotate response models), and `apps/mobile` (SecureStore-backed token storage, the compare-and-clear request wrapper, `X-MyKhaya-*` headers). No `Session` model changes, no migration.
+`apps/api/mykhaya/routers/auth.py` (new `/auth/mobile/login`, `/auth/mobile/logout`, `/auth/mobile/sessions/rotate` endpoints; extraction of shared `authenticate_credentials`), `apps/api/mykhaya/security.py` (`resolve_session` replacing ad hoc `current_user`/`require_csrf` calls, forwarded-scheme check), `apps/api/mykhaya/dependencies.py` (`AuthContext` gains `transport`), `apps/api/mykhaya/schemas.py` (new mobile login/rotate response models), and `apps/mobile` (SecureStore-backed token storage, the compare-and-clear request wrapper, `X-MyKhaya-*` headers). No `Session` model changes, no migration. As implemented.
+
+## Deviation from this ADR
+
+`require_secure_transport()` is gated on `settings.environment == "production"`, not `!= "development"` as originally worded above. Reason: `MYKHAYA_ENVIRONMENT=test` is what the automated test suite runs under (`compose.yml`'s `test` service), over plain HTTP via the ASGI test transport - gating on `!= "development"` would have made the test environment itself fail the HTTPS check and block the required test suite from running. `environment == "production"` matches the existing convention already used elsewhere in `Settings` for other production-only checks (e.g. `cookie_secure`, the admin production defaults validator), so this is a correction toward consistency with the rest of the codebase rather than a weakening of the intent. No other deviation from the approved design.
