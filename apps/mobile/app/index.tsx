@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   SafeAreaView,
   StyleSheet,
@@ -6,11 +7,36 @@ import {
   View,
 } from "react-native";
 import Constants from "expo-constants";
+import { checkApiHealth, type ApiHealthResult } from "../src/api/health";
 
 const appVersion =
   (Constants.expoConfig?.extra?.mykhayaVersion as string | undefined) ?? "unknown";
 
+function connectionCopy(result: ApiHealthResult | null): { bold: string; muted: string } {
+  if (result === null) {
+    return { bold: "Checking connection…", muted: "Looking for the MyKhaya API" };
+  }
+  if (result.status === "connected") {
+    return { bold: "Connected", muted: "The MyKhaya API is reachable" };
+  }
+  return { bold: "Not connected yet", muted: result.message };
+}
+
 export default function Home() {
+  const [health, setHealth] = useState<ApiHealthResult | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checkApiHealth().then((result) => {
+      if (!cancelled) setHealth(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connection = connectionCopy(health);
+
   return (
     <SafeAreaView style={styles.page}>
       <View style={styles.hero}>
@@ -34,6 +60,13 @@ export default function Home() {
           <View>
             <Text style={styles.bold}>People stay close</Text>
             <Text style={styles.muted}>Private to the Homes you join</Text>
+          </View>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.icon}>⇄</Text>
+          <View>
+            <Text style={styles.bold}>{connection.bold}</Text>
+            <Text style={styles.muted}>{connection.muted}</Text>
           </View>
         </View>
       </View>
