@@ -99,6 +99,8 @@ This means the mobile app can currently prove it can *reach* the API
 (the health check above) but **cannot sign a user in or make any
 household-scoped request**. This blocks all further mobile work that
 requires an authenticated user - the Calendar view, event creation, member
-data, everything past the placeholder home screen. This needs an explicit
-architecture decision (see Security Design Checkpoint in the audit doc)
-before Phase 6 onward can proceed with real data.
+data, everything past the placeholder home screen. A proposed design is
+written up in
+[docs/architecture/adr/0010-mobile-bearer-session-tokens.md](../architecture/adr/0010-mobile-bearer-session-tokens.md)
+(Status: Proposed, awaiting review) before Phase 6 onward proceeds with real
+data.
