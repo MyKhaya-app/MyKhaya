@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
@@ -16,6 +17,7 @@ from mykhaya.schemas import (
     ForgotRequest,
     LoginRequest,
     MessageResponse,
+    MobileSessionResponse,
     RegisterRequest,
     RegistrationResponse,
     ResetRequest,
@@ -33,6 +35,7 @@ from mykhaya.security import (
     new_session_token,
     normalise_email,
     password_hash,
+    require_secure_transport,
     set_auth_cookies,
     verify_password,
 )
@@ -65,6 +68,63 @@ async def issue_session(
     await db.flush()
     set_auth_cookies(response, raw, csrf, settings)
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
+
+
+def mobile_client_descriptor(request: Request) -> str:
+    """Display-only device label. X-MyKhaya-* headers are never trusted for
+    anything beyond this - they are diagnostic text, not authentication or
+    authorisation input."""
+    client = request.headers.get("x-mykhaya-client")
+    platform = request.headers.get("x-mykhaya-platform")
+    version = request.headers.get("x-mykhaya-app-version")
+    parts = [part for part in (client, platform, version) if part]
+    if parts:
+        return " ".join(parts)[:300]
+    return request.headers.get("user-agent", "Unknown device")[:300]
+
+
+async def issue_mobile_session(
+    db: AsyncSession, request: Request, user: User, settings: Settings
+) -> str:
+    """Bearer-transport equivalent of issue_session: same Session model, same
+    token scheme, no cookies. Returns the raw token - callers must put it in
+    the response body only, never a cookie, never a log line."""
+    raw = new_session_token()
+    session = Session(
+        user_id=user.id,
+        token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
+        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        user_agent=mobile_client_descriptor(request),
+    )
+    db.add(session)
+    await db.flush()
+    audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
+    return raw
+
+
+async def authenticate_credentials(
+    db: AsyncSession, request: Request, settings: Settings, body: LoginRequest, bucket: str
+) -> User:
+    """Shared by /auth/login and /auth/mobile/login so the security-sensitive
+    part (rate limiting, password check, active/verified checks) is never
+    duplicated between transports."""
+    await enforce_rate_limit(request, settings, bucket, settings.rate_limit_login, 60)
+    email = normalise_email(str(body.email))
+    result = await db.execute(
+        select(User, AuthIdentity)
+        .join(AuthIdentity, AuthIdentity.user_id == User.id)
+        .where(User.email == email)
+    )
+    pair = result.one_or_none()
+    valid = verify_password(body.password, pair[1].password_hash if pair else DUMMY_HASH)
+    if pair is None or not valid or not pair[0].is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
+    user = cast(User, pair[0])
+    if settings.email_verification_enabled and user.email_verified_at is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
+        )
+    return user
 
 
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -163,27 +223,35 @@ async def login(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
-    await enforce_rate_limit(request, settings, "login", settings.rate_limit_login, 60)
-    email = normalise_email(str(body.email))
-    result = await db.execute(
-        select(User, AuthIdentity)
-        .join(AuthIdentity, AuthIdentity.user_id == User.id)
-        .where(User.email == email)
-    )
-    pair = result.one_or_none()
-    valid = verify_password(body.password, pair[1].password_hash if pair else DUMMY_HASH)
-    if pair is None or not valid or not pair[0].is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
-    user = pair[0]
-    if settings.email_verification_enabled and user.email_verified_at is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
-        )
+    user = await authenticate_credentials(db, request, settings, body, "login")
     await issue_session(db, response, request, user, settings)
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
     return user_response(user)
+
+
+@router.post("/mobile/login", response_model=MobileSessionResponse)
+async def mobile_login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Native-client equivalent of /login: same credential check, opaque
+    Session token, but returned in the body (not a cookie) since a native
+    app has no cookie jar to rely on. Sets no cookies. Never logs the raw
+    token - only the caller who receives this response ever sees it."""
+    require_secure_transport(request, settings)
+    user = await authenticate_credentials(db, request, settings, body, "mobile_login")
+    raw = await issue_mobile_session(db, request, user, settings)
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(**user_response(user).model_dump(), session_token=raw)
 
 
 @router.post(
@@ -267,6 +335,36 @@ async def logout(
     clear_auth_cookies(response, settings)
 
 
+def require_bearer_transport(auth: AuthContext) -> None:
+    if auth.transport != "bearer":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This endpoint requires bearer authentication."
+        )
+
+
+@router.post("/mobile/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def mobile_logout(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Revokes the session; does not touch cookies (there are none for a
+    bearer session) and is not subject to CSRF (bearer transport). The
+    mobile client must still clear its SecureStore token locally even if
+    this call fails - see ADR 0010."""
+    require_bearer_transport(auth)
+    auth.session.revoked_at = datetime.now(UTC)
+    audit(
+        db,
+        request,
+        "session.revoked",
+        auth.user.id,
+        target_type="session",
+        target_id=auth.session.id,
+    )
+    await db.commit()
+
+
 @router.get("/sessions", response_model=list[SessionResponse])
 async def sessions(
     auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
@@ -335,3 +433,34 @@ async def rotate_session(
     )
     await db.commit()
     return user_response(auth.user)
+
+
+@router.post("/mobile/sessions/rotate", response_model=MobileSessionResponse)
+async def rotate_mobile_session(
+    request: Request,
+    response: Response,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Old token is revoked and the new one created in the same transaction
+    (one commit below) - there is no window where both are simultaneously
+    valid. If the app is killed before it persists the new token to
+    SecureStore, the user is signed out and must sign in again; that is the
+    intended safe failure mode, not a bug."""
+    require_secure_transport(request, settings)
+    require_bearer_transport(auth)
+    auth.session.revoked_at = datetime.now(UTC)
+    raw = await issue_mobile_session(db, request, auth.user, settings)
+    audit(
+        db,
+        request,
+        "session.rotated",
+        auth.user.id,
+        target_type="session",
+        target_id=auth.session.id,
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(**user_response(auth.user).model_dump(), session_token=raw)
