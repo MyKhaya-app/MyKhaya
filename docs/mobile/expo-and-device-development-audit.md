@@ -1,9 +1,85 @@
 # Expo and Device Development Audit
 
-Status: Phase 1–2 audit, plus the SDK upgrade decided at the Phase 2
-checkpoint (see "SDK upgrade outcome" below). EAS linkage (Phase 3) has not
-been done — it requires an authenticated Expo CLI session under Anthony's
-own account.
+Status: **`apps/mobile` is back on Expo SDK 53** as of the SDK rollback
+(see "SDK rollback: 57 → 53" below). The "SDK upgrade outcome" section
+further down is kept as an accurate historical record of the 53→57 upgrade
+that was done, decided against, and reverted — read it for that history,
+not as the current state. EAS linkage (Phase 3) has not been done — it
+requires an authenticated Expo CLI session under Anthony's own account.
+
+## SDK rollback: 57 → 53
+
+The SDK 53→57 upgrade below was completed and merged (`dev` PR #5), but
+before any physical-device testing had happened, Anthony decided the
+upgrade introduced unnecessary development-build complexity too early —
+the mobile product hadn't yet been validated on a phone at all. This is a
+**deliberate stabilisation step for early development, not a permanent
+architecture decision.** `apps/mobile` will very likely need to move to a
+newer SDK and/or an EAS development build again once native functionality
+grows beyond what Expo Go supports.
+
+Current facts (checked live, time-sensitive — see the "Compatibility risk"
+section below for how this was established for SDK 57; the same source
+applies here):
+
+- The **Expo Go app on the App Store / Play Store currently supports SDK
+  54** as its baseline generation (moving forward over time as newer SDKs
+  roll out) — not SDK 53.
+- **Android**: Expo officially supports installing SDK-specific Expo Go
+  builds outside the Play Store version, so a SDK-53-compatible Expo Go can
+  still be installed and used on Android today. See
+  [expo-go-setup.md](./expo-go-setup.md#android-sdk-53-expo-go-installation)
+  for exact steps.
+- **iPhone**: Apple's platform restrictions mean only the current Play
+  Store / App Store version of Expo Go can be installed on a physical
+  device — there is no supported way to sideload an older SDK-specific
+  Expo Go build on iOS. iPhone testing against SDK 53 is not possible via
+  plain Expo Go; it would require an EAS development build (a future,
+  separate piece of work) or a temporary SDK bump for that test only.
+- A development build will still eventually be needed for any serious
+  native-module development (push notifications, custom native code) —
+  SDK 53 + Expo Go remains a stabilisation step for the early UI/Calendar
+  work, not the end state.
+
+Package versions restored (from `apps/mobile/package.json` at commit
+`bfc4d0d`, the last commit before the 53→57 upgrade began — used as the
+source of truth per instruction, not reconstructed from memory):
+
+| Package | Restored (SDK 53) | Was (SDK 57) |
+| --- | --- | --- |
+| expo | ~53.0.20 | ~57.0.10 |
+| react | 19.0.0 | 19.2.3 |
+| react-native | 0.79.6 | 0.86.2 |
+| expo-router | ~5.1.4 | ~57.0.10 |
+| expo-constants | ~17.1.8 | ~57.0.9 |
+| expo-secure-store | ~14.2.3 | ~57.0.1 |
+| expo-status-bar | ~2.2.3 | ~57.0.1 |
+| expo-linking | ~7.1.7 | ~57.0.5 |
+| react-native-screens | ~4.11.1 | ~4.26.2 |
+| react-native-safe-area-context | 5.4.0 | 5.7.0 |
+| @types/react | ~19.0.10 | ~19.2.18 |
+| typescript | ~5.8.3 | ~6.0.3 |
+| @expo/metro-runtime | *(removed — not required below SDK 54)* | ~57.0.8 |
+
+`@types/node` (`22.17.0`) and `tsconfig.json`'s `"types": ["node"]` were
+**kept** — that fixed a pre-existing, SDK-independent typecheck gap (see
+"SDK upgrade outcome" below) that has nothing to do with which Expo SDK is
+installed. `app.config.ts`'s `expo-status-bar` plugin registration was
+**removed** — that was an SDK 57-specific requirement (`expo install --fix`
+detected it needed adding at that step); SDK 53 doesn't need or want it.
+
+**Preserved untouched**: `apps/mobile/src/auth/`, `apps/mobile/src/api/`,
+`apps/mobile/src/config/`, the mobile sign-in screen, ADR 0010 and the
+whole mobile bearer-token authentication implementation (both `apps/api`
+and `apps/mobile` sides) — none of that is SDK-version-dependent. See the
+final rollback report for full verification detail.
+
+`pnpm-lock.yaml` was restored from `bfc4d0d`'s exact lockfile (rather than
+letting pnpm re-resolve, which left stale SDK 57-era transitive entries -
+e.g. `react-native-reanimated`, `react-native-worklets`, a newer `metro` -
+causing peer-dependency errors and an `expo-doctor` failure) plus the
+`@types/node` addition. Diff against `bfc4d0d`: **3 lines** (exactly the
+`@types/node` entry) — confirming no other package in the workspace drifted.
 
 ## Baseline (Phase 1)
 
@@ -181,6 +257,10 @@ policy-based; the SDK-57-is-compatible expectation after this upgrade is
 also not yet device-confirmed. This must be verified once Phase 3 (EAS
 linking, which needs Anthony's own Expo login) and Phase 4 (LAN dev config)
 are in place.
+
+**Superseded**: this SDK 53→57 upgrade was subsequently rolled back — see
+"SDK rollback: 57 → 53" near the top of this document for the current state
+and why.
 
 ## Assumptions
 

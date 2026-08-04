@@ -14,9 +14,11 @@ from mykhaya.models import (
     AuditEvent,
     FeatureKey,
     FeatureOverride,
-    Session as SessionRow,
     TokenPurpose,
     User,
+)
+from mykhaya.models import (
+    Session as SessionRow,
 )
 from mykhaya.security import derived_token
 
