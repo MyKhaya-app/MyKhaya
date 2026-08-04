@@ -21,7 +21,7 @@ const config: ExpoConfig = {
   scheme: "mykhaya",
   orientation: "portrait",
   userInterfaceStyle: "light",
-  plugins: ["expo-router", "expo-secure-store"],
+  plugins: ["expo-router", "expo-secure-store", "expo-status-bar"],
   experiments: { typedRoutes: true },
   ios: { supportsTablet: true, bundleIdentifier: "app.mykhaya.mobile" },
   android: { package: "app.mykhaya.mobile" },

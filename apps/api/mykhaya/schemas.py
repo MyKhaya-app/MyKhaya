@@ -54,6 +54,12 @@ class UserResponse(BaseModel):
     email_verified: bool
 
 
+class MobileSessionResponse(UserResponse):
+    """Returned only by /auth/mobile/* endpoints - never by the browser /auth/* endpoints."""
+
+    session_token: str
+
+
 class GroupCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
 

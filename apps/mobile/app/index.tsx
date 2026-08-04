@@ -1,21 +1,99 @@
+import { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import Constants from "expo-constants";
+import { appVersion } from "../src/config/appVersion";
+import { checkApiHealth, type ApiHealthResult } from "../src/api/health";
+import { authorizedFetch } from "../src/api/authorizedFetch";
+import { login, logout, type SignedInUser } from "../src/auth/authClient";
 
-const appVersion =
-  (Constants.expoConfig?.extra?.mykhayaVersion as string | undefined) ?? "unknown";
+function connectionCopy(result: ApiHealthResult | null): { bold: string; muted: string } {
+  if (result === null) {
+    return { bold: "Checking connection…", muted: "Looking for the MyKhaya API" };
+  }
+  if (result.status === "connected") {
+    return { bold: "Connected", muted: "The MyKhaya API is reachable" };
+  }
+  return { bold: "Not connected yet", muted: result.message };
+}
+
+async function fetchSignedInUser(): Promise<SignedInUser | null> {
+  const response = await authorizedFetch("/api/v1/users/me");
+  if (!response.ok) return null;
+  const data = (await response.json()) as {
+    id: string;
+    email: string;
+    display_name: string;
+    email_verified: boolean;
+  };
+  return {
+    id: data.id,
+    email: data.email,
+    displayName: data.display_name,
+    emailVerified: data.email_verified,
+  };
+}
 
 export default function Home() {
+  const [health, setHealth] = useState<ApiHealthResult | null>(null);
+  const [user, setUser] = useState<SignedInUser | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checkApiHealth().then((result) => {
+      if (!cancelled) setHealth(result);
+    });
+    void fetchSignedInUser()
+      .then((result) => {
+        if (!cancelled) setUser(result);
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingSession(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connection = connectionCopy(health);
+
+  const handleSignIn = async (): Promise<void> => {
+    setSignInError(null);
+    setSigningIn(true);
+    try {
+      const signedIn = await login(email.trim(), password);
+      setUser(signedIn);
+      setPassword("");
+    } catch (error) {
+      setSignInError((error as Error).message);
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async (): Promise<void> => {
+    await logout();
+    setUser(null);
+  };
+
   return (
     <SafeAreaView style={styles.page}>
       <View style={styles.hero}>
         <Text style={styles.time}>Your family’s digital home</Text>
-        <Text style={styles.title}>Good evening 👋</Text>
+        <Text style={styles.title}>
+          {user ? `Good evening, ${user.displayName.split(" ")[0]} 👋` : "Good evening 👋"}
+        </Text>
         <Text style={styles.copy}>
           The native MyKhaya experience is taking shape.
         </Text>
@@ -36,10 +114,66 @@ export default function Home() {
             <Text style={styles.muted}>Private to the Homes you join</Text>
           </View>
         </View>
+        <View style={styles.row}>
+          <Text style={styles.icon}>⇄</Text>
+          <View>
+            <Text style={styles.bold}>{connection.bold}</Text>
+            <Text style={styles.muted}>{connection.muted}</Text>
+          </View>
+        </View>
       </View>
-      <TouchableOpacity accessibilityRole="button" style={styles.button}>
-        <Text style={styles.buttonText}>Sign in</Text>
-      </TouchableOpacity>
+
+      {checkingSession ? (
+        <ActivityIndicator style={styles.sessionSpinner} color="#566B58" />
+      ) : user ? (
+        <View style={styles.card}>
+          <Text style={styles.heading}>Signed in</Text>
+          <Text style={styles.muted}>{user.email}</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={[styles.button, styles.secondaryButton]}
+            onPress={() => void handleSignOut()}
+          >
+            <Text style={styles.buttonText}>Sign out</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.heading}>Sign in</Text>
+          <TextInput
+            accessibilityLabel="Email address"
+            autoCapitalize="none"
+            autoComplete="email"
+            keyboardType="email-address"
+            placeholder="Email address"
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+          />
+          <TextInput
+            accessibilityLabel="Password"
+            autoComplete="password"
+            placeholder="Password"
+            secureTextEntry
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+          />
+          {signInError ? <Text style={styles.error}>{signInError}</Text> : null}
+          <TouchableOpacity
+            accessibilityRole="button"
+            disabled={signingIn}
+            style={styles.button}
+            onPress={() => void handleSignIn()}
+          >
+            {signingIn ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Sign in</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
       <Text style={styles.note}>
         Credentials will be stored only in platform secure storage.
       </Text>
@@ -92,14 +226,36 @@ const styles = StyleSheet.create({
   },
   bold: { color: "#1F2933", fontWeight: "700" },
   muted: { color: "#62706F", fontSize: 12, marginTop: 3 },
+  input: {
+    borderColor: "#EEE8DF",
+    borderRadius: 12,
+    borderWidth: 1,
+    fontSize: 15,
+    marginTop: 10,
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  error: {
+    color: "#A33E2B",
+    fontSize: 13,
+    marginTop: 10,
+  },
   button: {
     alignItems: "center",
     backgroundColor: "#566B58",
     borderRadius: 12,
     marginTop: 22,
+    minHeight: 44,
+    justifyContent: "center",
     padding: 15,
   },
+  secondaryButton: {
+    backgroundColor: "#8A7A66",
+  },
   buttonText: { color: "#fff", fontWeight: "700" },
+  sessionSpinner: {
+    marginTop: 18,
+  },
   note: {
     color: "#62706F",
     fontSize: 12,

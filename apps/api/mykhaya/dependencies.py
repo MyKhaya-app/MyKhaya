@@ -1,5 +1,6 @@
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -9,13 +10,14 @@ from sqlalchemy.orm import selectinload
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import Group, Membership, Role, Session, User
-from mykhaya.security import current_user, require_csrf
+from mykhaya.security import require_csrf, resolve_session
 
 
 @dataclass(frozen=True)
 class AuthContext:
     user: User
     session: Session
+    transport: Literal["cookie", "bearer"]
 
 
 async def auth_context(
@@ -23,9 +25,10 @@ async def auth_context(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AuthContext:
-    require_csrf(request, settings)
-    user, session = await current_user(request, db, settings)
-    return AuthContext(user, session)
+    resolved = await resolve_session(request, db, settings)
+    if resolved.transport == "cookie":
+        require_csrf(request, settings)
+    return AuthContext(resolved.user, resolved.session, resolved.transport)
 
 
 async def membership_for(
