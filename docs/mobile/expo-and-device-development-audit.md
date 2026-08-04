@@ -1,8 +1,9 @@
 # Expo and Device Development Audit
 
-Status: Phase 1–2 audit only. No Expo configuration, EAS linkage, or dependency
-versions have been changed as part of this document. This is an inspection
-record to inform the checkpoint decision described in the Result section.
+Status: Phase 1–2 audit, plus the SDK upgrade decided at the Phase 2
+checkpoint (see "SDK upgrade outcome" below). EAS linkage (Phase 3) has not
+been done — it requires an authenticated Expo CLI session under Anthony's
+own account.
 
 ## Baseline (Phase 1)
 
@@ -120,6 +121,66 @@ Expo Go is viable at all right now:
 Sources:
 - [Expo Go and the App Store in May 2026 — Expo changelog](https://expo.dev/changelog/expo-go-and-app-store-may-2026)
 - [Expo SDK 57 — Expo changelog](https://expo.dev/changelog/sdk-57)
+
+## SDK upgrade outcome
+
+Anthony chose the upgrade path at the Phase 2 checkpoint. Completed using
+Expo's documented incremental process (one major version at a time, `npx
+expo install --fix` + `npx expo-doctor` after each step, per
+[the official upgrade walkthrough](https://docs.expo.dev/workflow/upgrading-expo-sdk-walkthrough/)):
+
+| Step | Expo | React Native | React | Expo Router | expo-doctor |
+| --- | --- | --- | --- | --- | --- |
+| Before | 53.0.20 | 0.79.5 | 19.0.0 | 5.1.4 | 18/18 (after doctor fixes) |
+| 53 → 54 | 54.0.x | 0.81.5 | 19.1.0 | 6.0.24 | 18/18 |
+| 54 → 55 | 55.0.x | 0.83.10 | 19.2.0 | ~55.0.17 | 19/19 |
+| 55 → 56 | 56.0.18 | 0.85.3 | 19.2.3 | ~56.2.17 | 21/21 |
+| 56 → 57 | 57.0.10 | 0.86.2 | 19.2.3 | ~57.0.10 | 20/20 |
+
+Per-step manual interventions beyond `expo install --fix` (none silently
+skipped or unrelated-package upgraded):
+- Added `@expo/metro-runtime` (new required peer of `expo-router` from SDK 54
+  onward, not auto-installed by `--fix`).
+- Added `expo-status-bar` to the `plugins` array in `app.config.ts` — SDK 57
+  requires it to be registered as a config plugin; `expo install --fix`
+  detected this but can't write to a dynamic (`.ts`) config automatically.
+- `typescript` moved from `5.8.3` to `6.0.3` as an explicit consequence of
+  `expo install --fix` on SDK 56 — this is what SDK 56/57 declare as their
+  expected version, not an incidental bump.
+- **Unrelated pre-existing gap found and fixed**: `apps/mobile/typecheck`
+  could never have passed — `app.config.ts` uses `node:fs`, `node:path` and
+  `__dirname` but `@types/node` was never a dependency and `tsconfig.json`
+  had no `"types"` entry. Added `@types/node` as a dev dependency and
+  `"types": ["node"]` to `tsconfig.json` so `typecheck` actually runs clean.
+  This predates the SDK upgrade (confirmed against the pre-upgrade
+  `app.config.ts`/`tsconfig.json`, which were unchanged by the version bumps)
+  and was necessary to get an honest validation baseline, so it's included
+  here rather than silently left broken.
+
+**Known peer-dependency noise, not a real defect**: from SDK 56 onward, the
+`expo` package pulls in `@expo/ui` as a transitive dependency, which in turn
+pulls in Radix UI web components expecting `react-dom`. This app has no
+`react-dom` dependency (it's pure React Native) and doesn't use `@expo/ui`.
+`pnpm add`/`expo install` print peer-dependency warnings for this on every
+install; `expo-doctor` does **not** flag it as an issue (confirmed 20/20 on
+SDK 57), and it does not affect `lint`, `typecheck`, or `expo start`.
+
+**Also confirmed no cross-workspace regression**: `pnpm -r lint` and
+`pnpm -r typecheck` pass across all 8 workspace projects (mobile's dependency
+bumps are scoped to `apps/mobile/package.json` only, per pnpm's strict
+per-package resolution — nothing in `apps/web` or `packages/*` moved).
+`apps/web`'s vitest suite passes (7/7) and its production build
+(`next build`) succeeds. `apps/api`'s Docker-based test suite was **not**
+run in this pass — no Python/API code was touched, and the suite requires
+building containers that aren't exercised by a mobile-only dependency change.
+
+**Still not done**: physical-device confirmation that Expo Go now actually
+opens the app (Phase 30) — no phone or device emulator was available in this
+environment. The SDK-53-was-incompatible conclusion in the section above was
+policy-based; the SDK-57-is-compatible expectation after this upgrade is
+also not yet device-confirmed. This must be verified once Phase 3 (EAS
+linking, which needs Anthony's own Expo login) and Phase 4 (LAN dev config)
+are in place.
 
 ## Assumptions
 
