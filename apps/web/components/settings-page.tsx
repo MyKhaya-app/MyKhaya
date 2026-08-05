@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
 import { AppShell } from "./app-shell";
 import { AppVersion } from "./app-version";
+import { useActiveHome } from "./use-active-home";
 const links = [
   ["Profile", "Your name and account details", "/settings/profile"],
   ["Security", "Password and signed-in devices", "/settings/security"],
@@ -13,6 +16,8 @@ export function SettingsPage({
   title?: string;
   children?: React.ReactNode;
 }) {
+  const { activeHome } = useActiveHome();
+  const isHomeAdmin = activeHome?.relationship === "home_admin";
   return (
     <AppShell>
       <main className="standard-page">
@@ -33,6 +38,15 @@ export function SettingsPage({
                 <span>›</span>
               </Link>
             ))}
+            {isHomeAdmin && (
+              <Link className="card" href="/khaya-control-centre">
+                <div>
+                  <h2>Khaya Control Centre</h2>
+                  <p>Members, child permissions and household features</p>
+                </div>
+                <span>›</span>
+              </Link>
+            )}
           </div>
         )}
         <AppVersion />

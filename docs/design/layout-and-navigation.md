@@ -10,6 +10,14 @@ On phones, use a safe-area-aware bottom bar with no more than five contextual de
 
 Use a warm branded header, stacked cards and a bottom navigation bar with a central quick-add action. Mobile must be designed natively rather than simply shrinking the desktop layout.
 
+## One question per screen
+
+Every screen answers exactly one question — Home: what matters today?
+Calendar: what is happening? Family: who is in my home? Settings: what can I
+change? If a screen needs several sentences to explain its purpose, redesign
+it rather than document around the problem. Full rationale in
+`visual-identity.md`.
+
 ## Terminology
 
-The main screen is Home. Do not use Dashboard, Workspace, Overview or Control Panel. Avoid tenant, RBAC, module and group ID in user-facing copy.
+The main screen is Home. Do not use Dashboard, Workspace, Overview or Control Panel. Avoid tenant, RBAC, module and group ID in user-facing copy. Prefer "Your family" over "Household members" and "Manage your home" over "Control Centre" in household-facing copy — see `tone-and-copy.md`.

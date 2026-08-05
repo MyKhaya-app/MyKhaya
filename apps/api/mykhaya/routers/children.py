@@ -13,6 +13,7 @@ from mykhaya.household_permissions import (
     Capability,
     require_capability,
 )
+from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ChildProfile,
     ChildTransitionStatus,
@@ -145,6 +146,7 @@ async def create_child(
         role=Role.member,
         relationship=HouseholdRelationship.child,
         permission_profile=PermissionProfile.child_restricted,
+        colour=await assign_member_colour(db, group_id),
     )
     db.add(membership)
     await db.flush()

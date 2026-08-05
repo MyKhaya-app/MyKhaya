@@ -1,3 +1,5 @@
+> **Superseded:** `apps/mobile` was removed per [ADR 0011](../architecture/adr/0011-single-pwa-retire-mobile-app.md) — MyKhaya ships as a single responsive PWA, no native Expo client. Kept as a historical record only.
+
 # Expo Go Setup (Windows)
 
 `apps/mobile` targets **Expo SDK 54** (see

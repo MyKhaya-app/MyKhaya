@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import type {
   EventLabel,
   EventOccurrence,
@@ -11,6 +12,7 @@ import type {
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
+import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -45,6 +47,19 @@ function displayDate(
 function eventTime(event: EventOccurrence) {
   if (event.is_all_day) return "All day";
   return displayDate(event.start_at, { hour: "2-digit", minute: "2-digit" });
+}
+
+function relativeDayHeading(key: string) {
+  const today = dateKey(new Date());
+  const tomorrow = new Date();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (key === today) return "Today";
+  if (key === dateKey(tomorrow)) return "Tomorrow";
+  return displayDate(`${key}T00:00:00Z`, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
 }
 
 function localInput(value: string | Date) {
@@ -272,6 +287,8 @@ export default function CalendarPage() {
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     const stored = window.localStorage.getItem(VIEW_STORAGE) as ViewMode | null;
@@ -329,7 +346,12 @@ export default function CalendarPage() {
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
 
-  const byDay = useMemo(() => groupEventsByDay(events), [events]);
+  const visibleEvents = useMemo(() => {
+    if (!query.trim()) return events;
+    const needle = query.trim().toLowerCase();
+    return events.filter((event) => event.title.toLowerCase().includes(needle));
+  }, [events, query]);
+  const byDay = useMemo(() => groupEventsByDay(visibleEvents), [visibleEvents]);
   const cells = useMemo(() => monthCells(focusDate), [focusDate]);
   const memberNames = useMemo(
     () =>
@@ -431,7 +453,7 @@ export default function CalendarPage() {
     );
   }
 
-  const focusedEvents = eventsForDay(events, focusDate);
+  const focusedEvents = eventsForDay(visibleEvents, focusDate);
 
   return (
     <AppShell>
@@ -441,10 +463,46 @@ export default function CalendarPage() {
             <p className="eyebrow">{activeHome?.name ?? "Home"}</p>
             <h1>Calendar</h1>
           </div>
-          <button type="button" onClick={() => setEditorDay(focusDate)}>
-            Add event
-          </button>
+          <div className="calendar-heading-actions">
+            <button
+              className="icon-button secondary"
+              type="button"
+              onClick={() => setSearchOpen((open) => !open)}
+              aria-pressed={searchOpen}
+              aria-label="Search events"
+            >
+              <Search size={18} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={() => setEditorDay(focusDate)}>
+              <Plus size={18} aria-hidden="true" />
+              Add
+            </button>
+          </div>
         </header>
+
+        {searchOpen && (
+          <div className="calendar-search">
+            <Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Search events"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              autoFocus
+              aria-label="Search events by title"
+            />
+            {query && (
+              <button
+                type="button"
+                className="icon-button secondary"
+                onClick={() => setQuery("")}
+                aria-label="Clear search"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="calendar-toolbar" aria-label="Calendar controls">
           <div
@@ -452,7 +510,14 @@ export default function CalendarPage() {
             role="group"
             aria-label="Calendar view"
           >
-            {(["month", "week", "day", "agenda"] as ViewMode[]).map((mode) => (
+            {(
+              [
+                { mode: "agenda", label: "Schedule" },
+                { mode: "day", label: "Day" },
+                { mode: "week", label: "Week" },
+                { mode: "month", label: "Month" },
+              ] as { mode: ViewMode; label: string }[]
+            ).map(({ mode, label }) => (
               <button
                 type="button"
                 key={mode}
@@ -460,7 +525,7 @@ export default function CalendarPage() {
                 aria-pressed={view === mode}
                 onClick={() => chooseView(mode)}
               >
-                {mode[0]!.toUpperCase() + mode.slice(1)}
+                {label}
               </button>
             ))}
           </div>
@@ -471,7 +536,7 @@ export default function CalendarPage() {
               onClick={() => move(-1)}
               aria-label="Previous period"
             >
-              ‹
+              <ChevronLeft size={18} aria-hidden="true" />
             </button>
             <button
               className="secondary today-button"
@@ -486,7 +551,7 @@ export default function CalendarPage() {
               onClick={() => move(1)}
               aria-label="Next period"
             >
-              ›
+              <ChevronRight size={18} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -573,7 +638,7 @@ export default function CalendarPage() {
             {Array.from({ length: 7 }, (_, index) => {
               const day = new Date(range.start);
               day.setUTCDate(day.getUTCDate() + index);
-              const dayEvents = eventsForDay(events, day);
+              const dayEvents = eventsForDay(visibleEvents, day);
               return (
                 <article
                   className={
@@ -591,6 +656,7 @@ export default function CalendarPage() {
                   </button>
                   <EventList
                     events={dayEvents}
+                    members={members}
                     memberNames={memberNames}
                     onSelect={setSelectedEvent}
                     compact
@@ -605,6 +671,7 @@ export default function CalendarPage() {
           <section className="day-view card" aria-label="Day view">
             <EventList
               events={focusedEvents}
+              members={members}
               memberNames={memberNames}
               onSelect={setSelectedEvent}
             />
@@ -620,15 +687,10 @@ export default function CalendarPage() {
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([key, rows]) => (
                   <article className="agenda-day" key={key}>
-                    <h2>
-                      {displayDate(`${key}T00:00:00Z`, {
-                        weekday: "long",
-                        day: "numeric",
-                        month: "long",
-                      })}
-                    </h2>
+                    <h2>{relativeDayHeading(key)}</h2>
                     <EventList
                       events={rows}
+                      members={members}
                       memberNames={memberNames}
                       onSelect={setSelectedEvent}
                     />
@@ -657,7 +719,8 @@ export default function CalendarPage() {
             onDismiss={() => setSelectedDay(null)}
           >
             <EventList
-              events={eventsForDay(events, selectedDay)}
+              events={eventsForDay(visibleEvents, selectedDay)}
+              members={members}
               memberNames={memberNames}
               onSelect={(event) => {
                 setSelectedDay(null);
@@ -721,11 +784,13 @@ export default function CalendarPage() {
 
 function EventList({
   events,
+  members,
   memberNames,
   onSelect,
   compact = false,
 }: {
   events: EventOccurrence[];
+  members: Member[];
   memberNames: Map<string, string>;
   onSelect: (event: EventOccurrence) => void;
   compact?: boolean;
@@ -737,6 +802,9 @@ function EventList({
         const people = event.member_ids
           .map((id) => memberNames.get(id))
           .filter(Boolean);
+        const firstMember = members.find((member) =>
+          event.member_ids.includes(member.user_id),
+        );
         return (
           <button
             className="event-row"
@@ -758,6 +826,14 @@ function EventList({
                   .join(" · ")}
               </small>
             </span>
+            {firstMember && (
+              <Avatar
+                id={firstMember.user_id}
+                name={firstMember.display_name}
+                colour={firstMember.colour}
+                size="sm"
+              />
+            )}
           </button>
         );
       })}

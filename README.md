@@ -2,7 +2,7 @@
 
 > **Your family’s digital home.**
 
-MyKhaya is a private coordination application for households, families and close groups of friends. This monorepo contains a Next.js web app, Expo native shell, FastAPI modular monolith, shared TypeScript packages and a Docker Compose deployment foundation.
+MyKhaya is a private coordination application for households, families and close groups of friends. This monorepo contains a single responsive Next.js web app (installable as a PWA), a FastAPI modular monolith, shared TypeScript packages and a Docker Compose deployment foundation.
 
 ## Branches
 
@@ -40,8 +40,7 @@ Use `make dev-update`, `make dev-logs`, `make test`, `make lint`, `make typechec
 
 ## Structure
 
-- `apps/web`: responsive Next.js App Router product
-- `apps/mobile`: native Expo shell
+- `apps/web`: responsive Next.js App Router product, installable as a PWA (mobile-first, single codebase for phone/tablet/desktop)
 - `apps/api`: FastAPI API, worker, scheduler, Alembic migrations and tests
 - `packages`: generated contract/types, client, tokens and shared configuration
 - `infrastructure`: Caddy, database bootstrap and operational scripts

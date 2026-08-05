@@ -93,6 +93,7 @@ class MemberResponse(BaseModel):
     permission_profile: PermissionProfile
     permission_overrides: dict[str, bool]
     shared_resources: list[str]
+    colour: str | None
 
 
 class MemberRelationshipUpdate(StrictModel):

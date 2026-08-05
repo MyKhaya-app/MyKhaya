@@ -17,6 +17,7 @@ from mykhaya.household_permissions import (
     legacy_role,
     require_capability,
 )
+from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
@@ -280,6 +281,7 @@ async def accept(
                 relationship=row.relationship,
                 permission_profile=row.permission_profile,
                 shared_resources=row.shared_resources,
+                colour=await assign_member_colour(db, row.group_id),
             )
         )
     else:
@@ -288,6 +290,8 @@ async def accept(
         existing.relationship = row.relationship
         existing.permission_profile = row.permission_profile
         existing.shared_resources = row.shared_resources
+        if existing.colour is None:
+            existing.colour = await assign_member_colour(db, row.group_id)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

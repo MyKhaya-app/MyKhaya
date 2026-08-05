@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from redis.asyncio import Redis
 
@@ -19,12 +19,25 @@ from mykhaya.models import (
 )
 from mykhaya.security import derived_token
 
+# Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
+# 3 -> 120s ... capped at MAX_BACKOFF_SECONDS. After MAX_ATTEMPTS the event
+# is marked processed (given up) so it stops being retried forever; the
+# WorkerJobRecord row remains as the permanent diagnostic record of why.
+MAX_ATTEMPTS = 8
+BASE_BACKOFF_SECONDS = 30
+MAX_BACKOFF_SECONDS = 3600
+
+
+def _backoff_seconds(attempts: int) -> int:
+    delay = BASE_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0))
+    return int(min(delay, MAX_BACKOFF_SECONDS))
+
 
 async def process(event_id: uuid.UUID) -> None:
     settings = get_settings()
     async with SessionFactory() as db:
         event = await db.get(OutboxEvent, event_id)
-        if event is None:
+        if event is None or event.processed_at is not None:
             return
         existing = await db.get(WorkerJobRecord, event_id)
         if existing and existing.status == "completed":
@@ -88,11 +101,23 @@ async def process(event_id: uuid.UUID) -> None:
 
             job.status = "completed"
             job.finished_at = datetime.now(UTC)
+            event.processed_at = datetime.now(UTC)
         except Exception as exc:
             job.status = "failed"
             job.attempts += 1
             job.error = type(exc).__name__[:500]
             job.finished_at = datetime.now(UTC)
+            event.attempts += 1
+            event.last_error = type(exc).__name__[:500]
+            if event.attempts >= MAX_ATTEMPTS:
+                # Give up for good: stop the row being selected again, but
+                # leave the WorkerJobRecord as the permanent diagnostic
+                # record of the last failure.
+                event.processed_at = datetime.now(UTC)
+            else:
+                event.available_at = datetime.now(UTC) + timedelta(
+                    seconds=_backoff_seconds(event.attempts)
+                )
             await db.commit()
             raise
 

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { UserPlus } from "lucide-react";
 import type {
   HouseholdRelationship,
   InvitationListItem,
@@ -9,8 +10,18 @@ import type {
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
+import { Avatar } from "@/components/avatar";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
+
+type FamilyFilter = "all" | "adults" | "children" | "extended";
+
+function filterGroup(relationship: HouseholdRelationship): FamilyFilter {
+  if (relationship === "child") return "children";
+  if (relationship === "extended_family" || relationship === "friend")
+    return "extended";
+  return "adults";
+}
 
 const relationshipLabels: Record<HouseholdRelationship, string> = {
   home_admin: "Home Admin",
@@ -49,6 +60,7 @@ export default function People() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState<FamilyFilter>("all");
 
   const canInvite =
     activeHome?.capabilities.includes("members.invite") ?? false;
@@ -184,15 +196,13 @@ export default function People() {
         <div className="page-heading">
           <div>
             <p className="eyebrow">{activeHome?.name ?? "Home"}</p>
-            <h1>Household</h1>
-            <p>
-              Relationships describe who someone is. Permission profiles control
-              access.
-            </p>
+            <h1>Family</h1>
+            <p className="muted">The people that make {activeHome?.name ?? "your Home"}</p>
           </div>
           {canInvite && (
             <button type="button" onClick={() => setOpen((value) => !value)}>
-              Invite someone
+              <UserPlus size={18} aria-hidden="true" />
+              Add member
             </button>
           )}
         </div>
@@ -334,49 +344,77 @@ export default function People() {
         )}
 
         <section aria-labelledby="household-members-title">
-          <h2 id="household-members-title">People in this Home</h2>
-          <div className="people-grid">
-            {members.map((member) => (
-              <article
-                className="card person relationship-card"
-                key={member.user_id}
-              >
-                <i aria-hidden="true">{member.display_name[0]}</i>
-                <div>
-                  <h3>{member.display_name}</h3>
-                  {member.email && <p>{member.email}</p>}
-                  <strong>{relationshipLabels[member.relationship]}</strong>
-                  <small>
-                    {member.permission_profile.replaceAll("_", " ")}
-                  </small>
-                  {canManage && member.relationship !== "child" && (
-                    <label>
-                      Change relationship
-                      <select
-                        value={member.relationship}
-                        onChange={(event) =>
-                          changeRelationship(
-                            member,
-                            event.target.value as HouseholdRelationship,
-                          )
-                        }
-                      >
-                        {nonChildRelationships.map((value) => (
-                          <option key={value} value={value}>
-                            {relationshipLabels[value]}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {member.relationship === "child" && canManage && (
-                    <Link href="/khaya-control-centre/children">
-                      Manage child privacy
-                    </Link>
-                  )}
-                </div>
-              </article>
-            ))}
+          <h2 id="household-members-title" className="visually-hidden">
+            People in this Home
+          </h2>
+          <div className="family-filters" role="group" aria-label="Filter family members">
+            {(
+              [
+                ["all", "All"],
+                ["adults", "Adults"],
+                ["children", "Children"],
+                ["extended", "Extended"],
+              ] as [FamilyFilter, string][]
+            ).map(([value, label]) => {
+              const count =
+                value === "all"
+                  ? members.length
+                  : members.filter((m) => filterGroup(m.relationship) === value).length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={filter === value ? "active" : "secondary"}
+                  aria-pressed={filter === value}
+                  onClick={() => setFilter(value)}
+                >
+                  {label} <span>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="family-list">
+            {members
+              .filter((member) => filter === "all" || filterGroup(member.relationship) === filter)
+              .map((member) => (
+                <article className="card family-member" key={member.user_id}>
+                  <Avatar id={member.user_id} name={member.display_name} colour={member.colour} size="lg" />
+                  <div className="family-member-body">
+                    <div className="family-member-name">
+                      <strong>{member.display_name}</strong>
+                      <span className="role-badge">
+                        {relationshipLabels[member.relationship]}
+                      </span>
+                    </div>
+                    {member.email && <p className="muted">{member.email}</p>}
+                    {canManage && member.relationship !== "child" && (
+                      <label className="family-member-relationship">
+                        Change relationship
+                        <select
+                          value={member.relationship}
+                          onChange={(event) =>
+                            changeRelationship(
+                              member,
+                              event.target.value as HouseholdRelationship,
+                            )
+                          }
+                        >
+                          {nonChildRelationships.map((value) => (
+                            <option key={value} value={value}>
+                              {relationshipLabels[value]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {member.relationship === "child" && canManage && (
+                      <Link className="tertiary" href="/khaya-control-centre/children">
+                        Manage child privacy
+                      </Link>
+                    )}
+                  </div>
+                </article>
+              ))}
           </div>
         </section>
       </main>

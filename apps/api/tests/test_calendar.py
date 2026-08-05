@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -257,3 +258,67 @@ async def test_invitation_only_registration_mode_requires_valid_invitation(
         assert accepted.status_code == 202
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.mark.asyncio
+async def test_weekly_recurrence_survives_dst_transition(client: AsyncClient) -> None:
+    """A weekly 09:00 Europe/London event must still show 09:00 local time
+    after the clocks change, not 08:00 or 10:00. UK clocks moved forward on
+    2026-03-29. Regression test for the UTC-timedelta recurrence bug fixed
+    in _expand_occurrences — see docs/design/visual-identity.md context and
+    the fix itself in routers/calendar.py."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"dst-{suffix}@example.com", "DST Owner")
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "DST Home"})
+    assert group.status_code == 201
+    home_id = group.json()["id"]
+
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar,
+                group_id=uuid.UUID(home_id),
+                enabled=True,
+            )
+        )
+        await db.commit()
+
+    # First occurrence: Tuesday 2026-03-24 09:00 Europe/London, still GMT
+    # (UTC+0) — before the 2026-03-29 spring-forward.
+    tz = ZoneInfo("Europe/London")
+    first_local = datetime(2026, 3, 24, 9, 0, tzinfo=tz)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Weekly team call",
+            "start_at": first_local.astimezone(UTC).isoformat(),
+            "end_at": (first_local + timedelta(hours=1)).astimezone(UTC).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "weekly",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+
+    # Query a range spanning three weeks after the spring-forward, so the
+    # occurrence on 2026-04-14 falls after clocks moved to BST (UTC+1).
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": datetime(2026, 4, 13, tzinfo=UTC).isoformat(),
+            "end_at": datetime(2026, 4, 16, tzinfo=UTC).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert items, "expected an occurrence in the post-DST week"
+    occurrence_start = datetime.fromisoformat(items[0]["start_at"])
+    local_start = occurrence_start.astimezone(tz)
+    assert local_start.hour == 9, (
+        f"expected 09:00 local time after DST, got {local_start.isoformat()} "
+        "— weekly recurrence is drifting across the clock change"
+    )

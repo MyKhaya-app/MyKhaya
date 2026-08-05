@@ -1,5 +1,10 @@
 # MyKhaya Design System
 
+> See `visual-identity.md` first — it is the entry point and source of truth
+> for the overall system (the MyKhaya Promise, one-question-per-screen,
+> family colours, typography split, Version D). This file holds the
+> underlying palette and identity rules that document builds on.
+
 ## Absolute identity rule
 
 MyKhaya must not look like Kaya.
@@ -16,7 +21,18 @@ Do not reuse Kaya navigation, components, spacing, cards, dark technical styling
 - Cream `#F2EDE3`
 - Slate `#1F2933`
 
-Use central semantic tokens and accessible derived shades.
+Use central semantic tokens and accessible derived shades. Ink/body text
+should read as a dark forest charcoal (`#233028`) rather than near-black —
+see `visual-identity.md`.
+
+## Member colours
+
+Separate from the palette above: each family member owns one colour,
+assigned once, used everywhere that member appears (avatar, their events on
+Calendar, their items on any future per-person list) — never a
+category-based colour scheme. Starter set and full rationale in
+`visual-identity.md`. This is a real `member.colour` field to design when
+that work starts, not a client-side hash.
 
 ## Visual language
 

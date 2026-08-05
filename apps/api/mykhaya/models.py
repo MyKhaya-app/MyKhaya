@@ -192,6 +192,10 @@ class Membership(UuidTimeMixin, Base):
     )
     permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Assigned once at creation via mykhaya.member_colours.assign_member_colour.
+    # Household-scoped, not global: the same person can hold a different
+    # colour in a different home. See docs/design/visual-identity.md.
+    colour: Mapped[str | None] = mapped_column(String(7))
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     group: Mapped[Group] = orm_relationship(back_populates="memberships")
     user: Mapped[User] = orm_relationship(back_populates="memberships")

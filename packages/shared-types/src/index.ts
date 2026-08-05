@@ -44,6 +44,7 @@ export interface Member {
   permission_profile: PermissionProfile;
   permission_overrides: Record<string, boolean>;
   shared_resources: string[];
+  colour: string | null;
 }
 
 export type RecurrencePattern =

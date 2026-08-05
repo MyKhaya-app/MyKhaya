@@ -16,6 +16,7 @@ from mykhaya.household_permissions import (
     legacy_role,
     require_capability,
 )
+from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     CalendarEventLabel,
     Group,
@@ -97,6 +98,7 @@ async def create_group(
         role=Role.owner,
         relationship=HouseholdRelationship.home_admin,
         permission_profile=PermissionProfile.home_admin,
+        colour=await assign_member_colour(db, group.id),
     )
     db.add(membership)
     calendar = HomeCalendar(group_id=group.id, name="Home Calendar")
@@ -169,6 +171,7 @@ async def members(
             permission_profile=membership.permission_profile,
             permission_overrides=membership.permission_overrides,
             shared_resources=membership.shared_resources,
+            colour=membership.colour,
         )
         for membership, user in rows
     ]
@@ -248,6 +251,7 @@ async def update_member(
         permission_profile=target.permission_profile,
         permission_overrides=target.permission_overrides,
         shared_resources=target.shared_resources,
+        colour=target.colour,
     )
 
 

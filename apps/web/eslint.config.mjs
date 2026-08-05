@@ -1,6 +1,14 @@
 import base from "@mykhaya/eslint-config";
 export default [
-  { ignores: [".next/**", "next-env.d.ts", "eslint.config.mjs"] },
+  {
+    ignores: [
+      ".next/**",
+      "next-env.d.ts",
+      "eslint.config.mjs",
+      "public/**",
+      "scripts/**",
+    ],
+  },
   ...base,
   {
     rules: {

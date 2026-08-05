@@ -161,3 +161,51 @@ async def test_home_admin_features_relationships_and_managed_child(
     remaining = await client.get(f"/api/v1/groups/{home_id}/children")
     assert remaining.status_code == 200
     assert remaining.json() == []
+
+
+@pytest.mark.asyncio
+async def test_member_colours_are_assigned_and_collision_free(
+    api_client: AsyncClient,
+) -> None:
+    """Colour belongs to the person's membership, assigned server-side, and
+    must never collide with another active member of the same home while
+    the starter palette has spare colours — see
+    docs/design/visual-identity.md and mykhaya.member_colours."""
+    client = api_client
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"colour-{suffix}@example.com", "Colour Owner")
+    created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Colour Home"})
+    assert created.status_code == 201
+    home_id = created.json()["id"]
+
+    members = await client.get(f"/api/v1/groups/{home_id}/members")
+    admin = members.json()[0]
+    assert admin["colour"] is not None
+
+    guardian_id = admin["membership_id"]
+    colours = [admin["colour"]]
+    for index in range(4):
+        child = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/groups/{home_id}/children",
+            json={
+                "display_name": f"Child {index}",
+                "age_band": "under_13",
+                "guardian_membership_ids": [guardian_id],
+            },
+        )
+        assert child.status_code == 201
+        assert child.json()["membership_id"]
+        colours.append(None)  # placeholder, colour isn't on ChildResponse
+
+    all_members = await client.get(f"/api/v1/groups/{home_id}/members")
+    assert all_members.status_code == 200
+    rows = all_members.json()
+    assert len(rows) == 5
+    member_colours = [row["colour"] for row in rows]
+    assert all(colour is not None for colour in member_colours)
+    # Exactly 4 starter colours: the first 4 members are all distinct, the
+    # 5th cycles back to a colour already in use rather than staying blank.
+    assert len(set(member_colours[:4])) == 4
+    assert member_colours[4] in member_colours[:4]
