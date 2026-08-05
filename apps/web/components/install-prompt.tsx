@@ -10,7 +10,7 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-function isStandalone() {
+export function isStandalone() {
   if (typeof window === "undefined") return true;
   return (
     window.matchMedia?.("(display-mode: standalone)").matches ||

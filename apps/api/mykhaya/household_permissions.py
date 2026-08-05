@@ -33,6 +33,7 @@ class Capability(StrEnum):
     sharing_external = "sharing.external"
     household_export = "household.export"
     security_manage = "security.manage"
+    household_manage_routines = "household.manage_routines"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
@@ -47,6 +48,7 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.calendar_edit_own,
             Capability.calendar_edit_all,
             Capability.calendar_delete,
+            Capability.household_manage_routines,
         }
     ),
     PermissionProfile.child_restricted: frozenset(),

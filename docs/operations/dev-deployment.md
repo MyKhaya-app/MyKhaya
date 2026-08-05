@@ -151,8 +151,55 @@ persistent volumes.
   is included in `MYKHAYA_ADMIN_ALLOWED_NETWORKS`. A 404 is the deliberate network
   boundary response.
 
+## Creating the initial Platform Admin account
+
+`MYKHAYA_ADMIN_BOOTSTRAP_ENABLED` gates a one-shot CLI that creates the first
+`platform_owner` account. Leave it unset (or `false`) once the account exists — the flag
+is a bootstrap door, not a standing config value. Run it against the running `api`
+service after migrations have completed:
+
+```sh
 docker compose -f compose.yml -f compose.dev.yml run --rm --no-deps \
   -e MYKHAYA_ADMIN_BOOTSTRAP_ENABLED=true \
   api python -m mykhaya.bootstrap_platform_owner \
   --email you@example.com \
   --display-name "Your Name"
+```
+
+The command prints a one-time credential/enrolment step for MFA, which is required
+before the account can sign in (`MYKHAYA_ADMIN_MFA_REQUIRED` is enforced). Complete MFA
+enrolment at `https://admin.dev.mykhaya.app/login` immediately afterwards.
+
+## Confirming the deployed version
+
+`GET /api/v1/health/build` (unauthenticated, `include_in_schema=False`) returns
+`version`, `commit`, `build_time`, `environment`, and `channel` sourced from
+`MYKHAYA_VERSION`, `MYKHAYA_COMMIT_SHA`, `MYKHAYA_BUILD_TIME`, and
+`MYKHAYA_BUILD_CHANNEL` (or the `VERSION` file baked into the image if unset):
+
+```sh
+curl -fsS http://127.0.0.1:8080/api/v1/health/build
+```
+
+The same version/channel (plus commit and build time outside production) is already
+surfaced without any extra tooling on the Control Centre Overview page
+(`https://admin.dev.mykhaya.app/`) — that is the fastest way to confirm what an update
+actually deployed.
+
+## Email delivery
+
+The Control Centre **Email** page (`https://admin.dev.mykhaya.app/mail`) reports whether
+SMTP is configured, its source (`environment` or `platform_admin`), outbound queue depth,
+last successful delivery, and recent failures, and offers a rate-limited "send a test
+email" action. See `docs/architecture/platform-control-centre.md` for how Platform Admin
+SMTP settings relate to `MYKHAYA_SMTP_*` env vars (env vars always win when set). In dev,
+Mailpit (`http://127.0.0.1:8025`, tunnel over SSH/NetBird — do not expose publicly) is the
+usual way to see mail land without a real external provider.
+
+## Worker and scheduler health
+
+`make dev-health` / `infrastructure/scripts/dev-deploy.sh health` already checks the
+`worker` and `scheduler` containers are running (via `wait_healthy`, falling back to
+container status since these services have no Docker `HEALTHCHECK` of their own) in
+addition to the `/health/live` and `/health/ready` HTTP checks — there is no separate
+worker/scheduler check to remember to run.

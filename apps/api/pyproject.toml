@@ -10,12 +10,14 @@ requires-python = ">=3.13"
 dependencies = [
   "alembic>=1.16,<2",
   "asyncpg>=0.30,<1",
+  "cryptography>=43,<45",
   "fastapi>=0.116,<1",
   "email-validator>=2.2,<3",
   "greenlet>=3.2,<4",
   "httpx>=0.28,<1",
   "pwdlib[argon2]>=0.2,<1",
   "pydantic-settings>=2.10,<3",
+  "pywebpush>=2,<3",
   "redis>=6.2,<7",
   "sqlalchemy[asyncio]>=2.0.41,<3",
   "structlog>=25.4,<26",
@@ -58,9 +60,13 @@ ignore = ["S101", "B008"]
 "mykhaya/models.py" = ["S105"]
 "mykhaya/security.py" = ["S106"]
 "mykhaya/routers/invitations.py" = ["S106"]
-"tests/*.py" = ["S105"]
+"tests/*.py" = ["S105", "S106"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pywebpush.*", "py_vapid.*"]
+ignore_missing_imports = true

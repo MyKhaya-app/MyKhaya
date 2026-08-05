@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any
 
@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
 )
@@ -119,6 +121,10 @@ class User(UuidTimeMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timezone: Mapped[str | None] = mapped_column(String(100))
+    birth_month: Mapped[int | None] = mapped_column(Integer)
+    birth_day: Mapped[int | None] = mapped_column(Integer)
+    birth_year: Mapped[int | None] = mapped_column(Integer)
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
 
 
@@ -454,6 +460,46 @@ class SecurityEvent(Base):
     safe_detail: Mapped[str | None] = mapped_column(String(500))
 
 
+class SmtpConnectionSecurity(StrEnum):
+    none = "none"
+    starttls = "starttls"
+    tls = "tls"
+
+
+class PlatformSmtpSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed SMTP configuration. Single row; app logic enforces that.
+
+    Used only when no MYKHAYA_SMTP_* environment override is active — see
+    mykhaya.mailer.resolve_smtp_config and docs/architecture/platform-control-centre.md.
+    """
+
+    __tablename__ = "platform_smtp_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    host: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    port: Mapped[int] = mapped_column(Integer, default=587, server_default="587")
+    connection_security: Mapped[SmtpConnectionSecurity] = mapped_column(
+        Enum(
+            SmtpConnectionSecurity,
+            name="smtp_connection_security",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=SmtpConnectionSecurity.starttls,
+        server_default=SmtpConnectionSecurity.starttls.value,
+    )
+    auth_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    username: Mapped[str | None] = mapped_column(String(320))
+    encrypted_password: Mapped[str | None] = mapped_column(Text)
+    sender_name: Mapped[str] = mapped_column(
+        String(100), default="MyKhaya", server_default="MyKhaya"
+    )
+    sender_email: Mapped[str] = mapped_column(String(320), default="", server_default="")
+    reply_to: Mapped[str | None] = mapped_column(String(320))
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=10, server_default="10")
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
 class PlatformSetting(UuidTimeMixin, Base):
     __tablename__ = "platform_settings"
     key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
@@ -500,6 +546,10 @@ class ChildProfile(UuidTimeMixin, Base):
         Enum(ChildTransitionStatus, name="child_transition_status"),
         default=ChildTransitionStatus.child,
     )
+    birth_month: Mapped[int | None] = mapped_column(Integer)
+    birth_day: Mapped[int | None] = mapped_column(Integer)
+    birth_year: Mapped[int | None] = mapped_column(Integer)
+    birthday_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class GuardianAssignment(UuidTimeMixin, Base):
@@ -543,3 +593,273 @@ class OperationalHeartbeat(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     safe_detail: Mapped[str | None] = mapped_column(String(300))
+
+
+# --- Notification Engine -----------------------------------------------------
+# Every channel (email/push/in-app) and every future notification-producing
+# module (calendar, household routines, birthdays, invitations, ...) shares
+# this schema. See mykhaya/notifications/engine.py and
+# docs/architecture/notification-engine.md.
+
+
+class NotificationChannel(StrEnum):
+    email = "email"
+    push = "push"
+    in_app = "in_app"
+
+
+class NotificationDeliveryStatus(StrEnum):
+    queued = "queued"
+    sent = "sent"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class LockScreenPreviewLevel(StrEnum):
+    full = "full"
+    title_only = "title_only"
+    hidden = "hidden"
+
+
+class BriefingDays(StrEnum):
+    daily = "daily"
+    weekdays = "weekdays"
+
+
+class RoutineReminderTiming(StrEnum):
+    evening_before = "evening_before"
+    same_day = "same_day"
+    both = "both"
+
+
+class PushSubscription(UuidTimeMixin, Base):
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (Index("ix_push_subscriptions_user", "user_id", "disabled_at"),)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh_key: Mapped[str] = mapped_column(String(255))
+    auth_key: Mapped[str] = mapped_column(String(255))
+    device_label: Mapped[str | None] = mapped_column(String(120))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class Notification(UuidTimeMixin, Base):
+    """In-app notification centre row."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_recipient_created", "recipient_user_id", "created_at"),
+    )
+    recipient_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL")
+    )
+    notification_type: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(String(500))
+    related_entity_type: Mapped[str | None] = mapped_column(String(50))
+    related_entity_id: Mapped[uuid.UUID | None]
+    deep_link: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationDelivery(Base):
+    """One row per recipient per channel per attempt-group — the diagnostics/timeline
+    backbone. A single OutboxEvent can fan out to many rows (e.g. push to N devices)."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        Index("ix_notification_deliveries_attempted", "attempted_at"),
+        Index("ix_notification_deliveries_recipient", "recipient_user_id", "channel"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, name="notification_channel")
+    )
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    notification_type: Mapped[str] = mapped_column(String(100), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(300), unique=True)
+    outbox_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("outbox_events.id", ondelete="SET NULL")
+    )
+    push_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="SET NULL")
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[NotificationDeliveryStatus] = mapped_column(
+        Enum(NotificationDeliveryStatus, name="notification_delivery_status"),
+        default=NotificationDeliveryStatus.queued,
+        server_default=NotificationDeliveryStatus.queued.value,
+    )
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sanitised_failure_reason: Mapped[str | None] = mapped_column(String(300))
+    used_template_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
+
+class NotificationPreferences(UuidTimeMixin, Base):
+    __tablename__ = "notification_preferences"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    event_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    event_invitations_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    event_changes_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    household_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    daily_briefing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    briefing_time: Mapped[time] = mapped_column(
+        Time, default=time(7, 30), server_default="07:30:00"
+    )
+    briefing_days: Mapped[BriefingDays] = mapped_column(
+        Enum(BriefingDays, name="briefing_days"),
+        default=BriefingDays.daily,
+        server_default=BriefingDays.daily.value,
+    )
+    empty_day_briefing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    lock_screen_preview_level: Mapped[LockScreenPreviewLevel] = mapped_column(
+        Enum(LockScreenPreviewLevel, name="lock_screen_preview_level"),
+        default=LockScreenPreviewLevel.title_only,
+        server_default=LockScreenPreviewLevel.title_only.value,
+    )
+    quiet_hours_start: Mapped[time | None] = mapped_column(Time)
+    quiet_hours_end: Mapped[time | None] = mapped_column(Time)
+    quiet_hours_critical_only: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+
+
+class HouseholdRoutine(UuidTimeMixin, Base):
+    __tablename__ = "household_routines"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_routine_title_nonempty"),
+        CheckConstraint("interval_weeks >= 1", name="ck_routine_interval_weeks"),
+        Index("ix_routine_group_enabled", "group_id", "enabled"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    interval_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    week_anchor_date: Mapped[date] = mapped_column(Date)
+    reminder_timing: Mapped[RoutineReminderTiming] = mapped_column(
+        Enum(RoutineReminderTiming, name="routine_reminder_timing"),
+        default=RoutineReminderTiming.evening_before,
+        server_default=RoutineReminderTiming.evening_before.value,
+    )
+    is_critical: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class HouseholdRoutineMember(UuidTimeMixin, Base):
+    __tablename__ = "household_routine_members"
+    __table_args__ = (UniqueConstraint("routine_id", "user_id", name="uq_routine_member"),)
+    routine_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_routines.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+class HouseholdRoutineCompletion(UuidTimeMixin, Base):
+    __tablename__ = "household_routine_completions"
+    __table_args__ = (
+        UniqueConstraint("routine_id", "occurrence_date", name="uq_routine_occurrence"),
+    )
+    routine_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_routines.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_date: Mapped[date] = mapped_column(Date, index=True)
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PlatformPushSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed Web Push (VAPID) configuration. Single row; app logic
+    enforces that. Same environment-wins precedence model as PlatformSmtpSettings."""
+
+    __tablename__ = "platform_push_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    vapid_public_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_vapid_private_key: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(320))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class NotificationTemplate(UuidTimeMixin, Base):
+    """Override-only: trusted default copy lives in code
+    (mykhaya/notifications/default_templates.py). A row here exists only once a Platform
+    Admin has customised that template_type/channel; deleting the row resets to default."""
+
+    __tablename__ = "notification_templates"
+    __table_args__ = (
+        UniqueConstraint("template_type", "channel", name="uq_template_type_channel"),
+    )
+    template_type: Mapped[str] = mapped_column(String(60), index=True)
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, name="notification_template_channel")
+    )
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class NotificationTemplateRevision(Base):
+    """Snapshot of the previous override, kept on every save so a bad edit is one click
+    from recovery. The code default itself never needs versioning here."""
+
+    __tablename__ = "notification_template_revisions"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("notification_templates.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    replaced_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )

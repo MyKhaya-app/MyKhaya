@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
     email_verification_enabled: bool = True
+    vapid_public_key: str | None = None
+    vapid_private_key: SecretStr | None = None
+    vapid_subject: str | None = None
+    push_delivery_configured: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     rate_limit_login: int = Field(default=10, ge=1, le=100)
     rate_limit_register: int = Field(default=5, ge=1, le=100)

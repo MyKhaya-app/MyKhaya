@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import outbox
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.mailer import send_email
+from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
@@ -29,20 +29,28 @@ from mykhaya.models import (
     Group,
     Invitation,
     Membership,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationDeliveryStatus,
     OperationalHeartbeat,
     OutboxEvent,
     PlatformAdministrator,
+    PlatformPushSettings,
     PlatformRole,
     PlatformSession,
     PlatformSetting,
+    PlatformSmtpSettings,
     PublicIncident,
+    PushSubscription,
     SecurityEvent,
     Session,
+    SmtpConnectionSecurity,
     TokenPurpose,
     User,
     WorkerJobRecord,
 )
 from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
+from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_config, send_push
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
@@ -54,8 +62,12 @@ from mykhaya.platform_schemas import (
     PlatformActorResponse,
     PlatformLoginRequest,
     PlatformReauthenticateRequest,
+    PushGenerateKeysRequest,
+    PushTestRequest,
+    PushVapidSettingsUpdate,
     SensitiveActionRequest,
     SettingUpdate,
+    SmtpSettingsUpdate,
     TestEmailRequest,
 )
 from mykhaya.platform_security import (
@@ -70,6 +82,7 @@ from mykhaya.platform_security import (
     set_admin_cookies,
 )
 from mykhaya.rate_limit import enforce_rate_limit
+from mykhaya.secrets_crypto import encrypt_secret
 from mykhaya.security import (
     DUMMY_HASH,
     create_action_token,
@@ -1767,6 +1780,11 @@ async def administrators(
     ]
 
 
+async def _get_smtp_settings_row(db: AsyncSession) -> PlatformSmtpSettings | None:
+    row: PlatformSmtpSettings | None = await db.scalar(select(PlatformSmtpSettings).limit(1))
+    return row
+
+
 @router.get("/mail")
 async def mail_configuration(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -1797,15 +1815,12 @@ async def mail_configuration(
             .limit(10)
         )
     ).all()
-    configured = bool(
-        settings.email_delivery_configured
-        and settings.smtp_host.strip()
-        and settings.email_from.strip()
-    )
+    config = await resolve_smtp_config(settings, db)
+    row = await _get_smtp_settings_row(db)
     return {
-        "configured": configured,
-        "transport": "SMTP" if configured else None,
-        "sender_identity": settings.email_from if configured else None,
+        "configured": config.configured,
+        "transport": "SMTP" if config.configured else None,
+        "sender_identity": config.sender if config.configured else None,
         "queue_depth": pending,
         "last_successful_delivery": last_success,
         "recent_failures": [
@@ -1817,8 +1832,120 @@ async def mail_configuration(
             }
             for row in failures
         ],
-        "managed_by": "deployment environment",
+        "managed_by": config.source,
+        "smtp_settings": {
+            "enabled": row.enabled if row else False,
+            "host": row.host if row else "",
+            "port": row.port if row else 587,
+            "connection_security": row.connection_security.value if row else "starttls",
+            "auth_enabled": row.auth_enabled if row else False,
+            "username": row.username if row else None,
+            "password_configured": bool(row.encrypted_password) if row else False,
+            "sender_name": row.sender_name if row else "MyKhaya",
+            "sender_email": row.sender_email if row else "",
+            "reply_to": row.reply_to if row else None,
+            "timeout_seconds": row.timeout_seconds if row else 10,
+            "updated_at": row.updated_at if row else None,
+            "editable": config.source != "environment",
+        },
     }
+
+
+@router.put("/mail/smtp-settings")
+async def update_smtp_settings(
+    body: SmtpSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if settings.email_delivery_configured:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "SMTP is managed by the deployment environment and cannot be changed here.",
+        )
+    row = await _get_smtp_settings_row(db)
+    was_enabled = row.enabled if row else False
+    had_password = bool(row.encrypted_password) if row else False
+
+    if row is None:
+        row = PlatformSmtpSettings()
+        db.add(row)
+
+    if body.enabled and body.auth_enabled and not body.password and not had_password:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A password is required when authentication is enabled.",
+        )
+
+    row.enabled = body.enabled
+    row.host = body.host.strip()
+    row.port = body.port
+    row.connection_security = SmtpConnectionSecurity(body.connection_security)
+    row.auth_enabled = body.auth_enabled
+    row.username = body.username.strip() if body.username else None
+    row.sender_name = body.sender_name.strip()
+    row.sender_email = body.sender_email.strip()
+    row.reply_to = body.reply_to.strip() if body.reply_to else None
+    row.timeout_seconds = body.timeout_seconds
+    row.updated_by_administrator_id = context.administrator.id
+
+    credentials_replaced = False
+    if body.password:
+        row.encrypted_password = encrypt_secret(settings, body.password)
+        credentials_replaced = True
+    elif not body.auth_enabled:
+        row.encrypted_password = None
+        row.username = None
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "smtp.settings_changed",
+        "smtp_settings",
+        reason=body.reason,
+        new={
+            "enabled": row.enabled,
+            "host": row.host,
+            "port": row.port,
+            "connection_security": row.connection_security.value,
+            "auth_enabled": row.auth_enabled,
+        },
+    )
+    if credentials_replaced:
+        platform_audit(
+            db, request, context, "smtp.credentials_replaced", "smtp_settings", reason=body.reason
+        )
+    if was_enabled and not row.enabled:
+        platform_audit(
+            db, request, context, "smtp.disabled", "smtp_settings", reason=body.reason
+        )
+    await db.commit()
+    return {"message": "SMTP settings saved."}
+
+
+@router.post("/mail/smtp-settings/clear-password")
+async def clear_smtp_password(
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    row = await _get_smtp_settings_row(db)
+    if row is None or not row.encrypted_password:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No stored SMTP password to clear.")
+    row.encrypted_password = None
+    row.username = None
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db, request, context, "smtp.credentials_replaced", "smtp_settings", reason=body.reason
+    )
+    await db.commit()
+    return {"message": "Stored SMTP credentials cleared."}
 
 
 @router.post("/mail/test")
@@ -1831,16 +1958,13 @@ async def send_test_email(
 ) -> dict[str, str]:
     require_recent_auth(context, settings)
     await enforce_rate_limit(request, settings, "platform-test-email", 3, 300)
-    if (
-        not settings.email_delivery_configured
-        or not settings.smtp_host.strip()
-        or not settings.email_from.strip()
-    ):
+    config = await resolve_smtp_config(settings, db)
+    if not config.configured:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
     try:
         await asyncio.to_thread(
             send_email,
-            settings,
+            config,
             str(body.recipient),
             "MyKhaya test email",
             "This test confirms that the MyKhaya deployment can deliver email.",
@@ -1874,6 +1998,221 @@ async def send_test_email(
     )
     await db.commit()
     return {"message": "Test email delivered successfully."}
+
+
+async def _get_push_settings_row(db: AsyncSession) -> PlatformPushSettings | None:
+    row: PlatformPushSettings | None = await db.scalar(select(PlatformPushSettings).limit(1))
+    return row
+
+
+@router.get("/push")
+async def push_configuration(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    config = await resolve_push_config(settings, db)
+    row = await _get_push_settings_row(db)
+    active_subscriptions = (
+        await db.scalar(
+            select(func.count(PushSubscription.id)).where(PushSubscription.disabled_at.is_(None))
+        )
+        or 0
+    )
+    failures = (
+        await db.scalars(
+            select(NotificationDelivery)
+            .where(
+                NotificationDelivery.channel == NotificationChannel.push,
+                NotificationDelivery.status == NotificationDeliveryStatus.failed,
+            )
+            .order_by(NotificationDelivery.attempted_at.desc())
+            .limit(10)
+        )
+    ).all()
+    return {
+        "configured": config.configured,
+        "managed_by": config.source,
+        "public_key": config.public_key,
+        "active_subscriptions": active_subscriptions,
+        "recent_failures": [
+            {
+                "id": row.id,
+                "notification_type": row.notification_type,
+                "failed_at": row.attempted_at,
+                "safe_failure_message": row.sanitised_failure_reason,
+            }
+            for row in failures
+        ],
+        "push_settings": {
+            "enabled": row.enabled if row else False,
+            "subject": row.subject if row else None,
+            "vapid_public_key": row.vapid_public_key if row else None,
+            "private_key_configured": bool(row.encrypted_vapid_private_key) if row else False,
+            "updated_at": row.updated_at if row else None,
+            "editable": config.source != "environment",
+        },
+    }
+
+
+@router.put("/push/vapid-settings")
+async def update_push_settings(
+    body: PushVapidSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if settings.push_delivery_configured:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Push is managed by the deployment environment and cannot be changed here.",
+        )
+    row = await _get_push_settings_row(db)
+    if row is None or not row.vapid_public_key:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Generate a VAPID key pair before enabling push notifications.",
+        )
+    was_enabled = row.enabled
+    row.enabled = body.enabled
+    row.subject = body.subject
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.settings_changed",
+        "push_settings",
+        reason=body.reason,
+        new={"enabled": row.enabled, "subject": row.subject},
+    )
+    if was_enabled and not row.enabled:
+        platform_audit(db, request, context, "push.disabled", "push_settings", reason=body.reason)
+    await db.commit()
+    return {"message": "Push settings saved."}
+
+
+@router.post("/push/vapid-settings/generate-keys")
+async def generate_push_keys(
+    body: PushGenerateKeysRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if settings.push_delivery_configured:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Push is managed by the deployment environment and cannot be changed here.",
+        )
+    row = await _get_push_settings_row(db)
+    if row is not None and row.vapid_public_key and not body.rotate:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A key pair already exists. Confirm rotation to replace it.",
+        )
+    public_key, private_key = generate_vapid_keypair()
+    if row is None:
+        row = PlatformPushSettings()
+        db.add(row)
+    rotating = bool(row.vapid_public_key)
+    row.vapid_public_key = public_key
+    row.encrypted_vapid_private_key = encrypt_secret(settings, private_key)
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.vapid_keys_rotated" if rotating else "push.vapid_keys_generated",
+        "push_settings",
+        reason=body.reason,
+    )
+    await db.commit()
+    return {
+        "message": (
+            "New VAPID keys generated. Every previously registered device is now "
+            "invalid and will stop receiving push until it re-subscribes."
+            if rotating
+            else "VAPID keys generated."
+        ),
+        "public_key": public_key,
+    }
+
+
+@router.post("/push/test")
+async def send_test_push(
+    body: PushTestRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    await enforce_rate_limit(request, settings, "platform-test-push", 3, 300)
+    config = await resolve_push_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
+    recipient = await db.scalar(select(User).where(User.email == normalise_email(body.recipient)))
+    if recipient is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No household member has that email.")
+    subscriptions = (
+        await db.scalars(
+            select(PushSubscription).where(
+                PushSubscription.user_id == recipient.id, PushSubscription.disabled_at.is_(None)
+            )
+        )
+    ).all()
+    if not subscriptions:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That member has no registered devices to test."
+        )
+    results = []
+    for subscription in subscriptions:
+        try:
+            await asyncio.to_thread(
+                send_push,
+                config,
+                subscription,
+                {
+                    "title": "MyKhaya test notification",
+                    "body": "This confirms push notifications are working.",
+                    "deep_link": {"type": "settings"},
+                    "notification_type": "test_push",
+                },
+            )
+            results.append({"device_label": subscription.device_label, "result": "accepted"})
+        except Exception as exc:
+            # Covers both WebPushException (the push service rejected/failed the
+            # request) and lower-level encoding errors from a malformed subscription
+            # (e.g. corrupted or truncated keys) — either way this is a per-device
+            # delivery failure, not a reason to fail the whole admin request.
+            results.append(
+                {"device_label": subscription.device_label, "result": type(exc).__name__}
+            )
+            await log.awarning(
+                "platform_test_push_device_failed",
+                error=type(exc).__name__,
+                subscription_id=str(subscription.id),
+            )
+    any_accepted = any(r["result"] == "accepted" for r in results)
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.test_sent" if any_accepted else "push.test_failed",
+        "push_transport",
+        reason=body.reason,
+        new={
+            "recipient_domain": str(body.recipient).rsplit("@", 1)[-1],
+            "device_count": len(results),
+        },
+        outcome="succeeded" if any_accepted else "failure",
+    )
+    await db.commit()
+    return {"results": results}
 
 
 @router.get("/incidents")

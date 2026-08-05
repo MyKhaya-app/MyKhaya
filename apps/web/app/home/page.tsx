@@ -7,6 +7,8 @@ import type { EventOccurrence, HomeSummary, Member, User } from "@mykhaya/shared
 import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar, memberColour } from "@/components/avatar";
+import { isStandalone } from "@/components/install-prompt";
+import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 
 function eventTime(value: string, timezone: string) {
@@ -138,12 +140,20 @@ export default function HomePage() {
 
   async function enableNotifications() {
     if (!notificationsSupported()) return;
-    const result = await Notification.requestPermission();
-    setNotifPermission(result);
+    const result = await subscribeToPush();
+    setNotifPermission(typeof Notification !== "undefined" ? Notification.permission : null);
+    if (!result.ok && result.reason === "error") {
+      setError("Could not enable notifications on this device. Please try again.");
+    }
   }
 
+  // Requesting push permission before the app is installed leads nowhere useful on
+  // iOS Safari (Notification.requestPermission works, but there is no way to receive
+  // push while the tab is closed) — so the prompt only appears once installed.
   const showNotificationPrompt =
-    notificationsSupported() && notifPermission === "default";
+    notificationsSupported() && notifPermission === "default" && isStandalone();
+  const showInstallFirstNotice =
+    notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
 
   return (
@@ -154,7 +164,7 @@ export default function HomePage() {
           <h1>{user?.display_name?.split(" ")[0] ?? "there"}</h1>
           <p>
             {activeHome
-              ? `Here's what's happening in ${activeHome.name}`
+              ? `Here's what's happening in your home`
               : "Select a Home to continue"}
           </p>
           {members.length > 0 && (
@@ -274,6 +284,18 @@ export default function HomePage() {
             <button type="button" className="secondary" onClick={enableNotifications}>
               Enable
             </button>
+          </section>
+        )}
+
+        {showInstallFirstNotice && (
+          <section className="card notify-panel">
+            <span className="notify-icon" aria-hidden="true">
+              <Bell size={20} />
+            </span>
+            <div className="notify-copy">
+              <strong>Install MyKhaya first</strong>
+              <p>Add MyKhaya to your Home Screen to enable notifications.</p>
+            </div>
           </section>
         )}
       </main>

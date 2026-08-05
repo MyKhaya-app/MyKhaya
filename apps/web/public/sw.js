@@ -69,3 +69,55 @@ self.addEventListener("fetch", (event) => {
 
   // Everything else (API calls, etc.) is passed through untouched — never cached.
 });
+
+// Web Push. Payload shape is produced by mykhaya.notifications.push.send_push:
+// { title, body, deep_link: {type, id} | null, notification_type }. The lock-screen
+// preview level (full/title_only/hidden) is enforced server-side by the payload's
+// content, not here — the service worker just displays whatever it was given.
+self.addEventListener("push", (event) => {
+  let payload = { title: "MyKhaya", body: "You have a new notification.", deep_link: null };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch {
+    // Malformed payload must never crash the worker — fall back to a generic notice.
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/icons/icon-192",
+      badge: "/icons/icon-192",
+      data: { deepLink: payload.deep_link, notificationType: payload.notification_type },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const deepLink = event.notification.data && event.notification.data.deepLink;
+  const path = resolveDeepLinkPath(deepLink);
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) {
+          client.postMessage({ type: "mykhaya-notification-click", path });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(path);
+    }),
+  );
+});
+
+// Mirrors mykhaya/notifications/deep_links.py::resolve_path — a notification always
+// navigates to its specific target, never a generic "open the app" for an actionable
+// type. Kept intentionally tiny and dependency-free (service workers can't import the
+// app's TS modules).
+function resolveDeepLinkPath(deepLink) {
+  if (!deepLink || !deepLink.type) return "/home";
+  if (deepLink.type === "calendar_event" && deepLink.id) return `/calendar?event=${deepLink.id}`;
+  if (deepLink.type === "routine" && deepLink.id) return `/home?routine=${deepLink.id}`;
+  if (deepLink.type === "member") return "/people";
+  if (deepLink.type === "notifications") return "/home?notifications=1";
+  if (deepLink.type === "settings") return "/settings/notifications";
+  return "/home";
+}

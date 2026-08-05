@@ -142,11 +142,12 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         FeatureKey.notifications.value,
         "Notifications",
-        "Household alerts and reminders.",
+        "Push, email and in-app reminders — event reminders, daily briefings and "
+        "household routines.",
         "Communication",
-        ReleaseState.hidden,
+        ReleaseState.beta,
         False,
-        None,
+        "0.1.0",
         route="/notifications",
     ),
     ModuleDefinition(

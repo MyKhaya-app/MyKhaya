@@ -324,3 +324,85 @@ class HomeSummaryResponse(BaseModel):
     pending_invitations: int | None
     today_events: list[EventOccurrence]
     next_event: EventOccurrence | None
+
+
+class NotificationPreferencesResponse(BaseModel):
+    push_enabled: bool
+    in_app_enabled: bool
+    event_reminders_enabled: bool
+    event_invitations_enabled: bool
+    event_changes_enabled: bool
+    household_reminders_enabled: bool
+    daily_briefing_enabled: bool
+    briefing_time: str
+    briefing_days: str
+    empty_day_briefing_enabled: bool
+    lock_screen_preview_level: str
+    quiet_hours_start: str | None
+    quiet_hours_end: str | None
+    quiet_hours_critical_only: bool
+
+
+class NotificationPreferencesUpdate(StrictModel):
+    push_enabled: bool
+    in_app_enabled: bool
+    event_reminders_enabled: bool
+    event_invitations_enabled: bool
+    event_changes_enabled: bool
+    household_reminders_enabled: bool
+    daily_briefing_enabled: bool
+    briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+    briefing_days: Literal["daily", "weekdays"]
+    empty_day_briefing_enabled: bool
+    lock_screen_preview_level: Literal["full", "title_only", "hidden"]
+    quiet_hours_start: str | None = Field(
+        default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    quiet_hours_end: str | None = Field(
+        default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    quiet_hours_critical_only: bool
+
+
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    notification_type: str
+    title: str
+    body: str
+    related_entity_type: str | None
+    related_entity_id: uuid.UUID | None
+    deep_link_path: str
+    read_at: datetime | None
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse]
+    unread_count: int
+    next_page: int | None
+
+
+class PushSubscriptionKeys(StrictModel):
+    p256dh: str = Field(min_length=1, max_length=255)
+    auth: str = Field(min_length=1, max_length=255)
+
+
+class PushSubscriptionCreate(StrictModel):
+    endpoint: str = Field(min_length=1, max_length=4000)
+    keys: PushSubscriptionKeys
+    device_label: str | None = Field(default=None, max_length=120)
+    user_agent: str | None = Field(default=None, max_length=300)
+
+
+class PushSubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    device_label: str | None
+    user_agent: str | None
+    created_at: datetime
+    last_seen_at: datetime | None
+    disabled_at: datetime | None
+
+
+class PushPublicKeyResponse(BaseModel):
+    configured: bool
+    public_key: str | None

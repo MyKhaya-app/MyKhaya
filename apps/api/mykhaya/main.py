@@ -17,6 +17,7 @@ from mykhaya.routers import (
     groups,
     health,
     invitations,
+    notifications,
     platform,
     users,
 )
@@ -89,6 +90,7 @@ for router in (
     calendar.router,
     children.router,
     features.router,
+    notifications.router,
     platform.router,
     status_router.router,
 ):

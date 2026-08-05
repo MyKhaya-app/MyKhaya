@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from email_validator import EmailNotValidError, validate_email
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from mykhaya.models import FeatureKey, PlatformRole, ServiceState
 from mykhaya.module_registry import ReleaseState
@@ -60,6 +61,80 @@ class FeatureFlagUpdate(StrictModel):
 
 
 class TestEmailRequest(SensitiveActionRequest):
+    recipient: EmailStr
+
+
+class SmtpSettingsUpdate(SensitiveActionRequest):
+    enabled: bool
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=587, ge=1, le=65535)
+    connection_security: Literal["none", "starttls", "tls"] = "starttls"
+    auth_enabled: bool = False
+    username: str | None = Field(default=None, max_length=320)
+    password: str | None = Field(default=None, max_length=1000)
+    sender_name: str = Field(default="MyKhaya", max_length=100)
+    sender_email: str = Field(default="", max_length=320)
+    reply_to: str | None = Field(default=None, max_length=320)
+    timeout_seconds: int = Field(default=10, ge=1, le=60)
+
+    @field_validator("sender_email", "reply_to")
+    @classmethod
+    def validate_email_fields(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        try:
+            validate_email(value, check_deliverability=False)
+        except EmailNotValidError as exc:
+            raise ValueError("Enter a valid email address") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_requirements(self) -> "SmtpSettingsUpdate":
+        if self.enabled:
+            if not self.host.strip():
+                raise ValueError("Host is required when SMTP is enabled")
+            if not self.sender_email.strip():
+                raise ValueError("Sender email is required when SMTP is enabled")
+            if self.auth_enabled and not (self.username and self.username.strip()):
+                raise ValueError("Username is required when authentication is enabled")
+        return self
+
+
+class PushVapidSettingsUpdate(SensitiveActionRequest):
+    enabled: bool
+    subject: str | None = Field(default=None, max_length=320)
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        if value.startswith("mailto:"):
+            candidate = value[len("mailto:") :]
+        elif value.startswith("https://"):
+            return value
+        else:
+            candidate = value
+        try:
+            validate_email(candidate, check_deliverability=False)
+        except EmailNotValidError as exc:
+            raise ValueError(
+                "The VAPID contact must be a mailto: address or an https:// URL"
+            ) from exc
+        return value if value.startswith("mailto:") else f"mailto:{value}"
+
+    @model_validator(mode="after")
+    def validate_enabled_requirements(self) -> "PushVapidSettingsUpdate":
+        if self.enabled and not (self.subject and self.subject.strip()):
+            raise ValueError("A contact address is required when push is enabled")
+        return self
+
+
+class PushGenerateKeysRequest(SensitiveActionRequest):
+    rotate: bool = False
+
+
+class PushTestRequest(SensitiveActionRequest):
     recipient: EmailStr
 
 

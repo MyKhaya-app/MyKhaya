@@ -3,20 +3,27 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from pywebpush import WebPushException
 from redis.asyncio import Redis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.config import get_settings
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.mailer import send_email
+from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.models import (
     ActionToken,
     Group,
     Invitation,
+    NotificationDelivery,
+    NotificationDeliveryStatus,
     OperationalHeartbeat,
     OutboxEvent,
+    PushSubscription,
     User,
     WorkerJobRecord,
 )
+from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
 from mykhaya.security import derived_token
 
 # Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
@@ -31,6 +38,55 @@ MAX_BACKOFF_SECONDS = 3600
 def _backoff_seconds(attempts: int) -> int:
     delay = BASE_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0))
     return int(min(delay, MAX_BACKOFF_SECONDS))
+
+
+async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
+    delivery_key = event.payload["delivery_idempotency_key"]
+    delivery = await db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.idempotency_key == delivery_key)
+    )
+    subscription = await db.get(
+        PushSubscription, uuid.UUID(event.payload["push_subscription_id"])
+    )
+    if delivery is None or subscription is None or subscription.disabled_at is not None:
+        return  # already pruned or diagnostic record missing — nothing more to do
+
+    push_config = await resolve_push_config(settings, db)
+    payload = {
+        "title": event.payload["title"],
+        "body": event.payload["body"],
+        "deep_link": event.payload.get("deep_link"),
+        "notification_type": event.payload.get("notification_type"),
+    }
+    try:
+        await asyncio.to_thread(send_push, push_config, subscription, payload)
+        delivery.status = NotificationDeliveryStatus.sent
+        delivery.attempted_at = datetime.now(UTC)
+        subscription.last_seen_at = datetime.now(UTC)
+    except WebPushException as exc:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        if is_subscription_gone(exc):
+            subscription.disabled_at = datetime.now(UTC)
+            subscription.disabled_reason = (
+                "Push service reported this subscription no longer exists."
+            )
+            delivery.status = NotificationDeliveryStatus.cancelled
+            delivery.sanitised_failure_reason = "Device unsubscribed or expired."
+            # Nothing more can be done for this subscription — do not re-raise, so the
+            # outbox event is marked processed rather than retried forever.
+        else:
+            delivery.status = NotificationDeliveryStatus.failed
+            delivery.sanitised_failure_reason = "Push service temporarily unavailable."
+            raise
+    except Exception:
+        # A malformed/corrupted subscription (e.g. invalid stored keys) fails encoding
+        # before any network call is even made — retrying it would fail identically
+        # forever, so this is treated as permanent, the same as an expired subscription.
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.sanitised_failure_reason = "This device's push registration is invalid."
 
 
 async def process(event_id: uuid.UUID) -> None:
@@ -52,6 +108,8 @@ async def process(event_id: uuid.UUID) -> None:
         db.add(job)
 
         try:
+            if event.topic.startswith("email."):
+                smtp_config = await resolve_smtp_config(settings, db)
             if event.topic in {"email.verify", "email.reset"}:
                 token = await db.get(ActionToken, uuid.UUID(event.payload["token_id"]))
                 if token is None:
@@ -70,7 +128,7 @@ async def process(event_id: uuid.UUID) -> None:
                 )
                 await asyncio.to_thread(
                     send_email,
-                    settings,
+                    smtp_config,
                     user.email,
                     subject,
                     f"Open this secure link:\n\n{settings.public_web_url}/{page}?token={raw}\n\n"
@@ -89,7 +147,7 @@ async def process(event_id: uuid.UUID) -> None:
                 )
                 await asyncio.to_thread(
                     send_email,
-                    settings,
+                    smtp_config,
                     invitation.email,
                     "You are invited to a MyKhaya Home",
                     f"{inviter.display_name} invited you to join {home.name}.\n\n"
@@ -98,6 +156,8 @@ async def process(event_id: uuid.UUID) -> None:
                     f"This invitation expires on {invitation.expires_at.isoformat()}.\n\n"
                     "If you were not expecting this invitation, you can ignore this email.",
                 )
+            elif event.topic == "notification.push":
+                await _process_push(db, settings, event)
 
             job.status = "completed"
             job.finished_at = datetime.now(UTC)

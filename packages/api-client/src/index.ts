@@ -212,6 +212,36 @@ export class MyKhayaClient {
     this.post<{ message: string }>("/invitations/revoke", {
       invitation_id: invitationId,
     });
+  pushPublicKey = () =>
+    this.request<{ configured: boolean; public_key: string | null }>(
+      "/notifications/push/public-key",
+    );
+  listPushSubscriptions = () =>
+    this.request<
+      {
+        id: string;
+        device_label: string | null;
+        user_agent: string | null;
+        created_at: string;
+        last_seen_at: string | null;
+        disabled_at: string | null;
+      }[]
+    >("/notifications/push-subscriptions");
+  registerPushSubscription = (body: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+    device_label?: string | null;
+    user_agent?: string | null;
+  }) =>
+    this.request<{ id: string }>("/notifications/push-subscriptions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  deletePushSubscription = (subscriptionId: string) =>
+    this.request<void>(
+      `/notifications/push-subscriptions/${encodeURIComponent(subscriptionId)}`,
+      { method: "DELETE" },
+    );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   patch = <T>(path: string, body: unknown) =>
