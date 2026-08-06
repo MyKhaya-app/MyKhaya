@@ -1,4 +1,4 @@
-.PHONY: init up down logs build migrate test lint typecheck format seed reset prod backup restore generate-client version-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
 init:
 	@test -f .env || cp .env.example .env
 	docker compose build
@@ -10,20 +10,23 @@ logs:
 	docker compose logs -f --tail=200
 build:
 	docker compose build
+backend-rebuild:
+	docker compose build api worker scheduler
+	docker compose up -d --no-deps api worker scheduler
 migrate:
 	docker compose run --rm migrate
 test:
 	pnpm test
-	docker compose --profile tools run --rm test
+	sh infrastructure/scripts/run-tests.sh
 lint:
 	pnpm lint
-	docker compose --profile tools run --rm test ruff check mykhaya tests
+	sh infrastructure/scripts/run-tests.sh ruff check mykhaya tests
 typecheck:
 	pnpm typecheck
-	docker compose --profile tools run --rm test mypy mykhaya
+	sh infrastructure/scripts/run-tests.sh mypy mykhaya
 format:
 	pnpm format
-	docker compose --profile tools run --rm test ruff format mykhaya tests
+	sh infrastructure/scripts/run-tests.sh ruff format mykhaya tests
 seed:
 	docker compose exec api python -m mykhaya.seed
 reset:

@@ -3,10 +3,14 @@ flagged critical (e.g. medication). Non-critical notifications are still written
 quiet hours affects push delivery only, nothing is silently lost.
 """
 
+import uuid
 from datetime import time
 from zoneinfo import ZoneInfo
 
-from mykhaya.models import NotificationPreferences
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.models import HomeCalendar, NotificationPreferences
 
 
 def is_within_quiet_hours(prefs: NotificationPreferences, now_local: time) -> bool:
@@ -25,3 +29,15 @@ def effective_timezone(user_timezone: str | None, fallback: str) -> ZoneInfo:
     except Exception:
         # A bad stored/config timezone name must never crash delivery.
         return ZoneInfo("UTC")
+
+
+async def home_timezone(db: AsyncSession, group_id: uuid.UUID, fallback: str) -> ZoneInfo:
+    """A household's effective timezone, via its primary calendar — used by
+    notification-producing modules that have no single recipient to anchor to (e.g.
+    household routines, a child's birthday)."""
+    calendar_row = await db.scalar(
+        select(HomeCalendar).where(
+            HomeCalendar.group_id == group_id, HomeCalendar.is_primary.is_(True)
+        )
+    )
+    return effective_timezone(calendar_row.timezone if calendar_row else None, fallback)

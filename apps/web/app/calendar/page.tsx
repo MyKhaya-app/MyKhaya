@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import type {
+  BirthdayEntry,
   EventLabel,
   EventOccurrence,
   EventPayload,
@@ -279,6 +280,7 @@ export default function CalendarPage() {
   const [view, setView] = useState<ViewMode>("month");
   const [focusDate, setFocusDate] = useState(new Date());
   const [events, setEvents] = useState<EventOccurrence[]>([]);
+  const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [labels, setLabels] = useState<EventLabel[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
@@ -324,6 +326,10 @@ export default function CalendarPage() {
     setLabels(labelRows);
     setEvents(eventRows.items);
     setMembers(memberRows);
+    api
+      .birthdays(activeHomeId)
+      .then((response) => setBirthdays(response.items))
+      .catch(() => setBirthdays([]));
   }, [activeHomeId, featureEnabled, range.end, range.start]);
 
   useEffect(() => {
@@ -470,6 +476,10 @@ export default function CalendarPage() {
   }
 
   const focusedEvents = eventsForDay(visibleEvents, focusDate);
+  const birthdaysInRange = birthdays.filter((entry) => {
+    const occurrence = new Date(entry.next_occurrence_date);
+    return occurrence >= range.start && occurrence < range.end;
+  });
 
   return (
     <AppShell>
@@ -495,6 +505,20 @@ export default function CalendarPage() {
             </button>
           </div>
         </header>
+
+        {birthdaysInRange.length > 0 && (
+          <p className="notice calendar-birthday-banner">
+            🎂{" "}
+            {birthdaysInRange
+              .map(
+                (entry) =>
+                  `${entry.display_name}'s birthday (${new Date(
+                    entry.next_occurrence_date,
+                  ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`,
+              )
+              .join(" · ")}
+          </p>
+        )}
 
         {searchOpen && (
           <div className="calendar-search">

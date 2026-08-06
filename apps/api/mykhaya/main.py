@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse
 from mykhaya.config import get_settings
 from mykhaya.routers import (
     auth,
+    birthdays,
     calendar,
     children,
     features,
     groups,
     health,
+    household_routines,
     invitations,
     notifications,
     platform,
@@ -90,6 +92,8 @@ for router in (
     calendar.router,
     children.router,
     features.router,
+    household_routines.router,
+    birthdays.router,
     notifications.router,
     platform.router,
     status_router.router,

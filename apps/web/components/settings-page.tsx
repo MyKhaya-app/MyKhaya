@@ -7,6 +7,7 @@ import { useActiveHome } from "./use-active-home";
 const links = [
   ["Profile", "Your name and account details", "/settings/profile"],
   ["Notifications", "Push, reminders and your daily briefing", "/settings/notifications"],
+  ["Routines", "Bins, medication and other recurring reminders", "/settings/routines"],
   ["Security", "Password and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
 ] as const;

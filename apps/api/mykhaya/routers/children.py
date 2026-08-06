@@ -27,6 +27,7 @@ from mykhaya.models import (
 )
 from mykhaya.schemas import (
     ChildAgeBandUpdate,
+    ChildBirthdayUpdate,
     ChildCreate,
     ChildDeleteRequest,
     ChildPermissionUpdate,
@@ -58,6 +59,9 @@ async def _child_response(db: AsyncSession, profile: ChildProfile) -> ChildRespo
         permissions=SAFE_CHILD_DEFAULTS | profile.permissions,
         guardian_membership_ids=guardian_ids,
         transition_status=profile.transition_status,
+        birth_month=profile.birth_month,
+        birth_day=profile.birth_day,
+        birthday_visible=profile.birthday_visible,
     )
 
 
@@ -201,6 +205,39 @@ async def update_child_age_band(
         "membership",
         membership_id,
         {"previous": previous.value, "new": body.age_band.value, "reason": body.reason},
+    )
+    await db.commit()
+    return await _child_response(db, profile)
+
+
+@router.put("/{membership_id}/birthday", response_model=ChildResponse)
+async def update_child_birthday(
+    group_id: uuid.UUID,
+    membership_id: uuid.UUID,
+    body: ChildBirthdayUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ChildResponse:
+    await require_capability(group_id, Capability.child_manage, auth, db)
+    profile = await _profile_for_group(db, group_id, membership_id)
+    previous_visible = profile.birthday_visible
+    profile.birth_month = body.birth_month
+    profile.birth_day = body.birth_day
+    profile.birthday_visible = body.birthday_visible
+    audit(
+        db,
+        request,
+        "child.birthday_changed",
+        auth.user.id,
+        group_id,
+        "membership",
+        membership_id,
+        {
+            "previous_visible": previous_visible,
+            "new_visible": body.birthday_visible,
+            "reason": body.reason,
+        },
     )
     await db.commit()
     return await _child_response(db, profile)

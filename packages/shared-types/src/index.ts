@@ -24,6 +24,9 @@ export interface User {
   email: string;
   display_name: string;
   email_verified: boolean;
+  birth_month: number | null;
+  birth_day: number | null;
+  birth_year: number | null;
 }
 export interface Home {
   id: string;
@@ -202,6 +205,9 @@ export interface ChildProfile {
   permissions: Record<string, boolean>;
   guardian_membership_ids: string[];
   transition_status: ChildTransitionStatus;
+  birth_month: number | null;
+  birth_day: number | null;
+  birthday_visible: boolean;
 }
 
 export type LockScreenPreviewLevel = "full" | "title_only" | "hidden";
@@ -231,4 +237,74 @@ export interface PushSubscriptionSummary {
   created_at: string;
   last_seen_at: string | null;
   disabled_at: string | null;
+}
+
+export type RoutineReminderTiming = "evening_before" | "same_day" | "both";
+
+export interface Routine {
+  id: string;
+  title: string;
+  description: string | null;
+  interval_weeks: number;
+  week_anchor_date: string;
+  reminder_timing: RoutineReminderTiming;
+  is_critical: boolean;
+  pinned: boolean;
+  enabled: boolean;
+  start_date: string;
+  end_date: string | null;
+  member_ids: string[];
+  next_occurrence_date: string | null;
+  completed_today: boolean;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface RoutinePayload {
+  title: string;
+  description?: string | null;
+  interval_weeks: number;
+  week_anchor_date: string;
+  reminder_timing: RoutineReminderTiming;
+  is_critical: boolean;
+  pinned: boolean;
+  start_date: string;
+  end_date?: string | null;
+  member_ids: string[];
+}
+
+export interface RoutineUpdatePayload extends RoutinePayload {
+  enabled: boolean;
+  expected_updated_at: string;
+}
+
+export interface RoutineListResponse {
+  items: Routine[];
+}
+
+export interface UserBirthdayPayload {
+  birth_month: number | null;
+  birth_day: number | null;
+  birth_year?: number | null;
+}
+
+export interface ChildBirthdayPayload {
+  birth_month: number | null;
+  birth_day: number | null;
+  birthday_visible: boolean;
+  reason: string;
+  confirmed: true;
+}
+
+export interface BirthdayEntry {
+  owner_type: "user" | "child";
+  owner_id: string;
+  display_name: string;
+  month: number;
+  day: number;
+  next_occurrence_date: string;
+}
+
+export interface BirthdayListResponse {
+  items: BirthdayEntry[];
 }

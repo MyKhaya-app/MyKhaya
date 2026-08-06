@@ -19,12 +19,14 @@ from mykhaya.household_permissions import Capability, capabilities_for
 from mykhaya.models import (
     BriefingDays,
     CalendarEvent,
+    ChildProfile,
     FeatureKey,
     Membership,
     NotificationPreferences,
     OutboxEvent,
     User,
 )
+from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
 from mykhaya.notifications.quiet_hours import effective_timezone
@@ -118,6 +120,68 @@ async def _events_for_user_today(
     return [description for _start, description in descriptions]
 
 
+async def _birthdays_for_user_today(
+    db: AsyncSession, user_id: uuid.UUID, local_date: date
+) -> list[str]:
+    """Birthdays are folded into the briefing sentence as a first-class item, not
+    just another calendar occurrence — see mykhaya.notifications.birthdays."""
+    memberships = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.user_id == user_id, Membership.removed_at.is_(None)
+            )
+        )
+    ).all()
+
+    phrases: list[str] = []
+    seen_child_ids: set[uuid.UUID] = set()
+    for membership in memberships:
+        if not await is_feature_enabled(db, FeatureKey.notifications, membership.group_id):
+            continue
+
+        co_members = (
+            await db.scalars(
+                select(Membership).where(
+                    Membership.group_id == membership.group_id, Membership.removed_at.is_(None)
+                )
+            )
+        ).all()
+        for co_membership in co_members:
+            user = await db.get(User, co_membership.user_id)
+            if user is None or user.birth_month is None or user.birth_day is None:
+                continue
+            if not is_birthday_date(user.birth_month, user.birth_day, local_date):
+                continue
+            if user.id == user_id:
+                phrases.append("it's your birthday")
+            else:
+                phrases.append(f"it's {user.display_name}'s birthday")
+
+        co_members_by_id = {row.id: row for row in co_members}
+        children = (
+            await db.scalars(
+                select(ChildProfile).where(
+                    ChildProfile.membership_id.in_(co_members_by_id.keys()),
+                    ChildProfile.birthday_visible.is_(True),
+                )
+            )
+        ).all()
+        for child in children:
+            if child.id in seen_child_ids:
+                continue
+            if child.birth_month is None or child.birth_day is None:
+                continue
+            if not is_birthday_date(child.birth_month, child.birth_day, local_date):
+                continue
+            child_membership = co_members_by_id[child.membership_id]
+            child_user = await db.get(User, child_membership.user_id)
+            seen_child_ids.add(child.id)
+            if child_user is not None:
+                phrases.append(f"it's {child_user.display_name}'s birthday")
+
+    return phrases
+
+
 async def scan_due_briefings(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
     window_end_utc = now_utc + LOOKAHEAD
@@ -174,12 +238,18 @@ async def deliver_daily_briefing(
 
     tz = effective_timezone(user.timezone, settings.default_timezone)
     local_date = date.fromisoformat(date_iso)
-    descriptions = await _events_for_user_today(db, user.id, local_date, tz)
+    birthday_phrases = await _birthdays_for_user_today(db, user.id, local_date)
+    event_descriptions = await _events_for_user_today(db, user.id, local_date, tz)
+    descriptions = birthday_phrases + event_descriptions
 
     if not descriptions and not prefs.empty_day_briefing_enabled:
         return
 
-    body = f"{oxford_join(descriptions)}." if descriptions else empty_day_message(local_date)
+    if descriptions:
+        sentence = oxford_join(descriptions)
+        body = f"{sentence[0].upper()}{sentence[1:]}."
+    else:
+        body = empty_day_message(local_date)
     await notify(
         db,
         settings=settings,

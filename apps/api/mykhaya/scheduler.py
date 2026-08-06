@@ -8,8 +8,10 @@ from sqlalchemy import select
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.models import OperationalHeartbeat, OutboxEvent
+from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
 from mykhaya.notifications.reminders import scan_due_reminders
+from mykhaya.notifications.routines import scan_due_routines
 
 # Visibility timeout: how long a dequeued-but-not-yet-completed job is hidden
 # from re-selection. This is a lease, not completion — `processed_at` is only
@@ -27,10 +29,11 @@ async def run() -> None:
             async with SessionFactory() as db:
                 # Durable scans — no in-memory timers. Each computes fresh from current
                 # data and inserts idempotent outbox rows; see mykhaya/notifications/
-                # reminders.py and briefing.py. Household routine scans join this same
-                # loop in a later stage.
+                # reminders.py, briefing.py, routines.py and birthdays.py.
                 await scan_due_reminders(db, settings)
                 await scan_due_briefings(db, settings)
+                await scan_due_routines(db, settings)
+                await scan_due_birthdays(db, settings)
             async with SessionFactory() as db:
                 rows = (
                     await db.scalars(

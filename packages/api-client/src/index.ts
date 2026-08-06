@@ -36,6 +36,17 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  updateMyBirthday = (
+    body: import("@mykhaya/shared-types").UserBirthdayPayload,
+  ) =>
+    this.request<User>("/users/me/birthday", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  birthdays = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").BirthdayListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/birthdays`,
+    );
   homes = () => this.request<Home[]>("/groups");
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
@@ -104,6 +115,15 @@ export class MyKhayaClient {
   ) =>
     this.request<import("@mykhaya/shared-types").ChildProfile>(
       `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/age-band`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  updateChildBirthday = (
+    homeId: string,
+    membershipId: string,
+    body: import("@mykhaya/shared-types").ChildBirthdayPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/birthday`,
       { method: "PUT", body: JSON.stringify(body) },
     );
   updateChildGuardians = (
@@ -245,6 +265,42 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").NotificationPreferences>(
       "/notifications/preferences",
       { method: "PUT", body: JSON.stringify(body) },
+    );
+  routines = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").RoutineListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/routines`,
+    );
+  createRoutine = (
+    homeId: string,
+    body: import("@mykhaya/shared-types").RoutinePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Routine>(
+      `/homes/${encodeURIComponent(homeId)}/routines`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateRoutine = (
+    homeId: string,
+    routineId: string,
+    body: import("@mykhaya/shared-types").RoutineUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Routine>(
+      `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteRoutine = (homeId: string, routineId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}`,
+      { method: "DELETE" },
+    );
+  completeRoutine = (homeId: string, routineId: string, occurrenceDate: string) =>
+    this.request<import("@mykhaya/shared-types").Routine>(
+      `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}/complete`,
+      { method: "POST", body: JSON.stringify({ occurrence_date: occurrenceDate }) },
+    );
+  uncompleteRoutine = (homeId: string, routineId: string, occurrenceDate: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}/complete/${encodeURIComponent(occurrenceDate)}`,
+      { method: "DELETE" },
     );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });

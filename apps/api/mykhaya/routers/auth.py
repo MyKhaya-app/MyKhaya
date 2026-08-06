@@ -50,6 +50,9 @@ def user_response(user: User) -> UserResponse:
         email=user.email,
         display_name=user.display_name,
         email_verified=user.email_verified_at is not None,
+        birth_month=user.birth_month,
+        birth_day=user.birth_day,
+        birth_year=user.birth_year,
     )
 
 

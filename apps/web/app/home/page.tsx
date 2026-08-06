@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Bell, CalendarPlus, UserPlus } from "lucide-react";
-import type { EventOccurrence, HomeSummary, Member, User } from "@mykhaya/shared-types";
+import { Bell, CalendarPlus, Gift, UserPlus } from "lucide-react";
+import type {
+  BirthdayEntry,
+  EventOccurrence,
+  HomeSummary,
+  Member,
+  User,
+} from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar, memberColour } from "@/components/avatar";
@@ -91,6 +97,7 @@ export default function HomePage() {
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
   const [calendarEnabled, setCalendarEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
+  const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
   const { activeHomeId, activeHome } = useActiveHome();
@@ -106,6 +113,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!activeHomeId) return;
     setError("");
+    api
+      .birthdays(activeHomeId)
+      .then((response) => setBirthdays(response.items))
+      .catch(() => setBirthdays([]));
     Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
       .then(async ([matrix, memberRows]) => {
         setMembers(memberRows);
@@ -185,6 +196,41 @@ export default function HomePage() {
     >
       <main className="home-page">
         {error && <p className="notice error">{error}</p>}
+
+        {birthdays.length > 0 && (
+          <section className="card home-section birthday-banner">
+            <div className="section-heading">
+              <h2>
+                <Gift size={18} aria-hidden="true" /> Birthdays
+              </h2>
+            </div>
+            <div className="home-event-list">
+              {birthdays.slice(0, 3).map((entry) => {
+                const today = new Date().toISOString().slice(0, 10);
+                const isToday = entry.next_occurrence_date === today;
+                return (
+                  <div className="home-event-row" key={`${entry.owner_type}:${entry.owner_id}`}>
+                    <span className="home-event-copy">
+                      <strong>
+                        {isToday
+                          ? `🎉 It's ${entry.display_name}'s birthday today!`
+                          : `${entry.display_name}'s birthday`}
+                      </strong>
+                      {!isToday && (
+                        <small>
+                          {new Date(entry.next_occurrence_date).toLocaleDateString("en-GB", {
+                            day: "numeric",
+                            month: "long",
+                          })}
+                        </small>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {calendarEnabled && (
           <section className="card home-section home-section-overlap">

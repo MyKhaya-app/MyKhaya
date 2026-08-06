@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from mykhaya.models import (
     ChildAgeBand,
@@ -11,6 +11,7 @@ from mykhaya.models import (
     PermissionProfile,
     RecurrencePattern,
     Role,
+    RoutineReminderTiming,
 )
 
 
@@ -52,6 +53,32 @@ class UserResponse(BaseModel):
     email: EmailStr
     display_name: str
     email_verified: bool
+    birth_month: int | None = None
+    birth_day: int | None = None
+    birth_year: int | None = None
+
+
+def _validate_birthday(birth_month: int | None, birth_day: int | None) -> None:
+    if birth_month is None and birth_day is None:
+        return
+    if birth_month is None or birth_day is None:
+        raise ValueError("birth_month and birth_day must be set together")
+    days_in_month = {
+        1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+    }
+    if birth_day > days_in_month[birth_month]:
+        raise ValueError("That is not a valid day for the selected month")
+
+
+class UserBirthdayUpdate(StrictModel):
+    birth_month: int | None = Field(default=None, ge=1, le=12)
+    birth_day: int | None = Field(default=None, ge=1, le=31)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+
+    @model_validator(mode="after")
+    def check_valid_date(self) -> "UserBirthdayUpdate":
+        _validate_birthday(self.birth_month, self.birth_day)
+        return self
 
 
 class MobileSessionResponse(UserResponse):
@@ -175,6 +202,19 @@ class ChildDeleteRequest(ChildTransitionRequest):
     pass
 
 
+class ChildBirthdayUpdate(StrictModel):
+    birth_month: int | None = Field(default=None, ge=1, le=12)
+    birth_day: int | None = Field(default=None, ge=1, le=31)
+    birthday_visible: bool
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+    @model_validator(mode="after")
+    def check_valid_date(self) -> "ChildBirthdayUpdate":
+        _validate_birthday(self.birth_month, self.birth_day)
+        return self
+
+
 class ChildResponse(BaseModel):
     membership_id: uuid.UUID
     user_id: uuid.UUID
@@ -183,6 +223,22 @@ class ChildResponse(BaseModel):
     permissions: dict[str, bool]
     guardian_membership_ids: list[uuid.UUID]
     transition_status: ChildTransitionStatus
+    birth_month: int | None
+    birth_day: int | None
+    birthday_visible: bool
+
+
+class BirthdayEntry(BaseModel):
+    owner_type: Literal["user", "child"]
+    owner_id: uuid.UUID
+    display_name: str
+    month: int
+    day: int
+    next_occurrence_date: date
+
+
+class BirthdayListResponse(BaseModel):
+    items: list[BirthdayEntry]
 
 
 class HouseholdModuleResponse(BaseModel):
@@ -324,6 +380,61 @@ class HomeSummaryResponse(BaseModel):
     pending_invitations: int | None
     today_events: list[EventOccurrence]
     next_event: EventOccurrence | None
+
+
+class RoutineCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    interval_weeks: int = Field(default=1, ge=1, le=52)
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
+    is_critical: bool = False
+    pinned: bool = False
+    start_date: date
+    end_date: date | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+
+class RoutineUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    interval_weeks: int = Field(default=1, ge=1, le=52)
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
+    is_critical: bool = False
+    pinned: bool = False
+    enabled: bool = True
+    start_date: date
+    end_date: date | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+
+class RoutineResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    interval_weeks: int
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming
+    is_critical: bool
+    pinned: bool
+    enabled: bool
+    start_date: date
+    end_date: date | None
+    member_ids: list[uuid.UUID]
+    next_occurrence_date: date | None
+    completed_today: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class RoutineListResponse(BaseModel):
+    items: list[RoutineResponse]
+
+
+class RoutineCompletionRequest(StrictModel):
+    occurrence_date: date
 
 
 class NotificationPreferencesResponse(BaseModel):

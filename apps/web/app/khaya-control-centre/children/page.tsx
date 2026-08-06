@@ -217,6 +217,36 @@ export default function ChildrenPage() {
     }
   }
 
+  async function saveBirthday(
+    event: FormEvent<HTMLFormElement>,
+    child: ChildProfile,
+  ) {
+    event.preventDefault();
+    if (!activeHomeId) return;
+    const data = new FormData(event.currentTarget);
+    const month = data.get("birth_month");
+    const day = data.get("birth_day");
+    const reason = window.prompt("Reason for changing this birthday:");
+    if (!reason || reason.trim().length < 10) return;
+    try {
+      await api.updateChildBirthday(activeHomeId, child.membership_id, {
+        birth_month: month ? Number(month) : null,
+        birth_day: day ? Number(day) : null,
+        birthday_visible: data.get("birthday_visible") === "on",
+        reason: reason.trim(),
+        confirmed: true,
+      });
+      setMessage("Birthday updated.");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "The birthday could not be changed.",
+      );
+    }
+  }
+
   async function anonymise(child: ChildProfile) {
     if (!activeHomeId) return;
     const reason = window.prompt(
@@ -352,6 +382,43 @@ export default function ChildrenPage() {
                 ))}
                 <button type="submit" className="secondary">
                   Save responsible adults
+                </button>
+              </form>
+            </details>
+            <details>
+              <summary>Birthday</summary>
+              <form onSubmit={(event) => saveBirthday(event, child)}>
+                <label>
+                  Month
+                  <select name="birth_month" defaultValue={child.birth_month ?? ""}>
+                    <option value="">Not set</option>
+                    {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
+                      <option key={month} value={month}>
+                        {month}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Day
+                  <input
+                    type="number"
+                    name="birth_day"
+                    min={1}
+                    max={31}
+                    defaultValue={child.birth_day ?? ""}
+                  />
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    name="birthday_visible"
+                    defaultChecked={child.birthday_visible}
+                  />{" "}
+                  Show this birthday to the household (off by default)
+                </label>
+                <button type="submit" className="secondary">
+                  Save birthday
                 </button>
               </form>
             </details>

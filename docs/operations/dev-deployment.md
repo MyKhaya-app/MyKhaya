@@ -203,3 +203,46 @@ usual way to see mail land without a real external provider.
 container status since these services have no Docker `HEALTHCHECK` of their own) in
 addition to the `/health/live` and `/health/ready` HTTP checks — there is no separate
 worker/scheduler check to remember to run.
+
+## api, worker and scheduler are three separate images built from one Dockerfile
+
+`compose.yml` defines `worker` and `scheduler` as YAML-anchor copies of the `api`
+service (`<<: *api`) so all three always build from the exact same source and
+`apps/api/Dockerfile`. They are still three **separate** Docker images
+(`mykhaya-api`, `mykhaya-worker`, `mykhaya-scheduler`) with independent build
+caches — rebuilding one does not rebuild the others. A manual `docker compose build
+api` (or `docker build ... --target builder`) only refreshes `mykhaya-api`; `worker`
+and `scheduler` silently keep running the old code with no error, which is exactly
+how a new `mykhaya/notifications/*.py` module went briefly missing from a running
+scheduler during Communications Stage 5 testing.
+
+`make dev-up` / `make dev-update` (via `deploy()` in `dev-deploy.sh`) already build
+and restart all three together and are the supported path for the persistent
+server — always prefer them. For a quicker local iteration loop that doesn't need
+the full preflight/health-check sequence, `make backend-rebuild` runs the equivalent
+`docker compose build api worker scheduler` followed by `docker compose up -d
+--no-deps api worker scheduler`. Never run `docker compose build api` (or `up
+--force-recreate api`) alone when backend code changed — always rebuild and recreate
+all three, via one of the two commands above.
+
+## Automated tests use an isolated database
+
+The automated backend test suite (`make test`/`lint`/`typecheck`/`format`, via
+`infrastructure/scripts/run-tests.sh`) runs against `postgres-test`/`redis-test` —
+dedicated, tmpfs-backed, disposable services defined in `compose.test.yml` — never
+against the persistent `postgres`/`redis` the dev stack uses. Each run brings the
+isolated pair up, applies migrations to it, runs the requested command with
+`--no-deps` (so the persistent `postgres`/`redis`/`migrate` are never touched or even
+started), and tears the isolated pair back down on exit, success or failure.
+
+This replaced an earlier setup where `test` shared the dev stack's `postgres`/`redis`
+directly. That caused repeated live contamination: rate-limit keys exhausted mid-run,
+`platform_smtp_settings`/`platform_push_settings` wiped by test cleanup fixtures,
+and — most seriously — thousands of test-generated user accounts accumulating in the
+dev database, some with real preferences (e.g. `daily_briefing_enabled=true`) that
+caused the live scheduler to generate real notifications for accounts nobody would
+ever read. Isolating the test database at the infrastructure level closes all of
+these at once, permanently, rather than requiring every new test file to remember to
+clean up after itself. Do not point `MYKHAYA_DATABASE_URL`/`MYKHAYA_REDIS_URL` for the
+`test` service back at `postgres`/`redis`, and do not add application-code cleanup
+(e.g. deleting `@example.com` users) as a substitute for this isolation.
