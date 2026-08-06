@@ -23,7 +23,9 @@ from mykhaya.models import (
     User,
     WorkerJobRecord,
 )
+from mykhaya.notifications.briefing import deliver_daily_briefing
 from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
+from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.security import derived_token
 
 # Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
@@ -158,6 +160,18 @@ async def process(event_id: uuid.UUID) -> None:
                 )
             elif event.topic == "notification.push":
                 await _process_push(db, settings, event)
+            elif event.topic == "notification.event_reminder":
+                await deliver_event_reminder(
+                    db,
+                    settings,
+                    event.payload["event_id"],
+                    event.payload["occurrence_start"],
+                    event.payload["reminder_minutes"],
+                )
+            elif event.topic == "notification.daily_briefing":
+                await deliver_daily_briefing(
+                    db, settings, event.payload["user_id"], event.payload["date"]
+                )
 
             job.status = "completed"
             job.finished_at = datetime.now(UTC)

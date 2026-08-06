@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import calendar as month_calendar
 import uuid
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -10,6 +9,11 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.calendar_occurrences import (
+    MAX_RANGE_DAYS,
+    expand_occurrences,
+    recurrence_candidate_filter,
+)
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.features import require_feature
@@ -24,7 +28,6 @@ from mykhaya.models import (
     HomeCalendar,
     Invitation,
     Membership,
-    RecurrencePattern,
 )
 from mykhaya.schemas import (
     EventActivityResponse,
@@ -51,7 +54,6 @@ router = APIRouter(
     tags=["calendar"],
     dependencies=[Depends(require_calendar_feature)],
 )
-MAX_RANGE_DAYS = 93
 SYSTEM_LABELS = [
     ("Family", "#456B76"),
     ("School", "#7A5C99"),
@@ -68,76 +70,6 @@ def _validate_timezone(value: str) -> None:
         ZoneInfo(value)
     except ZoneInfoNotFoundError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid timezone") from exc
-
-
-def _month_increment(value: datetime, step: int) -> datetime:
-    target_month = value.month + step
-    year = value.year + (target_month - 1) // 12
-    month = ((target_month - 1) % 12) + 1
-    day = min(value.day, month_calendar.monthrange(year, month)[1])
-    return value.replace(year=year, month=month, day=day)
-
-
-def _expand_occurrences(
-    event: CalendarEvent, range_start: datetime, range_end: datetime
-) -> list[tuple[datetime, datetime]]:
-    occurrences: list[tuple[datetime, datetime]] = []
-    duration = event.end_at - event.start_at
-    limit_end = min(range_end, range_start + timedelta(days=MAX_RANGE_DAYS))
-
-    if event.recurrence == RecurrencePattern.none:
-        if event.start_at < limit_end and event.end_at > range_start:
-            return [(event.start_at, event.end_at)]
-        return []
-
-    # Step recurrence in the event's own local timezone, not raw UTC. start_at
-    # is stored as an absolute UTC instant, so naive UTC timedelta arithmetic
-    # ("+7 days") silently drifts the displayed *local* time by an hour
-    # whenever a DST transition falls inside the recurrence range — a weekly
-    # 9am event would render as 8am or 10am local after the clocks change.
-    # zoneinfo-aware datetimes add timedeltas to the wall-clock fields, so
-    # stepping in local time and converting back to UTC per-occurrence keeps
-    # the local wall-clock time stable across DST, matching how a person
-    # actually expects "every Tuesday at 9am" to behave.
-    tz: tzinfo
-    try:
-        tz = ZoneInfo(event.timezone)
-    except ZoneInfoNotFoundError:
-        tz = UTC
-    current_start = event.start_at.astimezone(tz)
-    limit_end_local = limit_end.astimezone(tz)
-    range_start_local = range_start.astimezone(tz)
-    recurrence_until_local = (
-        event.recurrence_until.astimezone(tz) if event.recurrence_until else None
-    )
-    generated = 0
-    while current_start < limit_end_local:
-        current_end = current_start + duration
-        if current_end > range_start_local and current_start < limit_end_local:
-            occurrences.append((current_start.astimezone(UTC), current_end.astimezone(UTC)))
-        generated += 1
-        if event.recurrence_count and generated >= event.recurrence_count:
-            break
-        if recurrence_until_local and current_start > recurrence_until_local:
-            break
-
-        if event.recurrence == RecurrencePattern.daily:
-            current_start = current_start + timedelta(days=event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.weekly:
-            current_start = current_start + timedelta(weeks=event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.monthly:
-            current_start = _month_increment(current_start, event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.yearly:
-            current_start = _month_increment(current_start, 12 * event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.weekdays:
-            next_day = current_start + timedelta(days=1)
-            while next_day.weekday() > 4:
-                next_day = next_day + timedelta(days=1)
-            current_start = next_day
-        else:
-            break
-
-    return occurrences
 
 
 async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCalendar:
@@ -329,28 +261,7 @@ async def list_events(
     filters = [
         CalendarEvent.group_id == home_id,
         CalendarEvent.deleted_at.is_(None),
-        CalendarEvent.start_at < end_at,
-        # A non-recurring event matches only if its own window overlaps the
-        # query range. A recurring event's *base* end_at only describes its
-        # first occurrence — using it here would silently exclude a series
-        # whose later occurrences fall inside the query range but whose
-        # first one doesn't (e.g. a weekly event created in March, queried
-        # in a future month). Only recurrence_until, when set, can rule a
-        # series out at the SQL level; _expand_occurrences is still the
-        # source of truth for exactly which occurrences are returned.
-        or_(
-            and_(
-                CalendarEvent.recurrence == RecurrencePattern.none,
-                CalendarEvent.end_at > start_at,
-            ),
-            and_(
-                CalendarEvent.recurrence != RecurrencePattern.none,
-                or_(
-                    CalendarEvent.recurrence_until.is_(None),
-                    CalendarEvent.recurrence_until > start_at,
-                ),
-            ),
-        ),
+        recurrence_candidate_filter(start_at, end_at),
     ]
     if Capability.calendar_view_all not in capabilities:
         filters.append(
@@ -391,7 +302,7 @@ async def list_events(
     for event in events:
         label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        for occurrence_start, occurrence_end in _expand_occurrences(event, start_at, end_at):
+        for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
             items.append(_occurrence(event, occurrence_start, occurrence_end, label, member_ids))
 
     items.sort(key=lambda item: item.start_at)

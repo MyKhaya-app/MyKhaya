@@ -203,3 +203,32 @@ export interface ChildProfile {
   guardian_membership_ids: string[];
   transition_status: ChildTransitionStatus;
 }
+
+export type LockScreenPreviewLevel = "full" | "title_only" | "hidden";
+export type BriefingDays = "daily" | "weekdays";
+
+export interface NotificationPreferences {
+  push_enabled: boolean;
+  in_app_enabled: boolean;
+  event_reminders_enabled: boolean;
+  event_invitations_enabled: boolean;
+  event_changes_enabled: boolean;
+  household_reminders_enabled: boolean;
+  daily_briefing_enabled: boolean;
+  briefing_time: string;
+  briefing_days: BriefingDays;
+  empty_day_briefing_enabled: boolean;
+  lock_screen_preview_level: LockScreenPreviewLevel;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+  quiet_hours_critical_only: boolean;
+}
+
+export interface PushSubscriptionSummary {
+  id: string;
+  device_label: string | null;
+  user_agent: string | null;
+  created_at: string;
+  last_seen_at: string | null;
+  disabled_at: string | null;
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import type {
   EventLabel,
@@ -272,6 +272,7 @@ function EventForm({
 
 export default function CalendarPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { activeHome, activeHomeId } = useActiveHome();
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [featureChecked, setFeatureChecked] = useState(false);
@@ -340,6 +341,21 @@ export default function CalendarPage() {
       })
       .catch(() => router.replace("/home"));
   }, [activeHomeId, router]);
+
+  useEffect(() => {
+    // Deep-linked from a reminder notification (?event=<id>) — open it directly rather
+    // than requiring the user to find it in the calendar list. Independent of the
+    // visible date range/view, since a reminder can point at an occurrence outside it.
+    const deepLinkedEventId = searchParams.get("event");
+    if (!activeHomeId || !deepLinkedEventId) return;
+    api
+      .eventDetail(activeHomeId, deepLinkedEventId)
+      .then((detail) => setSelectedEvent(detail.event))
+      .catch(() => {
+        // The event may have been deleted since the reminder was sent — fail quietly,
+        // the user just lands on the calendar with nothing pre-opened.
+      });
+  }, [activeHomeId, searchParams]);
 
   useEffect(() => {
     setError("");

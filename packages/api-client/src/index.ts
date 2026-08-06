@@ -217,16 +217,9 @@ export class MyKhayaClient {
       "/notifications/push/public-key",
     );
   listPushSubscriptions = () =>
-    this.request<
-      {
-        id: string;
-        device_label: string | null;
-        user_agent: string | null;
-        created_at: string;
-        last_seen_at: string | null;
-        disabled_at: string | null;
-      }[]
-    >("/notifications/push-subscriptions");
+    this.request<import("@mykhaya/shared-types").PushSubscriptionSummary[]>(
+      "/notifications/push-subscriptions",
+    );
   registerPushSubscription = (body: {
     endpoint: string;
     keys: { p256dh: string; auth: string };
@@ -241,6 +234,17 @@ export class MyKhayaClient {
     this.request<void>(
       `/notifications/push-subscriptions/${encodeURIComponent(subscriptionId)}`,
       { method: "DELETE" },
+    );
+  notificationPreferences = () =>
+    this.request<import("@mykhaya/shared-types").NotificationPreferences>(
+      "/notifications/preferences",
+    );
+  updateNotificationPreferences = (
+    body: import("@mykhaya/shared-types").NotificationPreferences,
+  ) =>
+    this.request<import("@mykhaya/shared-types").NotificationPreferences>(
+      "/notifications/preferences",
+      { method: "PUT", body: JSON.stringify(body) },
     );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
