@@ -13,7 +13,6 @@ from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.audit import outbox
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.mailer import resolve_smtp_config, send_email
@@ -32,6 +31,8 @@ from mykhaya.models import (
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
+    NotificationTemplate,
+    NotificationTemplateRevision,
     OperationalHeartbeat,
     OutboxEvent,
     PlatformAdministrator,
@@ -50,7 +51,20 @@ from mykhaya.models import (
     WorkerJobRecord,
 )
 from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
+from mykhaya.notifications.default_templates import (
+    DEFAULT_TEMPLATE_VERSION,
+    SAMPLE_VARIABLES,
+    TEMPLATES,
+)
+from mykhaya.notifications.engine import notify
 from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_config, send_push
+from mykhaya.notifications.templates import (
+    UnknownTemplateVariable,
+    get_override,
+    render_notification,
+    substitute,
+    validate_override_text,
+)
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
@@ -58,6 +72,11 @@ from mykhaya.platform_schemas import (
     IncidentUpdate,
     ModuleUpdate,
     NoteRequest,
+    NotificationTemplatePreviewRequest,
+    NotificationTemplatePreviewResponse,
+    NotificationTemplateResponse,
+    NotificationTemplateTestRequest,
+    NotificationTemplateUpdate,
     PageResponse,
     PlatformActorResponse,
     PlatformLoginRequest,
@@ -86,6 +105,7 @@ from mykhaya.secrets_crypto import encrypt_secret
 from mykhaya.security import (
     DUMMY_HASH,
     create_action_token,
+    derived_token,
     normalise_email,
     verify_password,
 )
@@ -495,7 +515,7 @@ async def overview(
             {
                 "id": str(row.id),
                 "action": "email.delivery_failed"
-                if row.topic.startswith("email.")
+                if row.topic == "notification.email"
                 else "job.failed",
                 "target_type": "job",
                 "created_at": row.finished_at or row.created_at,
@@ -791,7 +811,6 @@ async def revoke_user_sessions(
 async def _enqueue_user_mail(
     user_id: uuid.UUID,
     purpose: TokenPurpose,
-    topic: str,
     action: str,
     body: SensitiveActionRequest,
     request: Request,
@@ -815,7 +834,23 @@ async def _enqueue_user_mail(
         .values(consumed_at=datetime.now(UTC))
     )
     token = await create_action_token(db, user.id, purpose, settings, 30)
-    outbox(db, topic, {"token_id": str(token.id)})
+    raw = derived_token(token.id, purpose.value, settings.secret_key.get_secret_value())
+    if purpose == TokenPurpose.verify_email:
+        notification_type = "email_verification"
+        link = f"{settings.public_web_url}/verify-email?token={raw}"
+    else:
+        notification_type = "password_reset"
+        link = f"{settings.public_web_url}/reset-password?token={raw}"
+    subject, message = await render_notification(db, notification_type, {"link": link})
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=user.id,
+        notification_type=notification_type,
+        title=subject,
+        body=message,
+        idempotency_key=f"{notification_type}:{token.id}",
+    )
     platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
     await db.commit()
     return {"message": "The email was queued safely."}
@@ -833,7 +868,6 @@ async def resend_verification(
     return await _enqueue_user_mail(
         user_id,
         TokenPurpose.verify_email,
-        "email.verify",
         "user.verification_resent",
         body,
         request,
@@ -855,7 +889,6 @@ async def send_password_reset(
     return await _enqueue_user_mail(
         user_id,
         TokenPurpose.reset_password,
-        "email.reset",
         "user.password_reset_sent",
         body,
         request,
@@ -1293,12 +1326,12 @@ async def internal_health(
 
     last_email_success = await db.scalar(
         select(func.max(WorkerJobRecord.finished_at)).where(
-            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "completed"
+            WorkerJobRecord.topic == "notification.email", WorkerJobRecord.status == "completed"
         )
     )
     last_email_failure = await db.scalar(
         select(func.max(WorkerJobRecord.finished_at)).where(
-            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "failed"
+            WorkerJobRecord.topic == "notification.email", WorkerJobRecord.status == "failed"
         )
     )
     email_configured = bool(
@@ -1794,21 +1827,21 @@ async def mail_configuration(
     pending = (
         await db.scalar(
             select(func.count(OutboxEvent.id)).where(
-                OutboxEvent.topic.like("email.%"), OutboxEvent.processed_at.is_(None)
+                OutboxEvent.topic == "notification.email", OutboxEvent.processed_at.is_(None)
             )
         )
         or 0
     )
     last_success = await db.scalar(
         select(func.max(WorkerJobRecord.finished_at)).where(
-            WorkerJobRecord.topic.like("email.%"), WorkerJobRecord.status == "completed"
+            WorkerJobRecord.topic == "notification.email", WorkerJobRecord.status == "completed"
         )
     )
     failures = (
         await db.scalars(
             select(WorkerJobRecord)
             .where(
-                WorkerJobRecord.topic.like("email.%"),
+                WorkerJobRecord.topic == "notification.email",
                 WorkerJobRecord.status == "failed",
             )
             .order_by(WorkerJobRecord.finished_at.desc())
@@ -1817,6 +1850,14 @@ async def mail_configuration(
     ).all()
     config = await resolve_smtp_config(settings, db)
     row = await _get_smtp_settings_row(db)
+    failure_labels: dict[uuid.UUID, str] = {}
+    for failure in failures:
+        if failure.outbox_event_id is None:
+            continue
+        source_event = await db.get(OutboxEvent, failure.outbox_event_id)
+        notification_type = source_event.payload.get("notification_type") if source_event else None
+        if notification_type:
+            failure_labels[failure.id] = notification_type
     return {
         "configured": config.configured,
         "transport": "SMTP" if config.configured else None,
@@ -1826,7 +1867,7 @@ async def mail_configuration(
         "recent_failures": [
             {
                 "id": row.id,
-                "job_type": row.topic,
+                "job_type": failure_labels.get(row.id, row.topic),
                 "failed_at": row.finished_at,
                 "safe_failure_message": row.error,
             }
@@ -2213,6 +2254,214 @@ async def send_test_push(
     )
     await db.commit()
     return {"results": results}
+
+
+def _template_response(
+    template_type: str, override: NotificationTemplate | None
+) -> NotificationTemplateResponse:
+    default = TEMPLATES[template_type]
+    is_override = override is not None
+    return NotificationTemplateResponse(
+        template_type=template_type,
+        channel=NotificationChannel.email.value,
+        description=default.description,
+        allowed_variables=sorted(default.allowed_variables),
+        default_subject=default.subject,
+        default_body=default.body,
+        subject=(override.subject if override and override.subject else default.subject),
+        body=(override.body_text if override and override.body_text else default.body),
+        is_override=is_override,
+        enabled=override.enabled if override else True,
+        is_stale=bool(override and override.based_on_default_version < DEFAULT_TEMPLATE_VERSION),
+        updated_at=override.updated_at if override else None,
+    )
+
+
+@router.get("/notification-templates")
+async def list_notification_templates(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> list[NotificationTemplateResponse]:
+    overrides = {
+        row.template_type: row
+        for row in (
+            await db.scalars(
+                select(NotificationTemplate).where(
+                    NotificationTemplate.channel == NotificationChannel.email
+                )
+            )
+        ).all()
+    }
+    return [
+        _template_response(template_type, overrides.get(template_type))
+        for template_type in sorted(TEMPLATES)
+    ]
+
+
+@router.get("/notification-templates/{template_type}")
+async def get_notification_template(
+    template_type: str,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> NotificationTemplateResponse:
+    if template_type not in TEMPLATES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    override = await get_override(db, template_type)
+    return _template_response(template_type, override)
+
+
+@router.put("/notification-templates/{template_type}")
+async def update_notification_template(
+    template_type: str,
+    body: NotificationTemplateUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> NotificationTemplateResponse:
+    require_recent_auth(context, settings)
+    default = TEMPLATES.get(template_type)
+    if default is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    try:
+        validate_override_text(body.subject, default.allowed_variables)
+        validate_override_text(body.body, default.allowed_variables)
+    except UnknownTemplateVariable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unknown template variable: {{{{{exc}}}}}. Allowed: "
+            f"{', '.join(sorted(default.allowed_variables))}.",
+        ) from exc
+
+    override = await get_override(db, template_type)
+    if override is None:
+        override = NotificationTemplate(
+            template_type=template_type, channel=NotificationChannel.email
+        )
+        db.add(override)
+    else:
+        db.add(
+            NotificationTemplateRevision(
+                template_id=override.id,
+                subject=override.subject,
+                body_text=override.body_text,
+                body_html=override.body_html,
+                replaced_by_administrator_id=context.administrator.id,
+            )
+        )
+    override.subject = body.subject
+    override.body_text = body.body
+    override.enabled = body.enabled
+    override.based_on_default_version = DEFAULT_TEMPLATE_VERSION
+    override.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.updated",
+        "notification_template",
+        reason=body.reason,
+        new={"template_type": template_type, "enabled": body.enabled},
+    )
+    await db.commit()
+    await db.refresh(override)
+    return _template_response(template_type, override)
+
+
+@router.delete("/notification-templates/{template_type}")
+async def reset_notification_template(
+    template_type: str,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> NotificationTemplateResponse:
+    require_recent_auth(context, settings)
+    if template_type not in TEMPLATES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    override = await get_override(db, template_type)
+    if override is not None:
+        await db.delete(override)
+        platform_audit(
+            db,
+            request,
+            context,
+            "notification_template.reset",
+            "notification_template",
+            reason="Reset to built-in default.",
+            new={"template_type": template_type},
+        )
+        await db.commit()
+    return _template_response(template_type, None)
+
+
+@router.post("/notification-templates/{template_type}/preview")
+async def preview_notification_template(
+    template_type: str,
+    body: NotificationTemplatePreviewRequest,
+    _: PlatformContext = Depends(require_roles(*OPERATORS)),
+) -> NotificationTemplatePreviewResponse:
+    default = TEMPLATES.get(template_type)
+    if default is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    sample = SAMPLE_VARIABLES[template_type]
+    try:
+        subject = substitute(body.subject, sample, default.allowed_variables)
+        rendered_body = substitute(body.body, sample, default.allowed_variables)
+    except UnknownTemplateVariable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unknown template variable: {{{{{exc}}}}}. Allowed: "
+            f"{', '.join(sorted(default.allowed_variables))}.",
+        ) from exc
+    return NotificationTemplatePreviewResponse(subject=subject, body=rendered_body)
+
+
+@router.post("/notification-templates/{template_type}/test")
+async def test_notification_template(
+    template_type: str,
+    body: NotificationTemplateTestRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    if template_type not in TEMPLATES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    await enforce_rate_limit(request, settings, "platform-test-template", 3, 300)
+    config = await resolve_smtp_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
+    subject, message = await render_notification(
+        db, template_type, SAMPLE_VARIABLES[template_type]
+    )
+    try:
+        await asyncio.to_thread(send_email, config, str(body.recipient), subject, message)
+    except Exception as exc:
+        platform_audit(
+            db,
+            request,
+            context,
+            "notification_template.test_failed",
+            "notification_template",
+            reason=body.reason,
+            new={"template_type": template_type},
+            outcome="failure",
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The test send failed.") from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.test_sent",
+        "notification_template",
+        reason=body.reason,
+        new={"template_type": template_type},
+    )
+    await db.commit()
+    return {"message": "Test email sent."}
 
 
 @router.get("/incidents")

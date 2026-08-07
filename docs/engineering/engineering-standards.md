@@ -43,6 +43,31 @@ Privileged platform administration is a separate management-plane boundary. Hous
 
 Every unfinished module must be enforced through the central server-side feature evaluator. Hiding a navigation link is not authorization or feature enforcement.
 
+Every new module must justify its existence on the Home screen. If a feature never surfaces useful, glanceable information on Home, it likely isn't important enough to exist as a first-class module — fold it into an existing surface, or reconsider it. This is a deliberate check against feature bloat, not a UI-placement suggestion: a module that has nothing to say on Home is a signal to revisit the proposal, not to add a Home widget for its own sake.
+
+## Notification architecture
+
+All user-facing communications must originate from `notify()`
+(`apps/api/mykhaya/notifications/engine.py`). This is a non-negotiable rule, not a
+convention to follow when convenient — see `docs/architecture/notification-engine.md`
+for the full design.
+
+Modules must never:
+
+- send email directly (call `mykhaya.mailer.send_email` from anywhere other than
+  `worker.py`'s single `notification.email` handler),
+- send push notifications directly (call `mykhaya.notifications.push.send_push` from
+  anywhere other than `worker.py`'s single `notification.push` handler),
+- create in-app notifications directly (insert a `Notification` row outside `notify()`),
+- enqueue `OutboxEvent` rows for communications directly, bypassing `notify()`.
+
+The Notification Engine is the sole communication pipeline and is responsible for
+channel selection, user preferences, quiet hours, mandatory delivery (identity/security
+workflows — email verification, password reset, household invitations — that must
+never depend on user preferences), retries, and delivery auditing. Every future
+delivery channel (SMS, a future mobile push provider, etc.) is added inside `notify()`,
+not as a parallel path a module calls instead.
+
 ## Definition of quality
 
 A change is complete only when it is secure, tested, documented, observable, reversible and consistent with the approved MyKhaya visual identity.

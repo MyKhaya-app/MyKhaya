@@ -103,6 +103,7 @@ async def test_preferences_update_round_trips(client: AsyncClient) -> None:
         json={
             "push_enabled": False,
             "in_app_enabled": True,
+            "email_enabled": True,
             "event_reminders_enabled": False,
             "event_invitations_enabled": True,
             "event_changes_enabled": True,

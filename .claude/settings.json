@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(MSYS_NO_PATHCONV=1 docker compose exec -T api python -c \"import mykhaya.notifications.templates; import mykhaya.notifications.default_templates; print\\('ok', mykhaya.notifications.default_templates.DEFAULT_TEMPLATE_VERSION\\)\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose exec -T api python -c ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(sh infrastructure/scripts/run-tests.sh pytest tests/test_communications_admin.py -v)",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose exec -T api python -c \"import mykhaya.routers.communications_admin; print\\('ok'\\)\")"
+    ]
+  }
+}

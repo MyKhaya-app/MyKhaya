@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.audit import audit, outbox
+from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
@@ -19,6 +19,8 @@ from mykhaya.household_permissions import (
 )
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     InvitationAccept,
@@ -85,7 +87,27 @@ async def invite(
     await db.flush()
     raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
     row.token_hash = hash_secret(raw, settings.secret_key.get_secret_value())
-    outbox(db, "email.invitation", {"invitation_id": str(row.id)})
+    home = await db.get(Group, row.group_id)
+    assert home is not None
+    subject, message = await render_notification(
+        db,
+        "household_invitation",
+        {
+            "inviter_display_name": auth.user.display_name,
+            "home_name": home.name,
+            "link": f"{settings.public_web_url}/register?invitation={raw}",
+            "expires_at": row.expires_at.isoformat(),
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_email=row.email,
+        notification_type="household_invitation",
+        title=subject,
+        body=message,
+        idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+    )
     audit(
         db,
         request,
@@ -154,6 +176,7 @@ async def resend_invitation(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
     row = await db.scalar(
         select(Invitation).where(Invitation.id == body.invitation_id).with_for_update()
@@ -164,7 +187,28 @@ async def resend_invitation(
     if row.accepted_at is not None or row.revoked_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This invitation is no longer active.")
     row.expires_at = datetime.now(UTC) + timedelta(days=7)
-    outbox(db, "email.invitation", {"invitation_id": str(row.id)})
+    raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
+    home = await db.get(Group, row.group_id)
+    assert home is not None
+    subject, message = await render_notification(
+        db,
+        "household_invitation",
+        {
+            "inviter_display_name": auth.user.display_name,
+            "home_name": home.name,
+            "link": f"{settings.public_web_url}/register?invitation={raw}",
+            "expires_at": row.expires_at.isoformat(),
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_email=row.email,
+        notification_type="household_invitation",
+        title=subject,
+        body=message,
+        idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+    )
     audit(db, request, "invitation.resent", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()
     return InvitationResponse(

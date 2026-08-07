@@ -177,3 +177,97 @@ class FeatureEvaluationResponse(BaseModel):
 
 class FeatureMatrixResponse(BaseModel):
     features: list[FeatureEvaluationResponse]
+
+
+class NotificationTemplateResponse(BaseModel):
+    template_type: str
+    channel: str
+    description: str
+    allowed_variables: list[str]
+    default_subject: str
+    default_body: str
+    subject: str
+    body: str
+    is_override: bool
+    enabled: bool
+    is_stale: bool
+    updated_at: datetime | None
+
+
+class NotificationTemplateUpdate(SensitiveActionRequest):
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+    enabled: bool = True
+
+
+class NotificationTemplatePreviewRequest(StrictModel):
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class NotificationTemplatePreviewResponse(BaseModel):
+    subject: str
+    body: str
+
+
+class NotificationTemplateTestRequest(SensitiveActionRequest):
+    recipient: EmailStr
+
+
+class ServiceStatusResponse(BaseModel):
+    status: Literal["running", "stale", "unavailable"]
+    last_heartbeat: datetime | None
+    detail: str
+
+
+class TransportStatusResponse(BaseModel):
+    configured: bool
+    status: Literal["connected", "not_configured"]
+
+
+class CommunicationsHealthResponse(BaseModel):
+    overall: Literal["healthy", "degraded", "unhealthy"]
+    worker: ServiceStatusResponse
+    scheduler: ServiceStatusResponse
+    smtp: TransportStatusResponse
+    push: TransportStatusResponse
+    queue_depth: int
+    average_latency_seconds: float | None
+    deliveries_today: int
+    failures_today: int
+    retries_today: int
+
+
+class TimelineEntryResponse(BaseModel):
+    id: uuid.UUID
+    occurred_at: datetime
+    notification_type: str
+    label: str
+    channel: str
+    status: str
+    friendly_status: str
+    recipient_display_name: str | None
+    retry_count: int
+
+
+class TimelineResponse(BaseModel):
+    items: list[TimelineEntryResponse]
+    next_page: int | None
+
+
+class DiagnosticsEntryResponse(BaseModel):
+    id: uuid.UUID
+    occurred_at: datetime
+    notification_type: str
+    label: str
+    channel: str
+    status: str
+    recipient_email: str | None
+    sanitised_failure_reason: str | None
+    retry_count: int
+    idempotency_key: str
+
+
+class DiagnosticsResponse(BaseModel):
+    items: list[DiagnosticsEntryResponse]
+    next_page: int | None

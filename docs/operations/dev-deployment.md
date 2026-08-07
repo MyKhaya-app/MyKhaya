@@ -204,26 +204,28 @@ container status since these services have no Docker `HEALTHCHECK` of their own)
 addition to the `/health/live` and `/health/ready` HTTP checks — there is no separate
 worker/scheduler check to remember to run.
 
-## api, worker and scheduler are three separate images built from one Dockerfile
+## api, worker, scheduler and migrate are four separate images built from one Dockerfile
 
 `compose.yml` defines `worker` and `scheduler` as YAML-anchor copies of the `api`
-service (`<<: *api`) so all three always build from the exact same source and
-`apps/api/Dockerfile`. They are still three **separate** Docker images
-(`mykhaya-api`, `mykhaya-worker`, `mykhaya-scheduler`) with independent build
-caches — rebuilding one does not rebuild the others. A manual `docker compose build
-api` (or `docker build ... --target builder`) only refreshes `mykhaya-api`; `worker`
-and `scheduler` silently keep running the old code with no error, which is exactly
-how a new `mykhaya/notifications/*.py` module went briefly missing from a running
-scheduler during Communications Stage 5 testing.
+service (`<<: *api`), and `migrate` builds from the same `apps/api/Dockerfile` with a
+different command. All four always build from the exact same source, but are four
+**separate** Docker images (`mykhaya-api`, `mykhaya-worker`, `mykhaya-scheduler`,
+`mykhaya-migrate`) with independent build caches — rebuilding one does not rebuild the
+others. A manual `docker compose build api` (or `docker build ... --target builder`)
+only refreshes `mykhaya-api`; the other three silently keep running the old code/schema
+expectations with no error. This has caused two separate incidents: a new
+`mykhaya/notifications/*.py` module briefly missing from a running scheduler
+(Communications Stage 5), and a scheduler crash-looping against a schema `migrate`
+hadn't actually been rebuilt to apply (Communications Stage 8, where `migrate` was the
+one forgotten out of four).
 
-`make dev-up` / `make dev-update` (via `deploy()` in `dev-deploy.sh`) already build
-and restart all three together and are the supported path for the persistent
-server — always prefer them. For a quicker local iteration loop that doesn't need
-the full preflight/health-check sequence, `make backend-rebuild` runs the equivalent
-`docker compose build api worker scheduler` followed by `docker compose up -d
---no-deps api worker scheduler`. Never run `docker compose build api` (or `up
---force-recreate api`) alone when backend code changed — always rebuild and recreate
-all three, via one of the two commands above.
+**Always use `make backend-rebuild`** for any backend code change — it rebuilds and
+recreates `api`, `worker`, `scheduler`, and `migrate` together in one command, so
+nobody has to remember which services share images. It does not run migrations itself
+(whether a new migration needs applying is a separate, explicit decision — run `make
+migrate` after, or use `make dev-up`/`make dev-update` for the persistent server, which
+build all four *and* run migrations *and* do a full health-check sequence). Never
+rebuild `api` — or any subset of the four — individually when backend code changed.
 
 ## Automated tests use an isolated database
 

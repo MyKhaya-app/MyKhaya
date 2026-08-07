@@ -389,7 +389,10 @@ async def test_deliver_reminder_is_idempotent_per_recipient(client: AsyncClient)
         deliveries = (
             await db.scalars(
                 select(NotificationDelivery).where(
-                    NotificationDelivery.recipient_user_id == creator_id
+                    NotificationDelivery.recipient_user_id == creator_id,
+                    # Excludes the registration email_verification delivery this same
+                    # user's create_verified_user() call also generated for creator_id.
+                    NotificationDelivery.notification_type == "event_reminder",
                 )
             )
         ).all()

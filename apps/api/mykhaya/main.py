@@ -14,6 +14,7 @@ from mykhaya.routers import (
     birthdays,
     calendar,
     children,
+    communications_admin,
     features,
     groups,
     health,
@@ -96,6 +97,7 @@ for router in (
     birthdays.router,
     notifications.router,
     platform.router,
+    communications_admin.router,
     status_router.router,
 ):
     app.include_router(router, prefix="/api/v1")

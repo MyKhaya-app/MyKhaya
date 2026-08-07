@@ -440,6 +440,7 @@ class RoutineCompletionRequest(StrictModel):
 class NotificationPreferencesResponse(BaseModel):
     push_enabled: bool
     in_app_enabled: bool
+    email_enabled: bool
     event_reminders_enabled: bool
     event_invitations_enabled: bool
     event_changes_enabled: bool
@@ -457,6 +458,7 @@ class NotificationPreferencesResponse(BaseModel):
 class NotificationPreferencesUpdate(StrictModel):
     push_enabled: bool
     in_app_enabled: bool
+    email_enabled: bool
     event_reminders_enabled: bool
     event_invitations_enabled: bool
     event_changes_enabled: bool

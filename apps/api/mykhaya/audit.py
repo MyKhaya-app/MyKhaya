@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.models import AuditEvent, OutboxEvent
+from mykhaya.models import AuditEvent
 
 
 def audit(
@@ -28,7 +28,3 @@ def audit(
             metadata_=metadata or {},
         )
     )
-
-
-def outbox(db: AsyncSession, topic: str, payload: dict[str, Any]) -> None:
-    db.add(OutboxEvent(topic=topic, payload=payload))

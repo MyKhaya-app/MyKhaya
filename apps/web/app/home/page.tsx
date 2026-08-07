@@ -59,6 +59,45 @@ function notificationsSupported() {
   return typeof window !== "undefined" && "Notification" in window;
 }
 
+// Warm, family-organiser phrasing rather than a system-generated alert — rotated by
+// day of year so it's stable within a day but varies day to day, matching
+// TODAY_EMPTY_STATES below. See docs/design/visual-identity.md.
+const BIRTHDAY_TODAY_PHRASES = [
+  (name: string) => `🎉 Today we're celebrating ${name}.`,
+  (name: string) => `🎂 Don't forget… it's ${name}'s birthday today.`,
+  (name: string) => `🎈 Today's a special day. It's ${name}'s birthday.`,
+];
+
+function dayOfYear() {
+  return Math.floor(
+    (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86_400_000,
+  );
+}
+
+function birthdayTodayPhrase(name: string) {
+  return BIRTHDAY_TODAY_PHRASES[dayOfYear() % BIRTHDAY_TODAY_PHRASES.length]!(name);
+}
+
+function daysUntil(isoDate: string) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(isoDate);
+  target.setHours(0, 0, 0, 0);
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function upcomingBirthdayLabel(days: number) {
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return `In ${days} days`;
+}
+
+function upcomingBirthdayIcon(days: number) {
+  if (days === 0) return "🎉";
+  if (days <= 7) return "🎁";
+  return "🎂";
+}
+
 function EventRow({
   event,
   member,
@@ -201,29 +240,22 @@ export default function HomePage() {
           <section className="card home-section birthday-banner">
             <div className="section-heading">
               <h2>
-                <Gift size={18} aria-hidden="true" /> Birthdays
+                <Gift size={18} aria-hidden="true" /> Upcoming birthdays
               </h2>
             </div>
             <div className="home-event-list">
-              {birthdays.slice(0, 3).map((entry) => {
-                const today = new Date().toISOString().slice(0, 10);
-                const isToday = entry.next_occurrence_date === today;
+              {birthdays.slice(0, 5).map((entry) => {
+                const days = daysUntil(entry.next_occurrence_date);
                 return (
                   <div className="home-event-row" key={`${entry.owner_type}:${entry.owner_id}`}>
+                    <span className="home-event-leading" aria-hidden="true">
+                      {upcomingBirthdayIcon(days)}
+                    </span>
                     <span className="home-event-copy">
                       <strong>
-                        {isToday
-                          ? `🎉 It's ${entry.display_name}'s birthday today!`
-                          : `${entry.display_name}'s birthday`}
+                        {days === 0 ? birthdayTodayPhrase(entry.display_name) : entry.display_name}
                       </strong>
-                      {!isToday && (
-                        <small>
-                          {new Date(entry.next_occurrence_date).toLocaleDateString("en-GB", {
-                            day: "numeric",
-                            month: "long",
-                          })}
-                        </small>
-                      )}
+                      {days !== 0 && <small>{upcomingBirthdayLabel(days)}</small>}
                     </span>
                   </div>
                 );

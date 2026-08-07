@@ -8,6 +8,8 @@ import { platformApi } from "@mykhaya/api-client";
 const navigation = [
   ["Overview", "/"], ["Users", "/users"], ["Homes", "/homes"],
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
+  ["Templates", "/notification-templates"], ["Communications", "/communications"],
+  ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
   ["Settings", "/settings"], ["Modules & Features", "/modules"],
   ["Security", "/security"], ["Audit", "/audit"],
   ["Administrators", "/administrators"], ["Public Status", "/incidents"],

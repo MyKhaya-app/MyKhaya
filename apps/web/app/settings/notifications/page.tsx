@@ -56,6 +56,7 @@ export default function NotificationSettings() {
       const updated = await api.updateNotificationPreferences({
         push_enabled: form.get("push_enabled") === "on",
         in_app_enabled: form.get("in_app_enabled") === "on",
+        email_enabled: form.get("email_enabled") === "on",
         event_reminders_enabled: form.get("event_reminders_enabled") === "on",
         event_invitations_enabled: form.get("event_invitations_enabled") === "on",
         event_changes_enabled: form.get("event_changes_enabled") === "on",
@@ -165,6 +166,9 @@ export default function NotificationSettings() {
         </label>
         <label className="check-row">
           <input type="checkbox" name="in_app_enabled" defaultChecked={prefs.in_app_enabled} /> In-app notifications
+        </label>
+        <label className="check-row">
+          <input type="checkbox" name="email_enabled" defaultChecked={prefs.email_enabled} /> Also email me
         </label>
 
         <h2>What to notify me about</h2>

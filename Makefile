@@ -11,7 +11,7 @@ logs:
 build:
 	docker compose build
 backend-rebuild:
-	docker compose build api worker scheduler
+	docker compose build api worker scheduler migrate
 	docker compose up -d --no-deps api worker scheduler
 migrate:
 	docker compose run --rm migrate

@@ -124,14 +124,19 @@ async def enable_briefing(
         user = await db.get(User, user_id)
         assert user is not None
         user.timezone = timezone
-        prefs = NotificationPreferences(
-            user_id=user_id,
-            daily_briefing_enabled=True,
-            briefing_time=briefing_time or now_local.time().replace(microsecond=0),
-            briefing_days=briefing_days,
-            empty_day_briefing_enabled=empty_day_briefing_enabled,
+        # A preferences row may already exist — e.g. registration's verification email
+        # now goes through notify(), which lazily creates one — so update in place
+        # rather than assuming this is the first row for this user.
+        prefs = await db.scalar(
+            select(NotificationPreferences).where(NotificationPreferences.user_id == user_id)
         )
-        db.add(prefs)
+        if prefs is None:
+            prefs = NotificationPreferences(user_id=user_id)
+            db.add(prefs)
+        prefs.daily_briefing_enabled = True
+        prefs.briefing_time = briefing_time or now_local.time().replace(microsecond=0)
+        prefs.briefing_days = briefing_days
+        prefs.empty_day_briefing_enabled = empty_day_briefing_enabled
         await db.commit()
 
 

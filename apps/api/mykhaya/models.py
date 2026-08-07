@@ -718,6 +718,12 @@ class NotificationPreferences(UuidTimeMixin, Base):
     )
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Default off, unlike push_enabled/in_app_enabled — email is an explicit opt-in
+    # "also send me an email" channel for optional notification types, not a third
+    # always-on channel that would triple send volume for every reminder/briefing/
+    # routine/birthday. MANDATORY_EMAIL_TYPES (verification, reset, invitation) always
+    # send by email regardless of this toggle. See docs/architecture/notification-engine.md.
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     event_reminders_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
@@ -842,6 +848,10 @@ class NotificationTemplate(UuidTimeMixin, Base):
     body_text: Mapped[str | None] = mapped_column(Text)
     body_html: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Which mykhaya.notifications.default_templates.DEFAULT_TEMPLATE_VERSION this
+    # override was saved against — lets a future admin UI flag "the built-in wording
+    # has changed since you customised this" without diffing text.
+    based_on_default_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )

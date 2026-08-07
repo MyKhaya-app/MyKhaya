@@ -7,11 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.audit import audit, outbox
+from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.models import ActionToken, AuthIdentity, Invitation, Session, TokenPurpose, User
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     ForgotRequest,
@@ -31,6 +33,7 @@ from mykhaya.security import (
     consume_action_token,
     create_action_token,
     decode_derived_token,
+    derived_token,
     hash_secret,
     new_session_token,
     normalise_email,
@@ -185,7 +188,23 @@ async def register(
             token = await create_action_token(
                 db, user.id, TokenPurpose.verify_email, settings, 60 * 24
             )
-            outbox(db, "email.verify", {"token_id": str(token.id)})
+            raw = derived_token(
+                token.id, token.purpose.value, settings.secret_key.get_secret_value()
+            )
+            subject, message = await render_notification(
+                db,
+                "email_verification",
+                {"link": f"{settings.public_web_url}/verify-email?token={raw}"},
+            )
+            await notify(
+                db,
+                settings=settings,
+                recipient_user_id=user.id,
+                notification_type="email_verification",
+                title=subject,
+                body=message,
+                idempotency_key=f"email_verification:{token.id}",
+            )
         audit(db, request, "user.registered", user.id, target_type="user", target_id=user.id)
         await db.commit()
     else:
@@ -280,7 +299,21 @@ async def forgot(
             .values(consumed_at=datetime.now(UTC))
         )
         token = await create_action_token(db, user.id, TokenPurpose.reset_password, settings, 30)
-        outbox(db, "email.reset", {"token_id": str(token.id)})
+        raw = derived_token(token.id, token.purpose.value, settings.secret_key.get_secret_value())
+        subject, message = await render_notification(
+            db,
+            "password_reset",
+            {"link": f"{settings.public_web_url}/reset-password?token={raw}"},
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="password_reset",
+            title=subject,
+            body=message,
+            idempotency_key=f"password_reset:{token.id}",
+        )
         audit(
             db, request, "password.reset_requested", user.id, target_type="user", target_id=user.id
         )

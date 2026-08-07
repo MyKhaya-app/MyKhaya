@@ -30,8 +30,8 @@ def test_backoff_grows_and_is_capped() -> None:
 async def test_failed_job_is_not_marked_processed_and_gets_backoff() -> None:
     async with SessionFactory() as db:
         event = OutboxEvent(
-            topic="email.invitation",
-            payload={"invitation_id": "00000000-0000-0000-0000-000000000000"},
+            topic="notification.email",
+            payload={},  # missing required keys — forces a genuine failure to test retry
         )
         db.add(event)
         await db.commit()
@@ -59,8 +59,8 @@ async def test_failed_job_is_not_marked_processed_and_gets_backoff() -> None:
 async def test_job_gives_up_after_max_attempts() -> None:
     async with SessionFactory() as db:
         event = OutboxEvent(
-            topic="email.invitation",
-            payload={"invitation_id": "00000000-0000-0000-0000-000000000000"},
+            topic="notification.email",
+            payload={},  # missing required keys — forces a genuine failure to test retry
             attempts=MAX_ATTEMPTS - 1,
         )
         db.add(event)
@@ -84,8 +84,8 @@ async def test_job_gives_up_after_max_attempts() -> None:
 async def test_already_processed_event_is_not_reprocessed() -> None:
     async with SessionFactory() as db:
         event = OutboxEvent(
-            topic="email.invitation",
-            payload={"invitation_id": "00000000-0000-0000-0000-000000000000"},
+            topic="notification.email",
+            payload={},  # missing required keys — forces a genuine failure to test retry
             processed_at=datetime.now(UTC),
         )
         db.add(event)

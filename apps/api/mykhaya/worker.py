@@ -12,15 +12,11 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.models import (
-    ActionToken,
-    Group,
-    Invitation,
     NotificationDelivery,
     NotificationDeliveryStatus,
     OperationalHeartbeat,
     OutboxEvent,
     PushSubscription,
-    User,
     WorkerJobRecord,
 )
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
@@ -28,7 +24,6 @@ from mykhaya.notifications.briefing import deliver_daily_briefing
 from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
-from mykhaya.security import derived_token
 
 # Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
 # 3 -> 120s ... capped at MAX_BACKOFF_SECONDS. After MAX_ATTEMPTS the event
@@ -93,6 +88,33 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
         delivery.sanitised_failure_reason = "This device's push registration is invalid."
 
 
+async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
+    delivery_key = event.payload["delivery_idempotency_key"]
+    delivery = await db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.idempotency_key == delivery_key)
+    )
+    if delivery is None:
+        return  # diagnostic record missing — nothing more to do
+
+    smtp_config = await resolve_smtp_config(settings, db)
+    try:
+        await asyncio.to_thread(
+            send_email,
+            smtp_config,
+            event.payload["recipient_email"],
+            event.payload["subject"],
+            event.payload["body"],
+        )
+        delivery.status = NotificationDeliveryStatus.sent
+        delivery.attempted_at = datetime.now(UTC)
+    except Exception:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.sanitised_failure_reason = "Email delivery temporarily unavailable."
+        raise
+
+
 async def process(event_id: uuid.UUID) -> None:
     settings = get_settings()
     async with SessionFactory() as db:
@@ -104,7 +126,7 @@ async def process(event_id: uuid.UUID) -> None:
             return
 
         job = existing or WorkerJobRecord(
-            id=event.id, outbox_event_id=event.id, topic=event.topic, status="running"
+            id=event.id, outbox_event_id=event.id, topic=event.topic, status="running", attempts=0
         )
         job.status = "running"
         job.finished_at = None
@@ -112,54 +134,8 @@ async def process(event_id: uuid.UUID) -> None:
         db.add(job)
 
         try:
-            if event.topic.startswith("email."):
-                smtp_config = await resolve_smtp_config(settings, db)
-            if event.topic in {"email.verify", "email.reset"}:
-                token = await db.get(ActionToken, uuid.UUID(event.payload["token_id"]))
-                if token is None:
-                    raise ValueError("action token not found")
-                user = await db.get(User, token.user_id)
-                if user is None:
-                    raise ValueError("user not found")
-                raw = derived_token(
-                    token.id, token.purpose.value, settings.secret_key.get_secret_value()
-                )
-                page = "verify-email" if event.topic == "email.verify" else "reset-password"
-                subject = (
-                    "Verify your MyKhaya email"
-                    if event.topic == "email.verify"
-                    else "Reset your MyKhaya password"
-                )
-                await asyncio.to_thread(
-                    send_email,
-                    smtp_config,
-                    user.email,
-                    subject,
-                    f"Open this secure link:\n\n{settings.public_web_url}/{page}?token={raw}\n\n"
-                    "If you did not request this, you can ignore it.",
-                )
-            elif event.topic == "email.invitation":
-                invitation = await db.get(Invitation, uuid.UUID(event.payload["invitation_id"]))
-                if invitation is None:
-                    raise ValueError("invitation not found")
-                home = await db.get(Group, invitation.group_id)
-                inviter = await db.get(User, invitation.invited_by)
-                if home is None or inviter is None:
-                    raise ValueError("invitation context not found")
-                raw = derived_token(
-                    invitation.id, "invitation", settings.secret_key.get_secret_value()
-                )
-                await asyncio.to_thread(
-                    send_email,
-                    smtp_config,
-                    invitation.email,
-                    "You are invited to a MyKhaya Home",
-                    f"{inviter.display_name} invited you to join {home.name}.\n\n"
-                    "Use this secure link to accept the invitation:\n\n"
-                    f"{settings.public_web_url}/register?invitation={raw}\n\n"
-                    f"This invitation expires on {invitation.expires_at.isoformat()}.\n\n"
-                    "If you were not expecting this invitation, you can ignore this email.",
-                )
+            if event.topic == "notification.email":
+                await _process_email(db, settings, event)
             elif event.topic == "notification.push":
                 await _process_push(db, settings, event)
             elif event.topic == "notification.event_reminder":

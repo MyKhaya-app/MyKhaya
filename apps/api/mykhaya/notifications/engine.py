@@ -1,12 +1,13 @@
 """The single Notification Engine dispatch point.
 
 Every notification-producing module (calendar, household routines, birthdays,
-invitations, and any future module) calls `notify()` instead of writing its own
-delivery logic. No module should send email or push directly, or invent its own
-reminder/notification scheduling — see docs/architecture/notification-engine.md.
-
-Email is layered on top in a later stage (Stage 8) by extending `notify()` at the
-marked extension point — callers do not change.
+invitations, account verification/reset, and any future module) calls `notify()`
+instead of writing its own delivery logic. No module sends email or push directly, or
+invents its own reminder/notification scheduling — see
+docs/architecture/notification-engine.md. As of Stage 8, email is a full third channel
+alongside push and in-app, not a special case: `mykhaya.mailer.send_email` is called
+from exactly one place (`worker.py`'s `notification.email` handler), the same way
+`mykhaya.notifications.push.send_push` is called from exactly one place.
 """
 
 from __future__ import annotations
@@ -44,6 +45,12 @@ PREFERENCE_GATES: dict[str, str] = {
     "daily_briefing": "daily_briefing_enabled",
 }
 
+# Notification types that must always be delivered by email regardless of any
+# preference — account security and household-membership actions the recipient is
+# actively waiting on, not an optional update. `notify()` still writes the normal
+# NotificationDelivery diagnostic row for these, it just never suppresses them.
+MANDATORY_EMAIL_TYPES = {"email_verification", "password_reset", "household_invitation"}
+
 
 async def get_or_create_preferences(
     db: AsyncSession, user_id: uuid.UUID
@@ -69,7 +76,8 @@ async def notify(
     db: AsyncSession,
     *,
     settings: Settings,
-    recipient_user_id: uuid.UUID,
+    recipient_user_id: uuid.UUID | None = None,
+    recipient_email: str | None = None,
     notification_type: str,
     title: str,
     body: str,
@@ -87,13 +95,37 @@ async def notify(
     constraint on NotificationDelivery.idempotency_key is the actual safety net, this
     check just avoids a needless failed-insert round trip under normal operation).
     Returns the created in-app Notification row, or None if nothing was delivered
-    (channel disabled, category disabled).
+    (channel disabled, category disabled, or the type is email-only).
+
+    `recipient_user_id` may be omitted only for a `MANDATORY_EMAIL_TYPES` notification
+    with no MyKhaya account yet (a household invitation sent to an email address that
+    hasn't registered) — `recipient_email` is required in that case. Every other caller
+    passes `recipient_user_id`.
     """
+    is_mandatory = notification_type in MANDATORY_EMAIL_TYPES
+
+    if recipient_user_id is None:
+        if not is_mandatory or not recipient_email:
+            raise ValueError(
+                "notify() requires recipient_user_id, unless notification_type is a "
+                "MANDATORY_EMAIL_TYPES type sent with recipient_email (no account yet)"
+            )
+        await _enqueue_email(
+            db,
+            recipient_user_id=None,
+            recipient_email=recipient_email,
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+        return None
+
     prefs = await get_or_create_preferences(db, recipient_user_id)
     category_enabled = _category_enabled(prefs, notification_type)
 
     notification: Notification | None = None
-    if prefs.in_app_enabled and category_enabled:
+    if not is_mandatory and prefs.in_app_enabled and category_enabled:
         in_app_key = f"{idempotency_key}:in_app"
         already_sent = await db.scalar(
             select(NotificationDelivery.id).where(
@@ -124,7 +156,7 @@ async def notify(
                 )
             )
 
-    if prefs.push_enabled and category_enabled:
+    if not is_mandatory and prefs.push_enabled and category_enabled:
         await _enqueue_push(
             db,
             settings=settings,
@@ -139,12 +171,61 @@ async def notify(
             timezone_override=timezone_override,
         )
 
-    # Extension point (Stage 8): if the notification_type also has an email rendering
-    # and the recipient has no push/in-app enabled (or the type is inherently
-    # email-only, e.g. verification/reset), enqueue OutboxEvent(topic=
-    # "notification.email", idempotency_key=f"{idempotency_key}:email", ...).
+    if is_mandatory or (prefs.email_enabled and category_enabled):
+        user = await db.get(User, recipient_user_id)
+        resolved_email = recipient_email or (user.email if user else None)
+        if resolved_email:
+            await _enqueue_email(
+                db,
+                recipient_user_id=recipient_user_id,
+                recipient_email=resolved_email,
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                idempotency_key=idempotency_key,
+            )
 
     return notification
+
+
+async def _enqueue_email(
+    db: AsyncSession,
+    *,
+    recipient_user_id: uuid.UUID | None,
+    recipient_email: str,
+    notification_type: str,
+    title: str,
+    body: str,
+    idempotency_key: str,
+) -> None:
+    email_key = f"{idempotency_key}:email"
+    already_queued = await db.scalar(
+        select(NotificationDelivery.id).where(NotificationDelivery.idempotency_key == email_key)
+    )
+    if already_queued is not None:
+        return
+    event = OutboxEvent(
+        topic="notification.email",
+        payload={
+            "recipient_email": recipient_email,
+            "subject": title,
+            "body": body,
+            "delivery_idempotency_key": email_key,
+            "notification_type": notification_type,
+        },
+    )
+    db.add(event)
+    await db.flush()
+    db.add(
+        NotificationDelivery(
+            channel=NotificationChannel.email,
+            recipient_user_id=recipient_user_id,
+            notification_type=notification_type,
+            idempotency_key=email_key,
+            outbox_event_id=event.id,
+            scheduled_at=datetime.now(UTC),
+        )
+    )
 
 
 async def _enqueue_push(

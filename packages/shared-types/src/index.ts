@@ -216,6 +216,7 @@ export type BriefingDays = "daily" | "weekdays";
 export interface NotificationPreferences {
   push_enabled: boolean;
   in_app_enabled: boolean;
+  email_enabled: boolean;
   event_reminders_enabled: boolean;
   event_invitations_enabled: boolean;
   event_changes_enabled: boolean;

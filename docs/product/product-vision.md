@@ -14,6 +14,8 @@ Every proposed feature must answer:
 
 > **Does this make life together simpler?**
 
+A related, more concrete check lives in `docs/engineering/engineering-standards.md`: every new module must justify its existence on the Home screen. If it has nothing glanceable to show there, that's a signal to reconsider it, not a UI gap to patch over.
+
 ## Core use cases
 
 - Shared calendars and occasions

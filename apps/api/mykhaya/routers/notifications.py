@@ -41,6 +41,7 @@ async def get_preferences(
     return NotificationPreferencesResponse(
         push_enabled=prefs.push_enabled,
         in_app_enabled=prefs.in_app_enabled,
+        email_enabled=prefs.email_enabled,
         event_reminders_enabled=prefs.event_reminders_enabled,
         event_invitations_enabled=prefs.event_invitations_enabled,
         event_changes_enabled=prefs.event_changes_enabled,
@@ -65,6 +66,7 @@ async def update_preferences(
     prefs = await get_or_create_preferences(db, auth.user.id)
     prefs.push_enabled = body.push_enabled
     prefs.in_app_enabled = body.in_app_enabled
+    prefs.email_enabled = body.email_enabled
     prefs.event_reminders_enabled = body.event_reminders_enabled
     prefs.event_invitations_enabled = body.event_invitations_enabled
     prefs.event_changes_enabled = body.event_changes_enabled
