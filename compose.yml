@@ -75,7 +75,15 @@ services:
         migrate: { condition: service_completed_successfully },
         redis: { condition: service_healthy },
       }
-    networks: [app, data]
+    # api/worker/scheduler are the application tier: they legitimately need outbound
+    # internet access (SMTP relays, Web Push endpoints — FCM/APNs/Mozilla autopush —
+    # OIDC providers, and future third-party integrations), not just inbound routing
+    # from Caddy. `edge` is non-internal (unlike `app`/`data`) so Docker gives
+    # containers on it a route out; this does NOT expose api to inbound traffic from
+    # the internet, since only caddy publishes host ports — network membership alone
+    # grants egress, not ingress. See docs/architecture/deployment-model.md and the
+    # `networks:` block below for the full model.
+    networks: [edge, app, data]
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -200,6 +208,29 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+# Three-tier network model. `internal: true` controls a network's route to the
+# outside world, not who can reach a service on it — inbound exposure is controlled
+# separately, by which services publish host ports (only `caddy` does).
+#
+#   edge  (not internal) — Caddy's public-facing ingress, and the application tier's
+#         (api/worker/scheduler) egress path for SMTP, Web Push, OIDC and other
+#         outbound third-party integrations. Being on `edge` does not make a service
+#         reachable from the internet by itself; only caddy publishes host ports.
+#   app   (internal)     — east-west traffic between caddy/web/api/worker/scheduler
+#         (e.g. web -> http://api:8000). No route out, no inbound from the internet.
+#   data  (internal)     — postgres/redis/mailpit plus every service that talks to
+#         them. Never internet-reachable in either direction — this is the tier the
+#         original "internal-only database and Redis networks" design goal
+#         (docs/architecture/deployment-model.md) actually describes.
+#
+# History: `app` was marked internal for every service on it, including
+# api/worker/scheduler, from the first commit that introduced this file — with no
+# ADR or design note discussing outbound access for the application tier. That
+# blocked all egress for api/worker/scheduler (confirmed via DNS resolution failing
+# inside the api container) and would have silently broken Web Push delivery to real
+# devices (FCM/APNs/Mozilla autopush are on the public internet). Fixed by adding
+# `edge` to api/worker/scheduler rather than removing `internal: true` from `app` —
+# the data-tier isolation goal was correct, it was just applied one tier too high.
 networks:
   edge: {}
   app: { internal: true }
