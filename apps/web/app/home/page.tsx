@@ -16,6 +16,13 @@ import { Avatar, memberColour } from "@/components/avatar";
 import { isStandalone } from "@/components/install-prompt";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
+import {
+  birthdayDateLabel,
+  daysUntilThisYear,
+  isBirthdayThisMonthAndUpcoming,
+  upcomingBirthdayIcon,
+  upcomingBirthdayLabel,
+} from "./birthday-utils";
 
 function eventTime(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -78,25 +85,6 @@ function birthdayTodayPhrase(name: string) {
   return BIRTHDAY_TODAY_PHRASES[dayOfYear() % BIRTHDAY_TODAY_PHRASES.length]!(name);
 }
 
-function daysUntil(isoDate: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(isoDate);
-  target.setHours(0, 0, 0, 0);
-  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
-}
-
-function upcomingBirthdayLabel(days: number) {
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return `In ${days} days`;
-}
-
-function upcomingBirthdayIcon(days: number) {
-  if (days === 0) return "🎉";
-  if (days <= 7) return "🎁";
-  return "🎂";
-}
 
 function EventRow({
   event,
@@ -236,33 +224,40 @@ export default function HomePage() {
       <main className="home-page">
         {error && <p className="notice error">{error}</p>}
 
-        {birthdays.length > 0 && (
-          <section className="card home-section birthday-banner">
-            <div className="section-heading">
-              <h2>
-                <Gift size={18} aria-hidden="true" /> Upcoming birthdays
-              </h2>
-            </div>
-            <div className="home-event-list">
-              {birthdays.slice(0, 5).map((entry) => {
-                const days = daysUntil(entry.next_occurrence_date);
-                return (
-                  <div className="home-event-row" key={`${entry.owner_type}:${entry.owner_id}`}>
-                    <span className="home-event-leading" aria-hidden="true">
-                      {upcomingBirthdayIcon(days)}
-                    </span>
-                    <span className="home-event-copy">
-                      <strong>
-                        {days === 0 ? birthdayTodayPhrase(entry.display_name) : entry.display_name}
-                      </strong>
-                      {days !== 0 && <small>{upcomingBirthdayLabel(days)}</small>}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        {(() => {
+          const thisMonthBirthdays = birthdays.filter((entry) => isBirthdayThisMonthAndUpcoming(entry));
+          if (!thisMonthBirthdays.length) return null;
+          return (
+            <section className="card home-section birthday-banner">
+              <div className="section-heading">
+                <h2>
+                  <Gift size={18} aria-hidden="true" /> Birthdays this month
+                </h2>
+              </div>
+              <div className="birthday-list">
+                {thisMonthBirthdays.slice(0, 5).map((entry) => {
+                  const days = daysUntilThisYear(entry);
+                  return (
+                    <div className="birthday-row" key={`${entry.owner_type}:${entry.owner_id}`}>
+                      <span className="birthday-row-icon" aria-hidden="true">
+                        {upcomingBirthdayIcon(days)}
+                      </span>
+                      <span className="birthday-row-copy">
+                        <strong>
+                          {days === 0 ? birthdayTodayPhrase(entry.display_name) : entry.display_name}
+                        </strong>
+                        <small>
+                          {birthdayDateLabel(entry)}
+                          {days !== 0 && ` · ${upcomingBirthdayLabel(days)}`}
+                        </small>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })()}
 
         {calendarEnabled && (
           <section className="card home-section home-section-overlap">

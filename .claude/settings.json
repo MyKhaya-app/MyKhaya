@@ -6,7 +6,10 @@
       "Bash(python3 -c ' *)",
       "Bash(sh infrastructure/scripts/run-tests.sh pytest tests/test_communications_admin.py -v)",
       "Bash(MSYS_NO_PATHCONV=1 docker compose exec -T api python -c \"import mykhaya.routers.communications_admin; print\\('ok'\\)\")",
-      "Bash(docker network *)"
+      "Bash(docker network *)",
+      "Bash(curl -s http://localhost:8080/login -H \"Host: localhost\")",
+      "Bash(pnpm exec *)",
+      "Bash(pnpm run *)"
     ]
   }
 }

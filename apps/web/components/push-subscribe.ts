@@ -20,13 +20,13 @@ export async function subscribeToPush(): Promise<SubscribeResult> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
     return { ok: false, reason: "unsupported" };
   }
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") return { ok: false, reason: "permission-denied" };
-
-  const { configured, public_key } = await api.pushPublicKey();
-  if (!configured || !public_key) return { ok: false, reason: "not-configured" };
-
   try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return { ok: false, reason: "permission-denied" };
+
+    const { configured, public_key } = await api.pushPublicKey();
+    if (!configured || !public_key) return { ok: false, reason: "not-configured" };
+
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();
     const subscription =
@@ -46,7 +46,10 @@ export async function subscribeToPush(): Promise<SubscribeResult> {
       user_agent: navigator.userAgent.slice(0, 300),
     });
     return { ok: true };
-  } catch {
+  } catch (cause) {
+    // Diagnostic only — never log the subscription itself (endpoint/keys are
+    // sensitive push credentials), just what kind of failure occurred.
+    console.error("subscribeToPush failed:", cause instanceof Error ? cause.message : cause);
     return { ok: false, reason: "error" };
   }
 }

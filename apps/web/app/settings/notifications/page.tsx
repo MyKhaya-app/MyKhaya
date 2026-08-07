@@ -85,20 +85,28 @@ export default function NotificationSettings() {
     setSubscribing(true);
     setError("");
     setMessage("");
-    const result = await subscribeToPush();
-    if (result.ok) {
-      setMessage("Notifications enabled on this device.");
-      await load();
-    } else if (result.reason === "unsupported") {
-      setError("This browser does not support push notifications.");
-    } else if (result.reason === "permission-denied") {
-      setError("Notification permission was not granted.");
-    } else if (result.reason === "not-configured") {
-      setError("Push is not configured on this server yet.");
-    } else {
-      setError("Could not enable notifications on this device.");
+    try {
+      const result = await subscribeToPush();
+      if (result.ok) {
+        setMessage("Notifications enabled on this device.");
+        await load();
+      } else if (result.reason === "unsupported") {
+        setError("This browser does not support push notifications.");
+      } else if (result.reason === "permission-denied") {
+        setError(
+          "Notification permission was denied. Enable notifications for MyKhaya in your device or browser settings, then try again.",
+        );
+      } else if (result.reason === "not-configured") {
+        setError("Push is not configured on this server yet.");
+      } else {
+        setError("Could not enable notifications on this device. Please try again.");
+      }
+    } catch (cause) {
+      console.error("enableOnThisDevice failed:", cause instanceof Error ? cause.message : cause);
+      setError("Could not enable notifications on this device. Please try again.");
+    } finally {
+      setSubscribing(false);
     }
-    setSubscribing(false);
   }
 
   async function removeDevice(id: string) {
