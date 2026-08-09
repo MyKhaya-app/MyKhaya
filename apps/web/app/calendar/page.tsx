@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import type {
   BirthdayEntry,
   EventLabel,
@@ -29,6 +29,7 @@ import {
 
 type ViewMode = "month" | "week" | "day" | "agenda";
 const VIEW_STORAGE = "mykhaya.calendar.view";
+const LABEL_STORAGE = "mykhaya.calendar.label";
 
 function formText(data: FormData, name: string) {
   const value = data.get(name);
@@ -292,12 +293,22 @@ export default function CalendarPage() {
   const [busy, setBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [labelFilter, setLabelFilter] = useState("");
+
+  useEffect(() => {
+    setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
+  }, []);
+
+  function chooseLabel(next: string) {
+    setLabelFilter(next);
+    window.localStorage.setItem(LABEL_STORAGE, next);
+  }
 
   useEffect(() => {
     const stored = window.localStorage.getItem(VIEW_STORAGE) as ViewMode | null;
     if (stored && ["month", "week", "day", "agenda"].includes(stored))
       setView(stored);
-    else if (window.matchMedia("(max-width: 600px)").matches) setView("agenda");
+    else setView("month");
   }, []);
 
   function chooseView(next: ViewMode) {
@@ -369,10 +380,13 @@ export default function CalendarPage() {
   }, [load]);
 
   const visibleEvents = useMemo(() => {
-    if (!query.trim()) return events;
+    const filtered = labelFilter
+      ? events.filter((event) => (event.label?.id ?? "") === labelFilter)
+      : events;
+    if (!query.trim()) return filtered;
     const needle = query.trim().toLowerCase();
-    return events.filter((event) => event.title.toLowerCase().includes(needle));
-  }, [events, query]);
+    return filtered.filter((event) => event.title.toLowerCase().includes(needle));
+  }, [events, labelFilter, query]);
   const byDay = useMemo(() => groupEventsByDay(visibleEvents), [visibleEvents]);
   const cells = useMemo(() => monthCells(focusDate), [focusDate]);
   const memberNames = useMemo(
@@ -596,6 +610,17 @@ export default function CalendarPage() {
           </div>
         </div>
 
+        <div className="calendar-filter-row">
+          <label className="calendar-selector">
+            <span className="sr-only">Calendar or category</span>
+            <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Calendar or category">
+              <option value="">{activeHome?.name ?? "Household"} calendar</option>
+              {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
+            </select>
+            <ChevronDown size={16} aria-hidden="true" />
+          </label>
+        </div>
+
         <h2 className="calendar-period">
           {view === "day"
             ? displayDate(focusDate, {
@@ -613,64 +638,7 @@ export default function CalendarPage() {
         )}
 
         {view === "month" && (
-          <section className="calendar-month" aria-label="Month view">
-            <div className="calendar-weekdays" aria-hidden="true">
-              {"Mon Tue Wed Thu Fri Sat Sun".split(" ").map((label) => (
-                <span key={label}>{label}</span>
-              ))}
-            </div>
-            <div className="calendar-grid">
-              {cells.map((day) => {
-                const key = dateKey(day);
-                const dayEvents = byDay.get(key) ?? [];
-                const today = key === dateKey(new Date());
-                const outside = day.getUTCMonth() !== focusDate.getUTCMonth();
-                return (
-                  <article
-                    className={`calendar-day${today ? " today" : ""}${outside ? " outside" : ""}`}
-                    key={key}
-                  >
-                    <button
-                      className="day-number"
-                      type="button"
-                      onClick={() => openDay(day)}
-                      aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long" })}, ${dayEvents.length} events`}
-                    >
-                      <span>{day.getUTCDate()}</span>
-                    </button>
-                    <div className="month-events">
-                      {dayEvents.slice(0, 3).map((event) => (
-                        <button
-                          key={event.occurrence_id}
-                          type="button"
-                          className="month-event"
-                          style={
-                            {
-                              "--event-color": event.label?.color ?? "#456b76",
-                            } as React.CSSProperties
-                          }
-                          onClick={() => setSelectedEvent(event)}
-                          aria-label={`${eventTime(event)} ${event.title}`}
-                        >
-                          <span aria-hidden="true" />
-                          <b>{eventTime(event)}</b> {event.title}
-                        </button>
-                      ))}
-                      {dayEvents.length > 3 && (
-                        <button
-                          className="overflow-events"
-                          type="button"
-                          onClick={() => openDay(day)}
-                        >
-                          +{dayEvents.length - 3} more
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
+          <MonthView cells={cells} events={visibleEvents} focusDate={focusDate} onDay={openDay} onEvent={setSelectedEvent} />
         )}
 
         {view === "week" && (
@@ -822,6 +790,88 @@ export default function CalendarPage() {
   );
 }
 
+function eventEndKey(event: EventOccurrence) {
+  const end = new Date(event.end_at);
+  if (event.is_all_day && event.end_at.includes("T00:00:00")) end.setUTCDate(end.getUTCDate() - 1);
+  return dateKey(end);
+}
+
+function MonthView({
+  cells,
+  events,
+  focusDate,
+  onDay,
+  onEvent,
+}: {
+  cells: Date[];
+  events: EventOccurrence[];
+  focusDate: Date;
+  onDay: (day: Date) => void;
+  onEvent: (event: EventOccurrence) => void;
+}) {
+  const todayKey = dateKey(new Date());
+  return (
+    <section className="calendar-month" aria-label="Month view">
+      <div className="calendar-weekdays" aria-hidden="true">
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => <span key={label}>{label}</span>)}
+      </div>
+      <div className="calendar-weeks">
+        {Array.from({ length: 6 }, (_, weekIndex) => {
+          const days = cells.slice(weekIndex * 7, weekIndex * 7 + 7);
+          const weekStart = dateKey(days[0]!);
+          const weekEnd = dateKey(days[6]!);
+          const rows: { event: EventOccurrence; start: number; end: number; row: number }[] = [];
+          const rowIntervals: { start: number; end: number }[][] = [];
+          events
+            .filter((event) => eventEndKey(event) >= weekStart && dateKey(event.start_at) <= weekEnd)
+            .sort((a, b) => dateKey(a.start_at).localeCompare(dateKey(b.start_at)) || a.title.localeCompare(b.title))
+            .forEach((event) => {
+              const start = Math.max(0, days.findIndex((day) => dateKey(day) >= dateKey(event.start_at)));
+              const end = Math.min(6, days.reduce((last, day, index) => dateKey(day) <= eventEndKey(event) ? index : last, -1));
+              if (end < start) return;
+              let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
+              if (row === -1) row = rowIntervals.length;
+              (rowIntervals[row] ??= []).push({ start, end });
+              rows.push({ event, start, end, row });
+            });
+          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= 4 && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
+          return (
+            <div className="calendar-week" key={weekStart}>
+              {days.map((day, index) => {
+                const key = dateKey(day);
+                const count = events.filter((event) => dateKey(event.start_at) <= key && eventEndKey(event) >= key).length;
+                const hidden = hiddenByDay[index] ?? 0;
+                return (
+                  <article className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}`} key={key}>
+                    <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, ${count} events`}>
+                      <span>{day.getUTCDate()}</span>
+                    </button>
+                    {hidden > 0 && <button className="overflow-events" type="button" onClick={() => onDay(day)}>+{hidden} more</button>}
+                  </article>
+                );
+              })}
+              {rows.filter((item) => item.row < 4).map(({ event, start, end, row }) => (
+                <button
+                  key={`${event.occurrence_id}-${weekStart}`}
+                  type="button"
+                  className="month-event"
+                  style={{ "--event-color": event.label?.color ?? "#456b76", gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
+                  onClick={() => onEvent(event)}
+                  aria-label={`${eventTime(event)} ${event.title}`}
+                  title={event.title}
+                >
+                  <span aria-hidden="true" />
+                  <b>{event.is_all_day ? "" : eventTime(event)}</b>{dateKey(event.start_at) < weekStart ? "↳ " : ""}{event.title}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function EventList({
   events,
   members,
@@ -861,7 +911,7 @@ function EventList({
             <span className="event-copy">
               <strong>{event.title}</strong>
               <small>
-                {[people.join(", "), event.location_text]
+                {[people.join(", "), event.label?.name, event.location_text, event.reminder_minutes !== null ? "Reminder set" : ""]
                   .filter(Boolean)
                   .join(" · ")}
               </small>

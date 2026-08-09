@@ -1334,6 +1334,112 @@ textarea {
 .calendar-month {
   min-width: 0;
 }
+.calendar-filter-row {
+  display: flex;
+  justify-content: flex-start;
+  margin: -0.4rem 0 0.8rem;
+}
+.calendar-selector {
+  align-items: center;
+  display: inline-flex;
+  position: relative;
+}
+.calendar-selector select {
+  appearance: none;
+  background: var(--colour-sage-soft);
+  border: 0;
+  border-radius: 999px;
+  color: var(--colour-sage-dark);
+  font-size: 0.82rem;
+  font-weight: 800;
+  min-height: 38px;
+  padding: 0.45rem 2rem 0.45rem 0.85rem;
+  width: auto;
+}
+.calendar-selector svg {
+  pointer-events: none;
+  position: absolute;
+  right: 0.55rem;
+}
+.sr-only {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+  clip: rect(0, 0, 0, 0);
+}
+.calendar-weeks {
+  display: grid;
+  gap: 0.35rem;
+}
+.calendar-week {
+  background: var(--colour-white);
+  border: 1px solid #ece6dc;
+  border-radius: 0.6rem;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: 34px repeat(4, 24px);
+  min-height: 130px;
+  overflow: hidden;
+  position: relative;
+}
+.calendar-week .calendar-day {
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #f0ebe3;
+  border-radius: 0;
+  grid-row: 1 / -1;
+  min-height: 0;
+  padding: 0.15rem 0.2rem;
+  position: relative;
+}
+.calendar-week .calendar-day:first-child {
+  border-left: 0;
+}
+.calendar-week .day-number {
+  min-height: 32px;
+  width: 100%;
+}
+.calendar-week .overflow-events {
+  bottom: 0.15rem;
+  left: 0.2rem;
+  min-height: 20px;
+  overflow: visible;
+  position: absolute;
+  width: calc(100% - 0.4rem);
+  z-index: 3;
+}
+.calendar-week .month-event {
+  align-self: center;
+  background: color-mix(in srgb, var(--event-color) 16%, white);
+  border-left: 3px solid var(--event-color);
+  border-radius: 0.25rem;
+  color: var(--colour-slate);
+  display: block;
+  font-size: 0.68rem;
+  line-height: 1.1;
+  min-height: 20px;
+  overflow: hidden;
+  padding: 0.18rem 0.28rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: calc(100% - 0.12rem);
+  z-index: 4;
+}
+.calendar-week .month-event > span {
+  background: var(--event-color);
+  border-radius: 50%;
+  display: inline-block;
+  height: 5px;
+  margin-right: 0.2rem;
+  vertical-align: middle;
+  width: 5px;
+}
+.calendar-week .month-event b {
+  font-weight: 800;
+}
 .calendar-day.outside {
   background: #f5f1eb;
   color: #858d8c;
@@ -1816,6 +1922,61 @@ body.sheet-open {
   .calendar-heading {
     align-items: start;
     flex-direction: column;
+  }
+}
+
+/* Calendar month view is a dedicated scan surface on small screens. Keep event
+   strips readable; the day sheet carries the full detail. */
+@media (max-width: 800px) {
+  .calendar-page {
+    padding-top: 1rem;
+  }
+  .calendar-heading {
+    margin-bottom: 0.35rem;
+  }
+  .calendar-heading h1 {
+    font-size: 1.55rem;
+  }
+  .calendar-toolbar {
+    gap: 0.45rem;
+    margin: 0.65rem 0 0.55rem;
+  }
+  .calendar-period {
+    font-size: 1.15rem;
+    margin-bottom: 0.55rem;
+  }
+  .calendar-filter-row {
+    margin-bottom: 0.55rem;
+  }
+  .calendar-weekdays {
+    margin-bottom: 0.2rem;
+  }
+  .calendar-weeks {
+    gap: 2px;
+  }
+  .calendar-week {
+    gap: 0;
+    grid-template-rows: 32px repeat(4, 22px);
+    min-height: 120px;
+  }
+  .calendar-week .calendar-day {
+    padding-inline: 0.08rem;
+  }
+  .calendar-week .day-number {
+    min-height: 30px;
+  }
+  .calendar-week .month-event {
+    border-left-width: 2px;
+    font-size: 0.61rem;
+    min-height: 18px;
+    padding: 0.12rem 0.16rem;
+  }
+  .calendar-week .month-event > span {
+    display: none;
+  }
+  .calendar-week .overflow-events {
+    font-size: 0.59rem;
+    padding-inline: 0.08rem;
   }
 }
 
