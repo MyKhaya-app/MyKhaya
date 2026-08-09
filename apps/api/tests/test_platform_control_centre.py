@@ -15,11 +15,14 @@ from mykhaya.models import (
     AdministrativeAuditEvent,
     AdministrativeNote,
     Group,
+    OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
     PlatformSession,
+    PlatformSmtpSettings,
     SecurityEvent,
     User,
+    WorkerJobRecord,
 )
 from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
@@ -145,6 +148,77 @@ async def test_overview_uses_live_database_counts_and_omits_missing_metadata(
         async with SessionFactory() as db:
             await db.execute(delete(Group).where(Group.id == home_id))
             await db.execute(delete(User).where(User.id == user_id))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_persisted_smtp_state_is_consistent_across_control_centre_health_pages(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    async with SessionFactory() as db:
+        db.add(
+            PlatformSmtpSettings(
+                enabled=True,
+                host="smtp.persisted.example",
+                sender_email="noreply@persisted.example",
+                sender_name="MyKhaya",
+                auth_enabled=False,
+            )
+        )
+        await db.commit()
+    try:
+        overview = (await admin_client.get("/api/v1/platform/overview")).json()
+        mail = (await admin_client.get("/api/v1/platform/mail")).json()
+        communications = (
+            await admin_client.get("/api/v1/platform/communications/health")
+        ).json()
+        email_health = next(item for item in overview["health"] if item["service"] == "Email")
+        assert email_health["state"] == "Healthy"
+        assert mail["configured"] is True
+        assert communications["smtp"] == {"configured": True, "status": "connected"}
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(PlatformSmtpSettings))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_job_does_not_degrade_current_overview(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    async with SessionFactory() as db:
+        event = OutboxEvent(
+            topic="notification.email",
+            payload={},
+            processed_at=datetime.now(UTC) - timedelta(days=2),
+        )
+        db.add(event)
+        await db.flush()
+        db.add(
+            WorkerJobRecord(
+                id=event.id,
+                outbox_event_id=event.id,
+                topic=event.topic,
+                status="failed",
+                finished_at=event.processed_at,
+            )
+        )
+        await db.commit()
+    try:
+        payload = (await admin_client.get("/api/v1/platform/overview")).json()
+        assert not any(
+            action["title"] == "1 background job failed" for action in payload["actions"]
+        )
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(WorkerJobRecord).where(WorkerJobRecord.id == event.id))
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event.id))
             await db.commit()
 
 

@@ -4,6 +4,7 @@ composition, and visibility-safe content across homes. No fake clock exists, so
 scan tests set `briefing_time` to the current real local time.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, time, timedelta
@@ -29,7 +30,6 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.briefing import (
-    BRIEFING_TOPIC,
     deliver_daily_briefing,
     empty_day_message,
     oxford_join,
@@ -40,6 +40,7 @@ from mykhaya.security import derived_token
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
 TZ = ZoneInfo("Europe/London")
+TEST_BRIEFING_USER_IDS: set[str] = set()
 
 
 @pytest.fixture
@@ -144,15 +145,26 @@ async def enable_briefing(
 async def clean_briefing_outbox() -> AsyncIterator[None]:
     yield
     async with SessionFactory() as db:
-        await db.execute(delete(OutboxEvent).where(OutboxEvent.topic == BRIEFING_TOPIC))
+        for user_id in TEST_BRIEFING_USER_IDS:
+            await db.execute(
+                delete(OutboxEvent).where(
+                    OutboxEvent.dedupe_key.like(f"daily-briefing:{user_id}:%")
+                )
+            )
         await db.commit()
+    TEST_BRIEFING_USER_IDS.clear()
 
 
 async def briefing_rows_for_user(db: AsyncSession, user_id: str) -> list[OutboxEvent]:
+    TEST_BRIEFING_USER_IDS.add(user_id)
     rows = (
-        await db.scalars(select(OutboxEvent).where(OutboxEvent.topic == BRIEFING_TOPIC))
+        await db.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.dedupe_key.like(f"daily-briefing:{user_id}:%")
+            )
+        )
     ).all()
-    return [row for row in rows if row.payload.get("user_id") == user_id]
+    return list(rows)
 
 
 def test_oxford_join_composes_natural_sentences() -> None:
@@ -192,9 +204,41 @@ async def test_scan_enqueues_a_due_briefing_and_is_idempotent(client: AsyncClien
 
 
 @pytest.mark.asyncio
+async def test_processed_occurrence_is_not_recreated_on_later_scan(client: AsyncClient) -> None:
+    user_id = await create_verified_user(client, unique_email("briefprocessed"), "Processed Owner")
+    await enable_briefing(user_id)
+
+    async with SessionFactory() as db:
+        await scan_due_briefings(db, get_settings())
+        row = (await briefing_rows_for_user(db, str(user_id)))[0]
+        row.processed_at = datetime.now(UTC)
+        await db.commit()
+        await scan_due_briefings(db, get_settings())
+        assert len(await briefing_rows_for_user(db, str(user_id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_scans_share_one_durable_occurrence(client: AsyncClient) -> None:
+    user_id = await create_verified_user(
+        client, unique_email("briefconcurrent"), "Concurrent Owner"
+    )
+    await enable_briefing(user_id)
+
+    async def scan_once() -> None:
+        async with SessionFactory() as db:
+            await scan_due_briefings(db, get_settings())
+
+    await asyncio.gather(scan_once(), scan_once())
+    async with SessionFactory() as db:
+        assert len(await briefing_rows_for_user(db, str(user_id))) == 1
+
+
+@pytest.mark.asyncio
 async def test_scan_skips_when_briefing_time_not_yet_reached(client: AsyncClient) -> None:
     user_id = await create_verified_user(client, unique_email("notyet"), "Not Yet Owner")
-    far_future_time = (datetime.now(UTC).astimezone(TZ) + timedelta(hours=6)).time()
+    # Keep the future time on the same local date; a time-only preference cannot
+    # represent tomorrow, and adding six hours can wrap past midnight.
+    far_future_time = (datetime.now(UTC).astimezone(TZ) + timedelta(minutes=30)).time()
     await enable_briefing(user_id, briefing_time=far_future_time)
 
     async with SessionFactory() as db:

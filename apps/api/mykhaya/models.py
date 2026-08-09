@@ -355,11 +355,17 @@ class AuditEvent(Base):
 
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
-    __table_args__ = (Index("ix_outbox_pending", "processed_at", "available_at"),)
+    __table_args__ = (
+        Index("ix_outbox_pending", "processed_at", "available_at"),
+        UniqueConstraint("dedupe_key", name="uq_outbox_events_dedupe_key"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     topic: Mapped[str] = mapped_column(String(100))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Durable identity for a scheduled occurrence. Nullable because ordinary
+    # transactional notifications do not have a recurring schedule identity.
+    dedupe_key: Mapped[str | None] = mapped_column(String(255))
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -378,6 +384,7 @@ class WorkerJobRecord(Base):
     topic: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(30), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(String(500))
 

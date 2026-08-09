@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_occurrences import expand_occurrences, recurrence_candidate_filter
@@ -186,15 +187,6 @@ async def scan_due_briefings(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
     window_end_utc = now_utc + LOOKAHEAD
 
-    pending = (
-        await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.topic == BRIEFING_TOPIC, OutboxEvent.processed_at.is_(None)
-            )
-        )
-    ).all()
-    already_queued = {(row.payload["user_id"], row.payload["date"]) for row in pending}
-
     prefs_rows = (
         await db.scalars(
             select(NotificationPreferences).where(
@@ -215,13 +207,17 @@ async def scan_due_briefings(db: AsyncSession, settings: Settings) -> None:
         if not (scheduled_local <= now_local < window_end_local):
             continue
         key = (str(user.id), now_local.date().isoformat())
-        if key in already_queued:
-            continue
-        db.add(
-            OutboxEvent(
+        # The unique durable key is the actual idempotency boundary. In-memory
+        # or pending-row checks fail once the previous occurrence is processed,
+        # and are racy when two scheduler instances scan concurrently.
+        await db.execute(
+            pg_insert(OutboxEvent)
+            .values(
                 topic=BRIEFING_TOPIC,
                 payload={"user_id": key[0], "date": key[1]},
+                dedupe_key=f"daily-briefing:{key[0]}:{key[1]}",
             )
+            .on_conflict_do_nothing(index_elements=["dedupe_key"])
         )
     await db.commit()
 

@@ -353,22 +353,33 @@ async def overview(
     ).one()
     failed_jobs = (
         await db.scalar(
-            select(func.count(WorkerJobRecord.id)).where(WorkerJobRecord.status == "failed")
+            select(func.count(WorkerJobRecord.id))
+            .join(OutboxEvent, WorkerJobRecord.outbox_event_id == OutboxEvent.id)
+            .where(
+                WorkerJobRecord.status == "failed",
+                OutboxEvent.processed_at.is_(None),
+            )
         )
         or 0
     )
     pending_outbox = (
         await db.scalar(
             select(func.count(OutboxEvent.id)).where(
-                OutboxEvent.processed_at.is_(None), OutboxEvent.available_at <= now
+                OutboxEvent.processed_at.is_(None)
             )
         )
         or 0
     )
+    oldest_pending = await db.scalar(
+        select(func.min(OutboxEvent.created_at)).where(OutboxEvent.processed_at.is_(None))
+    )
     queue_depth: int | None = None
     redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
     try:
-        queue_depth = int(await redis.llen("mykhaya:jobs")) + pending_outbox
+        # PostgreSQL is the source of truth. Redis may contain a transport copy
+        # of an outbox row, so adding both counts double-counts queued work.
+        await redis.llen("mykhaya:jobs")
+        queue_depth = pending_outbox
     except Exception as exc:
         await log.awarning(
             "platform_metric_unavailable", metric="queue_depth", error=type(exc).__name__
@@ -395,19 +406,33 @@ async def overview(
                     "href": "/health",
                 }
             )
+    queue_stuck = bool(
+        queue_depth is not None
+        and queue_depth > 0
+        and oldest_pending is not None
+        and (now - oldest_pending).total_seconds() > 300
+    )
     service_states.append(
         {
             "service": "Queue",
             "state": "Unavailable"
             if queue_depth is None
-            else ("Warning" if failed_jobs else "Healthy"),
+            else ("Warning" if queue_stuck else "Healthy"),
         }
     )
-    email_configured = bool(
-        settings.email_delivery_configured
-        and settings.smtp_host.strip()
-        and settings.email_from.strip()
-    )
+    if queue_stuck:
+        actions.append(
+            {
+                "severity": "warning",
+                "title": "Queue has unprocessed work",
+                "detail": (
+                    f"The oldest queued item is over five minutes old ({queue_depth} pending)."
+                ),
+                "href": "/jobs",
+            }
+        )
+    email_config = await resolve_smtp_config(settings, db)
+    email_configured = email_config.configured
     service_states.append(
         {"service": "Email", "state": "Healthy" if email_configured else "Not configured"}
     )
@@ -1334,11 +1359,8 @@ async def internal_health(
             WorkerJobRecord.topic == "notification.email", WorkerJobRecord.status == "failed"
         )
     )
-    email_configured = bool(
-        settings.email_delivery_configured
-        and settings.smtp_host.strip()
-        and settings.email_from.strip()
-    )
+    email_config = await resolve_smtp_config(settings, db)
+    email_configured = email_config.configured
     observation(
         "Email",
         "Healthy" if email_configured else "Not configured",
@@ -1424,6 +1446,10 @@ async def jobs(
     finally:
         await redis.aclose()
     worker_heartbeat = await db.get(OperationalHeartbeat, "worker")
+    scheduler_heartbeat = await db.get(OperationalHeartbeat, "scheduler")
+    next_scheduled_execution = await db.scalar(
+        select(func.min(OutboxEvent.available_at)).where(OutboxEvent.processed_at.is_(None))
+    )
     last_success = await db.scalar(
         select(func.max(WorkerJobRecord.finished_at)).where(WorkerJobRecord.status == "completed")
     )
@@ -1435,12 +1461,21 @@ async def jobs(
             .limit(page_size)
         )
     ).all()
+    outbox_ids = [row.outbox_event_id for row in rows if row.outbox_event_id]
+    outbox_rows = {
+        event.id: event
+        for event in (
+            await db.scalars(select(OutboxEvent).where(OutboxEvent.id.in_(outbox_ids)))
+        ).all()
+    }
     return {
         "summary": {
             **{str(state): count for state, count in state_counts},
             "queued": None if redis_depth is None else redis_depth + pending,
             "scheduled": scheduled,
             "worker_heartbeat": worker_heartbeat.observed_at if worker_heartbeat else None,
+            "scheduler_heartbeat": scheduler_heartbeat.observed_at if scheduler_heartbeat else None,
+            "next_scheduled_execution": next_scheduled_execution,
             "last_successful_execution": last_success,
         },
         "items": [
@@ -1449,9 +1484,21 @@ async def jobs(
                 "job_type": row.topic,
                 "state": row.status,
                 "created_at": row.created_at,
+                "started_at": row.started_at,
                 "completed_at": row.finished_at,
+                "duration_ms": (
+                    int((row.finished_at - row.started_at).total_seconds() * 1000)
+                    if row.finished_at and row.started_at
+                    else None
+                ),
                 "retry_count": row.attempts,
                 "safe_failure_message": row.error,
+                "occurrence_id": outbox_rows.get(row.outbox_event_id).dedupe_key
+                if outbox_rows.get(row.outbox_event_id)
+                else None,
+                "scheduled_for": outbox_rows.get(row.outbox_event_id).payload.get("date")
+                if outbox_rows.get(row.outbox_event_id)
+                else None,
             }
             for row in rows
         ],

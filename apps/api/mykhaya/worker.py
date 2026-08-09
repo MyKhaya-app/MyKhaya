@@ -118,7 +118,11 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
 async def process(event_id: uuid.UUID) -> None:
     settings = get_settings()
     async with SessionFactory() as db:
-        event = await db.get(OutboxEvent, event_id)
+        # Serialize all workers attempting the same outbox row. Redis is only
+        # transport; the database row lock is the durable execution claim.
+        event = await db.scalar(
+            select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
+        )
         if event is None or event.processed_at is not None:
             return
         existing = await db.get(WorkerJobRecord, event_id)
@@ -129,6 +133,7 @@ async def process(event_id: uuid.UUID) -> None:
             id=event.id, outbox_event_id=event.id, topic=event.topic, status="running", attempts=0
         )
         job.status = "running"
+        job.started_at = datetime.now(UTC)
         job.finished_at = None
         job.error = None
         db.add(job)
