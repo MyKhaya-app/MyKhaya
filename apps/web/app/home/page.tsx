@@ -110,7 +110,13 @@ function EventRow({
         {event.location_text && <small>{event.location_text}</small>}
       </span>
       {member ? (
-        <Avatar id={member.user_id} name={member.display_name} colour={member.colour} size="sm" />
+        <Avatar
+          id={member.user_id}
+          name={member.display_name}
+          colour={member.colour}
+          avatarVersion={member.avatar_version}
+          size="sm"
+        />
       ) : (
         <span className="home-event-avatar-placeholder" aria-hidden="true" />
       )}
@@ -213,6 +219,7 @@ export default function HomePage() {
                   id={member.user_id}
                   name={member.display_name}
                   colour={member.colour}
+                  avatarVersion={member.avatar_version}
                   size="md"
                 />
               ))}

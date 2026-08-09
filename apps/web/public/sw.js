@@ -8,7 +8,12 @@
 // network first; the cached offline page is only a fallback when the
 // network is unreachable.
 
-const CACHE_NAME = "mykhaya-shell-v1";
+// Bump this on any change to this file's caching behaviour — it both names the
+// Cache Storage bucket (so activate's cleanup below drops the previous one) and is
+// reported back to the app via the "MYKHAYA_GET_VERSION" message below, so a stale
+// installed PWA's build/SW version can actually be confirmed from the running app
+// rather than guessed at.
+const CACHE_NAME = "mykhaya-shell-v2";
 const OFFLINE_URL = "/offline";
 const PRECACHE_URLS = [OFFLINE_URL];
 
@@ -106,6 +111,16 @@ self.addEventListener("notificationclick", (event) => {
       return self.clients.openWindow(path);
     }),
   );
+});
+
+// Non-sensitive: lets the running app confirm exactly which service worker version
+// it's actually controlled by (see components/app-version.tsx), which is the
+// difference between "the deploy didn't reach this device" and "something else is
+// wrong" when debugging a stale-looking PWA.
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "MYKHAYA_GET_VERSION") {
+    event.ports[0]?.postMessage({ cacheName: CACHE_NAME });
+  }
 });
 
 // Mirrors mykhaya/notifications/deep_links.py::resolve_path — a notification always

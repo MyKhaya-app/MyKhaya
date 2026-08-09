@@ -15,8 +15,11 @@ dependencies = [
   "email-validator>=2.2,<3",
   "greenlet>=3.2,<4",
   "httpx>=0.28,<1",
+  "pillow>=11,<12",
+  "pillow-heif>=0.22,<1",
   "pwdlib[argon2]>=0.2,<1",
   "pydantic-settings>=2.10,<3",
+  "python-multipart>=0.0.20,<1",
   "pywebpush>=2,<3",
   "redis>=6.2,<7",
   "sqlalchemy[asyncio]>=2.0.41,<3",
@@ -68,5 +71,5 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["pywebpush.*", "py_vapid.*"]
+module = ["pywebpush.*", "py_vapid.*", "pillow_heif.*"]
 ignore_missing_imports = true

@@ -52,7 +52,12 @@ export function AppHeader({
         onClick={() => setMenuOpen(true)}
         aria-label="Open profile menu"
       >
-        <Avatar id={user?.id ?? "?"} name={user?.display_name ?? "?"} size="md" />
+        <Avatar
+          id={user?.id ?? "?"}
+          name={user?.display_name ?? "?"}
+          avatarVersion={user?.avatar_version}
+          size="md"
+        />
       </button>
 
       {menuOpen && (

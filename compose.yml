@@ -84,6 +84,10 @@ services:
     # grants egress, not ingress. See docs/architecture/deployment-model.md and the
     # `networks:` block below for the full model.
     networks: [edge, app, data]
+    # Profile avatars only (see mykhaya/avatars/) — a small, dedicated app-data volume,
+    # not a general media/photo store. Only `api` actually reads/writes it; worker and
+    # scheduler inherit the mount via this anchor but don't use it.
+    volumes: ["avatar_data:/data/avatars"]
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -133,7 +137,7 @@ services:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
       MYKHAYA_RATE_LIMIT_LOGIN: "100"
-      MYKHAYA_RATE_LIMIT_REGISTER: "100"
+      MYKHAYA_RATE_LIMIT_REGISTER: "300"
       MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
       MYKHAYA_ADMIN_URL: "http://admin.localhost:8080"
       MYKHAYA_STATUS_URL: "http://status.localhost:8080"
@@ -143,6 +147,7 @@ services:
       COVERAGE_FILE: /tmp/.coverage
       RUFF_CACHE_DIR: /tmp/.ruff_cache
       MYPY_CACHE_DIR: /tmp/.mypy_cache
+      MYKHAYA_AVATAR_STORAGE_DIR: /tmp/avatars
     command: ["python", "-m", "pytest"]
     depends_on:
       {
@@ -240,3 +245,4 @@ volumes:
   redis_data: {}
   caddy_data: {}
   caddy_config: {}
+  avatar_data: {}

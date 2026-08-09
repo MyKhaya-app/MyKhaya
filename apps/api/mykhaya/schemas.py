@@ -56,6 +56,9 @@ class UserResponse(BaseModel):
     birth_month: int | None = None
     birth_day: int | None = None
     birth_year: int | None = None
+    # Cache-busting version for the avatar image URL, not the image itself — null
+    # means "no custom avatar, show initials". See mykhaya/avatars/.
+    avatar_version: str | None = None
 
 
 def _validate_birthday(birth_month: int | None, birth_day: int | None) -> None:
@@ -121,6 +124,7 @@ class MemberResponse(BaseModel):
     permission_overrides: dict[str, bool]
     shared_resources: list[str]
     colour: str | None
+    avatar_version: str | None = None
 
 
 class MemberRelationshipUpdate(StrictModel):

@@ -125,6 +125,12 @@ class User(UuidTimeMixin, Base):
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)
     birth_year: Mapped[int | None] = mapped_column(Integer)
+    # A new random UUID per upload, not the user's id — a fresh, unpredictable filename
+    # each time so a changed avatar naturally invalidates any cached/versioned URL.
+    # Never the client-supplied filename. The actual image bytes live on disk under the
+    # avatar storage directory (mykhaya/avatars/), never in the database.
+    avatar_key: Mapped[str | None] = mapped_column(String(64))
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
 
 

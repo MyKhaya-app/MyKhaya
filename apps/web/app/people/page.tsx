@@ -50,6 +50,15 @@ function expiration(value: string) {
   );
 }
 
+// Mutually exclusive by construction — every action on this page (invite, resend,
+// revoke, change relationship) reports into this single status, so a success banner
+// from one attempt can never linger alongside a later error, or vice versa. Every
+// action clears it to "idle" the moment it starts, before setting its own outcome.
+type PageStatus =
+  | { kind: "idle" }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
+
 export default function People() {
   const { activeHome, activeHomeId } = useActiveHome();
   const [members, setMembers] = useState<Member[]>([]);
@@ -57,9 +66,8 @@ export default function People() {
   const [open, setOpen] = useState(false);
   const [relationship, setRelationship] =
     useState<HouseholdRelationship>("partner");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
+  const [sending, setSending] = useState(false);
   const [filter, setFilter] = useState<FamilyFilter>("all");
 
   const canInvite =
@@ -88,14 +96,22 @@ export default function People() {
   }
 
   useEffect(() => {
-    load().catch((cause: Error) => setError(cause.message));
+    load().catch((cause: Error) => setStatus({ kind: "error", message: cause.message }));
   }, [activeHomeId, canInvite]);
 
   async function invite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeHomeId || relationship === "child" || busy) return;
-    setBusy(true);
-    const data = new FormData(event.currentTarget);
+    if (!activeHomeId || relationship === "child" || sending) return;
+    // Captured now, before any `await` — React can null out event.currentTarget once
+    // this handler yields (and setOpen(false) below unmounts the form on the next
+    // render regardless), so touching event.currentTarget after the request was the
+    // actual cause of the original bug: form.reset() threw on every successful
+    // submit, landing in the catch block and showing an error right next to the
+    // success message that had just been set.
+    const form = event.currentTarget;
+    setSending(true);
+    setStatus({ kind: "idle" });
+    const data = new FormData(form);
     try {
       await api.post("/invitations", {
         group_id: activeHomeId,
@@ -106,19 +122,22 @@ export default function People() {
             ? data.getAll("shared_resources")
             : [],
       });
-      setMessage("Invitation sent securely.");
-      setError("");
+      // The email send itself happens asynchronously (worker + outbox, so a slow or
+      // temporarily-down mail provider never blocks this request) — this only
+      // confirms the invitation was created and the email queued, not that it has
+      // landed in an inbox yet. See the "Pending invitations" list for delivery
+      // status, and Resend if it doesn't arrive.
+      setStatus({ kind: "success", message: "Invitation created — sending the email now." });
       setOpen(false);
-      event.currentTarget.reset();
+      form.reset();
       await load();
     } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : "We could not send that invitation.",
-      );
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "We could not send that invitation.",
+      });
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
@@ -131,7 +150,10 @@ export default function People() {
       "Reason for changing this household relationship:",
     );
     if (!reason || reason.trim().length < 10) {
-      setError("Please provide an audit reason of at least 10 characters.");
+      setStatus({
+        kind: "error",
+        message: "Please provide an audit reason of at least 10 characters.",
+      });
       return;
     }
     if (
@@ -140,6 +162,7 @@ export default function People() {
       )
     )
       return;
+    setStatus({ kind: "idle" });
     try {
       await api.patch(`/groups/${activeHomeId}/members/${member.user_id}`, {
         relationship: next,
@@ -150,43 +173,42 @@ export default function People() {
         reason: reason.trim(),
         confirmed: true,
       });
-      setMessage("Relationship and default permission profile updated.");
+      setStatus({ kind: "success", message: "Relationship and default permission profile updated." });
       await load();
     } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : "That relationship could not be changed.",
-      );
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "That relationship could not be changed.",
+      });
     }
   }
 
   async function resend(invitationId: string) {
+    setStatus({ kind: "idle" });
     try {
       await api.resendInvitation(invitationId);
-      setMessage("Invitation resent.");
+      setStatus({ kind: "success", message: "Invitation re-queued — sending the email now." });
       await load();
     } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : "Could not resend invitation.",
-      );
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not resend invitation.",
+      });
     }
   }
 
   async function revoke(invitationId: string) {
     if (!window.confirm("Revoke this invitation?")) return;
+    setStatus({ kind: "idle" });
     try {
       await api.revokeInvitation(invitationId);
-      setMessage("Invitation revoked.");
+      setStatus({ kind: "success", message: "Invitation revoked." });
       await load();
     } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : "Could not revoke invitation.",
-      );
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not revoke invitation.",
+      });
     }
   }
 
@@ -301,8 +323,8 @@ export default function People() {
                       safe default profile will be used now.
                     </p>
                   </details>
-                  <button disabled={busy}>
-                    {busy ? "Sending…" : "Send invitation"}
+                  <button disabled={sending}>
+                    {sending ? "Sending…" : "Send invitation"}
                   </button>
                 </>
               )}
@@ -310,7 +332,10 @@ export default function People() {
           </section>
         )}
 
-        <FormStatus message={message} error={error} />
+        <FormStatus
+          message={status.kind === "success" ? status.message : undefined}
+          error={status.kind === "error" ? status.message : undefined}
+        />
 
         {canInvite && invitations.length > 0 && (
           <section className="card details">
@@ -378,7 +403,13 @@ export default function People() {
               .filter((member) => filter === "all" || filterGroup(member.relationship) === filter)
               .map((member) => (
                 <article className="card family-member" key={member.user_id}>
-                  <Avatar id={member.user_id} name={member.display_name} colour={member.colour} size="lg" />
+                  <Avatar
+                    id={member.user_id}
+                    name={member.display_name}
+                    colour={member.colour}
+                    avatarVersion={member.avatar_version}
+                    size="lg"
+                  />
                   <div className="family-member-body">
                     <div className="family-member-name">
                       <strong>{member.display_name}</strong>

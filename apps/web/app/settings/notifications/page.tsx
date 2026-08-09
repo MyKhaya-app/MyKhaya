@@ -9,7 +9,19 @@ import type {
 import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
-import { subscribeToPush } from "@/components/push-subscribe";
+import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
+
+const STAGE_LABELS: Record<SubscribeStage, string> = {
+  "checking-support": "Checking browser support…",
+  "checking-permission": "Checking notification permission…",
+  "requesting-permission": "Waiting for permission…",
+  "fetching-public-key": "Contacting server…",
+  "waiting-for-service-worker": "Waiting for service worker…",
+  "checking-existing-subscription": "Checking existing subscription…",
+  "creating-push-subscription": "Creating subscription…",
+  "registering-with-api": "Saving to your account…",
+  complete: "Done.",
+};
 
 const BRIEFING_PRESETS = [
   ["07:30", "Morning"],
@@ -25,6 +37,7 @@ export default function NotificationSettings() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [subscribing, setSubscribing] = useState(false);
+  const [subscribeStage, setSubscribeStage] = useState<SubscribeStage | null>(null);
 
   const load = useCallback(async () => {
     const [preferences, subscriptions] = await Promise.all([
@@ -83,10 +96,11 @@ export default function NotificationSettings() {
 
   async function enableOnThisDevice() {
     setSubscribing(true);
+    setSubscribeStage(null);
     setError("");
     setMessage("");
     try {
-      const result = await subscribeToPush();
+      const result = await subscribeToPush(setSubscribeStage);
       if (result.ok) {
         setMessage("Notifications enabled on this device.");
         await load();
@@ -98,14 +112,24 @@ export default function NotificationSettings() {
         );
       } else if (result.reason === "not-configured") {
         setError("Push is not configured on this server yet.");
+      } else if (result.reason === "timeout" && result.stage === "waiting-for-service-worker") {
+        setError(
+          "The service worker did not become ready in time. Try closing and reopening the app; if this keeps happening, please let us know.",
+        );
+      } else if (result.reason === "timeout") {
+        setError(`This took too long (stuck at "${STAGE_LABELS[result.stage!]}"). Please try again.`);
       } else {
         setError("Could not enable notifications on this device. Please try again.");
+      }
+      if (!result.ok && process.env.NODE_ENV !== "production") {
+        console.debug("[push] diagnostics:", await diagnosePushEnvironment());
       }
     } catch (cause) {
       console.error("enableOnThisDevice failed:", cause instanceof Error ? cause.message : cause);
       setError("Could not enable notifications on this device. Please try again.");
     } finally {
       setSubscribing(false);
+      setSubscribeStage(null);
     }
   }
 
@@ -141,7 +165,10 @@ export default function NotificationSettings() {
           <p>Install MyKhaya to your Home Screen first to enable notifications.</p>
         ) : (
           <button type="button" className="secondary" onClick={enableOnThisDevice} disabled={subscribing}>
-            <Bell size={16} aria-hidden="true" /> {subscribing ? "Enabling…" : "Enable notifications on this device"}
+            <Bell size={16} aria-hidden="true" />{" "}
+            {subscribing
+              ? (subscribeStage && STAGE_LABELS[subscribeStage]) || "Enabling…"
+              : "Enable notifications on this device"}
           </button>
         )}
         {devices.length > 0 && (

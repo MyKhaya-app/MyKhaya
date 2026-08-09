@@ -27,6 +27,7 @@ export interface User {
   birth_month: number | null;
   birth_day: number | null;
   birth_year: number | null;
+  avatar_version: string | null;
 }
 export interface Home {
   id: string;
@@ -48,6 +49,7 @@ export interface Member {
   permission_overrides: Record<string, boolean>;
   shared_resources: string[];
   colour: string | null;
+  avatar_version: string | null;
 }
 
 export type RecurrencePattern =

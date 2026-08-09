@@ -104,6 +104,7 @@ textarea:focus-visible {
 }
 form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   margin-top: 1.5rem;
 }
@@ -445,6 +446,12 @@ textarea {
   font-weight: 700;
   justify-content: center;
   flex: none;
+  overflow: hidden;
+}
+.avatar img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
 }
 .avatar-sm {
   font-size: 0.8rem;
@@ -707,6 +714,7 @@ textarea {
 }
 .home-event-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 .home-event-row {
   align-items: center;
@@ -768,6 +776,7 @@ textarea {
 }
 .birthday-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 .birthday-row {
   align-items: center;
@@ -820,6 +829,7 @@ textarea {
 }
 .notify-copy {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.15rem;
   min-width: 0;
 }
@@ -866,6 +876,7 @@ textarea {
 }
 .invitation-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
 }
 .invitation-list article {
@@ -928,6 +939,7 @@ textarea {
 }
 .family-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
 }
 .family-member {
@@ -968,6 +980,7 @@ textarea {
 }
 .settings-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   max-width: 760px;
 }
@@ -1016,6 +1029,16 @@ textarea {
   color: var(--colour-muted);
   display: block;
   margin-top: 0.3rem;
+}
+.avatar-editor-row {
+  align-items: center;
+  display: flex;
+  gap: 1.1rem;
+}
+.avatar-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
 }
 .coming {
   text-align: center;
@@ -1105,6 +1128,7 @@ textarea {
 
 .agenda-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
 }
 @media (max-width: 800px) {
@@ -1343,6 +1367,7 @@ textarea {
 }
 .month-events {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.2rem;
 }
 .month-event,
@@ -1397,6 +1422,7 @@ textarea {
 }
 .event-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.45rem;
 }
 .event-row {
@@ -1451,6 +1477,7 @@ textarea {
 .child-list,
 .feature-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
 .agenda-day h2 {
@@ -1652,6 +1679,7 @@ body.sheet-open {
 }
 .permission-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 .permission-row {
   align-items: center;
@@ -2498,7 +2526,7 @@ body.sheet-open {
   margin-bottom: 0.7rem;
 }
 .module-reason { display: grid; gap: 0.5rem; }
-.module-list { display: grid; gap: 0.8rem; }
+.module-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.8rem; }
 .module-list article {
   align-items: center;
   background: white;

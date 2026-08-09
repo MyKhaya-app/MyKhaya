@@ -871,6 +871,7 @@ function EventList({
                 id={firstMember.user_id}
                 name={firstMember.display_name}
                 colour={firstMember.colour}
+                avatarVersion={firstMember.avatar_version}
                 size="sm"
               />
             )}

@@ -9,7 +9,20 @@
       "Bash(docker network *)",
       "Bash(curl -s http://localhost:8080/login -H \"Host: localhost\")",
       "Bash(pnpm exec *)",
-      "Bash(pnpm run *)"
+      "Bash(pnpm run *)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(awk -F: '{sum+=$2; print} END{print \"TOTAL=\"sum}')",
+      "Bash(npx playwright *)",
+      "Bash(node scripts/diagnose-overflow.mjs http://127.0.0.1:8080)",
+      "Bash(node scripts/debug-register.mjs)",
+      "Bash(nslookup dev.mykhaya.app)",
+      "Read(//c/Windows/System32/drivers/etc/**)",
+      "Bash(grep -n \"^\\\\.home-event-list {$\\\\|^\\\\.birthday-list {$\\\\|^\\\\.family-list {$\\\\|^\\\\.notify-copy {$\\\\|^\\\\.invitation-list {$\\\\|^\\\\.feature-list {$\\\\|^\\\\.permission-list {$\\\\|^\\\\.settings-list {$\\\\|^\\\\.agenda-list {$\\\\|^\\\\.month-events {$\\\\|^\\\\.event-list {$\\\\|^\\\\.module-list {\" app/styles.css)",
+      "Bash(E2E_EMAIL=\"e2e-2e3b38f8@example.com\" npx playwright test e2e/mobile-viewport-and-invitations.spec.ts --project=mobile)",
+      "Bash(curl -s -D - -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/sw.js -o /tmp/sw_out.js)",
+      "Bash(curl -s -D - -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/login -o /tmp/login_out.html)",
+      "Bash(curl -sv -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/sw.js -o /tmp/sw_out2.js)",
+      "Bash(curl -s -D - http://127.0.0.1:8080/sw.js -o /tmp/sw_real.js)"
     ]
   }
 }

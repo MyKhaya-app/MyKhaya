@@ -1,19 +1,26 @@
 "use client";
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import type { User } from "@mykhaya/shared-types";
-import { api } from "@mykhaya/api-client";
+import { api, ApiError } from "@mykhaya/api-client";
+import { Avatar } from "@/components/avatar";
 import { SettingsPage } from "@/components/settings-page";
+import { emitUserUpdated } from "@/components/user-events";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
 
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
 export default function Profile() {
   const [user, setUser] = useState<User | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.me().then(setUser);
@@ -41,8 +48,100 @@ export default function Profile() {
     }
   }
 
+  async function handleAvatarSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Reset so choosing the same file again (e.g. after fixing it) still fires onChange.
+    event.target.value = "";
+    if (!file) return;
+
+    setAvatarError("");
+    if (file.size > MAX_AVATAR_BYTES) {
+      setAvatarError("That photo is too large. Please choose one under 5 MB.");
+      return;
+    }
+
+    setAvatarBusy(true);
+    try {
+      const updated = await api.uploadAvatar(file);
+      setUser(updated);
+      emitUserUpdated(updated);
+    } catch (cause) {
+      setAvatarError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not upload that photo. Please try again.",
+      );
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function handleRemoveAvatar() {
+    setAvatarError("");
+    setAvatarBusy(true);
+    try {
+      const updated = await api.removeAvatar();
+      setUser(updated);
+      emitUserUpdated(updated);
+    } catch (cause) {
+      setAvatarError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not remove your photo. Please try again.",
+      );
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   return (
     <SettingsPage title="Your profile">
+      {user && (
+        <section className="card details avatar-editor">
+          <h2>Your photo</h2>
+          <div className="avatar-editor-row">
+            <Avatar
+              id={user.id}
+              name={user.display_name}
+              avatarVersion={user.avatar_version}
+              size="xl"
+            />
+            <div className="avatar-editor-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={avatarBusy}
+              >
+                {avatarBusy ? "Working…" : "Change photo"}
+              </button>
+              {user.avatar_version && (
+                <button
+                  type="button"
+                  className="tertiary"
+                  onClick={handleRemoveAvatar}
+                  disabled={avatarBusy}
+                >
+                  Remove photo
+                </button>
+              )}
+            </div>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            style={{ display: "none" }}
+            onChange={handleAvatarSelected}
+          />
+          {avatarError && (
+            <p className="notice error" role="alert">
+              {avatarError}
+            </p>
+          )}
+        </section>
+      )}
+
       <section className="card details">
         <h2>Account details</h2>
         <dl>

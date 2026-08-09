@@ -7,6 +7,7 @@ import { api } from "@mykhaya/api-client";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { useActiveHome } from "./use-active-home";
+import { useUserUpdatedListener } from "./user-events";
 
 export function AppShell({
   children,
@@ -35,6 +36,8 @@ export function AppShell({
     if (!loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
   }, [homes, loading, path, router]);
+
+  useUserUpdatedListener(setUser);
 
   return (
     <div className="app-shell">

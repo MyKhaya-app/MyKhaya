@@ -12,7 +12,11 @@ export class MyKhayaClient {
         : document.cookie.match(/(?:^|; )mk_csrf=([^;]+)/)?.[1];
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    if (init.body) headers.set("Content-Type", "application/json");
+    // Leave FormData bodies alone — the browser sets Content-Type itself, including
+    // the multipart boundary, which we can't reproduce by hand.
+    if (init.body && !(init.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
     if (csrf && !["GET", "HEAD", "OPTIONS"].includes(init.method ?? "GET"))
       headers.set("X-CSRF-Token", decodeURIComponent(csrf));
     const response = await fetch(`${this.baseUrl}${path}`, {
@@ -47,6 +51,12 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").BirthdayListResponse>(
       `/homes/${encodeURIComponent(homeId)}/birthdays`,
     );
+  uploadAvatar = (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return this.request<User>("/users/me/avatar", { method: "POST", body });
+  };
+  removeAvatar = () => this.request<User>("/users/me/avatar", { method: "DELETE" });
   homes = () => this.request<Home[]>("/groups");
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);

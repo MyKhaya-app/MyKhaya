@@ -56,6 +56,7 @@ def user_response(user: User) -> UserResponse:
         birth_month=user.birth_month,
         birth_day=user.birth_day,
         birth_year=user.birth_year,
+        avatar_version=user.avatar_key,
     )
 
 

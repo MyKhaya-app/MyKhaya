@@ -172,6 +172,7 @@ async def members(
             permission_overrides=membership.permission_overrides,
             shared_resources=membership.shared_resources,
             colour=membership.colour,
+            avatar_version=user.avatar_key,
         )
         for membership, user in rows
     ]
@@ -252,6 +253,7 @@ async def update_member(
         permission_overrides=target.permission_overrides,
         shared_resources=target.shared_resources,
         colour=target.colour,
+        avatar_version=user.avatar_key,
     )
 
 

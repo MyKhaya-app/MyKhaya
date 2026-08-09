@@ -48,6 +48,12 @@ RUN addgroup -S -g 10001 mykhaya && adduser -S -u 10001 -G mykhaya mykhaya
 WORKDIR /app
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/.next/standalone ./
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/.next/static ./apps/web/.next/static
+# Next.js standalone output does NOT include public/ automatically — without this,
+# every file under apps/web/public (notably sw.js, the service worker) 404s in the
+# deployed container even though it works under `next dev`, where public/ is served
+# directly. This silently broke the service worker/PWA install path in every
+# deployment of this image until now.
+COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/public ./apps/web/public
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/VERSION /app/VERSION
 ENV MYKHAYA_VERSION=$MYKHAYA_VERSION MYKHAYA_COMMIT_SHA=$MYKHAYA_COMMIT_SHA MYKHAYA_BUILD_TIME=$MYKHAYA_BUILD_TIME MYKHAYA_BUILD_CHANNEL=$MYKHAYA_BUILD_CHANNEL
 USER 10001:10001
