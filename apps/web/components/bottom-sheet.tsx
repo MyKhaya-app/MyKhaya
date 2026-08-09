@@ -24,10 +24,14 @@ export function BottomSheet({
   useEffect(() => {
     restoreFocus.current = document.activeElement as HTMLElement | null;
     const element = dialog.current;
-    const initialFocus = element?.querySelector<HTMLElement>(
-      ".sheet-content input:not([disabled]), .sheet-content select:not([disabled]), .sheet-content textarea:not([disabled]), .sheet-content button:not([disabled])",
-    );
+    const scrollY = window.scrollY;
+    const initialFocus = element?.querySelector<HTMLElement>(".bottom-sheet-close");
+    // Focus the sheet control, never a form field. iOS Safari zooms when it
+    // programmatically focuses a small input as a sheet opens.
     (initialFocus ?? element)?.focus();
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = "100%";
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") dismiss.current();
       if (event.key !== "Tab" || !element) return;
@@ -52,6 +56,10 @@ export function BottomSheet({
     return () => {
       document.removeEventListener("keydown", keydown);
       document.body.classList.remove("sheet-open");
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.width = "";
+      window.scrollTo(0, scrollY);
       restoreFocus.current?.focus();
     };
   }, []);
@@ -75,7 +83,7 @@ export function BottomSheet({
         <header>
           <h2 id="sheet-title">{title}</h2>
           <button
-            className="icon-button secondary"
+            className="icon-button secondary bottom-sheet-close"
             type="button"
             onClick={onDismiss}
             aria-label="Close dialog"

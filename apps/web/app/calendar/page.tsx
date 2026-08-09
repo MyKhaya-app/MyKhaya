@@ -151,7 +151,6 @@ function EventForm({
           defaultValue={initial?.title ?? ""}
           required
           maxLength={180}
-          autoFocus
         />
       </label>
       <label>

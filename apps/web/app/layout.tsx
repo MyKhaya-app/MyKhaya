@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   appleWebApp: { title: "MyKhaya", statusBarStyle: "default" },
 };
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
   themeColor: "#7D8F7A",
 };
 export default function RootLayout({

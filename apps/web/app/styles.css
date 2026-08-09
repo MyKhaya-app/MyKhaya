@@ -1,6 +1,9 @@
 * {
   box-sizing: border-box;
 }
+:root {
+  --bottom-nav-height: 72px;
+}
 html {
   background: var(--colour-cream-light);
   color: var(--colour-slate);
@@ -508,7 +511,7 @@ textarea {
 .app-main {
   flex: 1;
   min-width: 0;
-  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 1rem);
 }
 .bottom-nav {
   align-items: stretch;
@@ -520,7 +523,7 @@ textarea {
   display: flex;
   justify-content: space-around;
   left: 0;
-  min-height: calc(72px + env(safe-area-inset-bottom));
+  min-height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
   padding: 0.55rem 0.5rem env(safe-area-inset-bottom);
   position: fixed;
   right: 0;
@@ -1379,8 +1382,8 @@ textarea {
   border-radius: 0.6rem;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  grid-template-rows: 34px repeat(4, 24px);
-  min-height: 130px;
+  grid-template-rows: 29px repeat(4, 19px);
+  min-height: 106px;
   overflow: hidden;
   position: relative;
 }
@@ -1592,15 +1595,15 @@ textarea {
 }
 .calendar-fab {
   border-radius: 50%;
-  bottom: calc(78px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 0.75rem);
   box-shadow: 0 12px 28px rgb(31 41 51 / 25%);
   display: none;
   font-size: 1.8rem;
-  height: 56px;
+  height: 52px;
   padding: 0;
   position: fixed;
   right: 1rem;
-  width: 56px;
+  width: 52px;
   z-index: 8;
 }
 body.sheet-open {
@@ -1650,13 +1653,14 @@ body.sheet-open {
   height: calc(100% - 70px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  padding: 0.8rem 1rem calc(0.8rem + env(safe-area-inset-bottom));
 }
 .sheet-primary {
   margin-top: 1rem;
   width: 100%;
 }
 .event-form {
+  gap: 0.65rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 0;
 }
@@ -1928,6 +1932,25 @@ body.sheet-open {
 /* Calendar month view is a dedicated scan surface on small screens. Keep event
    strips readable; the day sheet carries the full detail. */
 @media (max-width: 800px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  .event-form label {
+    gap: 0.25rem;
+  }
+  .event-form input,
+  .event-form select {
+    min-height: 43px;
+    padding-block: 0.55rem;
+  }
+  .event-form textarea {
+    min-height: 88px;
+  }
+  .check-row {
+    min-height: 40px;
+  }
   .calendar-page {
     padding-top: 1rem;
   }
@@ -1956,19 +1979,19 @@ body.sheet-open {
   }
   .calendar-week {
     gap: 0;
-    grid-template-rows: 32px repeat(4, 22px);
-    min-height: 120px;
+    grid-template-rows: 28px repeat(4, 18px);
+    min-height: 100px;
   }
   .calendar-week .calendar-day {
     padding-inline: 0.08rem;
   }
   .calendar-week .day-number {
-    min-height: 30px;
+    min-height: 28px;
   }
   .calendar-week .month-event {
     border-left-width: 2px;
     font-size: 0.61rem;
-    min-height: 18px;
+    min-height: 17px;
     padding: 0.12rem 0.16rem;
   }
   .calendar-week .month-event > span {
