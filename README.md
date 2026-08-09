@@ -9,8 +9,6 @@ MyKhaya is a private coordination application for households, families and close
 - `main`: stable and deployable; Anthony alone merges, tags and deploys it.
 - `dev`: the source of all day-to-day development; Codex works and commits here.
 
-Official flow: develop and test on `dev` → Anthony reviews → Anthony merges to `main` → Anthony tags → Anthony deploys. There is no automatic promotion and no normal use of release, hotfix or long-lived feature branches.
-
 ## Persistent development server
 
 Requirements: Git, Make, Docker Compose v2, Python 3, and curl or wget. Use the tracked
