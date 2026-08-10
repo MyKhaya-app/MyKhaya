@@ -146,16 +146,6 @@ export default function People() {
     next: HouseholdRelationship,
   ) {
     if (!activeHomeId || !canManage || next === "child") return;
-    const reason = window.prompt(
-      "Reason for changing this household relationship:",
-    );
-    if (!reason || reason.trim().length < 10) {
-      setStatus({
-        kind: "error",
-        message: "Please provide an audit reason of at least 10 characters.",
-      });
-      return;
-    }
     if (
       !window.confirm(
         `Change ${member.display_name} to ${relationshipLabels[next]}?`,
@@ -170,7 +160,6 @@ export default function People() {
         permission_overrides: {},
         shared_resources:
           next === "extended_family" || next === "friend" ? [] : [],
-        reason: reason.trim(),
         confirmed: true,
       });
       setStatus({ kind: "success", message: "Relationship and default permission profile updated." });

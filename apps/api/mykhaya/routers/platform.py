@@ -66,6 +66,7 @@ from mykhaya.notifications.templates import (
     validate_override_text,
 )
 from mykhaya.platform_audit import platform_audit
+from mykhaya.platform_health import current_platform_health
 from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
     IncidentCreate,
@@ -351,41 +352,9 @@ async def overview(
             )
         )
     ).one()
-    failed_jobs = (
-        await db.scalar(
-            select(func.count(WorkerJobRecord.id))
-            .join(OutboxEvent, WorkerJobRecord.outbox_event_id == OutboxEvent.id)
-            .where(
-                WorkerJobRecord.status == "failed",
-                OutboxEvent.processed_at.is_(None),
-            )
-        )
-        or 0
-    )
-    pending_outbox = (
-        await db.scalar(
-            select(func.count(OutboxEvent.id)).where(
-                OutboxEvent.processed_at.is_(None)
-            )
-        )
-        or 0
-    )
-    oldest_pending = await db.scalar(
-        select(func.min(OutboxEvent.created_at)).where(OutboxEvent.processed_at.is_(None))
-    )
-    queue_depth: int | None = None
-    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
-    try:
-        # PostgreSQL is the source of truth. Redis may contain a transport copy
-        # of an outbox row, so adding both counts double-counts queued work.
-        await redis.llen("mykhaya:jobs")
-        queue_depth = pending_outbox
-    except Exception as exc:
-        await log.awarning(
-            "platform_metric_unavailable", metric="queue_depth", error=type(exc).__name__
-        )
-    finally:
-        await redis.aclose()
+    current_health = await current_platform_health(db, settings, now=now)
+    failed_jobs = current_health.actionable_failed_jobs
+    queue_depth: int | None = current_health.queue_depth
 
     heartbeats = {
         row.service: row for row in (await db.scalars(select(OperationalHeartbeat))).all()
@@ -406,33 +375,22 @@ async def overview(
                     "href": "/health",
                 }
             )
-    queue_stuck = bool(
-        queue_depth is not None
-        and queue_depth > 0
-        and oldest_pending is not None
-        and (now - oldest_pending).total_seconds() > 300
-    )
     service_states.append(
         {
             "service": "Queue",
-            "state": "Unavailable"
-            if queue_depth is None
-            else ("Warning" if queue_stuck else "Healthy"),
+            "state": current_health.queue_state.title(),
         }
     )
-    if queue_stuck:
+    if current_health.queue_reason:
         actions.append(
             {
                 "severity": "warning",
                 "title": "Queue has unprocessed work",
-                "detail": (
-                    f"The oldest queued item is over five minutes old ({queue_depth} pending)."
-                ),
+                "detail": current_health.queue_reason,
                 "href": "/jobs",
             }
         )
-    email_config = await resolve_smtp_config(settings, db)
-    email_configured = email_config.configured
+    email_configured = current_health.smtp.configured
     service_states.append(
         {"service": "Email", "state": "Healthy" if email_configured else "Not configured"}
     )
@@ -443,15 +401,6 @@ async def overview(
                 "title": f"{failed_jobs} background job{'s' if failed_jobs != 1 else ''} failed",
                 "detail": "Inspect the safe failure details and retry eligible jobs.",
                 "href": "/jobs",
-            }
-        )
-    if queue_depth is None:
-        actions.append(
-            {
-                "severity": "critical",
-                "title": "Queue state is unavailable",
-                "detail": "Check the Redis service and network path.",
-                "href": "/health",
             }
         )
     if not email_configured:
@@ -1493,14 +1442,11 @@ async def jobs(
                 ),
                 "retry_count": row.attempts,
                 "safe_failure_message": row.error,
-                "occurrence_id": outbox_rows.get(row.outbox_event_id).dedupe_key
-                if outbox_rows.get(row.outbox_event_id)
-                else None,
-                "scheduled_for": outbox_rows.get(row.outbox_event_id).payload.get("date")
-                if outbox_rows.get(row.outbox_event_id)
-                else None,
+                "occurrence_id": outbox.dedupe_key if outbox else None,
+                "scheduled_for": outbox.payload.get("date") if outbox else None,
             }
             for row in rows
+            for outbox in [outbox_rows.get(row.outbox_event_id) if row.outbox_event_id else None]
         ],
         "page": page,
         "page_size": page_size,

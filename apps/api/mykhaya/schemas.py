@@ -132,7 +132,9 @@ class MemberRelationshipUpdate(StrictModel):
     permission_profile: PermissionProfile | None = None
     permission_overrides: dict[str, bool] = Field(default_factory=dict)
     shared_resources: list[str] = Field(default_factory=list, max_length=20)
-    reason: str = Field(min_length=10, max_length=500)
+    # Optional: this is a routine household action, not an operator action — the user
+    # is never prompted to justify it. See docs/security/threat-model.md.
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 
@@ -181,24 +183,25 @@ class ChildCreate(StrictModel):
 
 class ChildPermissionUpdate(StrictModel):
     permissions: dict[str, bool]
-    reason: str = Field(min_length=10, max_length=500)
+    # Optional — see MemberRelationshipUpdate.reason above.
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 
 class ChildAgeBandUpdate(StrictModel):
     age_band: ChildAgeBand
-    reason: str = Field(min_length=10, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 
 class GuardianUpdate(StrictModel):
     guardian_membership_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
-    reason: str = Field(min_length=10, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 
 class ChildTransitionRequest(StrictModel):
-    reason: str = Field(min_length=10, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 
@@ -210,7 +213,7 @@ class ChildBirthdayUpdate(StrictModel):
     birth_month: int | None = Field(default=None, ge=1, le=12)
     birth_day: int | None = Field(default=None, ge=1, le=31)
     birthday_visible: bool
-    reason: str = Field(min_length=10, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
     @model_validator(mode="after")
@@ -261,7 +264,7 @@ class HouseholdModuleResponse(BaseModel):
 
 class HouseholdFeatureUpdate(StrictModel):
     enabled: bool
-    reason: str = Field(min_length=10, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
 
 

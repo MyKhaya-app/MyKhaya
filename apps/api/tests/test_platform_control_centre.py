@@ -26,7 +26,6 @@ from mykhaya.models import (
 )
 from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
-from mykhaya.routers import platform as platform_router
 from mykhaya.security import password_hash
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
@@ -312,31 +311,17 @@ async def test_overview_failed_login_metric_uses_the_last_24_hours(
 
 
 @pytest.mark.asyncio
-async def test_unavailable_queue_metric_is_not_reported_as_zero(
+async def test_queue_metric_uses_database_outbox_as_source_of_truth(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
-
-    class UnavailableRedis:
-        async def llen(self, _: str) -> int:
-            raise ConnectionError
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr(
-        platform_router.Redis,
-        "from_url",
-        lambda *args, **kwargs: UnavailableRedis(),
-    )
     response = await admin_client.get("/api/v1/platform/overview")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["operations"]["queue_depth"] is None
-    assert any(item["title"] == "Queue state is unavailable" for item in payload["actions"])
+    assert isinstance(payload["operations"]["queue_depth"], int)
+    assert not any(item["title"] == "Queue state is unavailable" for item in payload["actions"])
 
 
 @pytest.mark.asyncio

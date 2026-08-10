@@ -97,10 +97,6 @@ export default function ChildrenPage() {
   async function togglePermission(child: ChildProfile, key: string) {
     if (!activeHomeId) return;
     const next = { ...child.permissions, [key]: !child.permissions[key] };
-    const reason = window.prompt(
-      `Reason for changing “${permissionLabels[key]}”:`,
-    );
-    if (!reason || reason.trim().length < 10) return;
     if (
       !window.confirm(
         `Save this child permission change for ${child.display_name}?`,
@@ -110,7 +106,6 @@ export default function ChildrenPage() {
     try {
       await api.updateChildPermissions(activeHomeId, child.membership_id, {
         permissions: next,
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Child permissions updated and active sessions revoked.");
@@ -126,10 +121,6 @@ export default function ChildrenPage() {
 
   async function requestTransition(child: ChildProfile) {
     if (!activeHomeId) return;
-    const reason = window.prompt(
-      "Reason for starting the adult transition review:",
-    );
-    if (!reason || reason.trim().length < 10) return;
     if (
       !window.confirm(
         "Start a review without granting any adult permissions automatically?",
@@ -138,7 +129,6 @@ export default function ChildrenPage() {
       return;
     try {
       await api.requestChildAdultReview(activeHomeId, child.membership_id, {
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Adult transition review recorded. No permissions changed.");
@@ -154,8 +144,6 @@ export default function ChildrenPage() {
 
   async function changeAgeBand(child: ChildProfile, ageBand: ChildAgeBand) {
     if (!activeHomeId || ageBand === child.age_band) return;
-    const reason = window.prompt("Reason for changing this age band:");
-    if (!reason || reason.trim().length < 10) return;
     if (
       !window.confirm(
         `Change ${child.display_name}'s age band to ${ageLabels[ageBand]}?`,
@@ -165,7 +153,6 @@ export default function ChildrenPage() {
     try {
       await api.updateChildAgeBand(activeHomeId, child.membership_id, {
         age_band: ageBand,
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Age band updated and audited.");
@@ -192,8 +179,6 @@ export default function ChildrenPage() {
       setError("Choose at least one responsible adult.");
       return;
     }
-    const reason = window.prompt("Reason for changing responsible adults:");
-    if (!reason || reason.trim().length < 10) return;
     if (
       !window.confirm(
         `Save the guardian assignments for ${child.display_name}?`,
@@ -203,7 +188,6 @@ export default function ChildrenPage() {
     try {
       await api.updateChildGuardians(activeHomeId, child.membership_id, {
         guardian_membership_ids: guardianIds,
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Responsible adults updated and audited.");
@@ -226,14 +210,11 @@ export default function ChildrenPage() {
     const data = new FormData(event.currentTarget);
     const month = data.get("birth_month");
     const day = data.get("birth_day");
-    const reason = window.prompt("Reason for changing this birthday:");
-    if (!reason || reason.trim().length < 10) return;
     try {
       await api.updateChildBirthday(activeHomeId, child.membership_id, {
         birth_month: month ? Number(month) : null,
         birth_day: day ? Number(day) : null,
         birthday_visible: data.get("birthday_visible") === "on",
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Birthday updated.");
@@ -249,10 +230,6 @@ export default function ChildrenPage() {
 
   async function anonymise(child: ChildProfile) {
     if (!activeHomeId) return;
-    const reason = window.prompt(
-      "Reason for permanently anonymising this Child profile:",
-    );
-    if (!reason || reason.trim().length < 10) return;
     if (
       !window.confirm(
         `Anonymise ${child.display_name}? This removes access and identifying profile data.`,
@@ -261,7 +238,6 @@ export default function ChildrenPage() {
       return;
     try {
       await api.anonymiseChild(activeHomeId, child.membership_id, {
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage("Child profile anonymised and access removed.");

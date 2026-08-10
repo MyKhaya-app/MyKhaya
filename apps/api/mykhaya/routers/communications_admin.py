@@ -17,7 +17,6 @@ from sqlalchemy.sql.elements import UnaryExpression
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.mailer import resolve_smtp_config
 from mykhaya.models import (
     NotificationChannel,
     NotificationDelivery,
@@ -28,6 +27,7 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.labels import friendly_status, notification_type_label
 from mykhaya.notifications.push import resolve_push_config
+from mykhaya.platform_health import current_platform_health
 from mykhaya.platform_schemas import (
     CommunicationsHealthResponse,
     DiagnosticsEntryResponse,
@@ -75,15 +75,8 @@ async def communications_health(
     worker = await _service_status(db, "worker")
     scheduler = await _service_status(db, "scheduler")
 
-    smtp_config = await resolve_smtp_config(settings, db)
+    current_health = await current_platform_health(db, settings)
     push_config = await resolve_push_config(settings, db)
-
-    queue_depth = int(
-        await db.scalar(
-            select(func.count(OutboxEvent.id)).where(OutboxEvent.processed_at.is_(None))
-        )
-        or 0
-    )
 
     today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     latency_seconds = func.extract(
@@ -133,14 +126,16 @@ async def communications_health(
         worker=worker,
         scheduler=scheduler,
         smtp=TransportStatusResponse(
-            configured=smtp_config.configured,
-            status="connected" if smtp_config.configured else "not_configured",
+            configured=current_health.smtp.configured,
+            status="connected" if current_health.smtp.configured else "not_configured",
         ),
         push=TransportStatusResponse(
             configured=push_config.configured,
             status="connected" if push_config.configured else "not_configured",
         ),
-        queue_depth=queue_depth,
+        queue_depth=current_health.queue_depth,
+        queue_status=current_health.queue_state,
+        queue_reason=current_health.queue_reason,
         average_latency_seconds=(
             round(float(average_latency), 2) if average_latency is not None else None
         ),

@@ -22,7 +22,16 @@
       "Bash(curl -s -D - -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/sw.js -o /tmp/sw_out.js)",
       "Bash(curl -s -D - -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/login -o /tmp/login_out.html)",
       "Bash(curl -sv -H \"Host: dev.mykhaya.app\" http://127.0.0.1:8080/sw.js -o /tmp/sw_out2.js)",
-      "Bash(curl -s -D - http://127.0.0.1:8080/sw.js -o /tmp/sw_real.js)"
+      "Bash(curl -s -D - http://127.0.0.1:8080/sw.js -o /tmp/sw_real.js)",
+      "Bash(node scripts/calendar-screenshots.mjs http://127.0.0.1:8080)",
+      "Bash(E2E_EMAIL=\"e2e-b247fbc3@example.com\" npx playwright test e2e/calendar-density.spec.ts e2e/reason-prompts.spec.ts --project=mobile)",
+      "Bash(E2E_EMAIL=\"e2e-b247fbc3@example.com\" npx playwright test e2e/calendar-density.spec.ts e2e/reason-prompts.spec.ts --project=mobile --workers=1)",
+      "PowerShell(Get-Process \"Docker Desktop\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Service com.docker.service -ErrorAction SilentlyContinue)",
+      "PowerShell(Start-Process \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "Bash(E2E_EMAIL=\"e2e-b247fbc3@example.com\" npx playwright test e2e/reason-prompts.spec.ts --project=mobile --workers=1)",
+      "Bash(sh infrastructure/scripts/run-tests.sh)",
+      "Bash(node scripts/calendar-review-screenshots.mjs http://127.0.0.1:8080)"
     ]
   }
 }

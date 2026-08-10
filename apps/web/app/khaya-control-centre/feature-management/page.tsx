@@ -10,7 +10,6 @@ import { useActiveHome } from "@/components/use-active-home";
 export default function FeatureManagementPage() {
   const { activeHomeId } = useActiveHome();
   const [modules, setModules] = useState<HouseholdModule[]>([]);
-  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -35,7 +34,7 @@ export default function FeatureManagementPage() {
   );
 
   async function update(module: HouseholdModule) {
-    if (!activeHomeId || reason.trim().length < 10 || busy) return;
+    if (!activeHomeId || busy) return;
     const enabled = !module.enabled;
     if (
       !window.confirm(
@@ -48,7 +47,6 @@ export default function FeatureManagementPage() {
     try {
       await api.updateHouseholdFeature(activeHomeId, module.id as FeatureKey, {
         enabled,
-        reason: reason.trim(),
         confirmed: true,
       });
       setMessage(
@@ -71,20 +69,6 @@ export default function FeatureManagementPage() {
       title="Feature Management"
       description="Released modules can be enabled per Home. Unreleased modules remain completely hidden."
     >
-      <section className="card feature-reason">
-        <label htmlFor="feature-reason">Reason for the change</label>
-        <input
-          id="feature-reason"
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          minLength={10}
-          maxLength={500}
-          placeholder="Describe why this Home needs the change"
-        />
-        <small>
-          At least 10 characters. Every change is confirmed and audited.
-        </small>
-      </section>
       <FormStatus message={message} error={error} />
       {grouped.map(([category, entries]) => (
         <section
@@ -126,7 +110,7 @@ export default function FeatureManagementPage() {
                   <button
                     type="button"
                     className={module.enabled ? "secondary" : ""}
-                    disabled={reason.trim().length < 10 || busy !== null}
+                    disabled={busy !== null}
                     onClick={() => update(module)}
                     aria-pressed={module.enabled}
                   >

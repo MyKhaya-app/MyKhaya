@@ -79,7 +79,7 @@ export class MyKhayaClient {
   updateHouseholdFeature = (
     homeId: string,
     feature: import("@mykhaya/shared-types").FeatureKey,
-    body: { enabled: boolean; reason: string; confirmed: true },
+    body: { enabled: boolean; reason?: string; confirmed: true },
   ) =>
     this.request<import("@mykhaya/shared-types").HouseholdModule>(
       `/features/${encodeURIComponent(homeId)}/${encodeURIComponent(feature)}/household`,
@@ -106,7 +106,7 @@ export class MyKhayaClient {
     membershipId: string,
     body: {
       permissions: Record<string, boolean>;
-      reason: string;
+      reason?: string;
       confirmed: true;
     },
   ) =>
@@ -119,7 +119,7 @@ export class MyKhayaClient {
     membershipId: string,
     body: {
       age_band: import("@mykhaya/shared-types").ChildAgeBand;
-      reason: string;
+      reason?: string;
       confirmed: true;
     },
   ) =>
@@ -141,7 +141,7 @@ export class MyKhayaClient {
     membershipId: string,
     body: {
       guardian_membership_ids: string[];
-      reason: string;
+      reason?: string;
       confirmed: true;
     },
   ) =>
@@ -152,7 +152,7 @@ export class MyKhayaClient {
   requestChildAdultReview = (
     homeId: string,
     membershipId: string,
-    body: { reason: string; confirmed: true },
+    body: { reason?: string; confirmed: true },
   ) =>
     this.request<import("@mykhaya/shared-types").ChildProfile>(
       `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/adult-transition-review`,
@@ -161,7 +161,7 @@ export class MyKhayaClient {
   anonymiseChild = (
     homeId: string,
     membershipId: string,
-    body: { reason: string; confirmed: true },
+    body: { reason?: string; confirmed: true },
   ) =>
     this.request<void>(
       `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}`,

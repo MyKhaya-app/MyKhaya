@@ -23,6 +23,8 @@ type Health = {
   smtp: TransportStatus;
   push: TransportStatus;
   queue_depth: number;
+  queue_status: "healthy" | "warning";
+  queue_reason: string | null;
   average_latency_seconds: number | null;
   deliveries_today: number;
   failures_today: number;
@@ -128,8 +130,11 @@ export default function CommunicationsHealthPage() {
             </section>
             <section className="overview-panel">
               <h2>Queued</h2>
+              <p>{health.queue_status === "healthy" ? "🟢 Healthy" : "🟡 Warning"}</p>
               <p className="stat-number">{health.queue_depth}</p>
-              <small>Outbox events not yet processed, across every topic.</small>
+              <small>
+                {health.queue_reason ?? "Outbox events not yet processed, across every topic."}
+              </small>
             </section>
             <section className="overview-panel">
               <h2>Average latency</h2>

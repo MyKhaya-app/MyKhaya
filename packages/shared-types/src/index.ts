@@ -295,7 +295,7 @@ export interface ChildBirthdayPayload {
   birth_month: number | null;
   birth_day: number | null;
   birthday_visible: boolean;
-  reason: string;
+  reason?: string;
   confirmed: true;
 }
 

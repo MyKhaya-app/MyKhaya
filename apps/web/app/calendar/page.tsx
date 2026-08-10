@@ -322,13 +322,29 @@ export default function CalendarPage() {
     return agendaRange(focusDate);
   }, [focusDate, view]);
 
+  const cells = useMemo(() => monthCells(focusDate), [focusDate]);
+
+  // Month view renders 6 weeks (42 cells) padded with days from the adjacent months,
+  // but `range` above is the exact calendar month (1st to last day) — a multi-day
+  // event that starts in the trailing days of last month or ends in the leading days
+  // of next month, yet is still visible in the padded grid, was never fetched at all.
+  // Fetch the full padded range for month view specifically; other views are
+  // unaffected.
+  const fetchRange = useMemo(() => {
+    if (view !== "month") return range;
+    const start = cells[0]!;
+    const end = new Date(cells[cells.length - 1]!);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return { start, end };
+  }, [view, range, cells]);
+
   const load = useCallback(async () => {
     if (!activeHomeId || !featureEnabled) return;
     const [labelRows, eventRows, memberRows] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
-        start_at: range.start.toISOString(),
-        end_at: range.end.toISOString(),
+        start_at: fetchRange.start.toISOString(),
+        end_at: fetchRange.end.toISOString(),
         page_size: 300,
       }),
       api.members(activeHomeId).catch(() => []),
@@ -340,7 +356,7 @@ export default function CalendarPage() {
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
-  }, [activeHomeId, featureEnabled, range.end, range.start]);
+  }, [activeHomeId, featureEnabled, fetchRange.end, fetchRange.start]);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -387,7 +403,6 @@ export default function CalendarPage() {
     return filtered.filter((event) => event.title.toLowerCase().includes(needle));
   }, [events, labelFilter, query]);
   const byDay = useMemo(() => groupEventsByDay(visibleEvents), [visibleEvents]);
-  const cells = useMemo(() => monthCells(focusDate), [focusDate]);
   const memberNames = useMemo(
     () =>
       new Map(members.map((member) => [member.user_id, member.display_name])),
@@ -795,6 +810,11 @@ function eventEndKey(event: EventOccurrence) {
   return dateKey(end);
 }
 
+// Show at most this many event bars per week before collapsing the rest into a
+// "+N more" indicator — a week with nothing more than this stays compact instead of
+// reserving space for events it doesn't have.
+const MONTH_VISIBLE_ROW_CAP = 3;
+
 function MonthView({
   cells,
   events,
@@ -833,9 +853,16 @@ function MonthView({
               (rowIntervals[row] ??= []).push({ start, end });
               rows.push({ event, start, end, row });
             });
-          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= 4 && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
+          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= MONTH_VISIBLE_ROW_CAP && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
+          // The whole point: a week with 0-1 events only reserves 0-1 event-row
+          // tracks, not a fixed 4-row block every week gets regardless of content.
+          const visibleRowCount = Math.min(rowIntervals.length, MONTH_VISIBLE_ROW_CAP);
           return (
-            <div className="calendar-week" key={weekStart}>
+            <div
+              className="calendar-week"
+              key={weekStart}
+              style={{ gridTemplateRows: `var(--month-day-number-h) repeat(${visibleRowCount}, var(--month-event-row-h))` }}
+            >
               {days.map((day, index) => {
                 const key = dateKey(day);
                 const count = events.filter((event) => dateKey(event.start_at) <= key && eventEndKey(event) >= key).length;
@@ -849,7 +876,7 @@ function MonthView({
                   </article>
                 );
               })}
-              {rows.filter((item) => item.row < 4).map(({ event, start, end, row }) => (
+              {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => (
                 <button
                   key={`${event.occurrence_id}-${weekStart}`}
                   type="button"
@@ -860,7 +887,7 @@ function MonthView({
                   title={event.title}
                 >
                   <span aria-hidden="true" />
-                  <b>{event.is_all_day ? "" : eventTime(event)}</b>{dateKey(event.start_at) < weekStart ? "↳ " : ""}{event.title}
+                  {dateKey(event.start_at) < weekStart ? "↳ " : ""}{event.title}
                 </button>
               ))}
             </div>

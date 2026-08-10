@@ -145,6 +145,8 @@ async def test_health_endpoint_reports_service_status(
     assert body["scheduler"]["status"] == "stale"
     assert body["overall"] in {"degraded", "unhealthy"}
     assert "queue_depth" in body
+    assert body["queue_status"] in {"healthy", "warning"}
+    assert "queue_reason" in body
     assert "deliveries_today" in body
     assert "failures_today" in body
     assert "retries_today" in body

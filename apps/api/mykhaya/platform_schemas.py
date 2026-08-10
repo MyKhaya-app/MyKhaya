@@ -232,6 +232,8 @@ class CommunicationsHealthResponse(BaseModel):
     smtp: TransportStatusResponse
     push: TransportStatusResponse
     queue_depth: int
+    queue_status: Literal["healthy", "warning"]
+    queue_reason: str | None
     average_latency_seconds: float | None
     deliveries_today: int
     failures_today: int
