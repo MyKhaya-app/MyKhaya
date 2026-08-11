@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import ipaddress
 import secrets
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,40 @@ DUMMY_HASH = password_hash.hash("a-valid-dummy-password-value")
 
 def normalise_email(email: str) -> str:
     return email.strip().casefold()
+
+
+# Managed Child sign-in (see mykhaya.routers.auth's /child/login and
+# mykhaya.routers.children's login-config endpoints). The PIN uses the exact same
+# pwdlib hasher as adult passwords (`password_hash` below) — a secure salted hash
+# with constant-time verification, not a bespoke scheme — deliberately, so low
+# numeric-PIN entropy is never compensated for with a weaker hash, only with the
+# rate limiting applied at the call site.
+
+_HOME_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L — typed on a phone
+_USERNAME_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_.-")
+
+
+def generate_home_code() -> str:
+    return "".join(secrets.choice(_HOME_CODE_ALPHABET) for _ in range(8))
+
+
+def normalise_home_code(value: str) -> str:
+    return value.strip().upper()
+
+
+def normalise_child_username(value: str) -> str:
+    """Casefold + NFKC-normalise + strip, matching normalise_email's approach —
+    keeps confusable Unicode/case variants from being treated as distinct
+    usernames. Callers must separately validate the allowed character set."""
+    return unicodedata.normalize("NFKC", value).strip().casefold()
+
+
+def is_valid_child_username(normalised: str) -> bool:
+    return 2 <= len(normalised) <= 24 and set(normalised) <= _USERNAME_ALLOWED
+
+
+def is_valid_child_pin(pin: str) -> bool:
+    return 4 <= len(pin) <= 6 and pin.isdigit()
 
 
 def hash_secret(value: str, key: str) -> str:

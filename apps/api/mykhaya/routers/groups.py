@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
 from mykhaya.household_permissions import (
     Capability,
     capabilities_for,
@@ -36,6 +36,7 @@ from mykhaya.schemas import (
     MemberRelationshipUpdate,
     MemberResponse,
 )
+from mykhaya.security import generate_home_code
 
 router = APIRouter(prefix="/groups", tags=["Homes"])
 # Kept in sync with mykhaya.routers.calendar.SYSTEM_LABELS by hand — both create
@@ -68,7 +69,18 @@ async def group_response(db: AsyncSession, group: Group, membership: Membership)
             capability.value for capability in await capabilities_for(db, membership)
         ),
         member_count=count or 0,
+        child_login_code=group.child_login_code,
     )
+
+
+async def _unique_home_code(db: AsyncSession) -> str:
+    for _ in range(10):
+        code = generate_home_code()
+        if await db.scalar(select(Group.id).where(Group.child_login_code == code)) is None:
+            return code
+    # 32^8 possible codes — reaching here would mean extraordinary bad luck, not a
+    # real collision risk; fail loudly rather than silently retry forever.
+    raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not create this Home.")
 
 
 @router.get("", response_model=list[GroupResponse])
@@ -94,7 +106,12 @@ async def create_group(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> GroupResponse:
-    group = Group(name=body.name, created_by=auth.user.id)
+    require_adult_session(auth)
+    group = Group(
+        name=body.name,
+        created_by=auth.user.id,
+        child_login_code=await _unique_home_code(db),
+    )
     db.add(group)
     await db.flush()
     membership = Membership(

@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import type { User } from "@mykhaya/shared-types";
+import { api } from "@mykhaya/api-client";
 import { AppShell } from "./app-shell";
 import { AppVersion } from "./app-version";
 import { useActiveHome } from "./use-active-home";
@@ -11,6 +14,9 @@ const links = [
   ["Security", "Password and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
 ] as const;
+// Not part of a managed Child's restricted surface — a Child has no password, no
+// household administration rights, and no invite/membership controls.
+const ADULT_ONLY_LINKS = new Set(["Security", "Home settings"]);
 export function SettingsPage({
   title = "Settings",
   children,
@@ -19,7 +25,12 @@ export function SettingsPage({
   children?: React.ReactNode;
 }) {
   const { activeHome } = useActiveHome();
-  const isHomeAdmin = activeHome?.relationship === "home_admin";
+  const [user, setUser] = useState<User | null>(null);
+  useEffect(() => {
+    api.me().then(setUser).catch(() => undefined);
+  }, []);
+  const isAdult = user?.principal_type !== "managed_child";
+  const isHomeAdmin = isAdult && activeHome?.relationship === "home_admin";
   return (
     <AppShell>
       <main className="standard-page">
@@ -31,7 +42,9 @@ export function SettingsPage({
         </div>
         {children ?? (
           <div className="settings-list">
-            {links.map(([name, detail, url]) => (
+            {links
+              .filter(([name]) => isAdult || !ADULT_ONLY_LINKS.has(name))
+              .map(([name, detail, url]) => (
               <Link className="card" href={url} key={url}>
                 <div>
                   <h2>{name}</h2>

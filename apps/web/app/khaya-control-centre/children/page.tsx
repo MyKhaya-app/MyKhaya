@@ -38,7 +38,7 @@ function formText(data: FormData, name: string) {
 }
 
 export default function ChildrenPage() {
-  const { activeHomeId } = useActiveHome();
+  const { activeHome, activeHomeId } = useActiveHome();
   const [children, setChildren] = useState<ChildProfile[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [message, setMessage] = useState("");
@@ -233,6 +233,131 @@ export default function ChildrenPage() {
     }
   }
 
+  async function enableLogin(
+    event: FormEvent<HTMLFormElement>,
+    child: ChildProfile,
+  ) {
+    event.preventDefault();
+    if (!activeHomeId) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const username = formText(data, "login_username");
+    const pin = formText(data, "login_pin");
+    try {
+      await api.updateChildLogin(activeHomeId, child.membership_id, {
+        enabled: true,
+        username,
+        pin,
+      });
+      form.reset();
+      setMessage(`Sign-in enabled for ${child.display_name}.`);
+      setError("");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Sign-in could not be enabled.",
+      );
+    }
+  }
+
+  async function changeUsername(
+    event: FormEvent<HTMLFormElement>,
+    child: ChildProfile,
+  ) {
+    event.preventDefault();
+    if (!activeHomeId) return;
+    const form = event.currentTarget;
+    const username = formText(new FormData(form), "new_username");
+    try {
+      await api.updateChildLogin(activeHomeId, child.membership_id, {
+        enabled: true,
+        username,
+      });
+      form.reset();
+      setMessage(`Username updated for ${child.display_name}. Their sign-in was signed out everywhere.`);
+      setError("");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "The username could not be changed.",
+      );
+    }
+  }
+
+  async function changePin(
+    event: FormEvent<HTMLFormElement>,
+    child: ChildProfile,
+  ) {
+    event.preventDefault();
+    if (!activeHomeId) return;
+    const form = event.currentTarget;
+    const pin = formText(new FormData(form), "new_pin");
+    try {
+      await api.updateChildLogin(activeHomeId, child.membership_id, {
+        enabled: true,
+        pin,
+      });
+      form.reset();
+      setMessage(`PIN reset for ${child.display_name}. Their sign-in was signed out everywhere.`);
+      setError("");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "The PIN could not be changed.",
+      );
+    }
+  }
+
+  async function disableLogin(child: ChildProfile) {
+    if (!activeHomeId) return;
+    if (
+      !window.confirm(
+        `Turn off sign-in for ${child.display_name}? Their username and PIN will be cleared and they'll be signed out everywhere.`,
+      )
+    )
+      return;
+    try {
+      await api.updateChildLogin(activeHomeId, child.membership_id, {
+        enabled: false,
+      });
+      setMessage(`Sign-in turned off for ${child.display_name}.`);
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Sign-in could not be turned off.",
+      );
+    }
+  }
+
+  async function revokeSessions(child: ChildProfile) {
+    if (!activeHomeId) return;
+    if (
+      !window.confirm(
+        `Sign ${child.display_name} out on every device? Their username and PIN stay the same.`,
+      )
+    )
+      return;
+    try {
+      await api.revokeChildSessions(activeHomeId, child.membership_id);
+      setMessage(`${child.display_name} was signed out everywhere.`);
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Sessions could not be revoked.",
+      );
+    }
+  }
+
   async function anonymise(child: ChildProfile) {
     if (!activeHomeId) return;
     if (
@@ -417,6 +542,105 @@ export default function ChildrenPage() {
                   </label>
                 ))}
               </div>
+            </details>
+            <details>
+              <summary>
+                Child sign-in{" "}
+                <span
+                  className={`release-badge ${child.login_enabled ? "core" : "beta"}`}
+                >
+                  {child.login_enabled ? "Enabled" : "Disabled"}
+                </span>
+              </summary>
+              {child.login_enabled ? (
+                <>
+                  <p>
+                    Username: <strong>{child.login_username}</strong>
+                    {activeHome && (
+                      <>
+                        {" "}
+                        · Home code: <strong>{activeHome.child_login_code}</strong>
+                      </>
+                    )}
+                  </p>
+                  <form onSubmit={(event) => changeUsername(event, child)}>
+                    <label>
+                      New username
+                      <input
+                        name="new_username"
+                        minLength={2}
+                        maxLength={24}
+                        autoComplete="off"
+                        required
+                      />
+                    </label>
+                    <button type="submit" className="secondary">
+                      Change username
+                    </button>
+                  </form>
+                  <form onSubmit={(event) => changePin(event, child)}>
+                    <label>
+                      New PIN (4–6 digits)
+                      <input
+                        name="new_pin"
+                        type="password"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        autoComplete="off"
+                        minLength={4}
+                        maxLength={6}
+                        required
+                      />
+                    </label>
+                    <button type="submit" className="secondary">
+                      Set new PIN
+                    </button>
+                  </form>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => revokeSessions(child)}
+                  >
+                    Sign out on all devices
+                  </button>
+                  <button
+                    className="danger-link"
+                    type="button"
+                    onClick={() => disableLogin(child)}
+                  >
+                    Turn off sign-in
+                  </button>
+                </>
+              ) : (
+                <form onSubmit={(event) => enableLogin(event, child)}>
+                  <label>
+                    Username
+                    <input
+                      name="login_username"
+                      minLength={2}
+                      maxLength={24}
+                      autoComplete="off"
+                      required
+                    />
+                  </label>
+                  <label>
+                    PIN (4–6 digits)
+                    <input
+                      name="login_pin"
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="off"
+                      minLength={4}
+                      maxLength={6}
+                      required
+                    />
+                  </label>
+                  <button type="submit" className="secondary">
+                    Enable sign-in
+                  </button>
+                </form>
+              )}
             </details>
             <button
               className="secondary"

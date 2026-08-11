@@ -50,7 +50,7 @@ export function AppShell({
       />
       {hero}
       <main className="app-main">{children}</main>
-      <BottomNav />
+      <BottomNav principalType={user?.principal_type} />
     </div>
   );
 }

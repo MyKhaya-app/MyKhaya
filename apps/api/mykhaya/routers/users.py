@@ -68,7 +68,7 @@ async def _can_view_avatar(db: AsyncSession, viewer_id: uuid.UUID, target_id: uu
 
 @router.get("/me", response_model=UserResponse)
 async def me(auth: AuthContext = Depends(auth_context)) -> UserResponse:
-    return user_response(auth.user)
+    return user_response(auth.user, auth.session)
 
 
 @router.put("/me/birthday", response_model=UserResponse)
@@ -82,7 +82,7 @@ async def update_my_birthday(
     auth.user.birth_year = body.birth_year
     db.add(auth.user)
     await db.commit()
-    return user_response(auth.user)
+    return user_response(auth.user, auth.session)
 
 
 @router.post("/me/avatar", response_model=UserResponse)
@@ -132,7 +132,7 @@ async def upload_my_avatar(
         except OSError:  # cleanup best-effort, never fail the request
             await log.awarning("avatar_cleanup_failed", user_id=str(auth.user.id))
 
-    return user_response(auth.user)
+    return user_response(auth.user, auth.session)
 
 
 @router.delete("/me/avatar", response_model=UserResponse)
@@ -143,7 +143,7 @@ async def remove_my_avatar(
 ) -> UserResponse:
     previous_key = auth.user.avatar_key
     if previous_key is None:
-        return user_response(auth.user)
+        return user_response(auth.user, auth.session)
 
     auth.user.avatar_key = None
     auth.user.avatar_updated_at = None
@@ -156,7 +156,7 @@ async def remove_my_avatar(
     except OSError:  # cleanup best-effort, never fail the request
         await log.awarning("avatar_cleanup_failed", user_id=str(auth.user.id))
 
-    return user_response(auth.user)
+    return user_response(auth.user, auth.session)
 
 
 @router.get("/{user_id}/avatar")

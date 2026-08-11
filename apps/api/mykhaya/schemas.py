@@ -51,7 +51,14 @@ class ResetRequest(TokenRequest):
 
 class UserResponse(BaseModel):
     id: uuid.UUID
-    email: EmailStr
+    # None for a managed Child: its User row carries a server-generated,
+    # deliberately-undeliverable placeholder address (managed-child-*@managed.
+    # mykhaya.invalid — see routers.children.create_child) that is an internal
+    # implementation detail, not something meaningful to expose to any client —
+    # see mykhaya.routers.auth.user_response, which nulls this based on the
+    # authenticating Session's kind. A real adult account always returns its
+    # validated email here, same as before.
+    email: EmailStr | None
     display_name: str
     email_verified: bool
     birth_month: int | None = None
@@ -60,6 +67,11 @@ class UserResponse(BaseModel):
     # Cache-busting version for the avatar image URL, not the image itself — null
     # means "no custom avatar, show initials". See mykhaya/avatars/.
     avatar_version: str | None = None
+    # "adult" or "managed_child" — set from the authenticating Session, never
+    # inferred from the User row itself. The frontend uses this to hide adult-only
+    # navigation/actions for a Child session; server-side capability checks are the
+    # real enforcement, this is only for UI shaping.
+    principal_type: str = "adult"
 
 
 def _validate_birthday(birth_month: int | None, birth_day: int | None) -> None:
@@ -112,6 +124,9 @@ class GroupResponse(BaseModel):
     permission_profile: PermissionProfile
     capabilities: list[str]
     member_count: int
+    # Shown to any existing member (the same trust boundary as member_count) so an
+    # adult can hand it to a Child for sign-in — see mykhaya.security.generate_home_code.
+    child_login_code: str
 
 
 class MemberResponse(BaseModel):
@@ -238,6 +253,34 @@ class ChildResponse(BaseModel):
     birth_month: int | None
     birth_day: int | None
     birthday_visible: bool
+    # Managed Child sign-in — status only. The username is shown back so the
+    # adult who configured it can see it; the PIN is never returned by any
+    # endpoint, at any point, under any circumstances.
+    login_enabled: bool
+    login_username: str | None
+
+
+class ChildLoginConfigure(StrictModel):
+    """Covers enable, change-username-only, change-PIN-only and disable — see
+    mykhaya.routers.children's login-config endpoint for the exact semantics of
+    which fields are required in which combination."""
+
+    enabled: bool
+    username: str | None = Field(default=None, min_length=2, max_length=24)
+    pin: str | None = Field(default=None, min_length=4, max_length=6)
+
+    @field_validator("pin")
+    @classmethod
+    def pin_is_numeric(cls, value: str | None) -> str | None:
+        if value is not None and not value.isdigit():
+            raise ValueError("PIN must be 4 to 6 digits.")
+        return value
+
+
+class ChildLoginRequest(StrictModel):
+    home_code: str = Field(min_length=4, max_length=10)
+    username: str = Field(min_length=1, max_length=24)
+    pin: str = Field(min_length=1, max_length=6)
 
 
 class BirthdayEntry(BaseModel):

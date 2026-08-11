@@ -163,6 +163,25 @@ export class MyKhayaClient {
       `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/adult-transition-review`,
       { method: "POST", body: JSON.stringify(body) },
     );
+  updateChildLogin = (
+    homeId: string,
+    membershipId: string,
+    body: import("@mykhaya/shared-types").ChildLoginConfigurePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/login`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  revokeChildSessions = (homeId: string, membershipId: string) =>
+    this.request<import("@mykhaya/shared-types").ChildProfile>(
+      `/groups/${encodeURIComponent(homeId)}/children/${encodeURIComponent(membershipId)}/login/revoke-sessions`,
+      { method: "POST" },
+    );
+  childLogin = (body: import("@mykhaya/shared-types").ChildLoginRequest) =>
+    this.request<User>("/auth/child/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   anonymiseChild = (
     homeId: string,
     membershipId: string,

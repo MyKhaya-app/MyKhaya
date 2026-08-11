@@ -11,11 +11,24 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.models import ActionToken, AuthIdentity, Invitation, Session, TokenPurpose, User
+from mykhaya.models import (
+    ActionToken,
+    AuthIdentity,
+    ChildProfile,
+    Group,
+    HouseholdRelationship,
+    Invitation,
+    Membership,
+    Session,
+    SessionKind,
+    TokenPurpose,
+    User,
+)
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    ChildLoginRequest,
     ForgotRequest,
     LoginRequest,
     MessageResponse,
@@ -36,7 +49,9 @@ from mykhaya.security import (
     derived_token,
     hash_secret,
     new_session_token,
+    normalise_child_username,
     normalise_email,
+    normalise_home_code,
     password_hash,
     require_secure_transport,
     set_auth_cookies,
@@ -47,22 +62,32 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
 
 
-def user_response(user: User) -> UserResponse:
+def user_response(user: User, session: Session | None = None) -> UserResponse:
+    principal = session.kind if session is not None else SessionKind.adult
     return UserResponse(
         id=user.id,
-        email=user.email,
+        # A managed Child's synthetic .invalid placeholder address is an internal
+        # implementation detail, never returned to any client — see the field
+        # comment on schemas.UserResponse.email.
+        email=user.email if principal == SessionKind.adult else None,
         display_name=user.display_name,
         email_verified=user.email_verified_at is not None,
         birth_month=user.birth_month,
         birth_day=user.birth_day,
         birth_year=user.birth_year,
         avatar_version=user.avatar_key,
+        principal_type=principal.value,
     )
 
 
 async def issue_session(
-    db: AsyncSession, response: Response, request: Request, user: User, settings: Settings
-) -> None:
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind = SessionKind.adult,
+) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
     session = Session(
@@ -70,11 +95,13 @@ async def issue_session(
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
+        kind=kind,
     )
     db.add(session)
     await db.flush()
     set_auth_cookies(response, raw, csrf, settings)
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
+    return session
 
 
 def mobile_client_descriptor(request: Request) -> str:
@@ -91,8 +118,12 @@ def mobile_client_descriptor(request: Request) -> str:
 
 
 async def issue_mobile_session(
-    db: AsyncSession, request: Request, user: User, settings: Settings
-) -> str:
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind = SessionKind.adult,
+) -> tuple[str, Session]:
     """Bearer-transport equivalent of issue_session: same Session model, same
     token scheme, no cookies. Returns the raw token - callers must put it in
     the response body only, never a cookie, never a log line."""
@@ -102,11 +133,12 @@ async def issue_mobile_session(
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         user_agent=mobile_client_descriptor(request),
+        kind=kind,
     )
     db.add(session)
     await db.flush()
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
-    return raw
+    return raw, session
 
 
 async def authenticate_credentials(
@@ -247,11 +279,81 @@ async def login(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     user = await authenticate_credentials(db, request, settings, body, "login")
-    await issue_session(db, response, request, user, settings)
+    session = await issue_session(db, response, request, user, settings)
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
-    return user_response(user)
+    return user_response(user, session)
+
+
+CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
+
+
+@router.post("/child/login", response_model=UserResponse)
+async def child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Managed Child sign-in — deliberately separate from /login: no email, no
+    password, no verification/reset flow. A Home code + Child username + PIN,
+    all rate limited, all failures returning the identical generic message so
+    neither the Home, the username nor the PIN can be distinguished as the
+    wrong element (no enumeration of Homes or Child usernames).
+    """
+    # Per-IP (matches adult login's own bucket) *and* per sign-in-identity — a
+    # slow, distributed attempt against one specific Child is limited even if it
+    # never trips the per-IP bucket, and vice versa.
+    await enforce_rate_limit(request, settings, "child-login", settings.rate_limit_login, 60)
+    identity_bucket = "child-login-identity:" + hash_secret(
+        f"{normalise_home_code(body.home_code)}:{normalise_child_username(body.username)}",
+        settings.secret_key.get_secret_value(),
+    )
+    await enforce_rate_limit(request, settings, identity_bucket, 8, 900)
+
+    group = await db.scalar(
+        select(Group).where(
+            Group.child_login_code == normalise_home_code(body.home_code),
+            Group.is_active.is_(True),
+        )
+    )
+    profile = None
+    if group is not None:
+        # ChildProfile.group_id (not just the Membership join) is what
+        # uq_child_login_username_per_home is defined over, so this query can never
+        # return more than one row for a given (group, username) — the database
+        # itself guarantees that, not just the application's read pattern.
+        profile = await db.scalar(
+            select(ChildProfile)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                ChildProfile.group_id == group.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+                ChildProfile.username_normalised == normalise_child_username(body.username),
+            )
+        )
+    stored_hash = profile.pin_hash if profile and profile.pin_hash else DUMMY_HASH
+    valid = verify_password(body.pin, stored_hash)
+    if profile is None or not valid:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+
+    membership = await db.get(Membership, profile.membership_id)
+    assert membership is not None
+    user = await db.get(User, membership.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+
+    session = await issue_session(
+        db, response, request, user, settings, kind=SessionKind.managed_child
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    return user_response(user, session)
 
 
 @router.post("/mobile/login", response_model=MobileSessionResponse)
@@ -268,13 +370,15 @@ async def mobile_login(
     token - only the caller who receives this response ever sees it."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
-    raw = await issue_mobile_session(db, request, user, settings)
+    raw, session = await issue_mobile_session(db, request, user, settings)
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(**user_response(user).model_dump(), session_token=raw)
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw
+    )
 
 
 @router.post(
@@ -459,7 +563,14 @@ async def rotate_session(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     auth.session.revoked_at = datetime.now(UTC)
-    await issue_session(db, response, request, auth.user, settings)
+    # kind must be carried over from the session being rotated, never left to
+    # issue_session's adult default — otherwise a managed Child session rotating
+    # its own session would silently come back as an *adult* session for the same
+    # underlying User row, defeating require_adult_session and every other
+    # kind-based check from that point on.
+    new_session = await issue_session(
+        db, response, request, auth.user, settings, kind=auth.session.kind
+    )
     audit(
         db,
         request,
@@ -469,7 +580,7 @@ async def rotate_session(
         target_id=auth.session.id,
     )
     await db.commit()
-    return user_response(auth.user)
+    return user_response(auth.user, new_session)
 
 
 @router.post("/mobile/sessions/rotate", response_model=MobileSessionResponse)
@@ -488,7 +599,12 @@ async def rotate_mobile_session(
     require_secure_transport(request, settings)
     require_bearer_transport(auth)
     auth.session.revoked_at = datetime.now(UTC)
-    raw = await issue_mobile_session(db, request, auth.user, settings)
+    # See the identical comment in rotate_session: kind must carry over from the
+    # session being rotated, not silently reset to issue_mobile_session's adult
+    # default.
+    raw, new_session = await issue_mobile_session(
+        db, request, auth.user, settings, kind=auth.session.kind
+    )
     audit(
         db,
         request,
@@ -500,4 +616,6 @@ async def rotate_mobile_session(
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(**user_response(auth.user).model_dump(), session_token=raw)
+    return MobileSessionResponse(
+        **user_response(auth.user, new_session).model_dump(), session_token=raw
+    )

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
@@ -45,6 +45,7 @@ async def invite(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
+    require_adult_session(auth)
     await require_capability(body.group_id, Capability.members_invite, auth, db)
     await enforce_rate_limit(request, settings, "household-invitation", 20, 3600)
     if body.relationship == HouseholdRelationship.child:

@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from datetime import date, datetime, time
 from enum import StrEnum
@@ -25,6 +26,18 @@ from sqlalchemy.orm import relationship as orm_relationship
 from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
+
+# Duplicated from mykhaya.security._HOME_CODE_ALPHABET deliberately: security.py
+# imports models for its User/Session lookups, so models.py cannot import back from
+# it without a circular import. This is only a Python-side ORM default (a safety net
+# for direct Group(...) construction, e.g. in tests) — the real, uniqueness-checked
+# code generation for the API-facing create-Home flow lives in
+# mykhaya.routers.groups._unique_home_code / mykhaya.security.generate_home_code.
+_HOME_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _default_child_login_code() -> str:
+    return "".join(secrets.choice(_HOME_CODE_ALPHABET) for _ in range(8))
 
 
 class RecurrencePattern(StrEnum):
@@ -76,6 +89,15 @@ class ChildTransitionStatus(StrEnum):
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
+
+
+class SessionKind(StrEnum):
+    """What kind of principal a Session authenticates — never inferred from the
+    User row itself (a managed Child has a perfectly normal User row; the
+    session is what marks it as restricted). See docs on managed Child sign-in."""
+
+    adult = "adult"
+    managed_child = "managed_child"
 
 
 class PlatformRole(StrEnum):
@@ -161,6 +183,15 @@ class Session(UuidTimeMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     ip_prefix: Mapped[str | None] = mapped_column(String(80))
+    # Set once at issuance from the credential path that authenticated it (adult
+    # email/password vs managed Child username/PIN) — never inferred from the User
+    # row, so a route can never accidentally treat a managed Child session as an
+    # ordinary adult's just because the underlying User looks normal.
+    kind: Mapped[SessionKind] = mapped_column(
+        Enum(SessionKind, name="session_kind"),
+        default=SessionKind.adult,
+        server_default=SessionKind.adult.value,
+    )
 
 
 class ActionToken(UuidTimeMixin, Base):
@@ -181,6 +212,16 @@ class Group(UuidTimeMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A short, random, non-sequential code — never the Home name or id — that a
+    # managed Child types in alongside their username/PIN to identify which Home
+    # they belong to at sign-in, without exposing membership or enumerating real
+    # Homes. Visible to any existing member of the Home (the same trust boundary
+    # as member_count etc.), not a secret in itself; brute-forcing it still has to
+    # clear the child-login rate limits same as the username/PIN. See
+    # mykhaya.security.generate_home_code.
+    child_login_code: Mapped[str] = mapped_column(
+        String(10), unique=True, index=True, default=_default_child_login_code
+    )
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
 
 
@@ -561,8 +602,24 @@ class FeatureOverride(UuidTimeMixin, Base):
 
 class ChildProfile(UuidTimeMixin, Base):
     __tablename__ = "child_profiles"
+    __table_args__ = (
+        # Denormalized from Membership.group_id (a membership never moves between
+        # Homes, so this is safe to duplicate) specifically so this uniqueness can be
+        # a real database constraint rather than a check-then-write application
+        # query: Postgres serialises the two concurrent inserts/updates and rejects
+        # whichever loses the race with a real IntegrityError, so
+        # "Home + username_normalised" can never end up duplicated even under
+        # concurrent requests. NULLs (login not configured) are exempt as usual —
+        # Postgres unique indexes never treat two NULLs as equal.
+        UniqueConstraint(
+            "group_id", "username_normalised", name="uq_child_login_username_per_home"
+        ),
+    )
     membership_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("group_memberships.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     age_band: Mapped[ChildAgeBand] = mapped_column(Enum(ChildAgeBand, name="child_age_band"))
     permissions: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
@@ -574,6 +631,17 @@ class ChildProfile(UuidTimeMixin, Base):
     birth_day: Mapped[int | None] = mapped_column(Integer)
     birth_year: Mapped[int | None] = mapped_column(Integer)
     birthday_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Managed Child sign-in (optional, parent-configured) — the Child remains this
+    # same managed identity, never converted into a normal email/password User.
+    # Username uniqueness within the Home is a real database constraint — see
+    # uq_child_login_username_per_home above — backed by an application-layer
+    # pre-check in children.py for a friendly error message on the common case.
+    login_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    username_normalised: Mapped[str | None] = mapped_column(String(32))
+    # A pwdlib hash (the same hasher as adult passwords, see mykhaya.security), never
+    # the raw PIN. Cleared whenever login is disabled — see children.py's disable path.
+    pin_hash: Mapped[str | None] = mapped_column(Text)
+    login_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class GuardianAssignment(UuidTimeMixin, Base):

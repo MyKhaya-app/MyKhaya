@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.models import Group, Membership, Role, Session, User
+from mykhaya.models import Group, Membership, Role, Session, SessionKind, User
 from mykhaya.security import require_csrf, resolve_session
 
 
@@ -29,6 +29,20 @@ async def auth_context(
     if resolved.transport == "cookie":
         require_csrf(request, settings)
     return AuthContext(resolved.user, resolved.session, resolved.transport)
+
+
+def require_adult_session(auth: AuthContext) -> None:
+    """A hard boundary independent of the capability system, for the handful of
+    actions that must never be reachable by a managed Child session no matter what
+    a capability override might say — creating a Home, inviting someone, and
+    managing another Child's sign-in credentials. Everything else is governed by
+    the normal per-Home capability checks, which already deny a Child by default;
+    this is defence in depth for the highest-risk surfaces, not a replacement for
+    them."""
+    if auth.session.kind != SessionKind.adult:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "This action is not available to a Child sign-in."
+        )
 
 
 async def membership_for(

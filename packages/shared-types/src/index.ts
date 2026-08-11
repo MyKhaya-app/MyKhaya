@@ -19,15 +19,18 @@ export type PermissionProfile =
   | "child_restricted"
   | "explicit_sharing"
   | "review_required";
+export type PrincipalType = "adult" | "managed_child";
 export interface User {
   id: string;
-  email: string;
+  // null for a managed Child — its internal placeholder address is never exposed.
+  email: string | null;
   display_name: string;
   email_verified: boolean;
   birth_month: number | null;
   birth_day: number | null;
   birth_year: number | null;
   avatar_version: string | null;
+  principal_type: PrincipalType;
 }
 export interface Home {
   id: string;
@@ -37,6 +40,8 @@ export interface Home {
   permission_profile: PermissionProfile;
   capabilities: string[];
   member_count: number;
+  // Shown to any member so an adult can hand it to a Child for sign-in.
+  child_login_code: string;
 }
 export interface Member {
   membership_id: string;
@@ -210,6 +215,22 @@ export interface ChildProfile {
   birth_month: number | null;
   birth_day: number | null;
   birthday_visible: boolean;
+  // Managed Child sign-in status. The username is shown back so the adult who
+  // configured it can see it; the PIN is never returned by any endpoint.
+  login_enabled: boolean;
+  login_username: string | null;
+}
+
+export interface ChildLoginConfigurePayload {
+  enabled: boolean;
+  username?: string;
+  pin?: string;
+}
+
+export interface ChildLoginRequest {
+  home_code: string;
+  username: string;
+  pin: string;
 }
 
 export type LockScreenPreviewLevel = "full" | "title_only" | "hidden";

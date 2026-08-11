@@ -3,11 +3,12 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.household_permissions import (
     SAFE_CHILD_DEFAULTS,
     Capability,
@@ -30,10 +31,17 @@ from mykhaya.schemas import (
     ChildBirthdayUpdate,
     ChildCreate,
     ChildDeleteRequest,
+    ChildLoginConfigure,
     ChildPermissionUpdate,
     ChildResponse,
     ChildTransitionRequest,
     GuardianUpdate,
+)
+from mykhaya.security import (
+    is_valid_child_pin,
+    is_valid_child_username,
+    normalise_child_username,
+    password_hash,
 )
 
 router = APIRouter(prefix="/groups/{group_id}/children", tags=["children"])
@@ -62,7 +70,27 @@ async def _child_response(db: AsyncSession, profile: ChildProfile) -> ChildRespo
         birth_month=profile.birth_month,
         birth_day=profile.birth_day,
         birthday_visible=profile.birthday_visible,
+        login_enabled=profile.login_enabled,
+        login_username=profile.username_normalised,
     )
+
+
+async def _child_username_taken(
+    db: AsyncSession, group_id: uuid.UUID, username_normalised: str, exclude_profile_id: uuid.UUID
+) -> bool:
+    """A friendly, fast pre-check for the common case — the actual invariant is the
+    uq_child_login_username_per_home database constraint (see models.ChildProfile),
+    which configure_child_login also relies on directly to catch the rare race this
+    pre-check can't: two concurrent requests both passing this check before either
+    has committed."""
+    existing = await db.scalar(
+        select(ChildProfile.id).where(
+            ChildProfile.group_id == group_id,
+            ChildProfile.username_normalised == username_normalised,
+            ChildProfile.id != exclude_profile_id,
+        )
+    )
+    return existing is not None
 
 
 async def _profile_for_group(
@@ -156,6 +184,7 @@ async def create_child(
     await db.flush()
     profile = ChildProfile(
         membership_id=membership.id,
+        group_id=group_id,
         age_band=body.age_band,
         permissions=SAFE_CHILD_DEFAULTS.copy(),
     )
@@ -341,6 +370,142 @@ async def request_adult_transition_review(
         "membership",
         membership_id,
         {"reason": body.reason},
+    )
+    await db.commit()
+    return await _child_response(db, profile)
+
+
+@router.put("/{membership_id}/login", response_model=ChildResponse)
+async def configure_child_login(
+    group_id: uuid.UUID,
+    membership_id: uuid.UUID,
+    body: ChildLoginConfigure,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ChildResponse:
+    """Covers every login-config action from the Child profile screen: enable
+    (username + PIN both required), change username only, change/reset PIN
+    only, and disable. See mykhaya.schemas.ChildLoginConfigure."""
+    require_adult_session(auth)
+    await require_capability(group_id, Capability.child_manage, auth, db)
+    profile = await _profile_for_group(db, group_id, membership_id)
+    membership = await db.get(Membership, membership_id)
+    assert membership is not None
+
+    if not body.enabled:
+        was_enabled = profile.login_enabled
+        profile.login_enabled = False
+        profile.username_normalised = None
+        profile.pin_hash = None
+        profile.login_updated_at = datetime.now(UTC)
+        if was_enabled:
+            await db.execute(
+                update(Session)
+                .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
+                .values(revoked_at=datetime.now(UTC))
+            )
+        audit(
+            db, request, "child.login_disabled", auth.user.id, group_id, "membership", membership_id
+        )
+        await db.commit()
+        return await _child_response(db, profile)
+
+    username_changed = False
+    if body.username is not None:
+        normalised = normalise_child_username(body.username)
+        if not is_valid_child_username(normalised):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Choose a username between 2 and 24 characters, using only letters, "
+                "numbers, dots, hyphens or underscores.",
+            )
+        if await _child_username_taken(db, group_id, normalised, profile.id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "That username is already in use in this Home."
+            )
+        username_changed = normalised != profile.username_normalised
+        profile.username_normalised = normalised
+    elif profile.username_normalised is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a username before enabling sign-in."
+        )
+
+    pin_changed = False
+    if body.pin is not None:
+        if not is_valid_child_pin(body.pin):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "PIN must be 4 to 6 digits.")
+        profile.pin_hash = password_hash.hash(body.pin)
+        pin_changed = True
+    elif profile.pin_hash is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Set a PIN before enabling sign-in."
+        )
+
+    was_enabled = profile.login_enabled
+    profile.login_enabled = True
+    profile.login_updated_at = datetime.now(UTC)
+
+    # A username or PIN change invalidates any device signed in under the old
+    # credential — matches the existing pattern for a permission change.
+    if pin_changed or username_changed:
+        await db.execute(
+            update(Session)
+            .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+
+    audit(
+        db,
+        request,
+        "child.login_enabled" if not was_enabled else "child.login_updated",
+        auth.user.id,
+        group_id,
+        "membership",
+        membership_id,
+        {"username_changed": username_changed, "pin_changed": pin_changed},
+    )
+    try:
+        await db.commit()
+    except IntegrityError as cause:
+        # The pre-check in _child_username_taken narrows this to a genuine race —
+        # two concurrent requests both passing that check before either committed.
+        # The uq_child_login_username_per_home constraint is the real guarantee;
+        # this just turns the loser's crash into the same clean 409 the pre-check
+        # gives everyone else, instead of a raw 500.
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That username is already in use in this Home."
+        ) from cause
+    return await _child_response(db, profile)
+
+
+@router.post("/{membership_id}/login/revoke-sessions", response_model=ChildResponse)
+async def revoke_child_sessions(
+    group_id: uuid.UUID,
+    membership_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ChildResponse:
+    require_adult_session(auth)
+    await require_capability(group_id, Capability.child_manage, auth, db)
+    profile = await _profile_for_group(db, group_id, membership_id)
+    membership = await db.get(Membership, membership_id)
+    assert membership is not None
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    audit(
+        db,
+        request,
+        "child.sessions_revoked",
+        auth.user.id,
+        group_id,
+        "membership",
+        membership_id,
     )
     await db.commit()
     return await _child_response(db, profile)

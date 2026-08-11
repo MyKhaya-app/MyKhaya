@@ -3,19 +3,29 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Calendar, Home, MoreHorizontal, Users } from "lucide-react";
+import type { PrincipalType } from "@mykhaya/shared-types";
 
 const ITEMS = [
-  { href: "/home", label: "Home", icon: Home },
-  { href: "/calendar", label: "Calendar", icon: Calendar },
-  { href: "/people", label: "Family", icon: Users },
-  { href: "/settings", label: "More", icon: MoreHorizontal },
+  { href: "/home", label: "Home", icon: Home, adultOnly: false },
+  { href: "/calendar", label: "Calendar", icon: Calendar, adultOnly: false },
+  // "Family" is primarily invitation and membership management — not part of a
+  // Child's restricted surface.
+  { href: "/people", label: "Family", icon: Users, adultOnly: true },
+  { href: "/settings", label: "More", icon: MoreHorizontal, adultOnly: false },
 ] as const;
 
-export function BottomNav() {
+export function BottomNav({
+  principalType,
+}: {
+  principalType?: PrincipalType;
+}) {
   const path = usePathname();
+  const items = ITEMS.filter(
+    (item) => !item.adultOnly || principalType !== "managed_child",
+  );
   return (
     <nav className="bottom-nav" aria-label="Primary navigation">
-      {ITEMS.map(({ href, label, icon: Icon }) => {
+      {items.map(({ href, label, icon: Icon }) => {
         const active = path === href || path.startsWith(`${href}/`);
         return (
           <Link
