@@ -15,15 +15,30 @@
   --colour-white: #fffefb;
   --colour-danger: #a33e2b;
 
-  /* Member colours: identity belongs to a person, not an event category.
-     Muted deliberately, to sit quietly against the warm paper rather than
-     compete with the terracotta accent. Starter set of four — assigning a
-     colour to a fifth+ member cycles this list until member.colour exists
-     as a real, persisted field. See docs/design/visual-identity.md. */
-  --colour-member-1: #5c8a54;
-  --colour-member-2: #8b6ba8;
-  --colour-member-3: #d9a83e;
-  --colour-member-4: #4c7fa6;
+  /* The one curated colour palette shared by member identity and calendar
+     categories. Muted deliberately, to sit quietly against the warm paper
+     rather than compete with the terracotta accent. Mirrored by hand from
+     packages/design-tokens/src/index.ts (PALETTE_HEX) and
+     mykhaya.colour_palette (Python) — keep all three in sync. See
+     docs/design/visual-identity.md. */
+  --colour-palette-red: #b8433a;
+  --colour-palette-coral: #d97757;
+  --colour-palette-orange: #c97a2e;
+  --colour-palette-amber: #d9a83e;
+  --colour-palette-yellow: #bfa23a;
+  --colour-palette-lime: #7c9a4e;
+  --colour-palette-green: #5c8a54;
+  --colour-palette-emerald: #3f7a5c;
+  --colour-palette-teal: #456b76;
+  --colour-palette-cyan: #2e8b99;
+  --colour-palette-sky: #4c7fa6;
+  --colour-palette-blue: #3d6fb0;
+  --colour-palette-indigo: #5a63a8;
+  --colour-palette-violet: #8b6ba8;
+  --colour-palette-purple: #7a5c99;
+  --colour-palette-pink: #b85c8a;
+  --colour-palette-rose: #a03f6a;
+  --colour-palette-slate: #62706f;
 
   /* Elevation scale: resting card, raised/pressed, overlay (sheets, menus),
      and the deep shadow the green hero casts onto the content below it. */

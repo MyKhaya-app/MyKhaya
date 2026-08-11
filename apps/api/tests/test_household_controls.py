@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -8,7 +9,14 @@ from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import AuditEvent
+from mykhaya.models import (
+    AuditEvent,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
+    User,
+)
 
 
 @pytest.fixture
@@ -169,8 +177,10 @@ async def test_member_colours_are_assigned_and_collision_free(
 ) -> None:
     """Colour belongs to the person's membership, assigned server-side, and
     must never collide with another active member of the same home while
-    the starter palette has spare colours — see
-    docs/design/visual-identity.md and mykhaya.member_colours."""
+    the palette has spare colours — see docs/design/visual-identity.md and
+    mykhaya.member_colours. The palette has 18 tokens (mykhaya.colour_palette
+    .ColourToken); this creates one more member than that to exercise both
+    "everyone distinct while there's room" and "cycles once exhausted"."""
     client = api_client
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"colour-{suffix}@example.com", "Colour Owner")
@@ -181,31 +191,129 @@ async def test_member_colours_are_assigned_and_collision_free(
     members = await client.get(f"/api/v1/groups/{home_id}/members")
     admin = members.json()[0]
     assert admin["colour"] is not None
-
     guardian_id = admin["membership_id"]
-    colours = [admin["colour"]]
-    for index in range(4):
+
+    for index in range(18):
         child = await unsafe(
             client,
             "POST",
             f"/api/v1/groups/{home_id}/children",
             json={
-                "display_name": f"Child {index}",
+                "display_name": f"Child {index:02d}",
                 "age_band": "under_13",
                 "guardian_membership_ids": [guardian_id],
             },
         )
         assert child.status_code == 201
-        assert child.json()["membership_id"]
-        colours.append(None)  # placeholder, colour isn't on ChildResponse
 
     all_members = await client.get(f"/api/v1/groups/{home_id}/members")
     assert all_members.status_code == 200
     rows = all_members.json()
-    assert len(rows) == 5
+    assert len(rows) == 19
     member_colours = [row["colour"] for row in rows]
     assert all(colour is not None for colour in member_colours)
-    # Exactly 4 starter colours: the first 4 members are all distinct, the
-    # 5th cycles back to a colour already in use rather than staying blank.
-    assert len(set(member_colours[:4])) == 4
-    assert member_colours[4] in member_colours[:4]
+    # Every one of the 18 palette colours gets used at least once — nobody is
+    # left without a colour and nothing is skipped while there's still room.
+    assert len(set(member_colours)) == 18
+    # The 19th member, past the palette's capacity, cycles back to a colour
+    # already in use rather than staying blank.
+    duplicate_counts = Counter(member_colours)
+    assert sum(duplicate_counts.values()) == 19
+    assert max(duplicate_counts.values()) == 2
+
+
+@pytest.mark.asyncio
+async def test_member_colour_self_update_admin_update_and_unauthorized(
+    api_client: AsyncClient,
+) -> None:
+    """A member may always recolour themselves; a Home Admin may recolour
+    anyone (reusing members.manage_relationships, the same capability that
+    already gates every other member-attribute change); anyone else is
+    blocked from changing someone else's colour. See
+    mykhaya.routers.groups.update_member_colour."""
+    client = api_client
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"coloradmin-{suffix}@example.com", "Colour Admin")
+    created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Colour Perms Home"})
+    assert created.status_code == 201
+    home_id = created.json()["id"]
+
+    members = await client.get(f"/api/v1/groups/{home_id}/members")
+    admin = members.json()[0]
+    admin_id = admin["user_id"]
+
+    # A second, non-admin household member — a "partner" profile, which has
+    # no members.manage_relationships capability (only home_admin does).
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        partner_email = f"colorpartner-{suffix}@example.com"
+        await create_verified_user(partner_client, partner_email, "Colour Partner")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == partner_email))
+            assert user is not None
+            partner_id = str(user.id)
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=user.id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+
+        # Admin recolours themselves.
+        self_update = await unsafe(
+            client,
+            "PATCH",
+            f"/api/v1/groups/{home_id}/members/{admin_id}/colour",
+            json={"colour": "rose"},
+        )
+        assert self_update.status_code == 200
+        assert self_update.json()["colour"] == "rose"
+
+        # Admin recolours the partner — reuses members.manage_relationships.
+        admin_recolours_partner = await unsafe(
+            client,
+            "PATCH",
+            f"/api/v1/groups/{home_id}/members/{partner_id}/colour",
+            json={"colour": "indigo"},
+        )
+        assert admin_recolours_partner.status_code == 200
+        assert admin_recolours_partner.json()["colour"] == "indigo"
+
+        # Partner recolours themselves — always allowed, no capability needed.
+        partner_self_update = await unsafe(
+            partner_client,
+            "PATCH",
+            f"/api/v1/groups/{home_id}/members/{partner_id}/colour",
+            json={"colour": "cyan"},
+        )
+        assert partner_self_update.status_code == 200
+        assert partner_self_update.json()["colour"] == "cyan"
+
+        # Partner attempts to recolour the admin — blocked.
+        partner_recolours_admin = await unsafe(
+            partner_client,
+            "PATCH",
+            f"/api/v1/groups/{home_id}/members/{admin_id}/colour",
+            json={"colour": "lime"},
+        )
+        assert partner_recolours_admin.status_code == 403
+
+    # An unrecognised colour token is rejected, not silently accepted.
+    invalid = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/groups/{home_id}/members/{admin_id}/colour",
+        json={"colour": "not-a-real-colour"},
+    )
+    assert invalid.status_code == 422
+
+    # The admin's colour reflects only the successful self-update, never the
+    # blocked attempt from the partner.
+    final = await client.get(f"/api/v1/groups/{home_id}/members")
+    final_admin = next(row for row in final.json() if row["user_id"] == admin_id)
+    assert final_admin["colour"] == "rose"

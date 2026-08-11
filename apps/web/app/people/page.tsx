@@ -8,9 +8,11 @@ import type {
   InvitationListItem,
   Member,
 } from "@mykhaya/shared-types";
+import type { ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
+import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
 
@@ -69,6 +71,13 @@ export default function People() {
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
   const [sending, setSending] = useState(false);
   const [filter, setFilter] = useState<FamilyFilter>("all");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [colourEditing, setColourEditing] = useState<string | null>(null);
+  const [colourBusy, setColourBusy] = useState(false);
+
+  useEffect(() => {
+    api.me().then((user) => setCurrentUserId(user.id));
+  }, []);
 
   const canInvite =
     activeHome?.capabilities.includes("members.invite") ?? false;
@@ -169,6 +178,24 @@ export default function People() {
         kind: "error",
         message: cause instanceof ApiError ? cause.message : "That relationship could not be changed.",
       });
+    }
+  }
+
+  async function changeColour(member: Member, colour: ColourKey) {
+    if (!activeHomeId || colourBusy) return;
+    setColourBusy(true);
+    setStatus({ kind: "idle" });
+    try {
+      await api.updateMemberColour(activeHomeId, member.user_id, colour);
+      setColourEditing(null);
+      await load();
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "That colour could not be changed.",
+      });
+    } finally {
+      setColourBusy(false);
     }
   }
 
@@ -431,6 +458,29 @@ export default function People() {
                       <Link className="tertiary" href="/khaya-control-centre/children">
                         Manage child privacy
                       </Link>
+                    )}
+                    {(member.user_id === currentUserId || canManage) && (
+                      <>
+                        <button
+                          type="button"
+                          className="tertiary family-member-colour-toggle"
+                          onClick={() =>
+                            setColourEditing((current) =>
+                              current === member.user_id ? null : member.user_id,
+                            )
+                          }
+                        >
+                          Change colour
+                        </button>
+                        {colourEditing === member.user_id && (
+                          <ColourSwatchPicker
+                            value={member.colour}
+                            onChange={(colour) => changeColour(member, colour)}
+                            groupLabel={`${member.display_name}'s colour`}
+                            disabled={colourBusy}
+                          />
+                        )}
+                      </>
                     )}
                   </div>
                 </article>

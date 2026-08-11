@@ -60,6 +60,11 @@ export class MyKhayaClient {
   homes = () => this.request<Home[]>("/groups");
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
+  updateMemberColour = (homeId: string, userId: string, colour: string) =>
+    this.request<Member>(
+      `/groups/${encodeURIComponent(homeId)}/members/${encodeURIComponent(userId)}/colour`,
+      { method: "PATCH", body: JSON.stringify({ colour }) },
+    );
   homeSummary = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").HomeSummary>(
       `/homes/${encodeURIComponent(homeId)}/summary`,
@@ -179,6 +184,15 @@ export class MyKhayaClient {
   listLabels = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").EventLabel[]>(
       `/homes/${encodeURIComponent(homeId)}/event-labels`,
+    );
+  updateLabel = (
+    homeId: string,
+    labelId: string,
+    body: { name?: string; color?: string; is_active?: boolean },
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventLabel>(
+      `/homes/${encodeURIComponent(homeId)}/event-labels/${encodeURIComponent(labelId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
     );
   listEvents = (
     homeId: string,

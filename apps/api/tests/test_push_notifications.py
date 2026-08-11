@@ -35,6 +35,7 @@ from mykhaya.models import (
     PushSubscription,
     TokenPurpose,
     User,
+    WorkerJobRecord,
 )
 from mykhaya.notifications import push as push_module
 from mykhaya.notifications.engine import notify
@@ -713,25 +714,38 @@ async def test_worker_retries_transient_push_failure(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(worker_module, "resolve_push_config", _configured_push_config)
     monkeypatch.setattr(push_module, "webpush", fail)
-    with pytest.raises(Exception):  # noqa: B017 - re-raised by design, see worker.py
-        await process(event_id)
+    try:
+        with pytest.raises(Exception):  # noqa: B017 - re-raised by design, see worker.py
+            await process(event_id)
 
-    async with SessionFactory() as db:
-        delivery = await db.scalar(
-            select(NotificationDelivery).where(
-                NotificationDelivery.idempotency_key == retry_key
+        async with SessionFactory() as db:
+            delivery = await db.scalar(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.idempotency_key == retry_key
+                )
             )
-        )
-        assert delivery is not None
-        assert delivery.status == NotificationDeliveryStatus.failed
-        subscription = await db.get(PushSubscription, subscription_id)
-        assert subscription is not None
-        assert subscription.disabled_at is None
-        event = await db.get(OutboxEvent, event_id)
-        assert event is not None
-        # Not marked processed — must remain selectable so the scheduler retries it.
-        assert event.processed_at is None
-        assert event.available_at > datetime.now(UTC) - timedelta(seconds=1)
+            assert delivery is not None
+            assert delivery.status == NotificationDeliveryStatus.failed
+            subscription = await db.get(PushSubscription, subscription_id)
+            assert subscription is not None
+            assert subscription.disabled_at is None
+            event = await db.get(OutboxEvent, event_id)
+            assert event is not None
+            # Not marked processed — must remain selectable so the scheduler retries it.
+            assert event.processed_at is None
+            assert event.available_at > datetime.now(UTC) - timedelta(seconds=1)
+    finally:
+        # Deliberately left failed + unprocessed (that's the behaviour under test),
+        # which also leaves a genuinely "actionable failed job" behind — clean it up
+        # so it doesn't pollute anything else in the run that checks the platform
+        # overview's actionable-failed-jobs count. See the identical cleanup in
+        # test_email_notifications.py::test_worker_delivers_queued_email.
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id)
+            )
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+            await db.commit()
 
 
 @pytest.mark.asyncio

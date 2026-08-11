@@ -1043,6 +1043,41 @@ textarea {
   flex-wrap: wrap;
   gap: 0.6rem;
 }
+/* Shared by profile colour and calendar/category colour selection — see
+   components/colour-swatch-picker.tsx. Fixed swatch size with wrapping,
+   not a fluid grid, so swatches stay a comfortable tap target and never
+   shrink to illegible dots on a narrow phone. */
+.colour-swatch-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+.colour-swatch {
+  align-items: center;
+  background: var(--swatch-colour);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: none;
+  color: white;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 34px;
+}
+.colour-swatch:hover {
+  box-shadow: none;
+  transform: none;
+}
+.colour-swatch.selected {
+  border-color: var(--colour-slate);
+  box-shadow: 0 0 0 2px var(--colour-white), 0 0 0 3px var(--swatch-colour);
+}
+.colour-swatch:focus-visible {
+  outline: 3px solid var(--colour-mustard);
+  outline-offset: 2px;
+}
 .coming {
   text-align: center;
   margin: 15vh auto;
@@ -1650,6 +1685,61 @@ body.sheet-open {
 .member-checks {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.label-list {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+.label-row {
+  border: 1px solid #ebe4da;
+  border-radius: var(--radius-small);
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+}
+.label-row-main {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+.label-row-main .label-name-button {
+  margin-right: auto;
+}
+.colour-dot {
+  background: var(--swatch-colour);
+  border: 2px solid var(--colour-white);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #ddd8ce;
+  flex: none;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  width: 28px;
+}
+.colour-dot:hover {
+  box-shadow: 0 0 0 1px #ddd8ce;
+  transform: none;
+}
+.label-name-button {
+  background: none;
+  color: var(--colour-slate);
+  font-weight: 700;
+  min-height: auto;
+  padding: 0.2rem 0;
+  text-align: left;
+}
+.label-active-toggle {
+  min-height: auto;
+}
+.label-create-form {
+  border-top: 1px solid #ebe4da;
+  display: grid;
+  gap: 0.6rem;
+  padding-top: 0.9rem;
 }
 .event-advanced summary,
 .child-card summary {

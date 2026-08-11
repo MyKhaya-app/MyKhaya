@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
@@ -25,6 +25,7 @@ from mykhaya.models import (
     PlatformRole,
     TokenPurpose,
     User,
+    WorkerJobRecord,
 )
 from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES, notify
 from mykhaya.security import derived_token, password_hash
@@ -378,14 +379,31 @@ async def test_worker_delivers_queued_email(client: AsyncClient) -> None:
     # SMTP is unconfigured in the test environment, so delivery fails — this still
     # proves the single notification.email handler is reached and the diagnostic
     # NotificationDelivery row is updated, without needing a real mail server.
-    with pytest.raises(RuntimeError):
-        await process(event_id)
+    try:
+        with pytest.raises(RuntimeError):
+            await process(event_id)
 
-    async with SessionFactory() as db:
-        delivery = await db.scalar(
-            select(NotificationDelivery).where(
-                NotificationDelivery.idempotency_key == rows[0].payload["delivery_idempotency_key"]
+        async with SessionFactory() as db:
+            delivery = await db.scalar(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.idempotency_key
+                    == rows[0].payload["delivery_idempotency_key"]
+                )
             )
-        )
-        assert delivery is not None
-        assert delivery.status == NotificationDeliveryStatus.failed
+            assert delivery is not None
+            assert delivery.status == NotificationDeliveryStatus.failed
+    finally:
+        # process() deliberately leaves the OutboxEvent unprocessed (eligible for
+        # retry — that's the behaviour under test), which also leaves a genuinely
+        # "failed and actionable" WorkerJobRecord behind. Without this cleanup it
+        # persists for the rest of the test run and is picked up by anything else
+        # that checks the platform overview's actionable-failed-jobs count (e.g.
+        # test_platform_control_centre.py::
+        # test_historical_failed_job_does_not_degrade_current_overview), which has
+        # nothing to do with this test.
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id)
+            )
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+            await db.commit()

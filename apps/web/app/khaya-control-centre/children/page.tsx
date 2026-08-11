@@ -66,7 +66,12 @@ export default function ChildrenPage() {
   async function createChild(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeHomeId || busy) return;
-    const data = new FormData(event.currentTarget);
+    // Captured now, before any `await` — React can null out event.currentTarget once
+    // this handler yields, so touching it after the request was what caused
+    // form.reset() to throw on every successful submit (masking a real 201 behind
+    // the generic error message). See the identical fix in people/page.tsx.
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const guardianIds = data.getAll("guardians").map(String);
     if (!guardianIds.length) {
       setError("Choose at least one responsible adult.");
@@ -79,7 +84,7 @@ export default function ChildrenPage() {
         age_band: formText(data, "age_band") as ChildAgeBand,
         guardian_membership_ids: guardianIds,
       });
-      event.currentTarget.reset();
+      form.reset();
       setMessage("Child profile created with restrictive defaults.");
       setError("");
       await load();

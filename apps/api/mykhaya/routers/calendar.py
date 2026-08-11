@@ -14,6 +14,7 @@ from mykhaya.calendar_occurrences import (
     expand_occurrences,
     recurrence_candidate_filter,
 )
+from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.features import require_feature
@@ -35,6 +36,7 @@ from mykhaya.schemas import (
     EventDetailResponse,
     EventLabelCreate,
     EventLabelResponse,
+    EventLabelUpdate,
     EventListResponse,
     EventOccurrence,
     EventUpdate,
@@ -55,13 +57,13 @@ router = APIRouter(
     dependencies=[Depends(require_calendar_feature)],
 )
 SYSTEM_LABELS = [
-    ("Family", "#456B76"),
-    ("School", "#7A5C99"),
-    ("Work", "#476A3A"),
-    ("Appointment", "#A05A2C"),
-    ("Birthday", "#A03F6A"),
-    ("Activity", "#336D9A"),
-    ("Other", "#666666"),
+    ("Family", ColourToken.teal),
+    ("School", ColourToken.purple),
+    ("Work", ColourToken.emerald),
+    ("Appointment", ColourToken.orange),
+    ("Birthday", ColourToken.rose),
+    ("Activity", ColourToken.blue),
+    ("Other", ColourToken.slate),
 ]
 
 
@@ -212,6 +214,17 @@ async def labels(
     ]
 
 
+async def _label_name_taken(
+    db: AsyncSession, home_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
+) -> bool:
+    query = select(CalendarEventLabel.id).where(
+        CalendarEventLabel.group_id == home_id, CalendarEventLabel.name == name
+    )
+    if exclude_id is not None:
+        query = query.where(CalendarEventLabel.id != exclude_id)
+    return await db.scalar(query) is not None
+
+
 @router.post("/{home_id}/event-labels", response_model=EventLabelResponse, status_code=201)
 async def create_label(
     home_id: uuid.UUID,
@@ -221,9 +234,13 @@ async def create_label(
     db: AsyncSession = Depends(get_db),
 ) -> EventLabelResponse:
     await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    if await _label_name_taken(db, home_id, body.name):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A calendar or category with that name already exists."
+        )
     row = CalendarEventLabel(
         group_id=home_id,
-        name=" ".join(body.name.strip().split()),
+        name=body.name,
         color=body.color,
         is_system=False,
     )
@@ -237,6 +254,46 @@ async def create_label(
         color=row.color,
         is_active=row.is_active,
         sort_order=row.sort_order,
+    )
+
+
+@router.patch("/{home_id}/event-labels/{label_id}", response_model=EventLabelResponse)
+async def update_label(
+    home_id: uuid.UUID,
+    label_id: uuid.UUID,
+    body: EventLabelUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventLabelResponse:
+    # calendar_edit_all, not calendar_edit_own: a calendar/category is shared
+    # household structure, not any one person's content — the same capability
+    # already gates creating one.
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    label = await db.get(CalendarEventLabel, label_id)
+    if label is None or label.group_id != home_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That calendar or category could not be found."
+        )
+    if body.name is not None and body.name != label.name:
+        if await _label_name_taken(db, home_id, body.name, exclude_id=label.id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "A calendar or category with that name already exists."
+            )
+        label.name = body.name
+    if body.color is not None:
+        label.color = body.color
+    if body.is_active is not None:
+        label.is_active = body.is_active
+    await db.flush()
+    audit(db, request, "calendar.label.updated", auth.user.id, home_id, "label", label.id)
+    await db.commit()
+    return EventLabelResponse(
+        id=label.id,
+        name=label.name,
+        color=label.color,
+        is_active=label.is_active,
+        sort_order=label.sort_order,
     )
 
 

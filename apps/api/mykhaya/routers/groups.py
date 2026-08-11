@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
 from mykhaya.household_permissions import (
@@ -31,19 +32,23 @@ from mykhaya.schemas import (
     GroupCreate,
     GroupResponse,
     GroupUpdate,
+    MemberColourUpdate,
     MemberRelationshipUpdate,
     MemberResponse,
 )
 
 router = APIRouter(prefix="/groups", tags=["Homes"])
+# Kept in sync with mykhaya.routers.calendar.SYSTEM_LABELS by hand — both create
+# the same starter categories for a new home, one at group-creation time and one
+# lazily the first time the calendar feature is touched (_ensure_home_calendar).
 DEFAULT_LABELS = [
-    ("Family", "#456B76"),
-    ("School", "#7A5C99"),
-    ("Work", "#476A3A"),
-    ("Appointment", "#A05A2C"),
-    ("Birthday", "#A03F6A"),
-    ("Activity", "#336D9A"),
-    ("Other", "#666666"),
+    ("Family", ColourToken.teal),
+    ("School", ColourToken.purple),
+    ("Work", ColourToken.emerald),
+    ("Appointment", ColourToken.orange),
+    ("Birthday", ColourToken.rose),
+    ("Activity", ColourToken.blue),
+    ("Other", ColourToken.slate),
 ]
 
 
@@ -247,6 +252,63 @@ async def update_member(
         user_id=user.id,
         display_name=user.display_name,
         email=user.email,
+        role=target.role,
+        relationship=target.relationship,
+        permission_profile=target.permission_profile,
+        permission_overrides=target.permission_overrides,
+        shared_resources=target.shared_resources,
+        colour=target.colour,
+        avatar_version=user.avatar_key,
+    )
+
+
+@router.patch("/{group_id}/members/{user_id}/colour", response_model=MemberResponse)
+async def update_member_colour(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: MemberColourUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> MemberResponse:
+    # A routine, personal choice — not a household-structure change — so a
+    # member picking their own colour needs no special capability beyond
+    # being an active member of the home. Changing someone *else's* colour
+    # (a Home Admin tidying up a child's or another adult's) reuses the same
+    # capability as every other member-attribute change.
+    if user_id != auth.user.id:
+        await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    target = await db.scalar(
+        select(Membership)
+        .where(
+            Membership.group_id == group_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
+    previous = target.colour.value if target.colour else None
+    target.colour = body.colour
+    user = await db.get(User, user_id)
+    assert user is not None
+    audit(
+        db,
+        request,
+        "membership.colour_changed",
+        auth.user.id,
+        group_id,
+        "user",
+        user_id,
+        {"previous": previous, "new": target.colour.value},
+    )
+    await db.commit()
+    return MemberResponse(
+        membership_id=target.id,
+        user_id=user.id,
+        display_name=user.display_name,
+        email=None if target.relationship == HouseholdRelationship.child else user.email,
         role=target.role,
         relationship=target.relationship,
         permission_profile=target.permission_profile,

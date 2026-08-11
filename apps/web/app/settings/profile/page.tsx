@@ -1,9 +1,12 @@
 "use client";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import type { User } from "@mykhaya/shared-types";
+import type { Member, User } from "@mykhaya/shared-types";
+import type { ColourKey } from "@mykhaya/design-tokens";
 import { api, ApiError } from "@mykhaya/api-client";
 import { Avatar } from "@/components/avatar";
+import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { SettingsPage } from "@/components/settings-page";
+import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
 
 const MONTHS = [
@@ -14,17 +17,44 @@ const MONTHS = [
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 export default function Profile() {
+  const { activeHomeId, activeHome } = useActiveHome();
   const [user, setUser] = useState<User | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarError, setAvatarError] = useState("");
+  const [membership, setMembership] = useState<Member | null>(null);
+  const [colourBusy, setColourBusy] = useState(false);
+  const [colourError, setColourError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.me().then(setUser);
   }, []);
+
+  useEffect(() => {
+    if (!activeHomeId || !user) return;
+    api
+      .members(activeHomeId)
+      .then((rows) => setMembership(rows.find((row) => row.user_id === user.id) ?? null));
+  }, [activeHomeId, user]);
+
+  async function changeColour(colour: ColourKey) {
+    if (!activeHomeId || !user || colourBusy) return;
+    setColourError("");
+    setColourBusy(true);
+    try {
+      const updated = await api.updateMemberColour(activeHomeId, user.id, colour);
+      setMembership(updated);
+    } catch (cause) {
+      setColourError(
+        cause instanceof ApiError ? cause.message : "Could not update your colour.",
+      );
+    } finally {
+      setColourBusy(false);
+    }
+  }
 
   async function saveBirthday(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,6 +133,7 @@ export default function Profile() {
             <Avatar
               id={user.id}
               name={user.display_name}
+              colour={membership?.colour}
               avatarVersion={user.avatar_version}
               size="xl"
             />
@@ -137,6 +168,28 @@ export default function Profile() {
           {avatarError && (
             <p className="notice error" role="alert">
               {avatarError}
+            </p>
+          )}
+        </section>
+      )}
+
+      {user && membership && (
+        <section className="card details">
+          <h2>Your colour</h2>
+          <p className="muted">
+            Used for your avatar and anywhere you show up as yourself in{" "}
+            {activeHome?.name ?? "your Home"} — not your calendar events, which take
+            their colour from the calendar or category instead.
+          </p>
+          <ColourSwatchPicker
+            value={membership.colour}
+            onChange={changeColour}
+            groupLabel="Your colour"
+            disabled={colourBusy}
+          />
+          {colourError && (
+            <p className="notice error" role="alert">
+              {colourError}
             </p>
           )}
         </section>

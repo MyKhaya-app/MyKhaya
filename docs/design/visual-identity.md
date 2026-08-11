@@ -81,32 +81,31 @@ competing for attention.
 ## Colour
 
 The canonical palette in `design-system.md` (sage, terracotta, mustard,
-cream, slate) remains the foundation. Version D adds one structural change on
-top of it:
+cream, slate) remains the foundation. On top of it, MyKhaya has two distinct
+colour identities, both drawn from one shared curated palette
+(`mykhaya.colour_palette.ColourToken` / `packages/design-tokens`,
+18 muted tokens — red, coral, orange, amber, yellow, lime, green, emerald,
+teal, cyan, sky, blue, indigo, violet, purple, pink, rose, slate):
 
-**Colour belongs to people, not categories.** Each family member owns one
-colour, assigned once and used everywhere that member appears — their
-avatar, their events on Calendar, their items on a future Shopping or
-Reminders list. Not "blue means a meeting, green means a reminder" — "blue
-means Joshua," full stop, in every screen that will ever exist. This is
-deliberately the opposite of a colour-coded taxonomy: the brain recognises a
-person's colour before it reads their name, which is real cognitive-load
-reduction, not decoration.
+**Member colour** — each family member owns one personal colour, chosen by
+themselves or set by a Home Admin, used everywhere *that person* appears:
+their avatar, member indicators, ownership dots, filters. Not their calendar
+events — see below. "Blue means Joshua" in every screen where identity is
+the point.
 
-Starter palette for member colours (muted, chosen to sit quietly against the
-warm paper background rather than compete with the terracotta accent):
+**Calendar/category colour** — each calendar or category (Family, School,
+Work, ...) owns its own colour, set by a Home Admin, and *that* is what
+determines an event's colour on Calendar — not who created it. Colour
+consistency across a multi-day event's continuation segments matters as much
+as the colour choice itself: one event, one colour, every day it spans.
 
-| | Hex |
-|---|---|
-| 🟢 | `#3C4A34` |
-| 🟣 | `#8B6BA8` |
-| 🟡 | `#D9A83E` |
-| 🔵 | `#4C7FA6` |
+Keeping these separate is deliberate: a household's shared calendar needs to
+read as a shared calendar, scannable by category, independent of whichever
+member happens to have created a given event.
 
-Implementation note for later: this needs a real `member.colour` field
-(assigned at creation, editable afterwards), not a client-side hash — that's
-a schema/API decision to make deliberately when this gets built, not to
-smuggle in as a side effect of a UI change.
+Both pickers are the same compact swatch grid
+(`components/colour-swatch-picker.tsx`) — one palette, one picker, wherever
+a colour is chosen.
 
 ## Typography
 
@@ -192,8 +191,8 @@ desktop as an expanded version of the same layout — never a separate one.
 ## Things MyKhaya deliberately does not do
 
 - No graphs, charts, or analytics-style dashboards on Home or Family.
-- No colour-coded taxonomies for event *categories* — colour is reserved for
-  people.
+- No free-form colour picker for either identity or categories — always the
+  one curated palette, never an arbitrary hex value a person types in.
 - No enterprise/admin visual language (dense tables, dark technical panels,
   corporate iconography) anywhere in the household-facing product. That
   register is reserved for the operator-only platform Control Centre, which

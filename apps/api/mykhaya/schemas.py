@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from mykhaya.colour_palette import ColourToken
 from mykhaya.models import (
     ChildAgeBand,
     ChildTransitionStatus,
@@ -123,8 +124,12 @@ class MemberResponse(BaseModel):
     permission_profile: PermissionProfile
     permission_overrides: dict[str, bool]
     shared_resources: list[str]
-    colour: str | None
+    colour: ColourToken | None
     avatar_version: str | None = None
+
+
+class MemberColourUpdate(StrictModel):
+    colour: ColourToken
 
 
 class MemberRelationshipUpdate(StrictModel):
@@ -299,13 +304,29 @@ class RegistrationResponse(MessageResponse):
 
 class EventLabelCreate(StrictModel):
     name: str = Field(min_length=1, max_length=40)
-    color: str = Field(default="#456B76", min_length=7, max_length=7)
+    color: ColourToken = ColourToken.teal
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+
+class EventLabelUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    color: ColourToken | None = None
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        return " ".join(value.strip().split()) if value is not None else None
 
 
 class EventLabelResponse(BaseModel):
     id: uuid.UUID
     name: str
-    color: str
+    color: ColourToken
     is_active: bool
     sort_order: int
 

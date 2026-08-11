@@ -12,6 +12,7 @@ import type {
   RecurrencePattern,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
+import { resolveColour } from "@mykhaya/design-tokens";
 import { AppShell } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -880,7 +881,7 @@ function MonthView({
                     key={`${event.occurrence_id}-${weekStart}`}
                     type="button"
                     className={`month-event${isMultiDay ? " month-event-span" : ""}`}
-                    style={{ "--event-color": event.label?.color ?? "#456b76", gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
+                    style={{ "--event-color": resolveColour(event.label?.color ?? "teal"), gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
                     onClick={() => onEvent(event)}
                     aria-label={`${eventTime(event)} ${event.title}`}
                     title={event.title}
@@ -930,7 +931,7 @@ function EventList({
           >
             <span
               className="event-colour"
-              style={{ background: event.label?.color ?? "#456b76" }}
+              style={{ background: resolveColour(event.label?.color ?? "teal") }}
               aria-label={event.label?.name ?? "Family event"}
             />
             <span className="event-time">{eventTime(event)}</span>

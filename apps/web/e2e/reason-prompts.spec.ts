@@ -60,6 +60,12 @@ test.describe("normal household actions never prompt for a reason", () => {
     // The only guardian checkbox available is the current user (home admin).
     await page.locator('input[name="guardians"]').first().check();
     await page.getByRole("button", { name: "Create Child profile" }).click();
+    // Also the regression guard for a real bug this suite caught: createChild()
+    // used to read event.currentTarget after an `await`, which React can have
+    // already nulled out, so form.reset() threw and masked a genuinely
+    // successful 201 behind a generic "could not be created" error. If that
+    // regresses, the profile never appears here even though the API call
+    // succeeded. See the fix in khaya-control-centre/children/page.tsx.
     await expect(page.getByRole("heading", { name: "Test Child" }).first()).toBeVisible();
 
     // Toggle a permission — this used to prompt for a text reason before the plain

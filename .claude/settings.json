@@ -59,7 +59,13 @@
       "Bash(node scripts/diag-chrome-heights.mjs)",
       "Bash(node scripts/calendar-review-screenshots.mjs http://127.0.0.1:8089)",
       "Bash(rm -f scripts/diag-chrome-heights.mjs scripts/diag-scroll-check.mjs)",
-      "Bash(node scripts/diag-fab-overlap.mjs)"
+      "Bash(node scripts/diag-fab-overlap.mjs)",
+      "Bash(pnpm --filter @mykhaya/design-tokens typecheck)",
+      "Bash(pnpm --filter @mykhaya/api-client typecheck)",
+      "Bash(curl -s -o /dev/null -w \"web status: %{http_code}\\\\n\" http://127.0.0.1:8089/)",
+      "Bash(node scripts/diag-colour-system.mjs)",
+      "Bash(rm -f scripts/diag-colour-system.mjs)",
+      "Bash(node scripts/diag-child-create.mjs)"
     ]
   }
 }

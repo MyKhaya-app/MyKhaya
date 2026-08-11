@@ -22,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
 
@@ -204,10 +205,12 @@ class Membership(UuidTimeMixin, Base):
     )
     permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # Assigned once at creation via mykhaya.member_colours.assign_member_colour.
-    # Household-scoped, not global: the same person can hold a different
-    # colour in a different home. See docs/design/visual-identity.md.
-    colour: Mapped[str | None] = mapped_column(String(7))
+    # Assigned once at creation via mykhaya.member_colours.assign_member_colour,
+    # editable afterwards by the person themselves or a Home Admin. A palette
+    # token, never a raw hex value — see mykhaya.colour_palette. Household-scoped,
+    # not global: the same person can hold a different colour in a different
+    # home. See docs/design/visual-identity.md.
+    colour: Mapped[ColourToken | None] = mapped_column(Enum(ColourToken, name="colour_token"))
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     group: Mapped[Group] = orm_relationship(back_populates="memberships")
     user: Mapped[User] = orm_relationship(back_populates="memberships")
@@ -234,7 +237,15 @@ class CalendarEventLabel(UuidTimeMixin, Base):
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(40))
-    color: Mapped[str] = mapped_column(String(7), default="#456B76")
+    # A palette token, never a raw hex value — see mykhaya.colour_palette. The
+    # same shared palette as member colours, but this is the calendar/category
+    # identity colour: event bars are coloured by their label, not by who
+    # created them. See docs/design/visual-identity.md.
+    color: Mapped[ColourToken] = mapped_column(
+        Enum(ColourToken, name="colour_token", create_type=False),
+        default=DEFAULT_LABEL_COLOUR,
+        server_default=DEFAULT_LABEL_COLOUR.value,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     sort_order: Mapped[int] = mapped_column(Integer, default=100, server_default="100")

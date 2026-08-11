@@ -10,7 +10,7 @@ mykhaya/worker.py and mykhaya/scheduler.py.
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from mykhaya.db import SessionFactory
 from mykhaya.models import OutboxEvent, WorkerJobRecord
@@ -37,22 +37,34 @@ async def test_failed_job_is_not_marked_processed_and_gets_backoff() -> None:
         await db.commit()
         event_id = event.id
 
-    with pytest.raises(Exception):  # noqa: B017 - re-raised by design, see worker.py
-        await process(event_id)
+    try:
+        with pytest.raises(Exception):  # noqa: B017 - re-raised by design, see worker.py
+            await process(event_id)
 
-    async with SessionFactory() as db:
-        refreshed = await db.get(OutboxEvent, event_id)
-        assert refreshed is not None
-        # The core bug: a failed job must remain selectable for retry, not
-        # be silently marked complete.
-        assert refreshed.processed_at is None
-        assert refreshed.attempts == 1
-        assert refreshed.last_error is not None
-        assert refreshed.available_at > datetime.now(UTC)
+        async with SessionFactory() as db:
+            refreshed = await db.get(OutboxEvent, event_id)
+            assert refreshed is not None
+            # The core bug: a failed job must remain selectable for retry, not
+            # be silently marked complete.
+            assert refreshed.processed_at is None
+            assert refreshed.attempts == 1
+            assert refreshed.last_error is not None
+            assert refreshed.available_at > datetime.now(UTC)
 
-        job = await db.get(WorkerJobRecord, event_id)
-        assert job is not None
-        assert job.status == "failed"
+            job = await db.get(WorkerJobRecord, event_id)
+            assert job is not None
+            assert job.status == "failed"
+    finally:
+        # Deliberately left failed + unprocessed (that's the behaviour under test),
+        # which also leaves a genuinely "actionable failed job" behind — clean it up
+        # so it doesn't pollute anything else in the run that checks the platform
+        # overview's actionable-failed-jobs count.
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id)
+            )
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+            await db.commit()
 
 
 @pytest.mark.asyncio

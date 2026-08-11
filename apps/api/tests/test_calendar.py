@@ -14,7 +14,11 @@ from mykhaya.models import (
     ActionToken,
     FeatureKey,
     FeatureOverride,
+    HouseholdRelationship,
     Invitation,
+    Membership,
+    PermissionProfile,
+    Role,
     TokenPurpose,
     User,
 )
@@ -322,3 +326,206 @@ async def test_weekly_recurrence_survives_dst_transition(client: AsyncClient) ->
         f"expected 09:00 local time after DST, got {local_start.isoformat()} "
         "— weekly recurrence is drifting across the clock change"
     )
+
+
+async def _home_with_calendar(client: AsyncClient, name: str) -> str:
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": name})
+    assert group.status_code == 201
+    home_id = group.json()["id"]
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
+            )
+        )
+        await db.commit()
+    return home_id
+
+
+@pytest.mark.asyncio
+async def test_event_label_create_update_rename_recolour_and_duplicate_name(
+    client: AsyncClient,
+) -> None:
+    """Calendar/category colour, not who created the event, is what an event
+    shows — see docs/design/visual-identity.md. Labels are created and later
+    renamed, recoloured and disabled through the same colour_token palette
+    used for member colours."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"labeladmin-{suffix}@example.com", "Label Admin")
+    home_id = await _home_with_calendar(client, "Label Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Sport", "color": "emerald"},
+    )
+    assert created.status_code == 201
+    label = created.json()
+    assert label["color"] == "emerald"
+    assert label["is_active"] is True
+
+    # An unrecognised colour token is rejected at the schema, not stored.
+    invalid_colour = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Bad Colour", "color": "not-a-real-colour"},
+    )
+    assert invalid_colour.status_code == 422
+
+    # Duplicate name within the same home is rejected, not silently accepted
+    # as a second identical category.
+    duplicate = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Sport", "color": "blue"},
+    )
+    assert duplicate.status_code == 409
+
+    # Rename and recolour independently.
+    renamed = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/event-labels/{label['id']}",
+        json={"name": "Football"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Football"
+    assert renamed.json()["color"] == "emerald"  # unchanged by a name-only update
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/event-labels/{label['id']}",
+        json={"color": "sky"},
+    )
+    assert recoloured.status_code == 200
+    assert recoloured.json()["color"] == "sky"
+    assert recoloured.json()["name"] == "Football"  # unchanged by a colour-only update
+
+    # Two different labels may share the same colour — not blocked.
+    second = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Athletics", "color": "sky"},
+    )
+    assert second.status_code == 201
+
+    # Disable, then confirm it drops out of the active listing.
+    disabled = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/event-labels/{label['id']}",
+        json={"is_active": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["is_active"] is False
+    listed = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert label["id"] not in {row["id"] for row in listed.json()}
+
+
+@pytest.mark.asyncio
+async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient) -> None:
+    """A household member without calendar.edit_all (e.g. an explicit-sharing
+    friend/extended-family profile) cannot rename or recolour a shared
+    calendar/category — that's shared household structure, gated the same
+    way label creation already is."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"labelowner-{suffix}@example.com", "Label Owner")
+    home_id = await _home_with_calendar(client, "Label Perms Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Outing", "color": "coral"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        friend_email = f"labelfriend-{suffix}@example.com"
+        await create_verified_user(friend_client, friend_email, "Label Friend")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == friend_email))
+            assert user is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=user.id,
+                    role=Role.guest,
+                    relationship=HouseholdRelationship.friend,
+                    permission_profile=PermissionProfile.explicit_sharing,
+                )
+            )
+            await db.commit()
+
+        blocked = await unsafe(
+            friend_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/event-labels/{label_id}",
+            json={"color": "rose"},
+        )
+        assert blocked.status_code == 403
+
+    unchanged = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == "coral"
+
+
+@pytest.mark.asyncio
+async def test_recurring_event_occurrences_keep_consistent_label_colour(
+    client: AsyncClient,
+) -> None:
+    """One event, one colour — every expanded occurrence of a recurring
+    event must carry the same label colour, the same identity every week,
+    matching the continuity the month view relies on for multi-day/
+    cross-week spans."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"recurcolour-{suffix}@example.com", "Recur Colour")
+    home_id = await _home_with_calendar(client, "Recur Colour Home")
+
+    label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Practice", "color": "violet"},
+    )
+    assert label.status_code == 201
+    label_id = label.json()["id"]
+
+    start_at = datetime.now(UTC) + timedelta(days=1)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Weekly practice",
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "label_id": label_id,
+            "recurrence": "weekly",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(days=35)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) >= 4, "expected multiple weekly occurrences in a 5-week window"
+    assert all(item["label"]["color"] == "violet" for item in items)
+    assert all(item["label"]["id"] == label_id for item in items)

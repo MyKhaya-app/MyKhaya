@@ -11,6 +11,10 @@ RUN pip install --upgrade pip && pip install .
 FROM builder AS test
 RUN pip install '.[dev]'
 COPY apps/api/tests ./tests
+# Read-only, for test_colour_palette_consistency.py: it parses the TS/CSS palette
+# source directly to prove mykhaya.colour_palette never silently drifts from
+# packages/design-tokens, rather than trusting a hand-maintained comment.
+COPY packages/design-tokens ./packages/design-tokens
 CMD ["python", "-m", "pytest"]
 
 FROM python:3.13.5-slim-bookworm AS runtime
