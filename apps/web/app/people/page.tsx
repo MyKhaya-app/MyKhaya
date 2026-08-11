@@ -101,7 +101,23 @@ export default function People() {
       canInvite ? api.listInvitations(activeHomeId) : Promise.resolve([]),
     ]);
     setMembers(memberRows);
-    setInvitations(invitationRows);
+    // The API already excludes accepted/revoked invitations and defensively
+    // suppresses any invitation whose email already has an active membership
+    // (see mykhaya.routers.invitations.list_invitations) — this is a second,
+    // belt-and-braces layer on top of that, not the source of truth. A
+    // pending invite must never render for an email that's already an active
+    // member of this Home, whatever the server returned.
+    const activeMemberEmails = new Set(
+      memberRows.map((member) => member.email?.toLowerCase()).filter(Boolean),
+    );
+    setInvitations(
+      invitationRows.filter(
+        (invitation) =>
+          !invitation.accepted_at &&
+          !invitation.revoked_at &&
+          !activeMemberEmails.has(invitation.email.toLowerCase()),
+      ),
+    );
   }
 
   useEffect(() => {

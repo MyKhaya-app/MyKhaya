@@ -144,4 +144,72 @@ test.describe("calendar month view density", () => {
     await page.locator(".overflow-events").first().click();
     await expect(page.locator(".bottom-sheet")).toBeVisible();
   });
+
+  test("a multi-day event's title starts from its first character and truncates only on the right, including when it begins in the first visible column", async ({
+    page,
+  }) => {
+    const email = process.env.E2E_EMAIL;
+    if (!email) throw new Error("E2E_EMAIL is required");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/login");
+    await page.getByRole("button", { name: "Not now" }).click({ timeout: 2000 }).catch(() => {});
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill("Correct horse battery staple!");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/(home|onboarding)$/);
+    if (page.url().includes("/onboarding")) {
+      await page.fill('input[name="name"]', "Clipping Test Home");
+      await page.click("button");
+      await expect(page).toHaveURL(/\/home$/);
+    }
+
+    const homes = (await api(page, "GET", "/groups")).body as { id: string }[];
+    const homeId = homes[0]!.id;
+    await api(page, "PUT", `/features/${homeId}/calendar/household`, { enabled: true, confirmed: true });
+
+    // August 3, 2026 is a Monday — the first visible weekday column — and the
+    // title is deliberately long enough to overflow a narrow mobile week cell.
+    // This is the exact regression: centering a `nowrap` overflowing flex
+    // child clips its *start*, not just its end ("AH - Police ..." rendered
+    // as "- Police Tr...").
+    const longTitle = "AH - Police training refresher course";
+    await api(page, "POST", `/homes/${homeId}/events`, {
+      title: longTitle,
+      start_at: iso(2026, 8, 3, 0),
+      end_at: iso(2026, 8, 6, 0),
+      timezone: "Europe/London",
+      is_all_day: true,
+      label_id: null,
+      location_text: null,
+      member_ids: [],
+    });
+
+    await gotoAugust2026(page);
+
+    const bar = page.locator(".month-event.month-event-span", { hasText: "Police" }).first();
+    await expect(bar).toBeVisible();
+
+    // The root cause, asserted directly: a spanning bar must never centre its
+    // text — centering plus `overflow: hidden` on a `nowrap` child is what
+    // clipped the start of the title in the reported bug.
+    const alignment = await bar.evaluate((el) => ({
+      justifyContent: getComputedStyle(el).justifyContent,
+      textAlign: getComputedStyle(el).textAlign,
+    }));
+    expect(alignment.justifyContent).not.toBe("center");
+    expect(alignment.textAlign).not.toBe("center");
+
+    // The full, untruncated title is always present in the accessible name —
+    // truncation is purely visual, never a loss of the underlying data.
+    await expect(bar).toHaveAccessibleName(new RegExp(longTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    // The rendered box starts flush with its grid column (no negative
+    // offset/transform pushing it left of the day it begins on).
+    const week = page.locator(".calendar-week").filter({ has: bar });
+    const [barBox, weekBox] = await Promise.all([bar.boundingBox(), week.boundingBox()]);
+    expect(barBox).not.toBeNull();
+    expect(weekBox).not.toBeNull();
+    expect(barBox!.x).toBeGreaterThanOrEqual(weekBox!.x - 1);
+  });
 });

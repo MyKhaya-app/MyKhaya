@@ -135,13 +135,39 @@ async def invite(
 async def list_invitations(
     group_id: uuid.UUID,
     include_revoked: bool = False,
+    include_accepted: bool = False,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[InvitationListItem]:
+    """The Family page's "Pending invitations" list — its only real caller — so the
+    default here excludes both revoked *and* accepted invitations, not just revoked.
+    An accepted invitation is no longer pending; it must never be returned here
+    alongside the active membership it created.
+
+    Belt-and-braces: an invitation is also excluded whenever an active (non-removed)
+    membership already exists for the same group and email, even if accepted_at is
+    for some reason unset — e.g. a membership created by a path other than this
+    accept() endpoint. This is a read-only suppression, not a write, so it never
+    mutates the invitation row and never discards audit history.
+    """
     await require_capability(group_id, Capability.members_invite, auth, db)
     filters = [Invitation.group_id == group_id]
     if not include_revoked:
         filters.append(Invitation.revoked_at.is_(None))
+    if not include_accepted:
+        filters.append(Invitation.accepted_at.is_(None))
+        filters.append(
+            ~(
+                select(Membership.id)
+                .join(User, User.id == Membership.user_id)
+                .where(
+                    Membership.group_id == Invitation.group_id,
+                    Membership.removed_at.is_(None),
+                    User.email == Invitation.email,
+                )
+                .exists()
+            )
+        )
     rows = (
         await db.execute(
             select(Invitation, User)

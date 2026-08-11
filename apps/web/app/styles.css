@@ -1429,6 +1429,14 @@ textarea {
   color: var(--colour-slate);
   display: flex;
   align-items: center;
+  /* The global `button` reset defaults to `justify-content: center` — harmless
+     for a short single-day chip, but for a long title that overflows its box
+     it centres the `nowrap` text and `overflow: hidden` then clips the
+     *start*, not just the end, with no ellipsis to show it happened. Every
+     event bar (single-day and spanning) must explicitly override this so
+     the title always renders from its first character and only ever
+     truncates on the right. */
+  justify-content: flex-start;
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.15;
@@ -1459,8 +1467,13 @@ textarea {
   border-radius: 0.35rem;
   color: white;
   font-weight: 600;
-  justify-content: center;
-  text-align: center;
+  /* Deliberately left-aligned, not centered: centering a `nowrap` flex child
+     that's wider than its box overflows equally on both sides, and
+     `overflow: hidden` then clips the *start* of the title with no ellipsis
+     there to show it happened ("AH - Police ..." silently became
+     "- Police Tr..."). Left-align + the shared rule's `text-overflow:
+     ellipsis` above guarantees the title always starts from its first
+     character and only ever truncates at the right. */
 }
 .calendar-day.outside {
   background: #f9f6f1;
