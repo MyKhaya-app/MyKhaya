@@ -8,11 +8,11 @@
 // environment: it creates a real account and real data.
 //
 // Usage: node scripts/seed-demo-data.mjs [baseUrl]
-// Requires the dev stack to be running (default http://localhost:8080).
+// Requires the dev stack to be running (default http://localhost:8089).
 
 import { chromium } from "@playwright/test";
 
-const BASE = process.argv[2] ?? "http://localhost:8080";
+const BASE = process.argv[2] ?? "http://localhost:8089";
 const stamp = Date.now();
 const email = `demo-${stamp}@example.com`;
 const password = "Correct-Horse-Battery-Staple-9";

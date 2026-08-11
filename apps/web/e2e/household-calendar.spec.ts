@@ -29,9 +29,8 @@ test("mobile-first Calendar, relationships and feature management", async ({
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/calendar");
-  await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Agenda" })).toBeVisible();
-  await page.getByRole("button", { name: "Month" }).click();
+  await expect(page.getByLabel("Calendar view")).toBeVisible();
+  await page.getByLabel("Calendar view").selectOption("month");
   await expect(page.getByLabel("Month view")).toBeVisible();
   expect(
     await page.evaluate(

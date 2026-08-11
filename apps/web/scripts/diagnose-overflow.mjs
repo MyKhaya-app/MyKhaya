@@ -2,12 +2,12 @@
 // tool for finding the actual offending element(s) at mobile widths.
 //
 // Usage: node scripts/diagnose-overflow.mjs [baseUrl]
-// Requires the dev stack running (default http://localhost:8080).
+// Requires the dev stack running (default http://localhost:8089).
 
 import { execSync } from "node:child_process";
 import { chromium } from "@playwright/test";
 
-const BASE = process.argv[2] ?? "http://localhost:8080";
+const BASE = process.argv[2] ?? "http://localhost:8089";
 const WIDTHS = [320, 375, 390, 393, 430];
 const stamp = Date.now();
 const email = `overflow-diag-${stamp}@example.com`;

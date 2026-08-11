@@ -43,12 +43,15 @@ Create or delegate these names to NetBird Proxy:
 Configure three HTTPS proxy routes and preserve the incoming `Host` header:
 
 ```text
-dev.mykhaya.app        -> http://SERVER_NETBIRD_IP:8080
-admin.dev.mykhaya.app  -> http://SERVER_NETBIRD_IP:8080
-status.dev.mykhaya.app -> http://SERVER_NETBIRD_IP:8080
+dev.mykhaya.app        -> http://SERVER_NETBIRD_IP:8089
+admin.dev.mykhaya.app  -> http://SERVER_NETBIRD_IP:8089
+status.dev.mykhaya.app -> http://SERVER_NETBIRD_IP:8089
 ```
 
-Change `8080` in both NetBird and `MYKHAYA_DEV_HOST_PORT` if the default is unavailable.
+The host port defaults to `8089` (`MYKHAYA_DEV_HOST_PORT`, set in `compose.dev.yml`) —
+changed from Caddy's usual `8080` because another app already uses `8080` on this
+machine. Change `MYKHAYA_DEV_HOST_PORT` again (and update the NetBird routes above to
+match) if `8089` is ever unavailable too.
 Keep `MYKHAYA_DEV_BIND_ADDRESS=0.0.0.0`, or bind to the server's specific NetBird IP.
 Do not expose this HTTP port to the public internet; allow it only over NetBird or the
 host firewall.
@@ -89,9 +92,9 @@ docker compose -f compose.yml -f compose.dev.yml ps
 Direct server checks intentionally use the `localhost` Caddy site:
 
 ```sh
-curl -fsS http://127.0.0.1:8080/api/v1/health/live
-curl -fsS http://127.0.0.1:8080/api/v1/health/ready
-curl -fsS http://127.0.0.1:8080/api/v1/health/build
+curl -fsS http://127.0.0.1:8089/api/v1/health/live
+curl -fsS http://127.0.0.1:8089/api/v1/health/ready
+curl -fsS http://127.0.0.1:8089/api/v1/health/build
 ```
 
 Mailpit is available only on the server at `http://127.0.0.1:8025` by default. Use an
@@ -178,7 +181,7 @@ enrolment at `https://admin.dev.mykhaya.app/login` immediately afterwards.
 `MYKHAYA_BUILD_CHANNEL` (or the `VERSION` file baked into the image if unset):
 
 ```sh
-curl -fsS http://127.0.0.1:8080/api/v1/health/build
+curl -fsS http://127.0.0.1:8089/api/v1/health/build
 ```
 
 The same version/channel (plus commit and build time outside production) is already

@@ -28,9 +28,9 @@ immediately and existing unverified accounts can sign in. Keep it enabled in pro
 - Control Centre: `https://admin.dev.mykhaya.app` (network allow-list and separate operator account required)
 - Public status: `https://status.dev.mykhaya.app`
 - Mailpit (loopback only): `http://localhost:8025`
-- Liveness: `http://localhost:8080/api/v1/health/live`
-- Readiness: `http://localhost:8080/api/v1/health/ready`
-- Build metadata: `http://localhost:8080/api/v1/health/build`
+- Liveness: `http://localhost:8089/api/v1/health/live`
+- Readiness: `http://localhost:8089/api/v1/health/ready`
+- Build metadata: `http://localhost:8089/api/v1/health/build`
 
 Use `make dev-update`, `make dev-logs`, `make test`, `make lint`, `make typecheck`,
 `make backup` and `make prod`. PostgreSQL and Redis have no host port mappings. See

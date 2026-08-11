@@ -34,7 +34,7 @@ async function gotoAugust2026(page: import("@playwright/test").Page) {
   await page.goto("/calendar");
   await page.waitForTimeout(300);
   for (let i = 0; i < 24; i += 1) {
-    const heading = await page.locator(".calendar-period").textContent();
+    const heading = await page.locator(".calendar-month-label").textContent();
     if (heading?.includes("August 2026")) return;
     await page.getByRole("button", { name: "Next period" }).click();
     await page.waitForTimeout(100);
@@ -109,12 +109,30 @@ test.describe("calendar month view density", () => {
     const weekHeights = await page.$$eval(".calendar-week", (weeks) =>
       weeks.map((week) => week.getBoundingClientRect().height),
     );
-    // A week with 5 events reserves visibly more height than a week with none — this
-    // is the core fix: rows are no longer a fixed block every week gets regardless
-    // of content.
-    const busiestWeek = Math.max(...weekHeights);
+    // Week height is the viewport's leftover space (after header/toolbar/weekday
+    // row/bottom nav) divided across all six weeks — clamp(88px, ..., 145px) — so
+    // every week, including an empty one, reads as a genuine row rather than a thin
+    // strip, all six stay visible together with no internal scroll region, and a
+    // busy week's actual content can still push it taller than a quiet one.
     const quietestWeek = Math.min(...weekHeights);
-    expect(busiestWeek).toBeGreaterThan(quietestWeek);
+    const busiestWeek = Math.max(...weekHeights);
+    expect(quietestWeek).toBeGreaterThanOrEqual(85);
+    expect(busiestWeek).toBeGreaterThanOrEqual(quietestWeek);
+
+    // All six weeks are visible together on a standard phone viewport — no nested
+    // scroll region inside the month grid (a real regression this test catches: an
+    // earlier iteration made the weeks grid its own internally-scrolling box).
+    const weeksBox = await page.locator(".calendar-weeks").boundingBox();
+    const weeksScroll = await page.locator(".calendar-weeks").evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      overflowY: getComputedStyle(el).overflowY,
+    }));
+    expect(weeksScroll.overflowY).not.toBe("auto");
+    expect(weeksScroll.overflowY).not.toBe("scroll");
+    expect(weeksScroll.scrollHeight).toBeLessThanOrEqual(weeksScroll.clientHeight + 1);
+    const allWeeksBottom = weekHeights.reduce((sum, h) => sum + h, 0) + weeksBox!.y;
+    expect(allWeeksBottom).toBeLessThanOrEqual(844);
 
     // The busy day shows an overflow indicator (5 events > MONTH_VISIBLE_ROW_CAP).
     await expect(page.locator(".overflow-events").first()).toBeVisible();

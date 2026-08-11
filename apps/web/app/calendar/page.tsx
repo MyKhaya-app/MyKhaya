@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import type {
   BirthdayEntry,
   EventLabel,
@@ -512,92 +512,8 @@ export default function CalendarPage() {
   return (
     <AppShell>
       <main className="standard-page calendar-page">
-        <header className="calendar-heading">
-          <div>
-            <p className="eyebrow">{activeHome?.name ?? "Home"}</p>
-            <h1>Calendar</h1>
-          </div>
-          <div className="calendar-heading-actions">
-            <button
-              className="icon-button secondary"
-              type="button"
-              onClick={() => setSearchOpen((open) => !open)}
-              aria-pressed={searchOpen}
-              aria-label="Search events"
-            >
-              <Search size={18} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={() => setEditorDay(focusDate)}>
-              <Plus size={18} aria-hidden="true" />
-              Add
-            </button>
-          </div>
-        </header>
-
-        {birthdaysInRange.length > 0 && (
-          <p className="notice calendar-birthday-banner">
-            🎂{" "}
-            {birthdaysInRange
-              .map(
-                (entry) =>
-                  `${entry.display_name}'s birthday (${new Date(
-                    entry.next_occurrence_date,
-                  ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`,
-              )
-              .join(" · ")}
-          </p>
-        )}
-
-        {searchOpen && (
-          <div className="calendar-search">
-            <Search size={16} aria-hidden="true" />
-            <input
-              type="search"
-              placeholder="Search events"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              autoFocus
-              aria-label="Search events by title"
-            />
-            {query && (
-              <button
-                type="button"
-                className="icon-button secondary"
-                onClick={() => setQuery("")}
-                aria-label="Clear search"
-              >
-                <X size={16} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="calendar-toolbar" aria-label="Calendar controls">
-          <div
-            className="view-switcher"
-            role="group"
-            aria-label="Calendar view"
-          >
-            {(
-              [
-                { mode: "agenda", label: "Schedule" },
-                { mode: "day", label: "Day" },
-                { mode: "week", label: "Week" },
-                { mode: "month", label: "Month" },
-              ] as { mode: ViewMode; label: string }[]
-            ).map(({ mode, label }) => (
-              <button
-                type="button"
-                key={mode}
-                className={view === mode ? "active" : "secondary"}
-                aria-pressed={view === mode}
-                onClick={() => chooseView(mode)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="date-navigation">
+        <header className="calendar-toolbar-compact">
+          <div className="calendar-month-row">
             <button
               className="icon-button secondary"
               type="button"
@@ -606,13 +522,11 @@ export default function CalendarPage() {
             >
               <ChevronLeft size={18} aria-hidden="true" />
             </button>
-            <button
-              className="secondary today-button"
-              type="button"
-              onClick={() => setFocusDate(new Date())}
-            >
-              Today
-            </button>
+            <h1 className="calendar-month-label">
+              {view === "day"
+                ? displayDate(focusDate, { weekday: "short", day: "numeric", month: "short" })
+                : displayDate(focusDate, { month: "long", year: "numeric" })}
+            </h1>
             <button
               className="icon-button secondary"
               type="button"
@@ -621,30 +535,96 @@ export default function CalendarPage() {
             >
               <ChevronRight size={18} aria-hidden="true" />
             </button>
+            <div className="calendar-month-row-actions">
+              <button
+                className="icon-button secondary"
+                type="button"
+                onClick={() => setFocusDate(new Date())}
+                aria-label="Jump to today"
+                title="Today"
+              >
+                <CalendarDays size={16} aria-hidden="true" />
+              </button>
+              <button
+                className="icon-button secondary"
+                type="button"
+                onClick={() => setSearchOpen((open) => !open)}
+                aria-pressed={searchOpen}
+                aria-label="Search events"
+              >
+                <Search size={16} aria-hidden="true" />
+              </button>
+              <button className="calendar-add-desktop" type="button" onClick={() => setEditorDay(focusDate)}>
+                <Plus size={16} aria-hidden="true" />
+                Add
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div className="calendar-filter-row">
-          <label className="calendar-selector">
-            <span className="sr-only">Calendar or category</span>
-            <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Calendar or category">
-              <option value="">{activeHome?.name ?? "Household"} calendar</option>
-              {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
-            </select>
-            <ChevronDown size={16} aria-hidden="true" />
-          </label>
-        </div>
+          <div className="calendar-selectors-row">
+            <label className="calendar-selector">
+              <span className="sr-only">Calendar or category</span>
+              <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Calendar or category">
+                <option value="">{activeHome?.name ?? "Household"} calendar</option>
+                {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
+              </select>
+              <ChevronDown size={14} aria-hidden="true" />
+            </label>
+            <label className="calendar-selector calendar-view-selector">
+              <span className="sr-only">Calendar view</span>
+              <select
+                value={view}
+                onChange={(event) => chooseView(event.target.value as ViewMode)}
+                aria-label="Calendar view"
+              >
+                <option value="month">Month</option>
+                <option value="week">Week</option>
+                <option value="day">Day</option>
+                <option value="agenda">Schedule</option>
+              </select>
+              <ChevronDown size={14} aria-hidden="true" />
+            </label>
+          </div>
 
-        <h2 className="calendar-period">
-          {view === "day"
-            ? displayDate(focusDate, {
-                weekday: "long",
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-              })
-            : displayDate(focusDate, { month: "long", year: "numeric" })}
-        </h2>
+          {birthdaysInRange.length > 0 && (
+            <p className="notice calendar-birthday-banner">
+              🎂{" "}
+              {birthdaysInRange
+                .map(
+                  (entry) =>
+                    `${entry.display_name}'s birthday (${new Date(
+                      entry.next_occurrence_date,
+                    ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`,
+                )
+                .join(" · ")}
+            </p>
+          )}
+
+          {searchOpen && (
+            <div className="calendar-search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                placeholder="Search events"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                autoFocus
+                aria-label="Search events by title"
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="icon-button secondary"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                >
+                  <X size={16} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+        </header>
+
         {error && (
           <p className="notice error" role="alert">
             {error}
@@ -868,7 +848,11 @@ function MonthView({
                 const count = events.filter((event) => dateKey(event.start_at) <= key && eventEndKey(event) >= key).length;
                 const hidden = hiddenByDay[index] ?? 0;
                 return (
-                  <article className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}`} key={key}>
+                  <article
+                    className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
+                    key={key}
+                    style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
+                  >
                     <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, ${count} events`}>
                       <span>{day.getUTCDate()}</span>
                     </button>
@@ -876,20 +860,36 @@ function MonthView({
                   </article>
                 );
               })}
-              {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => (
-                <button
-                  key={`${event.occurrence_id}-${weekStart}`}
-                  type="button"
-                  className="month-event"
-                  style={{ "--event-color": event.label?.color ?? "#456b76", gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
-                  onClick={() => onEvent(event)}
-                  aria-label={`${eventTime(event)} ${event.title}`}
-                  title={event.title}
-                >
-                  <span aria-hidden="true" />
-                  {dateKey(event.start_at) < weekStart ? "↳ " : ""}{event.title}
-                </button>
-              ))}
+              {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => {
+                // A multi-day event keeps the same solid-bar treatment on every week
+                // segment it touches, even a segment that only covers one day of that
+                // week (e.g. an event ending on a week's first day) — styling must key
+                // off the event's own duration, not how much of it happens to fall in
+                // this particular week, or a continuation segment would silently revert
+                // to the lighter single-day chip look and read as a different event.
+                const isMultiDay = eventEndKey(event) !== dateKey(event.start_at);
+                const segmentDays = end - start + 1;
+                const isContinuation = dateKey(event.start_at) < weekStart;
+                // A segment too narrow for its title to read as anything but a
+                // meaningless fragment ("Te…", "0…") shows no text at all — a blank
+                // coloured bar still communicates "this event continues here," which a
+                // squeezed fragment does not.
+                const showTitle = !isMultiDay || segmentDays >= 2;
+                return (
+                  <button
+                    key={`${event.occurrence_id}-${weekStart}`}
+                    type="button"
+                    className={`month-event${isMultiDay ? " month-event-span" : ""}`}
+                    style={{ "--event-color": event.label?.color ?? "#456b76", gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
+                    onClick={() => onEvent(event)}
+                    aria-label={`${eventTime(event)} ${event.title}`}
+                    title={event.title}
+                  >
+                    {!isMultiDay && <span aria-hidden="true" />}
+                    {showTitle ? `${isContinuation ? "↳ " : ""}${event.title}` : ""}
+                  </button>
+                );
+              })}
             </div>
           );
         })}

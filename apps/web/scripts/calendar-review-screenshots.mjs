@@ -5,7 +5,7 @@
 
 import { chromium } from "@playwright/test";
 
-const BASE = process.argv[2] ?? "http://localhost:8080";
+const BASE = process.argv[2] ?? "http://localhost:8089";
 const stamp = Date.now();
 const email = `cal-review-${stamp}@example.com`;
 const password = "Correct-Horse-Battery-Staple-9";
@@ -131,7 +131,7 @@ async function goToAugust() {
   await page.goto(`${BASE}/calendar`);
   await page.waitForTimeout(400);
   for (let i = 0; i < 24; i += 1) {
-    const heading = await page.locator(".calendar-period").textContent();
+    const heading = await page.locator(".calendar-month-label").textContent();
     if (heading?.includes("August 2026")) return;
     await page.getByRole("button", { name: "Next period" }).click();
     await page.waitForTimeout(150);
