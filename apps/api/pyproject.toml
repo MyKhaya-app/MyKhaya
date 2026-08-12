@@ -19,12 +19,14 @@ dependencies = [
   "pillow-heif>=0.22,<1",
   "pwdlib[argon2]>=0.2,<1",
   "pydantic-settings>=2.10,<3",
+  "pyotp>=2.9,<3",
   "python-multipart>=0.0.20,<1",
   "pywebpush>=2,<3",
   "redis>=6.2,<7",
   "sqlalchemy[asyncio]>=2.0.41,<3",
   "structlog>=25.4,<26",
-  "uvicorn[standard]>=0.35,<1"
+  "uvicorn[standard]>=0.35,<1",
+  "webauthn>=2.5,<3"
 ]
 
 [project.optional-dependencies]
@@ -64,6 +66,14 @@ ignore = ["S101", "B008"]
 "mykhaya/security.py" = ["S106"]
 "mykhaya/routers/invitations.py" = ["S106"]
 "tests/*.py" = ["S105", "S106"]
+# Pytest fixtures imported from another test module and used as a same-named
+# parameter (the standard way to share fixtures across test files without a
+# conftest.py) look like shadowing to ruff's static analysis, but are how
+# pytest's fixture injection is meant to work.
+"tests/test_platform_mfa.py" = ["F811"]
+"tests/test_platform_health_cards.py" = ["F811"]
+"tests/test_platform_admin_invitations.py" = ["F811"]
+"tests/test_platform_security_remediation.py" = ["F811"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -71,5 +81,5 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["pywebpush.*", "py_vapid.*", "pillow_heif.*"]
+module = ["pywebpush.*", "py_vapid.*", "pillow_heif.*", "pyotp.*"]
 ignore_missing_imports = true

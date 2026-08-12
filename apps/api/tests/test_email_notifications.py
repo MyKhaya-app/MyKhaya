@@ -106,9 +106,12 @@ async def email_outbox_rows(recipient_email: str) -> list[OutboxEvent]:
 
 
 def test_mandatory_email_types_are_registered() -> None:
-    assert {"email_verification", "password_reset", "household_invitation"} == (
-        MANDATORY_EMAIL_TYPES
-    )
+    assert {
+        "email_verification",
+        "password_reset",
+        "household_invitation",
+        "platform_administrator_invitation",
+    } == (MANDATORY_EMAIL_TYPES)
 
 
 @pytest.mark.asyncio

@@ -49,7 +49,12 @@ PREFERENCE_GATES: dict[str, str] = {
 # preference — account security and household-membership actions the recipient is
 # actively waiting on, not an optional update. `notify()` still writes the normal
 # NotificationDelivery diagnostic row for these, it just never suppresses them.
-MANDATORY_EMAIL_TYPES = {"email_verification", "password_reset", "household_invitation"}
+MANDATORY_EMAIL_TYPES = {
+    "email_verification",
+    "password_reset",
+    "household_invitation",
+    "platform_administrator_invitation",
+}
 
 
 async def get_or_create_preferences(

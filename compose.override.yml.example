@@ -1,0 +1,19 @@
+# Local developer workstation override — copy this file to compose.override.yml
+# (untracked, see .gitignore) and adjust if needed. `make up`/`make build`/`docker
+# compose` with no `-f` flags auto-merge compose.yml with compose.override.yml, so
+# this is the ONLY compose file responsible for publishing Caddy to your host for
+# local development — see docs/operations/local-development.md.
+#
+# This intentionally mirrors the port compose.dev.yml uses for the separate
+# persistent-dev-server workflow (MYKHAYA_DEV_HOST_PORT/MYKHAYA_DEV_BIND_ADDRESS),
+# so the two workflows read consistently even though they are never combined
+# with each other. Defaults to 8080, matching .env.example's MYKHAYA_ADMIN_URL /
+# MYKHAYA_STATUS_URL / MYKHAYA_PUBLIC_WEB_URL / MYKHAYA_CORS_ORIGINS /
+# MYKHAYA_TRUSTED_HOSTS defaults — if you change the port here, change the port in
+# those .env values too (infrastructure/caddy/Caddyfile's site addresses are the
+# only piece that's fixed at 8080 container-side; this maps your chosen host port
+# to that).
+services:
+  caddy:
+    ports:
+      - "${MYKHAYA_DEV_BIND_ADDRESS:-0.0.0.0}:${MYKHAYA_DEV_HOST_PORT:-8080}:8080"

@@ -131,7 +131,12 @@ async def clean_template_overrides() -> AsyncIterator[None]:
 
 def test_registry_matches_migration_version() -> None:
     assert DEFAULT_TEMPLATE_VERSION >= 1
-    assert set(TEMPLATES) == {"email_verification", "password_reset", "household_invitation"}
+    assert set(TEMPLATES) == {
+        "email_verification",
+        "password_reset",
+        "household_invitation",
+        "platform_administrator_invitation",
+    }
 
 
 @pytest.mark.asyncio

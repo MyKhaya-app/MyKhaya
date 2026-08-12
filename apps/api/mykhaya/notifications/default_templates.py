@@ -61,6 +61,24 @@ TEMPLATES: dict[str, TemplateDefault] = {
         ),
         description="Sent when a household admin or partner invites someone to join.",
     ),
+    "platform_administrator_invitation": TemplateDefault(
+        subject="You are invited to administer MyKhaya",
+        body=(
+            "{{inviter_display_name}} has invited you to become a Platform Administrator "
+            "for this MyKhaya installation, with the role of {{role}}.\n\n"
+            "This is not an invitation to a Home — it gives privileged access to manage "
+            "the entire MyKhaya platform, not a single household.\n\n"
+            "Use this secure link to set up your administrator account:\n\n"
+            "{{link}}\n\n"
+            "This invitation expires on {{expires_at}}.\n\n"
+            "If you were not expecting this invitation, you can ignore this email — no "
+            "account will be created unless the link above is used."
+        ),
+        allowed_variables=frozenset(
+            {"inviter_display_name", "role", "link", "expires_at"}
+        ),
+        description="Sent when a Platform Owner invites a new global platform administrator.",
+    ),
 }
 
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
@@ -72,6 +90,12 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "inviter_display_name": "Jamie Example",
         "home_name": "The Example Family",
         "link": "https://example.com/register?invitation=SAMPLE-TOKEN",
+        "expires_at": "2026-12-31",
+    },
+    "platform_administrator_invitation": {
+        "inviter_display_name": "Jamie Example",
+        "role": "Platform Administrator",
+        "link": "https://admin.example.com/accept-invitation?token=SAMPLE-TOKEN",
         "expires_at": "2026-12-31",
     },
 }

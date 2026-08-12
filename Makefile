@@ -1,8 +1,15 @@
 .PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+# Local developer workstation only (see docs/operations/local-development.md — the
+# separate persistent dev-server workflow below never touches compose.override.yml).
+# Ensures a fresh clone gets both files `docker compose`/`make up` need without any
+# manual copy step beyond what's already documented.
 init:
 	@test -f .env || cp .env.example .env
+	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose build
 up:
+	@test -f .env || cp .env.example .env
+	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose up --build -d
 down:
 	docker compose down
@@ -30,6 +37,8 @@ format:
 seed:
 	docker compose exec api python -m mykhaya.seed
 reset:
+	@test -f .env || cp .env.example .env
+	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose down -v
 	docker compose up --build -d
 prod:

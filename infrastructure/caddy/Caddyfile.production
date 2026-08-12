@@ -9,6 +9,11 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# PCC-SEC-008: no legitimate reason for any MyKhaya origin to be
+		# framed by another site — frame-ancestors (modern) plus
+		# X-Frame-Options (older-browser fallback) both deny it outright.
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout
@@ -23,6 +28,8 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout
@@ -41,6 +48,19 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy no-referrer
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Frame-Options DENY
+		# PCC-SEC-008: baseline CSP for the Platform Control Centre — the
+		# highest-privilege UI in MyKhaya, so it gets the strictest policy.
+		# script-src has no 'unsafe-inline'/'unsafe-eval' (the admin frontend
+		# has no inline <script> tags and ships no eval-based tooling in a
+		# production build). style-src allows 'unsafe-inline' because the
+		# app uses React inline style={{...}} attributes throughout — a
+		# blanket style-src block would break real, existing UI, not just
+		# theoretical injected styles. img-src allows data: for the
+		# client-generated TOTP QR code (qrcode's toDataURL). No external
+		# script/style/font/image/API origins are used anywhere in this app,
+		# so everything else is 'self' only.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"
 	}
 	log {
 		output stdout
@@ -59,6 +79,8 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout

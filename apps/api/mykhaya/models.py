@@ -108,6 +108,25 @@ class PlatformRole(StrEnum):
     readonly = "read_only_operator"
 
 
+class PlatformSessionStatus(StrEnum):
+    """Where a PlatformSession sits in the MFA login flow — never inferred from
+    PlatformAdministrator.mfa_enrolled alone, since that would let a session
+    minted before an MFA policy change silently keep full access. See
+    mykhaya.platform_security.platform_context and the login endpoint."""
+
+    # Password verified, second factor verified (or none was required) — full
+    # Control Centre access, subject to the normal role/step-up checks.
+    full = "full"
+    # Password verified, administrator has an enrolled second factor that has not
+    # yet been presented this login. Can only reach the MFA-verification
+    # endpoints and logout.
+    pending_mfa = "pending_mfa"
+    # Password verified, admin_mfa_required policy applies to this administrator
+    # and they have no enrolled second factor yet. Can only reach MFA-enrollment
+    # endpoints and logout — never ordinary Control Centre routes.
+    mfa_setup_required = "mfa_setup_required"
+
+
 class ServiceState(StrEnum):
     operational = "operational"
     degraded = "degraded_performance"
@@ -454,8 +473,45 @@ class PlatformAdministrator(UuidTimeMixin, Base):
         )
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # True once at least one second factor (TOTP or a WebAuthn credential) is
+    # enrolled. Never set directly by an endpoint that isn't the enrollment
+    # completion itself — see mykhaya.platform_mfa.
     mfa_enrolled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Encrypted with the same mykhaya.secrets_crypto approach as the SMTP/VAPID
+    # secrets — never plaintext at rest, never returned by any endpoint once set.
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    totp_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlatformAdministratorInvitation(UuidTimeMixin, Base):
+    """The only normal path to a new PlatformAdministrator row besides the
+    one-time bootstrap script — see mykhaya.routers.platform's
+    /administrators/invitations endpoints. The token itself is never stored:
+    only its HMAC (token_hash, same convention as Session/ActionToken), and it
+    is genuinely random (secrets.token_urlsafe) rather than derived from this
+    row's id, specifically so reissuing can invalidate the previous token by
+    simply overwriting token_hash — the old raw value stops matching anything."""
+
+    __tablename__ = "platform_administrator_invitations"
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    role: Mapped[PlatformRole] = mapped_column(
+        Enum(
+            PlatformRole,
+            name="platform_role",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PlatformSession(UuidTimeMixin, Base):
@@ -471,6 +527,60 @@ class PlatformSession(UuidTimeMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     source_ip: Mapped[str] = mapped_column(String(64))
+    status: Mapped[PlatformSessionStatus] = mapped_column(
+        Enum(PlatformSessionStatus, name="platform_session_status"),
+        default=PlatformSessionStatus.full,
+        server_default=PlatformSessionStatus.full.value,
+    )
+
+
+class AdminWebAuthnCredential(UuidTimeMixin, Base):
+    """A registered passkey/security key for a platform administrator. Standard
+    WebAuthn public-key credential storage — see mykhaya.platform_mfa. Never
+    stores a private key; the private key never leaves the authenticator."""
+
+    __tablename__ = "admin_webauthn_credentials"
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="CASCADE"), index=True
+    )
+    # Base64url-encoded credential ID, as returned by the authenticator — the
+    # handle used to look up this credential on every authentication attempt.
+    credential_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Chosen by the administrator at registration time (e.g. "YubiKey 5C",
+    # "iPhone Face ID") — display only, never used for lookup.
+    label: Mapped[str] = mapped_column(String(100))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminRecoveryCode(UuidTimeMixin, Base):
+    __tablename__ = "admin_recovery_codes"
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="CASCADE"), index=True
+    )
+    # HMAC-SHA256 (mykhaya.security.hash_secret), same convention as session/
+    # action tokens — a recovery code is a high-entropy single-use secret, not a
+    # low-entropy PIN, so it doesn't need pwdlib's slower password hashing.
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BackupRun(UuidTimeMixin, Base):
+    """One row per backup attempt, written by infrastructure/scripts/backup.sh on
+    completion — see docs/operations/backup-and-restore.md. The application never
+    triggers a backup itself; this table only records outcomes so the Control
+    Centre can show authoritative last-success/overdue state instead of assuming
+    health from the presence of a backup directory."""
+
+    __tablename__ = "backup_runs"
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    succeeded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    # Free-text but never a raw stack trace or secret — the script only ever
+    # writes short, fixed operational messages here.
+    detail: Mapped[str | None] = mapped_column(String(500))
 
 
 class AdministrativeAuditEvent(Base):

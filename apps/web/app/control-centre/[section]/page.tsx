@@ -6,10 +6,13 @@ import { platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { readableDate } from "@/components/platform-format";
 
+// "security" and "administrators" are deliberately not listed here — they now
+// have dedicated pages (app/control-centre/security, .../administrators),
+// which Next.js resolves in preference to this dynamic route for those exact
+// segments. This generic table view remains for sections with no bespoke UI.
 const allowed: Record<string, string> = {
   users: "Users", homes: "Homes", health: "Health and diagnostics", jobs: "Jobs and scheduler",
-  settings: "Global settings",
-  security: "Security events", audit: "Administrative audit", administrators: "Administrators",
+  settings: "Global settings", audit: "Administrative audit",
   incidents: "Public status management",
 };
 

@@ -2,6 +2,7 @@ from functools import lru_cache
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -69,6 +70,10 @@ class Settings(BaseSettings):
     admin_recent_auth_minutes: int = Field(default=10, ge=1, le=30)
     admin_mfa_required: bool = True
     admin_bootstrap_enabled: bool = False
+    # How often infrastructure/scripts/backup.sh is expected to run — purely for
+    # the Control Centre's "is the latest backup overdue" health signal, not a
+    # scheduling mechanism (the application never triggers backups itself).
+    backup_expected_interval_hours: int = Field(default=26, ge=1, le=24 * 30)
     status_public_enabled: bool = True
     commit_sha: str = "unknown"
     build_time: str = "unknown"
@@ -125,6 +130,69 @@ class Settings(BaseSettings):
             if not self.admin_mfa_required:
                 raise ValueError("MYKHAYA_ADMIN_MFA_REQUIRED must be true in production")
         return self
+
+    @model_validator(mode="after")
+    def validate_admin_and_status_url_configuration(self) -> "Settings":
+        """Catches exactly the class of bug found during Control Centre MFA
+        verification: MYKHAYA_ADMIN_URL/MYKHAYA_STATUS_URL silently drifting
+        out of sync with MYKHAYA_TRUSTED_HOSTS/MYKHAYA_CORS_ORIGINS (or just
+        being malformed), which doesn't break startup at all — it just makes
+        every admin request fail with an opaque 400/403 at request time. This
+        fails at startup instead, with a message that names the actual
+        mismatch, rather than a browser network tab.
+
+        Skipped in the `test` environment: the isolated test pipeline uses its
+        own minimal, deliberately narrow settings and doesn't exercise the
+        admin/status subdomains through this config-driven path.
+        """
+        if self.environment == "test":
+            return self
+
+        for field_name, url in (
+            ("admin_url", self.admin_url),
+            ("status_url", self.status_url),
+            ("public_web_url", self.public_web_url),
+        ):
+            parts = urlsplit(url)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()} ({url!r}) is not a valid http(s) URL."
+                )
+            if self.environment == "production" and parts.scheme != "https":
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()} must use https in production "
+                    f"(got {url!r}) — WebAuthn and secure cookies both depend on it."
+                )
+            hostname = parts.hostname.casefold()
+            if not any(hostname == host.casefold() for host in self.trusted_hosts):
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()}'s host ({parts.hostname!r}) is not listed in "
+                    f"MYKHAYA_TRUSTED_HOSTS {self.trusted_hosts!r} — every request to it would "
+                    "be rejected by TrustedHostMiddleware. Add it to MYKHAYA_TRUSTED_HOSTS."
+                )
+
+        admin_origin = self.admin_webauthn_origin
+        if not any(admin_origin.casefold() == origin.casefold() for origin in self.cors_origins):
+            raise ValueError(
+                f"MYKHAYA_ADMIN_URL's origin ({admin_origin!r}) is not listed in "
+                f"MYKHAYA_CORS_ORIGINS {self.cors_origins!r} — every mutating Control Centre "
+                "request would be rejected as a disallowed origin. Add it to MYKHAYA_CORS_ORIGINS."
+            )
+        return self
+
+    @property
+    def admin_webauthn_rp_id(self) -> str:
+        """WebAuthn Relying Party ID — the registrable domain passkeys are bound
+        to. Derived from admin_url (the Control Centre's own origin), never
+        hardcoded, so a self-hosted deployment's actual domain is always used."""
+        return urlsplit(self.admin_url).hostname or "localhost"
+
+    @property
+    def admin_webauthn_origin(self) -> str:
+        """WebAuthn expects the exact scheme+host+port the browser used — unlike
+        the RP ID, this is the full origin, not just the hostname."""
+        parts = urlsplit(self.admin_url)
+        return f"{parts.scheme}://{parts.netloc}"
 
 
 @lru_cache

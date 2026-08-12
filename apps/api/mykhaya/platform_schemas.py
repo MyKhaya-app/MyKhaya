@@ -25,6 +25,12 @@ class PlatformActorResponse(BaseModel):
     display_name: str
     role: PlatformRole
     mfa_enrolled: bool
+    # "full": ordinary Control Centre access. "pending_mfa": password verified,
+    # a second factor is enrolled and must now be presented. "mfa_setup_required":
+    # password verified, policy requires MFA and none is enrolled yet — only
+    # enrollment endpoints are reachable until one is set up. The frontend
+    # branches its post-login screen on this field.
+    session_status: Literal["full", "pending_mfa", "mfa_setup_required"]
 
 
 class SensitiveActionRequest(StrictModel):
@@ -35,6 +41,161 @@ class SensitiveActionRequest(StrictModel):
     @classmethod
     def clean_reason(cls, value: str) -> str:
         return " ".join(value.strip().split())
+
+
+class TotpSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class TotpCodeRequest(StrictModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class TotpDisableRequest(SensitiveActionRequest):
+    pass
+
+
+class WebAuthnRegistrationOptionsResponse(BaseModel):
+    options_json: str
+
+
+class WebAuthnRegistrationVerifyRequest(StrictModel):
+    label: str = Field(min_length=1, max_length=100)
+    credential_json: str = Field(min_length=1, max_length=10_000)
+
+
+class WebAuthnCredentialResponse(BaseModel):
+    id: uuid.UUID
+    label: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class WebAuthnCredentialRename(StrictModel):
+    label: str = Field(min_length=1, max_length=100)
+
+
+class WebAuthnAuthenticationOptionsResponse(BaseModel):
+    options_json: str
+
+
+class WebAuthnAssertionRequest(StrictModel):
+    credential_json: str = Field(min_length=1, max_length=10_000)
+
+
+class RecoveryCodesResponse(BaseModel):
+    codes: list[str]
+
+
+class RecoveryCodeStatusResponse(BaseModel):
+    remaining: int
+
+
+class RecoveryCodeVerifyRequest(StrictModel):
+    code: str = Field(min_length=1, max_length=32)
+
+
+class AdministratorSecurityResponse(BaseModel):
+    """The full detail view — Owner only (PCC-SEC-006). Includes raw session
+    IP/user-agent/session-ID data, which is more than a non-Owner role needs
+    to do its job; see AdministratorSecuritySummaryResponse for what
+    Administrator/Security see instead."""
+
+    id: uuid.UUID
+    email: EmailStr
+    display_name: str
+    role: PlatformRole
+    is_active: bool
+    mfa_enrolled: bool
+    totp_enabled: bool
+    totp_verified_at: datetime | None
+    webauthn_credentials: list[WebAuthnCredentialResponse]
+    recovery_codes_remaining: int
+    sessions: list[dict[str, Any]]
+
+
+class AdministratorSecuritySummaryResponse(BaseModel):
+    """The reduced detail view returned to the Administrator/Security roles
+    (PCC-SEC-006): enough for security operations — is MFA enrolled, is the
+    account active, how many active sessions, when it was last active — but
+    without raw session IPs/user-agents/session IDs or per-credential labels,
+    which those roles don't need to do their job. Never returned for an Owner
+    target; Administrator/Security have no visibility into an Owner's
+    security detail at all, mirroring the same boundary as the MFA-reset
+    authorization fix (PCC-SEC-001)."""
+
+    id: uuid.UUID
+    email: EmailStr
+    display_name: str
+    role: PlatformRole
+    is_active: bool
+    mfa_enrolled: bool
+    totp_enabled: bool
+    totp_verified_at: datetime | None
+    webauthn_credential_count: int
+    recovery_codes_remaining: int
+    active_session_count: int
+    last_seen_at: datetime | None
+
+
+class AdministratorUpdate(SensitiveActionRequest):
+    is_active: bool | None = None
+    role: PlatformRole | None = None
+
+
+class AdministratorMfaResetRequest(SensitiveActionRequest):
+    pass
+
+
+class MfaPolicyUpdate(SensitiveActionRequest):
+    required: bool
+
+
+class MfaPolicyResponse(BaseModel):
+    required: bool
+    # True when MYKHAYA_ADMIN_MFA_REQUIRED already forces this on — the toggle
+    # is then read-only in the UI, since no database setting can weaken it.
+    environment_enforced: bool
+
+
+class AdministratorInvitationCreate(SensitiveActionRequest):
+    email: EmailStr
+    display_name: str = Field(min_length=1, max_length=100)
+    role: PlatformRole
+
+
+InvitationState = Literal["pending", "accepted", "expired", "revoked"]
+
+
+class AdministratorInvitationResponse(BaseModel):
+    id: uuid.UUID
+    email: EmailStr
+    display_name: str
+    role: PlatformRole
+    state: InvitationState
+    invited_by_display_name: str | None
+    created_at: datetime
+    expires_at: datetime
+    accepted_at: datetime | None
+    revoked_at: datetime | None
+
+
+class AdministratorInvitationPreview(BaseModel):
+    email: EmailStr
+    display_name: str
+    role: PlatformRole
+    invited_by_display_name: str | None
+    expires_at: datetime
+
+
+class AdministratorInvitationAccept(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+    # Platform Administrator accounts are the highest-privilege identity in
+    # MyKhaya — held to the same minimum length as the one-time bootstrap
+    # script (mykhaya.bootstrap_platform_owner), not the lower bar used for
+    # ordinary household passwords.
+    password: str = Field(min_length=16, max_length=128)
 
 
 class NoteRequest(StrictModel):

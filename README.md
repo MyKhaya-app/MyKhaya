@@ -9,7 +9,28 @@ MyKhaya is a private coordination application for households, families and close
 - `main`: stable and deployable; Anthony alone merges, tags and deploys it.
 - `dev`: the source of all day-to-day development; Codex works and commits here.
 
+## Local development (your own machine)
+
+Requirements: Git, Make, Docker Compose v2.
+
+```sh
+cp .env.example .env
+make up
+```
+
+- Product: `http://localhost:8080`
+- Control Centre: `http://admin.localhost:8080`
+- Public status: `http://status.localhost:8080`
+- Mailpit: `http://localhost:8025`
+
+See [`docs/operations/local-development.md`](docs/operations/local-development.md) for
+port customization and how this differs from the persistent dev server below.
+
 ## Persistent development server
+
+A separate, shared, NetBird-tunnelled server — not for your own laptop; see
+[`docs/operations/local-development.md`](docs/operations/local-development.md) if
+that's what you want instead.
 
 Requirements: Git, Make, Docker Compose v2, Python 3, and curl or wget. Use the tracked
 development overlay; no `compose.override.yml` is required:

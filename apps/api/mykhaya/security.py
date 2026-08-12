@@ -248,6 +248,40 @@ def _forwarded_scheme_is_trusted(request: Request, settings: Settings) -> bool:
     )
 
 
+def _in_any(address: ipaddress.IPv4Address | ipaddress.IPv6Address, networks: list[str]) -> bool:
+    return any(address in ipaddress.ip_network(network, strict=False) for network in networks)
+
+
+def resolve_client_ip(request: Request, settings: Settings) -> str:
+    """Resolve a client only through a configured trusted proxy chain.
+
+    X-Forwarded-For is ignored unless the socket peer is trusted. When it is trusted,
+    the chain is walked from right to left until the first untrusted address. Shared by
+    mykhaya.platform_security (admin network allowlisting) and mykhaya.rate_limit (so
+    rate-limit identity uses the same trust boundary as everything else, instead of the
+    raw, potentially proxy-rewritten socket peer)."""
+    peer_text = request.client.host if request.client else "192.0.2.0"
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return "192.0.2.0"
+    if not settings.trusted_proxy_cidrs or not _in_any(peer, settings.trusted_proxy_cidrs):
+        return str(peer)
+    forwarded = request.headers.get("x-forwarded-for", "")
+    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for item in forwarded.split(","):
+        try:
+            chain.append(ipaddress.ip_address(item.strip()))
+        except ValueError:
+            continue
+    current = peer
+    for candidate in reversed(chain):
+        if not _in_any(current, settings.trusted_proxy_cidrs):
+            break
+        current = candidate
+    return str(current)
+
+
 def resolve_forwarded_proto(request: Request, settings: Settings) -> str:
     """Mirrors ADR 0008: X-Forwarded-Proto is trusted only from a configured proxy CIDR."""
     if _forwarded_scheme_is_trusted(request, settings):

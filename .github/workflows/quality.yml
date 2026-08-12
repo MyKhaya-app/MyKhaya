@@ -25,10 +25,23 @@ jobs:
       - name: Prepare test configuration
         run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
       - name: Compose validation
+        # Exercises the exact three environments documented in
+        # docs/operations/local-development.md / dev-deployment.md / deployment.md.
+        # `config --quiet` only checks syntax; `make up`/`make init`'s own step of
+        # copying compose.override.yml.example is replicated here so local dev is
+        # validated as it's actually resolved (not silently skipped because
+        # compose.override.yml, gitignored, doesn't exist on a CI runner), and the
+        # port-publish check catches a stack that resolves cleanly but is silently
+        # unreachable from a browser — the actual regression this step exists for.
         run: |
+          cp compose.override.yml.example compose.override.yml
           docker compose config --quiet
+          docker compose config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "local dev"
+          rm compose.override.yml
           docker compose -f compose.yml -f compose.dev.yml config --quiet
+          docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "persistent dev server"
           docker compose -f compose.yml -f compose.production.yml config --quiet
+          docker compose -f compose.yml -f compose.production.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "production"
       - name: Development deployment validation
         run: |
           python -m unittest discover -s infrastructure/tests -v

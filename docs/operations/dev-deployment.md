@@ -1,6 +1,7 @@
 # Persistent Development Deployment
 
-This is the supported deployment path for the long-running `dev` server. It uses
+This is the supported deployment path for the long-running, shared `dev` server — not
+your own machine; see [`local-development.md`](local-development.md) for that. It uses
 `compose.yml` as the shared base and the tracked `compose.dev.yml` overlay. It does not
 use `compose.override.yml`. PostgreSQL and Redis remain on Docker-internal networks,
 Mailpit binds only to loopback, and Caddy exposes one configurable HTTP origin for an
