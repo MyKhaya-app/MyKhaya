@@ -44,9 +44,7 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
     delivery = await db.scalar(
         select(NotificationDelivery).where(NotificationDelivery.idempotency_key == delivery_key)
     )
-    subscription = await db.get(
-        PushSubscription, uuid.UUID(event.payload["push_subscription_id"])
-    )
+    subscription = await db.get(PushSubscription, uuid.UUID(event.payload["push_subscription_id"]))
     if delivery is None or subscription is None or subscription.disabled_at is not None:
         return  # already pruned or diagnostic record missing — nothing more to do
 

@@ -241,9 +241,7 @@ async def test_cookie_transport_endpoints_reject_bearer_only_sessions(
     assert login.status_code == 200
     csrf = client.cookies["mk_csrf"]
 
-    denied = await client.post(
-        "/api/v1/auth/mobile/logout", headers={"X-CSRF-Token": csrf}
-    )
+    denied = await client.post("/api/v1/auth/mobile/logout", headers={"X-CSRF-Token": csrf})
     assert denied.status_code == 400
 
 

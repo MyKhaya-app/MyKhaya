@@ -217,20 +217,22 @@ async def test_host_required_when_enabled(
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     response = await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(host=""),
     )
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_bad_port_is_rejected(
-    admin_client: AsyncClient, admin_factory: AdminFactory
-) -> None:
+async def test_bad_port_is_rejected(admin_client: AsyncClient, admin_factory: AdminFactory) -> None:
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     response = await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(port=70000),
     )
     assert response.status_code == 422
@@ -243,7 +245,9 @@ async def test_bad_sender_email_is_rejected(
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     response = await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(sender_email="not-an-email"),
     )
     assert response.status_code == 422
@@ -256,7 +260,9 @@ async def test_auth_enabled_requires_a_password_on_first_save(
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     response = await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(password=None),
     )
     assert response.status_code == 422
@@ -287,7 +293,9 @@ async def test_empty_password_on_update_retains_existing_secret(
     await login(admin_client, admin)
     await unsafe(admin_client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())
     await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(password=None, host="smtp2.example.com"),
     )
     async with SessionFactory() as db:
@@ -306,7 +314,9 @@ async def test_password_replacement_works(
     await login(admin_client, admin)
     await unsafe(admin_client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())
     await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(password="a brand new secret"),
     )
     async with SessionFactory() as db:
@@ -323,7 +333,9 @@ async def test_clear_password_endpoint_removes_stored_credential(
     await login(admin_client, admin)
     await unsafe(admin_client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())
     response = await unsafe(
-        admin_client, "POST", "/api/v1/platform/mail/smtp-settings/clear-password",
+        admin_client,
+        "POST",
+        "/api/v1/platform/mail/smtp-settings/clear-password",
         json={"reason": "Rotating the compromised credential.", "confirmed": True},
     )
     assert response.status_code == 200
@@ -341,7 +353,9 @@ async def test_disabled_smtp_reports_unconfigured_even_with_fields_populated(
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(enabled=False),
     )
     read = await admin_client.get("/api/v1/platform/mail")
@@ -369,7 +383,9 @@ async def test_undecryptable_password_degrades_gracefully_instead_of_crashing(
     assert read.json()["configured"] is False
 
     test_email = await unsafe(
-        admin_client, "POST", "/api/v1/platform/mail/test",
+        admin_client,
+        "POST",
+        "/api/v1/platform/mail/test",
         json={
             "recipient": admin.email,
             "reason": "Probing rotated-secret behaviour.",
@@ -436,7 +452,9 @@ async def test_disabling_smtp_is_audited(
     await login(admin_client, admin)
     await unsafe(admin_client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())
     await unsafe(
-        admin_client, "PUT", "/api/v1/platform/mail/smtp-settings",
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
         json=valid_payload(enabled=False),
     )
     async with SessionFactory() as db:
@@ -464,7 +482,9 @@ async def test_send_test_email_success_and_failure_are_audited(
 
     monkeypatch.setattr(platform_router, "send_email", lambda *args, **kwargs: None)
     ok = await unsafe(
-        admin_client, "POST", "/api/v1/platform/mail/test",
+        admin_client,
+        "POST",
+        "/api/v1/platform/mail/test",
         json={"recipient": admin.email, "reason": "Confirming delivery works.", "confirmed": True},
     )
     assert ok.status_code == 200
@@ -474,7 +494,9 @@ async def test_send_test_email_success_and_failure_are_audited(
 
     monkeypatch.setattr(platform_router, "send_email", fail)
     failed = await unsafe(
-        admin_client, "POST", "/api/v1/platform/mail/test",
+        admin_client,
+        "POST",
+        "/api/v1/platform/mail/test",
         json={"recipient": admin.email, "reason": "Confirming failure path.", "confirmed": True},
     )
     assert failed.status_code == 502
@@ -516,7 +538,9 @@ async def test_send_test_email_is_rate_limited(
         statuses = []
         for _ in range(4):
             response = await unsafe(
-                client, "POST", "/api/v1/platform/mail/test",
+                client,
+                "POST",
+                "/api/v1/platform/mail/test",
                 json={"recipient": admin.email, "reason": "Rate limit probe.", "confirmed": True},
             )
             statuses.append(response.status_code)

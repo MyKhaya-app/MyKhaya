@@ -376,9 +376,7 @@ async def mobile_login(
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(
-        **user_response(user, session).model_dump(), session_token=raw
-    )
+    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
 
 
 @router.post(

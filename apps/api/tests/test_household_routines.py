@@ -152,9 +152,7 @@ def make_routine(
 
 def test_is_occurrence_date_weekly() -> None:
     anchor = date(2026, 1, 6)  # Tuesday
-    routine = make_routine(
-        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor
-    )
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor)
     assert is_occurrence_date(routine, anchor)
     assert is_occurrence_date(routine, anchor + timedelta(weeks=1))
     assert is_occurrence_date(routine, anchor + timedelta(weeks=5))

@@ -37,9 +37,7 @@ async def new_client() -> AsyncClient:
     )
 
 
-async def _make_home_with_child(
-    client: AsyncClient, suffix: str
-) -> tuple[str, str, str]:
+async def _make_home_with_child(client: AsyncClient, suffix: str) -> tuple[str, str, str]:
     """Registers a Home Admin, creates a Home and a Child profile. Returns
     (group_id, membership_id, home_code)."""
     await create_verified_user(client, f"admin-{suffix}@example.com", "Home Admin")
@@ -504,12 +502,8 @@ async def test_parent_can_revoke_all_child_sessions_without_disabling_login(
     async with await new_client() as device_one, await new_client() as device_two:
         app.dependency_overrides[get_settings] = _high_limits
         try:
-            assert (
-                await _child_login(device_one, home_code, "multi", "4444")
-            ).status_code == 200
-            assert (
-                await _child_login(device_two, home_code, "multi", "4444")
-            ).status_code == 200
+            assert (await _child_login(device_one, home_code, "multi", "4444")).status_code == 200
+            assert (await _child_login(device_two, home_code, "multi", "4444")).status_code == 200
 
             revoke = await unsafe(
                 client,

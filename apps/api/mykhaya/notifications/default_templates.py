@@ -32,8 +32,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "email_verification": TemplateDefault(
         subject="Verify your MyKhaya email",
         body=(
-            "Open this secure link:\n\n{{link}}\n\n"
-            "If you did not request this, you can ignore it."
+            "Open this secure link:\n\n{{link}}\n\nIf you did not request this, you can ignore it."
         ),
         allowed_variables=frozenset({"link"}),
         description="Sent when someone registers or an administrator resends verification.",
@@ -41,8 +40,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "password_reset": TemplateDefault(
         subject="Reset your MyKhaya password",
         body=(
-            "Open this secure link:\n\n{{link}}\n\n"
-            "If you did not request this, you can ignore it."
+            "Open this secure link:\n\n{{link}}\n\nIf you did not request this, you can ignore it."
         ),
         allowed_variables=frozenset({"link"}),
         description="Sent when someone requests a password reset.",
@@ -56,9 +54,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "This invitation expires on {{expires_at}}.\n\n"
             "If you were not expecting this invitation, you can ignore this email."
         ),
-        allowed_variables=frozenset(
-            {"inviter_display_name", "home_name", "link", "expires_at"}
-        ),
+        allowed_variables=frozenset({"inviter_display_name", "home_name", "link", "expires_at"}),
         description="Sent when a household admin or partner invites someone to join.",
     ),
     "platform_administrator_invitation": TemplateDefault(
@@ -74,9 +70,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "If you were not expecting this invitation, you can ignore this email — no "
             "account will be created unless the link above is used."
         ),
-        allowed_variables=frozenset(
-            {"inviter_display_name", "role", "link", "expires_at"}
-        ),
+        allowed_variables=frozenset({"inviter_display_name", "role", "link", "expires_at"}),
         description="Sent when a Platform Owner invites a new global platform administrator.",
     ),
 }

@@ -98,9 +98,7 @@ def unique_email(prefix: str) -> str:
 async def email_outbox_rows(recipient_email: str) -> list[OutboxEvent]:
     async with SessionFactory() as db:
         rows = (
-            await db.scalars(
-                select(OutboxEvent).where(OutboxEvent.topic == "notification.email")
-            )
+            await db.scalars(select(OutboxEvent).where(OutboxEvent.topic == "notification.email"))
         ).all()
         return [row for row in rows if row.payload.get("recipient_email") == recipient_email]
 
@@ -188,9 +186,7 @@ async def test_forgot_password_enqueues_reset_email(client: AsyncClient) -> None
         )
     await unsafe(client, "POST", "/api/v1/auth/verify-email", json={"token": raw})
 
-    response = await unsafe(
-        client, "POST", "/api/v1/auth/forgot-password", json={"email": email}
-    )
+    response = await unsafe(client, "POST", "/api/v1/auth/forgot-password", json={"email": email})
     assert response.status_code == 202
 
     all_rows = await email_outbox_rows(email)

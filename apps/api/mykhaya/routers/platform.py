@@ -550,7 +550,12 @@ async def disable_totp(
     admin.totp_verified_at = None
     admin.mfa_enrolled = has_webauthn
     platform_audit(
-        db, request, context, "administrator.totp_disabled", "administrator", admin.id,
+        db,
+        request,
+        context,
+        "administrator.totp_disabled",
+        "administrator",
+        admin.id,
         reason=body.reason,
     )
     await db.commit()
@@ -727,11 +732,7 @@ async def remove_webauthn_credential(
             AdminWebAuthnCredential.id != credential_id,
         )
     )
-    if (
-        not remaining
-        and not admin.totp_enabled
-        and await resolve_admin_mfa_required(db, settings)
-    ):
+    if not remaining and not admin.totp_enabled and await resolve_admin_mfa_required(db, settings):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This is your only second factor and MFA is required. Add another method "
@@ -739,9 +740,7 @@ async def remove_webauthn_credential(
         )
     await db.delete(row)
     admin.mfa_enrolled = bool(remaining) or admin.totp_enabled
-    platform_audit(
-        db, request, context, "administrator.passkey_removed", "administrator", admin.id
-    )
+    platform_audit(db, request, context, "administrator.passkey_removed", "administrator", admin.id)
     await db.commit()
 
 
@@ -845,7 +844,12 @@ async def generate_recovery_codes_endpoint(
             )
         )
     platform_audit(
-        db, request, context, "administrator.recovery_codes_generated", "administrator", admin.id,
+        db,
+        request,
+        context,
+        "administrator.recovery_codes_generated",
+        "administrator",
+        admin.id,
         reason=body.reason,
     )
     await db.commit()
@@ -900,7 +904,11 @@ async def verify_recovery_code_login(
     if consumed.scalar_one_or_none() is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "That recovery code is not valid.")
     platform_audit(
-        db, request, context, "administrator.recovery_code_used", "administrator",
+        db,
+        request,
+        context,
+        "administrator.recovery_code_used",
+        "administrator",
         context.administrator.id,
     )
     await _complete_login_step(
@@ -2738,9 +2746,7 @@ async def internal_health(
                 + (" This is overdue." if overdue else ""),
                 last_success=latest_backup.completed_at or latest_backup.started_at,
                 action=(
-                    "The latest backup is overdue — check the backup schedule."
-                    if overdue
-                    else None
+                    "The latest backup is overdue — check the backup schedule." if overdue else None
                 ),
             )
 
@@ -3409,9 +3415,7 @@ async def update_smtp_settings(
             db, request, context, "smtp.credentials_replaced", "smtp_settings", reason=body.reason
         )
     if was_enabled and not row.enabled:
-        platform_audit(
-            db, request, context, "smtp.disabled", "smtp_settings", reason=body.reason
-        )
+        platform_audit(db, request, context, "smtp.disabled", "smtp_settings", reason=body.reason)
     await db.commit()
     return {"message": "SMTP settings saved."}
 
@@ -3882,9 +3886,7 @@ async def test_notification_template(
     config = await resolve_smtp_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
-    subject, message = await render_notification(
-        db, template_type, SAMPLE_VARIABLES[template_type]
-    )
+    subject, message = await render_notification(db, template_type, SAMPLE_VARIABLES[template_type])
     try:
         await asyncio.to_thread(send_email, config, str(body.recipient), subject, message)
     except Exception as exc:

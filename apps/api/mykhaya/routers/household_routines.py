@@ -44,9 +44,7 @@ router = APIRouter(
 )
 
 
-async def _require_member(
-    home_id: uuid.UUID, auth: AuthContext, db: AsyncSession
-) -> Membership:
+async def _require_member(home_id: uuid.UUID, auth: AuthContext, db: AsyncSession) -> Membership:
     membership = await active_membership(db, home_id, auth.user.id)
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
@@ -187,9 +185,7 @@ async def update_routine(
     if routine is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     if routine.updated_at != body.expected_updated_at:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "This routine changed. Reload and try again."
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, "This routine changed. Reload and try again.")
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
     await db.execute(
@@ -275,9 +271,7 @@ async def complete_routine(
     return await _to_response(db, routine)
 
 
-@router.delete(
-    "/{home_id}/routines/{routine_id}/complete/{occurrence_date}", status_code=204
-)
+@router.delete("/{home_id}/routines/{routine_id}/complete/{occurrence_date}", status_code=204)
 async def uncomplete_routine(
     home_id: uuid.UUID,
     routine_id: uuid.UUID,

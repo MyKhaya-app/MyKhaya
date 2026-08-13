@@ -72,9 +72,7 @@ async def test_accepted_invitation_no_longer_appears_in_pending_list(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as invitee:
         await create_verified_user(invitee, invitee_email, "Invited Partner")
-        accepted = await unsafe(
-            invitee, "POST", "/api/v1/invitations/accept", json={"token": raw}
-        )
+        accepted = await unsafe(invitee, "POST", "/api/v1/invitations/accept", json={"token": raw})
         assert accepted.status_code == 200
 
     # The invitation must be gone from the default (pending) listing...
@@ -114,9 +112,7 @@ async def test_resend_and_revoke_are_rejected_for_an_accepted_invitation(
     ) as invitee:
         await create_verified_user(invitee, invitee_email, "Invited Partner")
         assert (
-            await unsafe(
-                invitee, "POST", "/api/v1/invitations/accept", json={"token": raw}
-            )
+            await unsafe(invitee, "POST", "/api/v1/invitations/accept", json={"token": raw})
         ).status_code == 200
 
     resend = await unsafe(

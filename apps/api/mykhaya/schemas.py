@@ -80,7 +80,18 @@ def _validate_birthday(birth_month: int | None, birth_day: int | None) -> None:
     if birth_month is None or birth_day is None:
         raise ValueError("birth_month and birth_day must be set together")
     days_in_month = {
-        1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+        1: 31,
+        2: 29,
+        3: 31,
+        4: 30,
+        5: 31,
+        6: 30,
+        7: 31,
+        8: 31,
+        9: 30,
+        10: 31,
+        11: 30,
+        12: 31,
     }
     if birth_day > days_in_month[birth_month]:
         raise ValueError("That is not a valid day for the selected month")

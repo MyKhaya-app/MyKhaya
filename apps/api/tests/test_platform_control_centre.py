@@ -171,9 +171,7 @@ async def test_persisted_smtp_state_is_consistent_across_control_centre_health_p
     try:
         overview = (await admin_client.get("/api/v1/platform/overview")).json()
         mail = (await admin_client.get("/api/v1/platform/mail")).json()
-        communications = (
-            await admin_client.get("/api/v1/platform/communications/health")
-        ).json()
+        communications = (await admin_client.get("/api/v1/platform/communications/health")).json()
         email_health = next(item for item in overview["health"] if item["service"] == "Email")
         assert email_health["state"] == "Healthy"
         assert mail["configured"] is True

@@ -122,9 +122,7 @@ async def clean_reminder_outbox() -> AsyncIterator[None]:
 async def reminder_rows_for_event(db: AsyncSession, event_id: str) -> list[OutboxEvent]:
     """OutboxEvent.payload is a generic JSON column (not JSONB), so it has no `.astext`
     SQL comparator — filter by topic at the SQL level and by event_id in Python."""
-    rows = (
-        await db.scalars(select(OutboxEvent).where(OutboxEvent.topic == REMINDER_TOPIC))
-    ).all()
+    rows = (await db.scalars(select(OutboxEvent).where(OutboxEvent.topic == REMINDER_TOPIC))).all()
     return [row for row in rows if row.payload.get("event_id") == event_id]
 
 

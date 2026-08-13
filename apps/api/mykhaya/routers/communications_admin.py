@@ -245,11 +245,7 @@ async def communications_diagnostics(
             return DiagnosticsResponse(items=[], next_page=None)
 
     rows = (
-        await db.scalars(
-            query.order_by(_occurred_at_order())
-            .offset(offset)
-            .limit(PAGE_SIZE + 1)
-        )
+        await db.scalars(query.order_by(_occurred_at_order()).offset(offset).limit(PAGE_SIZE + 1))
     ).all()
     has_more = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
@@ -268,9 +264,7 @@ async def communications_diagnostics(
             label=notification_type_label(row.notification_type),
             channel=row.channel.value,
             status=row.status.value,
-            recipient_email=(
-                emails.get(row.recipient_user_id) if row.recipient_user_id else None
-            ),
+            recipient_email=(emails.get(row.recipient_user_id) if row.recipient_user_id else None),
             sanitised_failure_reason=row.sanitised_failure_reason,
             retry_count=row.retry_count,
             idempotency_key=row.idempotency_key,

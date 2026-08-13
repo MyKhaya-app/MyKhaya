@@ -363,11 +363,15 @@ async def test_recovery_code_two_concurrent_requests_only_one_succeeds(
         await login(second, admin)
         response_1, response_2 = await asyncio.gather(
             unsafe(
-                first, "POST", "/api/v1/platform/auth/mfa/recovery-codes/login-verify",
+                first,
+                "POST",
+                "/api/v1/platform/auth/mfa/recovery-codes/login-verify",
                 json={"code": code},
             ),
             unsafe(
-                second, "POST", "/api/v1/platform/auth/mfa/recovery-codes/login-verify",
+                second,
+                "POST",
+                "/api/v1/platform/auth/mfa/recovery-codes/login-verify",
                 json={"code": code},
             ),
         )

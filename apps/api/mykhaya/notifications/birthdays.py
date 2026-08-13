@@ -52,8 +52,7 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
         )
     ).all()
     already_queued = {
-        (row.payload["owner_type"], row.payload["owner_id"], row.payload["year"])
-        for row in pending
+        (row.payload["owner_type"], row.payload["owner_id"], row.payload["year"]) for row in pending
     }
 
     def maybe_enqueue(owner_type: str, owner_id: uuid.UUID, today_local: date) -> None:

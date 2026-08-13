@@ -12,9 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal, TypedDict
 
-DeepLinkType = Literal[
-    "calendar_event", "member", "routine", "notifications", "settings", "home"
-]
+DeepLinkType = Literal["calendar_event", "member", "routine", "notifications", "settings", "home"]
 
 
 class DeepLinkTarget(TypedDict, total=False):

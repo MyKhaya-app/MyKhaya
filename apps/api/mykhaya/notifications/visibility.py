@@ -31,9 +31,7 @@ async def active_membership(
     return membership
 
 
-async def can_view_event(
-    db: AsyncSession, event: CalendarEvent, user_id: uuid.UUID
-) -> bool:
+async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.UUID) -> bool:
     membership = await active_membership(db, event.group_id, user_id)
     if membership is None:
         return False

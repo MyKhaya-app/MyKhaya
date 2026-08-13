@@ -860,9 +860,7 @@ class Notification(UuidTimeMixin, Base):
     recipient_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    group_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("groups.id", ondelete="SET NULL")
-    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
     notification_type: Mapped[str] = mapped_column(String(100), index=True)
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(String(500))

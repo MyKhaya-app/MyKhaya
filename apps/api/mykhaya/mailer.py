@@ -54,9 +54,7 @@ async def resolve_smtp_config(settings: Settings, db: AsyncSession) -> SmtpConfi
     if row is not None and row.enabled:
         try:
             password = (
-                decrypt_secret(settings, row.encrypted_password)
-                if row.encrypted_password
-                else None
+                decrypt_secret(settings, row.encrypted_password) if row.encrypted_password else None
             )
         except SecretDecryptionError:
             # The stored password can't be decrypted with the current MYKHAYA_SECRET_KEY

@@ -583,9 +583,7 @@ async def test_worker_marks_delivery_sent_on_success(monkeypatch: pytest.MonkeyP
 
     async with SessionFactory() as db:
         delivery = await db.scalar(
-            select(NotificationDelivery).where(
-                NotificationDelivery.idempotency_key == ok_key
-            )
+            select(NotificationDelivery).where(NotificationDelivery.idempotency_key == ok_key)
         )
         assert delivery is not None
         assert delivery.status == NotificationDeliveryStatus.sent
@@ -651,9 +649,7 @@ async def test_worker_disables_subscription_on_gone_response(
 
     async with SessionFactory() as db:
         delivery = await db.scalar(
-            select(NotificationDelivery).where(
-                NotificationDelivery.idempotency_key == gone_key
-            )
+            select(NotificationDelivery).where(NotificationDelivery.idempotency_key == gone_key)
         )
         assert delivery is not None
         assert delivery.status == NotificationDeliveryStatus.cancelled

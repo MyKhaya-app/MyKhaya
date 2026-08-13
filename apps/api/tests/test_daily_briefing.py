@@ -159,9 +159,7 @@ async def briefing_rows_for_user(db: AsyncSession, user_id: str) -> list[OutboxE
     TEST_BRIEFING_USER_IDS.add(user_id)
     rows = (
         await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.dedupe_key.like(f"daily-briefing:{user_id}:%")
-            )
+            select(OutboxEvent).where(OutboxEvent.dedupe_key.like(f"daily-briefing:{user_id}:%"))
         )
     ).all()
     return list(rows)
@@ -288,9 +286,7 @@ async def test_deliver_composes_events_into_one_sentence_and_is_visibility_safe(
     assert created.status_code == 201, created.text
 
     async with SessionFactory() as db:
-        await deliver_daily_briefing(
-            db, get_settings(), str(user_id), today_local.isoformat()
-        )
+        await deliver_daily_briefing(db, get_settings(), str(user_id), today_local.isoformat())
         await db.commit()
         notification = await db.scalar(
             select(Notification).where(Notification.recipient_user_id == user_id)
@@ -329,9 +325,7 @@ async def test_deliver_skips_other_homes_events_not_visible_to_user(client: Asyn
 
     today_local = datetime.now(UTC).astimezone(TZ).date()
     async with SessionFactory() as db:
-        await deliver_daily_briefing(
-            db, get_settings(), str(user_id), today_local.isoformat()
-        )
+        await deliver_daily_briefing(db, get_settings(), str(user_id), today_local.isoformat())
         await db.commit()
         notification = await db.scalar(
             select(Notification).where(Notification.recipient_user_id == user_id)
@@ -351,9 +345,7 @@ async def test_deliver_suppresses_send_when_empty_day_briefing_disabled(
 
     today_local = datetime.now(UTC).astimezone(TZ).date()
     async with SessionFactory() as db:
-        await deliver_daily_briefing(
-            db, get_settings(), str(user_id), today_local.isoformat()
-        )
+        await deliver_daily_briefing(db, get_settings(), str(user_id), today_local.isoformat())
         await db.commit()
         notification = await db.scalar(
             select(Notification).where(Notification.recipient_user_id == user_id)
@@ -368,9 +360,7 @@ async def test_deliver_sends_empty_day_message_when_no_events(client: AsyncClien
 
     today_local = datetime.now(UTC).astimezone(TZ).date()
     async with SessionFactory() as db:
-        await deliver_daily_briefing(
-            db, get_settings(), str(user_id), today_local.isoformat()
-        )
+        await deliver_daily_briefing(db, get_settings(), str(user_id), today_local.isoformat())
         await db.commit()
         notification = await db.scalar(
             select(Notification).where(Notification.recipient_user_id == user_id)
@@ -390,9 +380,7 @@ async def test_deliver_is_idempotent_per_user_per_day(client: AsyncClient) -> No
         await deliver_daily_briefing(db, get_settings(), str(user_id), today_local.isoformat())
         await db.commit()
         notifications = (
-            await db.scalars(
-                select(Notification).where(Notification.recipient_user_id == user_id)
-            )
+            await db.scalars(select(Notification).where(Notification.recipient_user_id == user_id))
         ).all()
         assert len(notifications) == 1
 

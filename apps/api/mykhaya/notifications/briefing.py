@@ -79,9 +79,7 @@ async def _events_for_user_today(
 
     memberships = (
         await db.scalars(
-            select(Membership).where(
-                Membership.user_id == user_id, Membership.removed_at.is_(None)
-            )
+            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
 
@@ -111,9 +109,7 @@ async def _events_for_user_today(
                     db, event
                 ):
                     continue
-            for occurrence_start, _occurrence_end in expand_occurrences(
-                event, day_start, day_end
-            ):
+            for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
                 description = _describe_occurrence(event, occurrence_start, tz)
                 descriptions.append((occurrence_start, description))
 
@@ -128,9 +124,7 @@ async def _birthdays_for_user_today(
     just another calendar occurrence — see mykhaya.notifications.birthdays."""
     memberships = (
         await db.scalars(
-            select(Membership).where(
-                Membership.user_id == user_id, Membership.removed_at.is_(None)
-            )
+            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
 

@@ -410,9 +410,7 @@ async def test_deliver_is_idempotent_per_recipient(client: AsyncClient) -> None:
         await deliver_birthday_reminder(db, get_settings(), "user", str(user_id), today.year)
         await db.commit()
         notifications = (
-            await db.scalars(
-                select(Notification).where(Notification.recipient_user_id == user_id)
-            )
+            await db.scalars(select(Notification).where(Notification.recipient_user_id == user_id))
         ).all()
         assert len(notifications) == 1
 
