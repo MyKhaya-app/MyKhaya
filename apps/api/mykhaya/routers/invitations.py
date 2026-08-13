@@ -7,11 +7,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.audit import audit, outbox
+from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context, membership_for
-from mykhaya.models import Group, Invitation, Membership, Role, User
+from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.household_permissions import (
+    Capability,
+    default_profile,
+    legacy_role,
+    require_capability,
+)
+from mykhaya.member_colours import assign_member_colour
+from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
+from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     InvitationAccept,
     InvitationCreate,
@@ -25,7 +35,6 @@ from mykhaya.schemas import (
 from mykhaya.security import decode_derived_token, derived_token, hash_secret, normalise_email
 
 router = APIRouter(prefix="/invitations", tags=["invitations"])
-MANAGERS = {Role.owner, Role.administrator}
 
 
 @router.post("", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
@@ -36,11 +45,16 @@ async def invite(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
-    await membership_for(body.group_id, auth, db, MANAGERS)
-    if body.role == Role.owner:
+    require_adult_session(auth)
+    await require_capability(body.group_id, Capability.members_invite, auth, db)
+    await enforce_rate_limit(request, settings, "household-invitation", 20, 3600)
+    if body.relationship == HouseholdRelationship.child:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Ownership cannot be assigned by invitation."
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Use the child setup flow instead of sending an adult invitation.",
         )
+    if body.relationship == HouseholdRelationship.review_required:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a relationship.")
     active = await db.scalar(
         select(Invitation).where(
             Invitation.group_id == body.group_id,
@@ -59,7 +73,13 @@ async def invite(
     row = Invitation(
         group_id=body.group_id,
         email=normalise_email(str(body.email)),
-        role=body.role,
+        role=legacy_role(body.relationship),
+        relationship=body.relationship,
+        permission_profile=default_profile(body.relationship),
+        shared_resources=body.shared_resources
+        if body.relationship
+        in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}
+        else [],
         token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
         invited_by=auth.user.id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
@@ -68,11 +88,47 @@ async def invite(
     await db.flush()
     raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
     row.token_hash = hash_secret(raw, settings.secret_key.get_secret_value())
-    outbox(db, "email.invitation", {"invitation_id": str(row.id)})
-    audit(db, request, "invitation.created", auth.user.id, body.group_id, "invitation", row.id)
+    home = await db.get(Group, row.group_id)
+    assert home is not None
+    subject, message = await render_notification(
+        db,
+        "household_invitation",
+        {
+            "inviter_display_name": auth.user.display_name,
+            "home_name": home.name,
+            "link": f"{settings.public_web_url}/register?invitation={raw}",
+            "expires_at": row.expires_at.isoformat(),
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_email=row.email,
+        notification_type="household_invitation",
+        title=subject,
+        body=message,
+        idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+    )
+    audit(
+        db,
+        request,
+        "invitation.created",
+        auth.user.id,
+        body.group_id,
+        "invitation",
+        row.id,
+        {"relationship": row.relationship.value},
+    )
     await db.commit()
     return InvitationResponse(
-        id=row.id, group_id=row.group_id, email=row.email, role=row.role, expires_at=row.expires_at
+        id=row.id,
+        group_id=row.group_id,
+        email=row.email,
+        role=row.role,
+        relationship=row.relationship,
+        permission_profile=row.permission_profile,
+        shared_resources=row.shared_resources,
+        expires_at=row.expires_at,
     )
 
 
@@ -80,13 +136,39 @@ async def invite(
 async def list_invitations(
     group_id: uuid.UUID,
     include_revoked: bool = False,
+    include_accepted: bool = False,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[InvitationListItem]:
-    await membership_for(group_id, auth, db, MANAGERS)
+    """The Family page's "Pending invitations" list — its only real caller — so the
+    default here excludes both revoked *and* accepted invitations, not just revoked.
+    An accepted invitation is no longer pending; it must never be returned here
+    alongside the active membership it created.
+
+    Belt-and-braces: an invitation is also excluded whenever an active (non-removed)
+    membership already exists for the same group and email, even if accepted_at is
+    for some reason unset — e.g. a membership created by a path other than this
+    accept() endpoint. This is a read-only suppression, not a write, so it never
+    mutates the invitation row and never discards audit history.
+    """
+    await require_capability(group_id, Capability.members_invite, auth, db)
     filters = [Invitation.group_id == group_id]
     if not include_revoked:
         filters.append(Invitation.revoked_at.is_(None))
+    if not include_accepted:
+        filters.append(Invitation.accepted_at.is_(None))
+        filters.append(
+            ~(
+                select(Membership.id)
+                .join(User, User.id == Membership.user_id)
+                .where(
+                    Membership.group_id == Invitation.group_id,
+                    Membership.removed_at.is_(None),
+                    User.email == Invitation.email,
+                )
+                .exists()
+            )
+        )
     rows = (
         await db.execute(
             select(Invitation, User)
@@ -102,6 +184,9 @@ async def list_invitations(
             group_id=invitation.group_id,
             email=invitation.email,
             role=invitation.role,
+            relationship=invitation.relationship,
+            permission_profile=invitation.permission_profile,
+            shared_resources=invitation.shared_resources,
             expires_at=invitation.expires_at,
             accepted_at=invitation.accepted_at,
             revoked_at=invitation.revoked_at,
@@ -118,17 +203,39 @@ async def resend_invitation(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
     row = await db.scalar(
         select(Invitation).where(Invitation.id == body.invitation_id).with_for_update()
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That invitation could not be found.")
-    await membership_for(row.group_id, auth, db, MANAGERS)
+    await require_capability(row.group_id, Capability.members_invite, auth, db)
     if row.accepted_at is not None or row.revoked_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This invitation is no longer active.")
     row.expires_at = datetime.now(UTC) + timedelta(days=7)
-    outbox(db, "email.invitation", {"invitation_id": str(row.id)})
+    raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
+    home = await db.get(Group, row.group_id)
+    assert home is not None
+    subject, message = await render_notification(
+        db,
+        "household_invitation",
+        {
+            "inviter_display_name": auth.user.display_name,
+            "home_name": home.name,
+            "link": f"{settings.public_web_url}/register?invitation={raw}",
+            "expires_at": row.expires_at.isoformat(),
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_email=row.email,
+        notification_type="household_invitation",
+        title=subject,
+        body=message,
+        idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+    )
     audit(db, request, "invitation.resent", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()
     return InvitationResponse(
@@ -136,6 +243,9 @@ async def resend_invitation(
         group_id=row.group_id,
         email=row.email,
         role=row.role,
+        relationship=row.relationship,
+        permission_profile=row.permission_profile,
+        shared_resources=row.shared_resources,
         expires_at=row.expires_at,
     )
 
@@ -152,7 +262,7 @@ async def revoke_invitation(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That invitation could not be found.")
-    await membership_for(row.group_id, auth, db, MANAGERS)
+    await require_capability(row.group_id, Capability.members_invite, auth, db)
     if row.accepted_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Accepted invitations cannot be revoked.")
     row.revoked_at = datetime.now(UTC)
@@ -192,6 +302,7 @@ async def preview_invitation(
         invited_by_display_name=inviter.display_name,
         email=row.email,
         role=row.role,
+        relationship=row.relationship,
         expires_at=row.expires_at,
     )
 
@@ -233,10 +344,25 @@ async def accept(
         .with_for_update()
     )
     if existing is None:
-        db.add(Membership(group_id=row.group_id, user_id=auth.user.id, role=row.role))
+        db.add(
+            Membership(
+                group_id=row.group_id,
+                user_id=auth.user.id,
+                role=row.role,
+                relationship=row.relationship,
+                permission_profile=row.permission_profile,
+                shared_resources=row.shared_resources,
+                colour=await assign_member_colour(db, row.group_id),
+            )
+        )
     else:
         existing.removed_at = None
         existing.role = row.role
+        existing.relationship = row.relationship
+        existing.permission_profile = row.permission_profile
+        existing.shared_resources = row.shared_resources
+        if existing.colour is None:
+            existing.colour = await assign_member_colour(db, row.group_id)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

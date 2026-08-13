@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
 
 from mykhaya.config import get_settings
@@ -23,8 +24,9 @@ async def client() -> AsyncIterator[AsyncClient]:
         yield value
 
 
-async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: object):
-    headers = dict(kwargs.pop("headers", {}))
+async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: Any) -> Response:
+    raw_headers = kwargs.pop("headers", {})
+    headers: dict[str, str] = dict(raw_headers) if isinstance(raw_headers, dict) else {}
     csrf = client.cookies.get("mk_csrf")
     if csrf:
         headers["X-CSRF-Token"] = csrf

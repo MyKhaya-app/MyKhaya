@@ -1,9 +1,13 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import secrets
+import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import HTTPException, Request, Response, status
 from pwdlib import PasswordHash
@@ -19,6 +23,40 @@ DUMMY_HASH = password_hash.hash("a-valid-dummy-password-value")
 
 def normalise_email(email: str) -> str:
     return email.strip().casefold()
+
+
+# Managed Child sign-in (see mykhaya.routers.auth's /child/login and
+# mykhaya.routers.children's login-config endpoints). The PIN uses the exact same
+# pwdlib hasher as adult passwords (`password_hash` below) — a secure salted hash
+# with constant-time verification, not a bespoke scheme — deliberately, so low
+# numeric-PIN entropy is never compensated for with a weaker hash, only with the
+# rate limiting applied at the call site.
+
+_HOME_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L — typed on a phone
+_USERNAME_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_.-")
+
+
+def generate_home_code() -> str:
+    return "".join(secrets.choice(_HOME_CODE_ALPHABET) for _ in range(8))
+
+
+def normalise_home_code(value: str) -> str:
+    return value.strip().upper()
+
+
+def normalise_child_username(value: str) -> str:
+    """Casefold + NFKC-normalise + strip, matching normalise_email's approach —
+    keeps confusable Unicode/case variants from being treated as distinct
+    usernames. Callers must separately validate the allowed character set."""
+    return unicodedata.normalize("NFKC", value).strip().casefold()
+
+
+def is_valid_child_username(normalised: str) -> bool:
+    return 2 <= len(normalised) <= 24 and set(normalised) <= _USERNAME_ALLOWED
+
+
+def is_valid_child_pin(pin: str) -> bool:
+    return 4 <= len(pin) <= 6 and pin.isdigit()
 
 
 def hash_secret(value: str, key: str) -> str:
@@ -139,12 +177,12 @@ async def consume_action_token(
     return row
 
 
-async def current_user(
-    request: Request, db: AsyncSession, settings: Settings
+EXPIRED_SESSION_MESSAGE = "Your session has ended. Please sign in again."
+
+
+async def _session_for_token(
+    db: AsyncSession, raw: str, settings: Settings, message: str
 ) -> tuple[User, Session]:
-    raw = request.cookies.get("mk_session")
-    if not raw:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     digest = hash_secret(raw, settings.secret_key.get_secret_value())
     result = await db.execute(
         select(User, Session)
@@ -158,8 +196,111 @@ async def current_user(
     )
     pair = result.one_or_none()
     if pair is None:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Your session has ended. Please sign in again."
-        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, message)
     pair[1].last_seen_at = datetime.now(UTC)
     return pair[0], pair[1]
+
+
+async def current_user(
+    request: Request, db: AsyncSession, settings: Settings
+) -> tuple[User, Session]:
+    raw = request.cookies.get("mk_session")
+    if not raw:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    return await _session_for_token(db, raw, settings, EXPIRED_SESSION_MESSAGE)
+
+
+@dataclass(frozen=True)
+class AuthenticatedSession:
+    user: User
+    session: Session
+    transport: Literal["cookie", "bearer"]
+
+
+async def resolve_session(
+    request: Request, db: AsyncSession, settings: Settings
+) -> AuthenticatedSession:
+    """The single place that inspects the Authorization header or the session cookie.
+
+    An Authorization header, once present, is authoritative for the request: a
+    malformed or invalid bearer token returns 401 and never falls back to
+    checking the cookie, even if a valid one is also present.
+    """
+    header = request.headers.get("authorization")
+    if header is not None:
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your session could not be verified.")
+        user, session = await _session_for_token(db, token, settings, EXPIRED_SESSION_MESSAGE)
+        return AuthenticatedSession(user, session, "bearer")
+    user, session = await current_user(request, db, settings)
+    return AuthenticatedSession(user, session, "cookie")
+
+
+def _forwarded_scheme_is_trusted(request: Request, settings: Settings) -> bool:
+    peer_text = request.client.host if request.client else ""
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return False
+    return bool(settings.trusted_proxy_cidrs) and any(
+        peer in ipaddress.ip_network(cidr, strict=False) for cidr in settings.trusted_proxy_cidrs
+    )
+
+
+def _in_any(address: ipaddress.IPv4Address | ipaddress.IPv6Address, networks: list[str]) -> bool:
+    return any(address in ipaddress.ip_network(network, strict=False) for network in networks)
+
+
+def resolve_client_ip(request: Request, settings: Settings) -> str:
+    """Resolve a client only through a configured trusted proxy chain.
+
+    X-Forwarded-For is ignored unless the socket peer is trusted. When it is trusted,
+    the chain is walked from right to left until the first untrusted address. Shared by
+    mykhaya.platform_security (admin network allowlisting) and mykhaya.rate_limit (so
+    rate-limit identity uses the same trust boundary as everything else, instead of the
+    raw, potentially proxy-rewritten socket peer)."""
+    peer_text = request.client.host if request.client else "192.0.2.0"
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return "192.0.2.0"
+    if not settings.trusted_proxy_cidrs or not _in_any(peer, settings.trusted_proxy_cidrs):
+        return str(peer)
+    forwarded = request.headers.get("x-forwarded-for", "")
+    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for item in forwarded.split(","):
+        try:
+            chain.append(ipaddress.ip_address(item.strip()))
+        except ValueError:
+            continue
+    current = peer
+    for candidate in reversed(chain):
+        if not _in_any(current, settings.trusted_proxy_cidrs):
+            break
+        current = candidate
+    return str(current)
+
+
+def resolve_forwarded_proto(request: Request, settings: Settings) -> str:
+    """Mirrors ADR 0008: X-Forwarded-Proto is trusted only from a configured proxy CIDR."""
+    if _forwarded_scheme_is_trusted(request, settings):
+        forwarded = request.headers.get("x-forwarded-proto", "")
+        first = forwarded.split(",")[0].strip().lower()
+        if first:
+            return first
+    return request.url.scheme
+
+
+def require_secure_transport(request: Request, settings: Settings) -> None:
+    """Bearer token issuance must happen over HTTPS outside development/test.
+
+    Gated on `environment == "production"`, matching the existing convention in
+    Settings (see cookie_secure / admin production defaults) rather than
+    "!= development", so the automated test suite (MYKHAYA_ENVIRONMENT=test)
+    continues to run over plain HTTP via the ASGI test transport.
+    """
+    if settings.environment != "production":
+        return
+    if resolve_forwarded_proto(request, settings) != "https":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A secure connection is required.")

@@ -12,8 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.models import PlatformAdministrator, PlatformRole, PlatformSession
-from mykhaya.security import hash_secret
+from mykhaya.models import (
+    AdminWebAuthnCredential,
+    PlatformAdministrator,
+    PlatformRole,
+    PlatformSession,
+    PlatformSessionStatus,
+    PlatformSetting,
+)
+from mykhaya.security import hash_secret, resolve_client_ip
+
+MFA_POLICY_SETTING_KEY = "admin_mfa_required"
 
 ADMIN_SESSION_COOKIE = "mk_admin_session"
 ADMIN_CSRF_COOKIE = "mk_admin_csrf"
@@ -21,34 +30,6 @@ ADMIN_CSRF_COOKIE = "mk_admin_csrf"
 
 def _in_any(address: ipaddress.IPv4Address | ipaddress.IPv6Address, networks: list[str]) -> bool:
     return any(address in ipaddress.ip_network(network, strict=False) for network in networks)
-
-
-def resolve_client_ip(request: Request, settings: Settings) -> str:
-    """Resolve a client only through a configured trusted proxy chain.
-
-    X-Forwarded-For is ignored unless the socket peer is trusted. When it is trusted,
-    the chain is walked from right to left until the first untrusted address.
-    """
-    peer_text = request.client.host if request.client else "192.0.2.0"
-    try:
-        peer = ipaddress.ip_address(peer_text)
-    except ValueError:
-        return "192.0.2.0"
-    if not settings.trusted_proxy_cidrs or not _in_any(peer, settings.trusted_proxy_cidrs):
-        return str(peer)
-    forwarded = request.headers.get("x-forwarded-for", "")
-    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
-    for item in forwarded.split(","):
-        try:
-            chain.append(ipaddress.ip_address(item.strip()))
-        except ValueError:
-            continue
-    current = peer
-    for candidate in reversed(chain):
-        if not _in_any(current, settings.trusted_proxy_cidrs):
-            break
-        current = candidate
-    return str(current)
 
 
 def enforce_admin_network(request: Request, settings: Settings) -> str:
@@ -107,11 +88,45 @@ class PlatformContext:
     source_ip: str
 
 
-async def platform_context(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> PlatformContext:
+async def resolve_admin_mfa_required(db: AsyncSession, settings: Settings) -> bool:
+    """The environment variable is a floor, never a ceiling: if it's already
+    True (the default, and hard-required in production — see
+    Settings.secure_admin_production_defaults), no database setting can weaken
+    it. The database-stored Platform Setting can only ever turn the requirement
+    ON when the environment leaves it OFF, matching the SMTP/push
+    "environment wins when set, database is the flexible fallback" precedent in
+    mykhaya.mailer.resolve_smtp_config. See routers.platform's MFA-policy
+    endpoint for the admin-facing toggle this backs."""
+    if settings.admin_mfa_required:
+        return True
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == MFA_POLICY_SETTING_KEY)
+    )
+    return bool(row is not None and row.value.get("required") is True)
+
+
+async def administrator_has_mfa_enrolled(db: AsyncSession, administrator_id: object) -> bool:
+    """The authoritative check — administrator.mfa_enrolled is a cached flag
+    kept in sync by the enrollment/removal endpoints, but this is what actually
+    decides access when it matters (e.g. re-evaluated at every login)."""
+    if await db.scalar(
+        select(PlatformAdministrator.totp_enabled).where(
+            PlatformAdministrator.id == administrator_id
+        )
+    ):
+        return True
+    return (
+        await db.scalar(
+            select(AdminWebAuthnCredential.id).where(
+                AdminWebAuthnCredential.administrator_id == administrator_id
+            )
+        )
+    ) is not None
+
+
+async def _resolve_admin_session(
+    request: Request, db: AsyncSession, settings: Settings
+) -> tuple[PlatformAdministrator, PlatformSession, str]:
     enforce_admin_host(request, settings)
     source_ip = enforce_admin_network(request, settings)
     require_admin_csrf(request, settings)
@@ -139,17 +154,59 @@ async def platform_context(
     if pair is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your administrator session has ended.")
     administrator, session = pair
-    if settings.admin_mfa_required and not administrator.mfa_enrolled:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Mandatory MFA enrolment is required before Control Centre access.",
-        )
     session.last_seen_at = now
     session.idle_expires_at = min(
         now + timedelta(minutes=settings.admin_session_idle_minutes),
         session.absolute_expires_at,
     )
     await db.commit()
+    return administrator, session, source_ip
+
+
+async def platform_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PlatformContext:
+    """The guard used by every ordinary Control Centre route. Requires a fully
+    authenticated session — password *and* any required/enrolled second factor
+    already verified. A session still mid-MFA-flow (pending_mfa or
+    mfa_setup_required) is rejected here even though the cookie is valid; see
+    platform_mfa_flow_context for the narrow set of MFA endpoints such a session
+    *can* reach."""
+    administrator, session, source_ip = await _resolve_admin_session(request, db, settings)
+    if session.status != PlatformSessionStatus.full:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Additional authentication is required before this session can be used.",
+        )
+    # The authoritative check, not the cached administrator.mfa_enrolled flag —
+    # this is the actual access decision, so it must reflect real credential
+    # records even if the cache were ever wrong or stale. Re-checked on every
+    # request (not just at login) so e.g. another admin resetting this one's
+    # MFA takes effect immediately, not just on next sign-in.
+    if await resolve_admin_mfa_required(db, settings) and not await administrator_has_mfa_enrolled(
+        db, administrator.id
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Mandatory MFA enrolment is required before Control Centre access.",
+        )
+    return PlatformContext(administrator, session, source_ip)
+
+
+async def platform_mfa_flow_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PlatformContext:
+    """The guard used only by the handful of MFA enrollment/verification
+    endpoints, which must be reachable *before* a session reaches 'full' —
+    otherwise an administrator could never complete the second factor that
+    would let them reach it. Every other check (host, network, CSRF, valid
+    non-expired non-revoked session, active administrator) is identical to
+    platform_context; only the status==full requirement is dropped."""
+    administrator, session, source_ip = await _resolve_admin_session(request, db, settings)
     return PlatformContext(administrator, session, source_ip)
 
 
@@ -174,7 +231,11 @@ def require_recent_auth(context: PlatformContext, settings: Settings) -> None:
 
 
 def new_admin_session(
-    administrator: PlatformAdministrator, request: Request, settings: Settings, source_ip: str
+    administrator: PlatformAdministrator,
+    request: Request,
+    settings: Settings,
+    source_ip: str,
+    status_: PlatformSessionStatus = PlatformSessionStatus.full,
 ) -> tuple[PlatformSession, str, str]:
     raw = secrets.token_urlsafe(48)
     csrf = secrets.token_urlsafe(32)
@@ -188,6 +249,7 @@ def new_admin_session(
         last_seen_at=now,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         source_ip=source_ip,
+        status=status_,
     )
     return session, raw, csrf
 

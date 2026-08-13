@@ -13,7 +13,7 @@ def _read_version() -> str:
             value = path.read_text(encoding="utf-8").strip()
             if value:
                 return value
-    return "0.1.0-dev"
+    return "unknown"
 
 
 __version__ = _read_version()

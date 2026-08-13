@@ -6,6 +6,8 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.dev.example
+compose.override.yml
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -17,4 +19,3 @@ playwright-report/
 test-results/
 backups/
 *.sql.gz
-

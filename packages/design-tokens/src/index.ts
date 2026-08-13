@@ -1,12 +1,100 @@
+// Kept in sync with tokens.css by hand — same keys, same values, TS just
+// exposes them as JS values (e.g. for inline style props) instead of CSS vars.
 export const colour = {
   sage: "#7D8F7A",
   sageDark: "#566B58",
+  sageSoft: "#E7EBE4",
+  forest: "#3F5442",
+  forestDark: "#33452F",
   terracotta: "#E07A5F",
   mustard: "#E9B44C",
   cream: "#F2EDE3",
-  slate: "#1F2933",
+  creamLight: "#FAF7F1",
+  slate: "#233028",
+  muted: "#62706F",
   white: "#FFFEFB",
+  danger: "#A33E2B",
 } as const;
 
-export const radius = { sm: 10, md: 16, lg: 24, pill: 999 } as const;
+// The one curated colour palette shared by member identity and calendar
+// categories — a stable token (e.g. "emerald") is what's persisted and
+// passed across the API, never a raw hex value, so the actual shade can be
+// tuned here later without touching a database. Mirrored by hand from
+// mykhaya.colour_palette.PALETTE_HEX (Python); keep the two in sync. See
+// docs/design/visual-identity.md.
+export const PALETTE_KEYS = [
+  "red", "coral", "orange", "amber", "yellow", "lime", "green", "emerald",
+  "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "pink",
+  "rose", "slate",
+] as const;
+
+export type ColourKey = (typeof PALETTE_KEYS)[number];
+
+export const PALETTE_HEX: Record<ColourKey, string> = {
+  red: "#B8433A",
+  coral: "#D97757",
+  orange: "#C97A2E",
+  amber: "#D9A83E",
+  yellow: "#BFA23A",
+  lime: "#7C9A4E",
+  green: "#5C8A54",
+  emerald: "#3F7A5C",
+  teal: "#456B76",
+  cyan: "#2E8B99",
+  sky: "#4C7FA6",
+  blue: "#3D6FB0",
+  indigo: "#5A63A8",
+  violet: "#8B6BA8",
+  purple: "#7A5C99",
+  pink: "#B85C8A",
+  rose: "#A03F6A",
+  slate: "#62706F",
+};
+
+function isColourKey(value: string): value is ColourKey {
+  return Object.prototype.hasOwnProperty.call(PALETTE_HEX, value);
+}
+
+function hashPalette(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return PALETTE_HEX[PALETTE_KEYS[hash % PALETTE_KEYS.length]!];
+}
+
+/** Resolves a persisted colour value (a palette token like "emerald", a raw
+ *  `#RRGGBB` string from data that predates the palette, or nothing) to an
+ *  actual CSS colour. `seed` (e.g. a user id) drives the deterministic
+ *  fallback used when there's no persisted colour at all yet. */
+export function resolveColour(value: string | null | undefined, seed = ""): string {
+  if (value) {
+    if (isColourKey(value)) return PALETTE_HEX[value];
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
+  }
+  return hashPalette(seed);
+}
+
+/** Relative luminance (sRGB, unlinearised approximation — good enough for
+ *  picking readable text on a solid fill, not a WCAG-precise calculation). */
+export function contrastText(hex: string): string {
+  const value = hex.replace("#", "");
+  if (value.length !== 6) return "#FFFEFB";
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#233028" : "#FFFEFB";
+}
+
+export const radius = { small: 10, card: 22, shell: 24, hero: 32 } as const;
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 } as const;
+export const font = {
+  family: "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif",
+  familyDisplay: "ui-rounded, Inter, ui-sans-serif, system-ui, -apple-system, sans-serif",
+  hero: "2.75rem",
+  display: "1.75rem",
+  title: "1.375rem",
+  heading: "1.0625rem",
+  body: "0.9375rem",
+  small: "0.8125rem",
+  micro: "0.6875rem",
+} as const;

@@ -1,5 +1,6 @@
+import secrets
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any
 
@@ -7,6 +8,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -14,13 +16,28 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import relationship as orm_relationship
 
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
+
+# Duplicated from mykhaya.security._HOME_CODE_ALPHABET deliberately: security.py
+# imports models for its User/Session lookups, so models.py cannot import back from
+# it without a circular import. This is only a Python-side ORM default (a safety net
+# for direct Group(...) construction, e.g. in tests) — the real, uniqueness-checked
+# code generation for the API-facing create-Home flow lives in
+# mykhaya.routers.groups._unique_home_code / mykhaya.security.generate_home_code.
+_HOME_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _default_child_login_code() -> str:
+    return "".join(secrets.choice(_HOME_CODE_ALPHABET) for _ in range(8))
 
 
 class RecurrencePattern(StrEnum):
@@ -40,9 +57,47 @@ class Role(StrEnum):
     guest = "guest"
 
 
+class HouseholdRelationship(StrEnum):
+    home_admin = "home_admin"
+    partner = "partner"
+    child = "child"
+    extended_family = "extended_family"
+    friend = "friend"
+    review_required = "review_required"
+
+
+class PermissionProfile(StrEnum):
+    home_admin = "home_admin"
+    standard_partner = "standard_partner"
+    child_restricted = "child_restricted"
+    explicit_sharing = "explicit_sharing"
+    review_required = "review_required"
+
+
+class ChildAgeBand(StrEnum):
+    under_13 = "under_13"
+    age_13_15 = "13_to_15"
+    age_16_17 = "16_to_17"
+
+
+class ChildTransitionStatus(StrEnum):
+    child = "child"
+    review_due = "review_due"
+    converted = "converted"
+
+
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
+
+
+class SessionKind(StrEnum):
+    """What kind of principal a Session authenticates — never inferred from the
+    User row itself (a managed Child has a perfectly normal User row; the
+    session is what marks it as restricted). See docs on managed Child sign-in."""
+
+    adult = "adult"
+    managed_child = "managed_child"
 
 
 class PlatformRole(StrEnum):
@@ -51,6 +106,25 @@ class PlatformRole(StrEnum):
     support = "support_operator"
     security = "security_operator"
     readonly = "read_only_operator"
+
+
+class PlatformSessionStatus(StrEnum):
+    """Where a PlatformSession sits in the MFA login flow — never inferred from
+    PlatformAdministrator.mfa_enrolled alone, since that would let a session
+    minted before an MFA policy change silently keep full access. See
+    mykhaya.platform_security.platform_context and the login endpoint."""
+
+    # Password verified, second factor verified (or none was required) — full
+    # Control Centre access, subject to the normal role/step-up checks.
+    full = "full"
+    # Password verified, administrator has an enrolled second factor that has not
+    # yet been presented this login. Can only reach the MFA-verification
+    # endpoints and logout.
+    pending_mfa = "pending_mfa"
+    # Password verified, admin_mfa_required policy applies to this administrator
+    # and they have no enrolled second factor yet. Can only reach MFA-enrollment
+    # endpoints and logout — never ordinary Control Centre routes.
+    mfa_setup_required = "mfa_setup_required"
 
 
 class ServiceState(StrEnum):
@@ -89,7 +163,17 @@ class User(UuidTimeMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
+    timezone: Mapped[str | None] = mapped_column(String(100))
+    birth_month: Mapped[int | None] = mapped_column(Integer)
+    birth_day: Mapped[int | None] = mapped_column(Integer)
+    birth_year: Mapped[int | None] = mapped_column(Integer)
+    # A new random UUID per upload, not the user's id — a fresh, unpredictable filename
+    # each time so a changed avatar naturally invalidates any cached/versioned URL.
+    # Never the client-supplied filename. The actual image bytes live on disk under the
+    # avatar storage directory (mykhaya/avatars/), never in the database.
+    avatar_key: Mapped[str | None] = mapped_column(String(64))
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
 
 
 class AuthIdentity(UuidTimeMixin, Base):
@@ -118,6 +202,15 @@ class Session(UuidTimeMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     ip_prefix: Mapped[str | None] = mapped_column(String(80))
+    # Set once at issuance from the credential path that authenticated it (adult
+    # email/password vs managed Child username/PIN) — never inferred from the User
+    # row, so a route can never accidentally treat a managed Child session as an
+    # ordinary adult's just because the underlying User looks normal.
+    kind: Mapped[SessionKind] = mapped_column(
+        Enum(SessionKind, name="session_kind"),
+        default=SessionKind.adult,
+        server_default=SessionKind.adult.value,
+    )
 
 
 class ActionToken(UuidTimeMixin, Base):
@@ -138,7 +231,17 @@ class Group(UuidTimeMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    memberships: Mapped[list["Membership"]] = relationship(back_populates="group")
+    # A short, random, non-sequential code — never the Home name or id — that a
+    # managed Child types in alongside their username/PIN to identify which Home
+    # they belong to at sign-in, without exposing membership or enumerating real
+    # Homes. Visible to any existing member of the Home (the same trust boundary
+    # as member_count etc.), not a secret in itself; brute-forcing it still has to
+    # clear the child-login rate limits same as the username/PIN. See
+    # mykhaya.security.generate_home_code.
+    child_login_code: Mapped[str] = mapped_column(
+        String(10), unique=True, index=True, default=_default_child_login_code
+    )
+    memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
 
 
 class Membership(UuidTimeMixin, Base):
@@ -152,9 +255,25 @@ class Membership(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     role: Mapped[Role] = mapped_column(Enum(Role, name="membership_role"))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship"),
+        default=HouseholdRelationship.review_required,
+    )
+    permission_profile: Mapped[PermissionProfile] = mapped_column(
+        Enum(PermissionProfile, name="permission_profile"),
+        default=PermissionProfile.review_required,
+    )
+    permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Assigned once at creation via mykhaya.member_colours.assign_member_colour,
+    # editable afterwards by the person themselves or a Home Admin. A palette
+    # token, never a raw hex value — see mykhaya.colour_palette. Household-scoped,
+    # not global: the same person can hold a different colour in a different
+    # home. See docs/design/visual-identity.md.
+    colour: Mapped[ColourToken | None] = mapped_column(Enum(ColourToken, name="colour_token"))
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    group: Mapped[Group] = relationship(back_populates="memberships")
-    user: Mapped[User] = relationship(back_populates="memberships")
+    group: Mapped[Group] = orm_relationship(back_populates="memberships")
+    user: Mapped[User] = orm_relationship(back_populates="memberships")
 
 
 class HomeCalendar(UuidTimeMixin, Base):
@@ -178,7 +297,15 @@ class CalendarEventLabel(UuidTimeMixin, Base):
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(40))
-    color: Mapped[str] = mapped_column(String(7), default="#456B76")
+    # A palette token, never a raw hex value — see mykhaya.colour_palette. The
+    # same shared palette as member colours, but this is the calendar/category
+    # identity colour: event bars are coloured by their label, not by who
+    # created them. See docs/design/visual-identity.md.
+    color: Mapped[ColourToken] = mapped_column(
+        Enum(ColourToken, name="colour_token", create_type=False),
+        default=DEFAULT_LABEL_COLOUR,
+        server_default=DEFAULT_LABEL_COLOUR.value,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     sort_order: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
@@ -267,6 +394,13 @@ class Invitation(UuidTimeMixin, Base):
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     email: Mapped[str] = mapped_column(String(320))
     role: Mapped[Role] = mapped_column(Enum(Role, name="membership_role", create_type=False))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    permission_profile: Mapped[PermissionProfile] = mapped_column(
+        Enum(PermissionProfile, name="permission_profile", create_type=False)
+    )
+    shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -292,11 +426,17 @@ class AuditEvent(Base):
 
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
-    __table_args__ = (Index("ix_outbox_pending", "processed_at", "available_at"),)
+    __table_args__ = (
+        Index("ix_outbox_pending", "processed_at", "available_at"),
+        UniqueConstraint("dedupe_key", name="uq_outbox_events_dedupe_key"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     topic: Mapped[str] = mapped_column(String(100))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Durable identity for a scheduled occurrence. Nullable because ordinary
+    # transactional notifications do not have a recurring schedule identity.
+    dedupe_key: Mapped[str | None] = mapped_column(String(255))
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -315,6 +455,7 @@ class WorkerJobRecord(Base):
     topic: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(30), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(String(500))
 
@@ -332,8 +473,45 @@ class PlatformAdministrator(UuidTimeMixin, Base):
         )
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # True once at least one second factor (TOTP or a WebAuthn credential) is
+    # enrolled. Never set directly by an endpoint that isn't the enrollment
+    # completion itself — see mykhaya.platform_mfa.
     mfa_enrolled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Encrypted with the same mykhaya.secrets_crypto approach as the SMTP/VAPID
+    # secrets — never plaintext at rest, never returned by any endpoint once set.
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    totp_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlatformAdministratorInvitation(UuidTimeMixin, Base):
+    """The only normal path to a new PlatformAdministrator row besides the
+    one-time bootstrap script — see mykhaya.routers.platform's
+    /administrators/invitations endpoints. The token itself is never stored:
+    only its HMAC (token_hash, same convention as Session/ActionToken), and it
+    is genuinely random (secrets.token_urlsafe) rather than derived from this
+    row's id, specifically so reissuing can invalidate the previous token by
+    simply overwriting token_hash — the old raw value stops matching anything."""
+
+    __tablename__ = "platform_administrator_invitations"
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    role: Mapped[PlatformRole] = mapped_column(
+        Enum(
+            PlatformRole,
+            name="platform_role",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PlatformSession(UuidTimeMixin, Base):
@@ -349,6 +527,60 @@ class PlatformSession(UuidTimeMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     source_ip: Mapped[str] = mapped_column(String(64))
+    status: Mapped[PlatformSessionStatus] = mapped_column(
+        Enum(PlatformSessionStatus, name="platform_session_status"),
+        default=PlatformSessionStatus.full,
+        server_default=PlatformSessionStatus.full.value,
+    )
+
+
+class AdminWebAuthnCredential(UuidTimeMixin, Base):
+    """A registered passkey/security key for a platform administrator. Standard
+    WebAuthn public-key credential storage — see mykhaya.platform_mfa. Never
+    stores a private key; the private key never leaves the authenticator."""
+
+    __tablename__ = "admin_webauthn_credentials"
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="CASCADE"), index=True
+    )
+    # Base64url-encoded credential ID, as returned by the authenticator — the
+    # handle used to look up this credential on every authentication attempt.
+    credential_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Chosen by the administrator at registration time (e.g. "YubiKey 5C",
+    # "iPhone Face ID") — display only, never used for lookup.
+    label: Mapped[str] = mapped_column(String(100))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminRecoveryCode(UuidTimeMixin, Base):
+    __tablename__ = "admin_recovery_codes"
+    administrator_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="CASCADE"), index=True
+    )
+    # HMAC-SHA256 (mykhaya.security.hash_secret), same convention as session/
+    # action tokens — a recovery code is a high-entropy single-use secret, not a
+    # low-entropy PIN, so it doesn't need pwdlib's slower password hashing.
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BackupRun(UuidTimeMixin, Base):
+    """One row per backup attempt, written by infrastructure/scripts/backup.sh on
+    completion — see docs/operations/backup-and-restore.md. The application never
+    triggers a backup itself; this table only records outcomes so the Control
+    Centre can show authoritative last-success/overdue state instead of assuming
+    health from the presence of a backup directory."""
+
+    __tablename__ = "backup_runs"
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    succeeded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    # Free-text but never a raw stack trace or secret — the script only ever
+    # writes short, fixed operational messages here.
+    detail: Mapped[str | None] = mapped_column(String(500))
 
 
 class AdministrativeAuditEvent(Base):
@@ -403,6 +635,46 @@ class SecurityEvent(Base):
     safe_detail: Mapped[str | None] = mapped_column(String(500))
 
 
+class SmtpConnectionSecurity(StrEnum):
+    none = "none"
+    starttls = "starttls"
+    tls = "tls"
+
+
+class PlatformSmtpSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed SMTP configuration. Single row; app logic enforces that.
+
+    Used only when no MYKHAYA_SMTP_* environment override is active — see
+    mykhaya.mailer.resolve_smtp_config and docs/architecture/platform-control-centre.md.
+    """
+
+    __tablename__ = "platform_smtp_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    host: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    port: Mapped[int] = mapped_column(Integer, default=587, server_default="587")
+    connection_security: Mapped[SmtpConnectionSecurity] = mapped_column(
+        Enum(
+            SmtpConnectionSecurity,
+            name="smtp_connection_security",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=SmtpConnectionSecurity.starttls,
+        server_default=SmtpConnectionSecurity.starttls.value,
+    )
+    auth_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    username: Mapped[str | None] = mapped_column(String(320))
+    encrypted_password: Mapped[str | None] = mapped_column(Text)
+    sender_name: Mapped[str] = mapped_column(
+        String(100), default="MyKhaya", server_default="MyKhaya"
+    )
+    sender_email: Mapped[str] = mapped_column(String(320), default="", server_default="")
+    reply_to: Mapped[str | None] = mapped_column(String(320))
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=10, server_default="10")
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
 class PlatformSetting(UuidTimeMixin, Base):
     __tablename__ = "platform_settings"
     key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
@@ -416,6 +688,7 @@ class FeatureFlag(UuidTimeMixin, Base):
     __tablename__ = "feature_flags"
     key: Mapped[FeatureKey] = mapped_column(Enum(FeatureKey, name="feature_key"), unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    release_state: Mapped[str | None] = mapped_column(String(30))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
@@ -431,6 +704,69 @@ class FeatureOverride(UuidTimeMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class ChildProfile(UuidTimeMixin, Base):
+    __tablename__ = "child_profiles"
+    __table_args__ = (
+        # Denormalized from Membership.group_id (a membership never moves between
+        # Homes, so this is safe to duplicate) specifically so this uniqueness can be
+        # a real database constraint rather than a check-then-write application
+        # query: Postgres serialises the two concurrent inserts/updates and rejects
+        # whichever loses the race with a real IntegrityError, so
+        # "Home + username_normalised" can never end up duplicated even under
+        # concurrent requests. NULLs (login not configured) are exempt as usual —
+        # Postgres unique indexes never treat two NULLs as equal.
+        UniqueConstraint(
+            "group_id", "username_normalised", name="uq_child_login_username_per_home"
+        ),
+    )
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    age_band: Mapped[ChildAgeBand] = mapped_column(Enum(ChildAgeBand, name="child_age_band"))
+    permissions: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    transition_status: Mapped[ChildTransitionStatus] = mapped_column(
+        Enum(ChildTransitionStatus, name="child_transition_status"),
+        default=ChildTransitionStatus.child,
+    )
+    birth_month: Mapped[int | None] = mapped_column(Integer)
+    birth_day: Mapped[int | None] = mapped_column(Integer)
+    birth_year: Mapped[int | None] = mapped_column(Integer)
+    birthday_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Managed Child sign-in (optional, parent-configured) — the Child remains this
+    # same managed identity, never converted into a normal email/password User.
+    # Username uniqueness within the Home is a real database constraint — see
+    # uq_child_login_username_per_home above — backed by an application-layer
+    # pre-check in children.py for a friendly error message on the common case.
+    login_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    username_normalised: Mapped[str | None] = mapped_column(String(32))
+    # A pwdlib hash (the same hasher as adult passwords, see mykhaya.security), never
+    # the raw PIN. Cleared whenever login is disabled — see children.py's disable path.
+    pin_hash: Mapped[str | None] = mapped_column(Text)
+    login_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GuardianAssignment(UuidTimeMixin, Base):
+    __tablename__ = "guardian_assignments"
+    __table_args__ = (
+        UniqueConstraint("child_profile_id", "guardian_membership_id", name="uq_child_guardian"),
+    )
+    child_profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True
+    )
+    guardian_membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), index=True
+    )
+    assigned_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
     )
 
 
@@ -459,3 +795,281 @@ class OperationalHeartbeat(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     safe_detail: Mapped[str | None] = mapped_column(String(300))
+
+
+# --- Notification Engine -----------------------------------------------------
+# Every channel (email/push/in-app) and every future notification-producing
+# module (calendar, household routines, birthdays, invitations, ...) shares
+# this schema. See mykhaya/notifications/engine.py and
+# docs/architecture/notification-engine.md.
+
+
+class NotificationChannel(StrEnum):
+    email = "email"
+    push = "push"
+    in_app = "in_app"
+
+
+class NotificationDeliveryStatus(StrEnum):
+    queued = "queued"
+    sent = "sent"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class LockScreenPreviewLevel(StrEnum):
+    full = "full"
+    title_only = "title_only"
+    hidden = "hidden"
+
+
+class BriefingDays(StrEnum):
+    daily = "daily"
+    weekdays = "weekdays"
+
+
+class RoutineReminderTiming(StrEnum):
+    evening_before = "evening_before"
+    same_day = "same_day"
+    both = "both"
+
+
+class PushSubscription(UuidTimeMixin, Base):
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (Index("ix_push_subscriptions_user", "user_id", "disabled_at"),)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh_key: Mapped[str] = mapped_column(String(255))
+    auth_key: Mapped[str] = mapped_column(String(255))
+    device_label: Mapped[str | None] = mapped_column(String(120))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class Notification(UuidTimeMixin, Base):
+    """In-app notification centre row."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_recipient_created", "recipient_user_id", "created_at"),
+    )
+    recipient_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
+    notification_type: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(String(500))
+    related_entity_type: Mapped[str | None] = mapped_column(String(50))
+    related_entity_id: Mapped[uuid.UUID | None]
+    deep_link: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationDelivery(Base):
+    """One row per recipient per channel per attempt-group — the diagnostics/timeline
+    backbone. A single OutboxEvent can fan out to many rows (e.g. push to N devices)."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        Index("ix_notification_deliveries_attempted", "attempted_at"),
+        Index("ix_notification_deliveries_recipient", "recipient_user_id", "channel"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, name="notification_channel")
+    )
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    notification_type: Mapped[str] = mapped_column(String(100), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(300), unique=True)
+    outbox_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("outbox_events.id", ondelete="SET NULL")
+    )
+    push_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="SET NULL")
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[NotificationDeliveryStatus] = mapped_column(
+        Enum(NotificationDeliveryStatus, name="notification_delivery_status"),
+        default=NotificationDeliveryStatus.queued,
+        server_default=NotificationDeliveryStatus.queued.value,
+    )
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sanitised_failure_reason: Mapped[str | None] = mapped_column(String(300))
+    used_template_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
+
+class NotificationPreferences(UuidTimeMixin, Base):
+    __tablename__ = "notification_preferences"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Default off, unlike push_enabled/in_app_enabled — email is an explicit opt-in
+    # "also send me an email" channel for optional notification types, not a third
+    # always-on channel that would triple send volume for every reminder/briefing/
+    # routine/birthday. MANDATORY_EMAIL_TYPES (verification, reset, invitation) always
+    # send by email regardless of this toggle. See docs/architecture/notification-engine.md.
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    event_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    event_invitations_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    event_changes_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    household_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    daily_briefing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    briefing_time: Mapped[time] = mapped_column(
+        Time, default=time(7, 30), server_default="07:30:00"
+    )
+    briefing_days: Mapped[BriefingDays] = mapped_column(
+        Enum(BriefingDays, name="briefing_days"),
+        default=BriefingDays.daily,
+        server_default=BriefingDays.daily.value,
+    )
+    empty_day_briefing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    lock_screen_preview_level: Mapped[LockScreenPreviewLevel] = mapped_column(
+        Enum(LockScreenPreviewLevel, name="lock_screen_preview_level"),
+        default=LockScreenPreviewLevel.title_only,
+        server_default=LockScreenPreviewLevel.title_only.value,
+    )
+    quiet_hours_start: Mapped[time | None] = mapped_column(Time)
+    quiet_hours_end: Mapped[time | None] = mapped_column(Time)
+    quiet_hours_critical_only: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+
+
+class HouseholdRoutine(UuidTimeMixin, Base):
+    __tablename__ = "household_routines"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_routine_title_nonempty"),
+        CheckConstraint("interval_weeks >= 1", name="ck_routine_interval_weeks"),
+        Index("ix_routine_group_enabled", "group_id", "enabled"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    interval_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    week_anchor_date: Mapped[date] = mapped_column(Date)
+    reminder_timing: Mapped[RoutineReminderTiming] = mapped_column(
+        Enum(RoutineReminderTiming, name="routine_reminder_timing"),
+        default=RoutineReminderTiming.evening_before,
+        server_default=RoutineReminderTiming.evening_before.value,
+    )
+    is_critical: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class HouseholdRoutineMember(UuidTimeMixin, Base):
+    __tablename__ = "household_routine_members"
+    __table_args__ = (UniqueConstraint("routine_id", "user_id", name="uq_routine_member"),)
+    routine_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_routines.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+class HouseholdRoutineCompletion(UuidTimeMixin, Base):
+    __tablename__ = "household_routine_completions"
+    __table_args__ = (
+        UniqueConstraint("routine_id", "occurrence_date", name="uq_routine_occurrence"),
+    )
+    routine_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_routines.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_date: Mapped[date] = mapped_column(Date, index=True)
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PlatformPushSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed Web Push (VAPID) configuration. Single row; app logic
+    enforces that. Same environment-wins precedence model as PlatformSmtpSettings."""
+
+    __tablename__ = "platform_push_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    vapid_public_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_vapid_private_key: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(320))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class NotificationTemplate(UuidTimeMixin, Base):
+    """Override-only: trusted default copy lives in code
+    (mykhaya/notifications/default_templates.py). A row here exists only once a Platform
+    Admin has customised that template_type/channel; deleting the row resets to default."""
+
+    __tablename__ = "notification_templates"
+    __table_args__ = (
+        UniqueConstraint("template_type", "channel", name="uq_template_type_channel"),
+    )
+    template_type: Mapped[str] = mapped_column(String(60), index=True)
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, name="notification_template_channel")
+    )
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Which mykhaya.notifications.default_templates.DEFAULT_TEMPLATE_VERSION this
+    # override was saved against — lets a future admin UI flag "the built-in wording
+    # has changed since you customised this" without diffing text.
+    based_on_default_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class NotificationTemplateRevision(Base):
+    """Snapshot of the previous override, kept on every save so a bad edit is one click
+    from recovery. The code default itself never needs versioning here."""
+
+    __tablename__ = "notification_template_revisions"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("notification_templates.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    replaced_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )

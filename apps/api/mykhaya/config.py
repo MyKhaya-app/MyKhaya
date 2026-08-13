@@ -1,13 +1,18 @@
+import os
 from functools import lru_cache
+from importlib import metadata as importlib_metadata
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_DISTRIBUTION_NAME = "mykhaya-api"
 
-def _read_repo_version() -> str:
+
+def _read_repo_version_file() -> str | None:
     here = Path(__file__).resolve()
     candidates = [Path("/app/VERSION"), Path.cwd() / "VERSION"]
     candidates.extend(parent / "VERSION" for parent in here.parents[:4])
@@ -16,7 +21,33 @@ def _read_repo_version() -> str:
             value = path.read_text(encoding="utf-8").strip()
             if value:
                 return value
-    return "0.1.0-dev"
+    return None
+
+
+def resolve_app_version() -> str:
+    """The single source of truth for the running application's version.
+
+    Precedence: an explicit MYKHAYA_VERSION override > installed package
+    metadata (infrastructure/scripts/validate_version.py already enforces
+    apps/api/pyproject.toml's version stays equal to the repository VERSION
+    file, so this is never stale) > the repository VERSION file when running
+    from source > a safe non-empty fallback.
+
+    "unknown" is deliberately not treated as a meaningful override even
+    though it's present as a literal env var value in several places
+    (compose.yml's `${MYKHAYA_VERSION:-unknown}` substitution, the
+    Dockerfiles' `ARG MYKHAYA_VERSION=unknown`) — those exist so a build/run
+    never fails for lacking the var, not to assert "the version really is
+    unknown" over a better source that's actually available.
+    """
+    override = os.environ.get("MYKHAYA_VERSION", "").strip()
+    if override and override != "unknown":
+        return override
+    try:
+        return importlib_metadata.version(_DISTRIBUTION_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    return _read_repo_version_file() or "unknown"
 
 
 class Settings(BaseSettings):
@@ -24,7 +55,7 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "test", "production"] = "development"
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
-    version: str = _read_repo_version()
+    version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
@@ -38,11 +69,27 @@ class Settings(BaseSettings):
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
     smtp_host: str = "mailpit"
     smtp_port: int = 1025
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_starttls: bool = False
+    email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
     email_verification_enabled: bool = True
+    vapid_public_key: str | None = None
+    vapid_private_key: SecretStr | None = None
+    vapid_subject: str | None = None
+    push_delivery_configured: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
-    rate_limit_login: int = Field(default=10, ge=1, le=100)
-    rate_limit_register: int = Field(default=5, ge=1, le=100)
+    avatar_storage_dir: str = "/data/avatars"
+    avatar_max_upload_bytes: int = Field(default=5_242_880, ge=1024, le=10_485_760)
+    # The `le` ceiling here is a schema safety bound, not a production recommendation
+    # — it exists so test/CI environments (which register far more accounts per
+    # window than a real deployment ever would) and unusual self-hosted deployments
+    # can raise the value if genuinely needed. The defaults above (10/5) are the
+    # actual production-appropriate values and are deliberately low; nothing about
+    # this field implies 1000 is a sane production setting.
+    rate_limit_login: int = Field(default=10, ge=1, le=1000)
+    rate_limit_register: int = Field(default=5, ge=1, le=1000)
     trusted_proxy_cidrs: list[str] = []
     default_timezone: str = "Europe/London"
     default_locale: str = "en-GB"
@@ -53,10 +100,28 @@ class Settings(BaseSettings):
     admin_recent_auth_minutes: int = Field(default=10, ge=1, le=30)
     admin_mfa_required: bool = True
     admin_bootstrap_enabled: bool = False
+    # How often infrastructure/scripts/backup.sh is expected to run — purely for
+    # the Control Centre's "is the latest backup overdue" health signal, not a
+    # scheduling mechanism (the application never triggers backups itself).
+    backup_expected_interval_hours: int = Field(default=26, ge=1, le=24 * 30)
     status_public_enabled: bool = True
     commit_sha: str = "unknown"
     build_time: str = "unknown"
     build_channel: Literal["development", "stable"] = "development"
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def resolve_blank_version(cls, value: object) -> object:
+        """.env.example ships MYKHAYA_VERSION= (blank) with the comment
+        "leave blank to use the repository VERSION file" — but a
+        present-but-empty env var is still a value as far as pydantic-settings
+        is concerned, so without this it silently overrides the default_factory
+        with "", and FastAPI(version="") fails its own non-empty assertion at
+        startup. Blank is treated as unset, not as an explicit empty override.
+        """
+        if isinstance(value, str) and not value.strip():
+            return resolve_app_version()
+        return value
 
     @field_validator(
         "cors_origins",
@@ -109,6 +174,69 @@ class Settings(BaseSettings):
             if not self.admin_mfa_required:
                 raise ValueError("MYKHAYA_ADMIN_MFA_REQUIRED must be true in production")
         return self
+
+    @model_validator(mode="after")
+    def validate_admin_and_status_url_configuration(self) -> "Settings":
+        """Catches exactly the class of bug found during Control Centre MFA
+        verification: MYKHAYA_ADMIN_URL/MYKHAYA_STATUS_URL silently drifting
+        out of sync with MYKHAYA_TRUSTED_HOSTS/MYKHAYA_CORS_ORIGINS (or just
+        being malformed), which doesn't break startup at all — it just makes
+        every admin request fail with an opaque 400/403 at request time. This
+        fails at startup instead, with a message that names the actual
+        mismatch, rather than a browser network tab.
+
+        Skipped in the `test` environment: the isolated test pipeline uses its
+        own minimal, deliberately narrow settings and doesn't exercise the
+        admin/status subdomains through this config-driven path.
+        """
+        if self.environment == "test":
+            return self
+
+        for field_name, url in (
+            ("admin_url", self.admin_url),
+            ("status_url", self.status_url),
+            ("public_web_url", self.public_web_url),
+        ):
+            parts = urlsplit(url)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()} ({url!r}) is not a valid http(s) URL."
+                )
+            if self.environment == "production" and parts.scheme != "https":
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()} must use https in production "
+                    f"(got {url!r}) — WebAuthn and secure cookies both depend on it."
+                )
+            hostname = parts.hostname.casefold()
+            if not any(hostname == host.casefold() for host in self.trusted_hosts):
+                raise ValueError(
+                    f"MYKHAYA_{field_name.upper()}'s host ({parts.hostname!r}) is not listed in "
+                    f"MYKHAYA_TRUSTED_HOSTS {self.trusted_hosts!r} — every request to it would "
+                    "be rejected by TrustedHostMiddleware. Add it to MYKHAYA_TRUSTED_HOSTS."
+                )
+
+        admin_origin = self.admin_webauthn_origin
+        if not any(admin_origin.casefold() == origin.casefold() for origin in self.cors_origins):
+            raise ValueError(
+                f"MYKHAYA_ADMIN_URL's origin ({admin_origin!r}) is not listed in "
+                f"MYKHAYA_CORS_ORIGINS {self.cors_origins!r} — every mutating Control Centre "
+                "request would be rejected as a disallowed origin. Add it to MYKHAYA_CORS_ORIGINS."
+            )
+        return self
+
+    @property
+    def admin_webauthn_rp_id(self) -> str:
+        """WebAuthn Relying Party ID — the registrable domain passkeys are bound
+        to. Derived from admin_url (the Control Centre's own origin), never
+        hardcoded, so a self-hosted deployment's actual domain is always used."""
+        return urlsplit(self.admin_url).hostname or "localhost"
+
+    @property
+    def admin_webauthn_origin(self) -> str:
+        """WebAuthn expects the exact scheme+host+port the browser used — unlike
+        the RP ID, this is the full origin, not just the hostname."""
+        parts = urlsplit(self.admin_url)
+        return f"{parts.scheme}://{parts.netloc}"
 
 
 @lru_cache

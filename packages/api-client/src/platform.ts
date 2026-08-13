@@ -31,6 +31,7 @@ export class PlatformClient {
     this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
   put = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+  delete = <T>(path: string) => this.request<T>(path, { method: "DELETE" });
 }
 
 export const platformApi = new PlatformClient();

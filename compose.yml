@@ -39,6 +39,7 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+        MYKHAYA_EMAIL_DELIVERY_CONFIGURED: "${MYKHAYA_EMAIL_DELIVERY_CONFIGURED:-false}",
       }
     depends_on: { api: { condition: service_healthy } }
     networks: [app]
@@ -74,7 +75,19 @@ services:
         migrate: { condition: service_completed_successfully },
         redis: { condition: service_healthy },
       }
-    networks: [app, data]
+    # api/worker/scheduler are the application tier: they legitimately need outbound
+    # internet access (SMTP relays, Web Push endpoints — FCM/APNs/Mozilla autopush —
+    # OIDC providers, and future third-party integrations), not just inbound routing
+    # from Caddy. `edge` is non-internal (unlike `app`/`data`) so Docker gives
+    # containers on it a route out; this does NOT expose api to inbound traffic from
+    # the internet, since only caddy publishes host ports — network membership alone
+    # grants egress, not ingress. See docs/architecture/deployment-model.md and the
+    # `networks:` block below for the full model.
+    networks: [edge, app, data]
+    # Profile avatars only (see mykhaya/avatars/) — a small, dedicated app-data volume,
+    # not a general media/photo store. Only `api` actually reads/writes it; worker and
+    # scheduler inherit the mount via this anchor but don't use it.
+    volumes: ["avatar_data:/data/avatars"]
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -124,16 +137,26 @@ services:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
       MYKHAYA_RATE_LIMIT_LOGIN: "100"
-      MYKHAYA_RATE_LIMIT_REGISTER: "100"
+      MYKHAYA_RATE_LIMIT_REGISTER: "300"
       MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
       MYKHAYA_ADMIN_URL: "http://admin.localhost:8080"
       MYKHAYA_STATUS_URL: "http://status.localhost:8080"
       MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost"]'
       MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]'
       MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128"]'
+      # Most test files' admin_factory fixtures log in without completing an
+      # MFA step; only test_platform_mfa.py exercises the MFA-required path,
+      # and does so explicitly via get_settings().model_copy(update={
+      # "admin_mfa_required": True}) rather than relying on ambient config.
+      # Pinned here (not left to .env/.env.example, whose documented default
+      # is true) so test execution doesn't depend on an incidental
+      # environment variable — this was previously masked only by individual
+      # developers' local .env files happening to set it false.
+      MYKHAYA_ADMIN_MFA_REQUIRED: "false"
       COVERAGE_FILE: /tmp/.coverage
       RUFF_CACHE_DIR: /tmp/.ruff_cache
       MYPY_CACHE_DIR: /tmp/.mypy_cache
+      MYKHAYA_AVATAR_STORAGE_DIR: /tmp/avatars
     command: ["python", "-m", "pytest"]
     depends_on:
       {
@@ -199,6 +222,29 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+# Three-tier network model. `internal: true` controls a network's route to the
+# outside world, not who can reach a service on it — inbound exposure is controlled
+# separately, by which services publish host ports (only `caddy` does).
+#
+#   edge  (not internal) — Caddy's public-facing ingress, and the application tier's
+#         (api/worker/scheduler) egress path for SMTP, Web Push, OIDC and other
+#         outbound third-party integrations. Being on `edge` does not make a service
+#         reachable from the internet by itself; only caddy publishes host ports.
+#   app   (internal)     — east-west traffic between caddy/web/api/worker/scheduler
+#         (e.g. web -> http://api:8000). No route out, no inbound from the internet.
+#   data  (internal)     — postgres/redis/mailpit plus every service that talks to
+#         them. Never internet-reachable in either direction — this is the tier the
+#         original "internal-only database and Redis networks" design goal
+#         (docs/architecture/deployment-model.md) actually describes.
+#
+# History: `app` was marked internal for every service on it, including
+# api/worker/scheduler, from the first commit that introduced this file — with no
+# ADR or design note discussing outbound access for the application tier. That
+# blocked all egress for api/worker/scheduler (confirmed via DNS resolution failing
+# inside the api container) and would have silently broken Web Push delivery to real
+# devices (FCM/APNs/Mozilla autopush are on the public internet). Fixed by adding
+# `edge` to api/worker/scheduler rather than removing `internal: true` from `app` —
+# the data-tier isolation goal was correct, it was just applied one tier too high.
 networks:
   edge: {}
   app: { internal: true }
@@ -208,3 +254,4 @@ volumes:
   redis_data: {}
   caddy_data: {}
   caddy_config: {}
+  avatar_data: {}

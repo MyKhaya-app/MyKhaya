@@ -13,3 +13,4 @@ A change is done only when:
 - Security and threat-model documentation is updated where relevant.
 - Design remains faithful to the canonical MyKhaya reference.
 - No unresolved high or critical security issue remains without an approved risk record.
+- Any user-facing UI change has been reviewed on a physical phone (iPhone and Android where possible) against the visual quality standard — see `docs/engineering/mobile-standards.md`. Desktop browser responsive mode alone is not sufficient evidence.

@@ -1,12 +1,15 @@
 # Deployment and Operations
 
-## Local foundation
+## Persistent development foundation
 
-1. Copy `.env.example` to `.env` and replace every placeholder with independently generated secrets.
-2. Run `make up`; use `http://localhost:8080` and local-only Mailpit at `http://localhost:8025`.
+1. Copy `.env.dev.example` to `.env` and replace every placeholder with independently generated secrets.
+2. Run `make dev-up`; public HTTPS is provided by NetBird Proxy and Mailpit stays local-only at `http://localhost:8025`.
 3. Run `make test`, `make lint` and `make typecheck` before publishing changes.
 
-Development HTTP is deliberately marked by `MYKHAYA_ENVIRONMENT=development` and non-secure cookies. Hosted and home-server production-like deployments use HTTPS and `compose.production.yml`; configuration refuses production startup with insecure cookies.
+The persistent development server uses `compose.dev.yml`, HTTPS public URLs, and secure
+cookies. See `dev-deployment.md` for the supported installation and one-command update
+workflow. Production deployments continue to use `compose.production.yml`; configuration
+refuses production startup with insecure cookies.
 
 ## Home server and VPS
 
@@ -22,18 +25,8 @@ For Cloudflare, restrict origin ingress to Cloudflare IP ranges, configure Caddy
 4. Exercise login, Home membership and a cross-Home denial check.
 5. To roll back, restore prior image digests. If a migration is not backward compatible, stop writes and restore the verified pre-upgrade database backup. Never improvise schema rollback against live data.
 
-## Release channels and tags
+## Release ownership
 
-- Development deployments may run from `dev` and should identify themselves as non-production.
-- Stable production deployments must run from `main` or a stable tag.
-- Stable tags follow `vMAJOR.MINOR.PATCH` and map to the same value in `VERSION`.
-- Do not publish development builds as `latest`.
-
-If registry publishing is introduced, prefer:
-
-- development tags: `mykhaya:dev`, optional `mykhaya:dev-<sha>`
-- stable tags: `mykhaya:latest`, `mykhaya:<major>.<minor>.<patch>`, `mykhaya:<major>.<minor>`, `mykhaya:<major>`
-
-Only advance `latest` after an approved stable release.
+Codex validates and reports `dev` readiness. Anthony alone merges `dev` to `main`, creates the matching `v<VERSION>` tag and deploys that tagged revision. Workflows validate and build; they do not publish or deploy automatically.
 
 Containers log JSON or structured records to stdout. Alert on health failures, repeated authentication denials, queue failures, backup failures and storage capacity. Keep exactly one scheduler replica.

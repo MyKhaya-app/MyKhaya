@@ -3,6 +3,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
+COPY VERSION ./VERSION
 COPY apps/api/pyproject.toml ./
 COPY apps/api/mykhaya ./mykhaya
 RUN pip install --upgrade pip && pip install .
@@ -10,6 +11,14 @@ RUN pip install --upgrade pip && pip install .
 FROM builder AS test
 RUN pip install '.[dev]'
 COPY apps/api/tests ./tests
+# Read-only, for test_colour_palette_consistency.py: it parses the TS/CSS palette
+# source directly to prove mykhaya.colour_palette never silently drifts from
+# packages/design-tokens, rather than trusting a hand-maintained comment.
+COPY packages/design-tokens ./packages/design-tokens
+RUN groupadd --system --gid 10001 mykhaya \
+	&& useradd --system --uid 10001 --gid mykhaya --home-dir /build mykhaya \
+	&& chown -R mykhaya:mykhaya /build
+USER 10001:10001
 CMD ["python", "-m", "pytest"]
 
 FROM python:3.13.5-slim-bookworm AS runtime
@@ -30,6 +39,11 @@ WORKDIR /app
 COPY --chown=mykhaya:mykhaya VERSION /app/VERSION
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
 COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
+# A fresh named volume mounted here inherits this directory's ownership on first
+# use (only api actually writes to it — see compose.yml) — without this, Docker
+# creates the volume owned by root and the non-root `mykhaya` user below can't
+# write avatars to it.
+RUN mkdir -p /data/avatars && chown mykhaya:mykhaya /data/avatars
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"

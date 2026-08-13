@@ -1,9 +1,19 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from mykhaya.models import RecurrencePattern, Role
+from mykhaya.colour_palette import ColourToken
+from mykhaya.models import (
+    ChildAgeBand,
+    ChildTransitionStatus,
+    HouseholdRelationship,
+    PermissionProfile,
+    RecurrencePattern,
+    Role,
+    RoutineReminderTiming,
+)
 
 
 class StrictModel(BaseModel):
@@ -41,9 +51,67 @@ class ResetRequest(TokenRequest):
 
 class UserResponse(BaseModel):
     id: uuid.UUID
-    email: EmailStr
+    # None for a managed Child: its User row carries a server-generated,
+    # deliberately-undeliverable placeholder address (managed-child-*@managed.
+    # mykhaya.invalid — see routers.children.create_child) that is an internal
+    # implementation detail, not something meaningful to expose to any client —
+    # see mykhaya.routers.auth.user_response, which nulls this based on the
+    # authenticating Session's kind. A real adult account always returns its
+    # validated email here, same as before.
+    email: EmailStr | None
     display_name: str
     email_verified: bool
+    birth_month: int | None = None
+    birth_day: int | None = None
+    birth_year: int | None = None
+    # Cache-busting version for the avatar image URL, not the image itself — null
+    # means "no custom avatar, show initials". See mykhaya/avatars/.
+    avatar_version: str | None = None
+    # "adult" or "managed_child" — set from the authenticating Session, never
+    # inferred from the User row itself. The frontend uses this to hide adult-only
+    # navigation/actions for a Child session; server-side capability checks are the
+    # real enforcement, this is only for UI shaping.
+    principal_type: str = "adult"
+
+
+def _validate_birthday(birth_month: int | None, birth_day: int | None) -> None:
+    if birth_month is None and birth_day is None:
+        return
+    if birth_month is None or birth_day is None:
+        raise ValueError("birth_month and birth_day must be set together")
+    days_in_month = {
+        1: 31,
+        2: 29,
+        3: 31,
+        4: 30,
+        5: 31,
+        6: 30,
+        7: 31,
+        8: 31,
+        9: 30,
+        10: 31,
+        11: 30,
+        12: 31,
+    }
+    if birth_day > days_in_month[birth_month]:
+        raise ValueError("That is not a valid day for the selected month")
+
+
+class UserBirthdayUpdate(StrictModel):
+    birth_month: int | None = Field(default=None, ge=1, le=12)
+    birth_day: int | None = Field(default=None, ge=1, le=31)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+
+    @model_validator(mode="after")
+    def check_valid_date(self) -> "UserBirthdayUpdate":
+        _validate_birthday(self.birth_month, self.birth_day)
+        return self
+
+
+class MobileSessionResponse(UserResponse):
+    """Returned only by /auth/mobile/* endpoints - never by the browser /auth/* endpoints."""
+
+    session_token: str
 
 
 class GroupCreate(StrictModel):
@@ -63,24 +131,51 @@ class GroupResponse(BaseModel):
     id: uuid.UUID
     name: str
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    capabilities: list[str]
     member_count: int
+    # Shown to any existing member (the same trust boundary as member_count) so an
+    # adult can hand it to a Child for sign-in — see mykhaya.security.generate_home_code.
+    child_login_code: str
 
 
 class MemberResponse(BaseModel):
+    membership_id: uuid.UUID
     user_id: uuid.UUID
     display_name: str
-    email: EmailStr
+    email: EmailStr | None
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    permission_overrides: dict[str, bool]
+    shared_resources: list[str]
+    colour: ColourToken | None
+    avatar_version: str | None = None
 
 
-class MemberRoleUpdate(StrictModel):
-    role: Role
+class MemberColourUpdate(StrictModel):
+    colour: ColourToken
+
+
+class MemberRelationshipUpdate(StrictModel):
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile | None = None
+    permission_overrides: dict[str, bool] = Field(default_factory=dict)
+    shared_resources: list[str] = Field(default_factory=list, max_length=20)
+    # Optional: this is a routine household action, not an operator action — the user
+    # is never prompted to justify it. See docs/security/threat-model.md.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
 
 
 class InvitationCreate(StrictModel):
     group_id: uuid.UUID
     email: EmailStr
-    role: Role = Role.adult_member
+    relationship: HouseholdRelationship = HouseholdRelationship.partner
+    shared_resources: list[str] = Field(default_factory=list, max_length=20)
+    # Accepted during the compatibility window; authority is derived from relationship.
+    role: Role | None = None
 
 
 class InvitationResponse(BaseModel):
@@ -88,6 +183,9 @@ class InvitationResponse(BaseModel):
     group_id: uuid.UUID
     email: EmailStr
     role: Role
+    relationship: HouseholdRelationship
+    permission_profile: PermissionProfile
+    shared_resources: list[str]
     expires_at: datetime
 
 
@@ -104,7 +202,129 @@ class InvitationTokenPreview(BaseModel):
     invited_by_display_name: str
     email: EmailStr
     role: Role
+    relationship: HouseholdRelationship
     expires_at: datetime
+
+
+class ChildCreate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=100)
+    age_band: ChildAgeBand
+    guardian_membership_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+
+
+class ChildPermissionUpdate(StrictModel):
+    permissions: dict[str, bool]
+    # Optional — see MemberRelationshipUpdate.reason above.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildAgeBandUpdate(StrictModel):
+    age_band: ChildAgeBand
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class GuardianUpdate(StrictModel):
+    guardian_membership_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildTransitionRequest(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class ChildDeleteRequest(ChildTransitionRequest):
+    pass
+
+
+class ChildBirthdayUpdate(StrictModel):
+    birth_month: int | None = Field(default=None, ge=1, le=12)
+    birth_day: int | None = Field(default=None, ge=1, le=31)
+    birthday_visible: bool
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+    @model_validator(mode="after")
+    def check_valid_date(self) -> "ChildBirthdayUpdate":
+        _validate_birthday(self.birth_month, self.birth_day)
+        return self
+
+
+class ChildResponse(BaseModel):
+    membership_id: uuid.UUID
+    user_id: uuid.UUID
+    display_name: str
+    age_band: ChildAgeBand
+    permissions: dict[str, bool]
+    guardian_membership_ids: list[uuid.UUID]
+    transition_status: ChildTransitionStatus
+    birth_month: int | None
+    birth_day: int | None
+    birthday_visible: bool
+    # Managed Child sign-in — status only. The username is shown back so the
+    # adult who configured it can see it; the PIN is never returned by any
+    # endpoint, at any point, under any circumstances.
+    login_enabled: bool
+    login_username: str | None
+
+
+class ChildLoginConfigure(StrictModel):
+    """Covers enable, change-username-only, change-PIN-only and disable — see
+    mykhaya.routers.children's login-config endpoint for the exact semantics of
+    which fields are required in which combination."""
+
+    enabled: bool
+    username: str | None = Field(default=None, min_length=2, max_length=24)
+    pin: str | None = Field(default=None, min_length=4, max_length=6)
+
+    @field_validator("pin")
+    @classmethod
+    def pin_is_numeric(cls, value: str | None) -> str | None:
+        if value is not None and not value.isdigit():
+            raise ValueError("PIN must be 4 to 6 digits.")
+        return value
+
+
+class ChildLoginRequest(StrictModel):
+    home_code: str = Field(min_length=4, max_length=10)
+    username: str = Field(min_length=1, max_length=24)
+    pin: str = Field(min_length=1, max_length=6)
+
+
+class BirthdayEntry(BaseModel):
+    owner_type: Literal["user", "child"]
+    owner_id: uuid.UUID
+    display_name: str
+    month: int
+    day: int
+    next_occurrence_date: date
+
+
+class BirthdayListResponse(BaseModel):
+    items: list[BirthdayEntry]
+
+
+class HouseholdModuleResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    release_state: str
+    enabled: bool
+    toggleable: bool
+    introduced_version: str | None
+    dependencies: list[str]
+    permissions: list[str]
+    route: str | None
+
+
+class HouseholdFeatureUpdate(StrictModel):
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
 
 
 class InvitationResend(StrictModel):
@@ -138,13 +358,29 @@ class RegistrationResponse(MessageResponse):
 
 class EventLabelCreate(StrictModel):
     name: str = Field(min_length=1, max_length=40)
-    color: str = Field(default="#456B76", min_length=7, max_length=7)
+    color: ColourToken = ColourToken.teal
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+
+class EventLabelUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    color: ColourToken | None = None
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        return " ".join(value.strip().split()) if value is not None else None
 
 
 class EventLabelResponse(BaseModel):
     id: uuid.UUID
     name: str
-    color: str
+    color: ColourToken
     is_active: bool
     sort_order: int
 
@@ -226,3 +462,142 @@ class HomeSummaryResponse(BaseModel):
     pending_invitations: int | None
     today_events: list[EventOccurrence]
     next_event: EventOccurrence | None
+
+
+class RoutineCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    interval_weeks: int = Field(default=1, ge=1, le=52)
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
+    is_critical: bool = False
+    pinned: bool = False
+    start_date: date
+    end_date: date | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+
+class RoutineUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    interval_weeks: int = Field(default=1, ge=1, le=52)
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
+    is_critical: bool = False
+    pinned: bool = False
+    enabled: bool = True
+    start_date: date
+    end_date: date | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+
+class RoutineResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    interval_weeks: int
+    week_anchor_date: date
+    reminder_timing: RoutineReminderTiming
+    is_critical: bool
+    pinned: bool
+    enabled: bool
+    start_date: date
+    end_date: date | None
+    member_ids: list[uuid.UUID]
+    next_occurrence_date: date | None
+    completed_today: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class RoutineListResponse(BaseModel):
+    items: list[RoutineResponse]
+
+
+class RoutineCompletionRequest(StrictModel):
+    occurrence_date: date
+
+
+class NotificationPreferencesResponse(BaseModel):
+    push_enabled: bool
+    in_app_enabled: bool
+    email_enabled: bool
+    event_reminders_enabled: bool
+    event_invitations_enabled: bool
+    event_changes_enabled: bool
+    household_reminders_enabled: bool
+    daily_briefing_enabled: bool
+    briefing_time: str
+    briefing_days: str
+    empty_day_briefing_enabled: bool
+    lock_screen_preview_level: str
+    quiet_hours_start: str | None
+    quiet_hours_end: str | None
+    quiet_hours_critical_only: bool
+
+
+class NotificationPreferencesUpdate(StrictModel):
+    push_enabled: bool
+    in_app_enabled: bool
+    email_enabled: bool
+    event_reminders_enabled: bool
+    event_invitations_enabled: bool
+    event_changes_enabled: bool
+    household_reminders_enabled: bool
+    daily_briefing_enabled: bool
+    briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+    briefing_days: Literal["daily", "weekdays"]
+    empty_day_briefing_enabled: bool
+    lock_screen_preview_level: Literal["full", "title_only", "hidden"]
+    quiet_hours_start: str | None = Field(
+        default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    quiet_hours_end: str | None = Field(
+        default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    quiet_hours_critical_only: bool
+
+
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    notification_type: str
+    title: str
+    body: str
+    related_entity_type: str | None
+    related_entity_id: uuid.UUID | None
+    deep_link_path: str
+    read_at: datetime | None
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse]
+    unread_count: int
+    next_page: int | None
+
+
+class PushSubscriptionKeys(StrictModel):
+    p256dh: str = Field(min_length=1, max_length=255)
+    auth: str = Field(min_length=1, max_length=255)
+
+
+class PushSubscriptionCreate(StrictModel):
+    endpoint: str = Field(min_length=1, max_length=4000)
+    keys: PushSubscriptionKeys
+    device_label: str | None = Field(default=None, max_length=120)
+    user_agent: str | None = Field(default=None, max_length=300)
+
+
+class PushSubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    device_label: str | None
+    user_agent: str | None
+    created_at: datetime
+    last_seen_at: datetime | None
+    disabled_at: datetime | None
+
+
+class PushPublicKeyResponse(BaseModel):
+    configured: bool
+    public_key: str | None

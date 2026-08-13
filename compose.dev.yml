@@ -1,0 +1,51 @@
+x-dev-api-environment: &dev-api-environment
+  MYKHAYA_ENVIRONMENT: development
+  MYKHAYA_BUILD_CHANNEL: development
+  MYKHAYA_REGISTRATION_MODE: open
+  # false (not true) because this dev stack is reachable two ways: the HTTPS tunnel
+  # (dev.mykhaya.app, for phone testing) and plain http://localhost:8089 directly on
+  # the Docker host. A Secure cookie is dropped by the browser over plain HTTP, so it
+  # must be off here for local access to work at all — it still works fine over the
+  # tunnel's HTTPS regardless, Secure is an extra restriction, not a requirement.
+  # compose.production.yml has its own independent (and strict) cookie/CORS settings.
+  MYKHAYA_COOKIE_SECURE: "false"
+  MYKHAYA_PUBLIC_WEB_URL: https://dev.mykhaya.app
+  MYKHAYA_ADMIN_URL: https://admin.dev.mykhaya.app
+  MYKHAYA_STATUS_URL: https://status.dev.mykhaya.app
+  # Both access paths: the HTTPS tunnel for phone testing, and plain localhost/127.0.0.1
+  # for working directly against the Docker host. 8089 (not 8080) because 8080 is
+  # already in use by another app on this machine.
+  MYKHAYA_CORS_ORIGINS: '["https://dev.mykhaya.app","https://admin.dev.mykhaya.app","https://status.dev.mykhaya.app","http://localhost:8089","http://127.0.0.1:8089"]'
+  MYKHAYA_TRUSTED_HOSTS: '["dev.mykhaya.app","admin.dev.mykhaya.app","status.dev.mykhaya.app","localhost","127.0.0.1","api"]'
+  MYKHAYA_TRUSTED_PROXY_CIDRS: '${MYKHAYA_TRUSTED_PROXY_CIDRS:-["172.16.0.0/12"]}'
+  MYKHAYA_ADMIN_ALLOWED_NETWORKS: '${MYKHAYA_ADMIN_ALLOWED_NETWORKS:-["100.64.0.0/10"]}'
+  MYKHAYA_ADMIN_MFA_REQUIRED: "${MYKHAYA_ADMIN_MFA_REQUIRED:-false}"
+  MYKHAYA_DEFAULT_TIMEZONE: "${MYKHAYA_DEFAULT_TIMEZONE:-Europe/London}"
+  MYKHAYA_DEFAULT_LOCALE: "${MYKHAYA_DEFAULT_LOCALE:-en-GB}"
+  MYKHAYA_WEEK_START: "${MYKHAYA_WEEK_START:-monday}"
+
+services:
+  caddy:
+    ports:
+      - "${MYKHAYA_DEV_BIND_ADDRESS:-0.0.0.0}:${MYKHAYA_DEV_HOST_PORT:-8089}:8080"
+    environment:
+      MYKHAYA_DEV_PROXY_TRUSTED_CIDRS: "${MYKHAYA_DEV_PROXY_TRUSTED_CIDRS:-100.64.0.0/10}"
+    volumes:
+      - "./infrastructure/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro"
+      - "caddy_data:/data"
+      - "caddy_config:/config"
+  api:
+    environment: *dev-api-environment
+  web:
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_BUILD_CHANNEL: development
+  worker:
+    environment: *dev-api-environment
+  scheduler:
+    environment: *dev-api-environment
+  migrate:
+    environment: *dev-api-environment
+  mailpit:
+    ports:
+      - "127.0.0.1:${MYKHAYA_DEV_MAILPIT_PORT:-8025}:8025"

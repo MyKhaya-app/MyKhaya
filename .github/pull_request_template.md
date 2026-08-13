@@ -4,8 +4,8 @@
 
 ## Target Branch
 
-- Normal development PRs must target `dev`.
-- Release PRs and approved hotfix PRs must target `main`.
+- Target `dev` unless Anthony explicitly requested this branch and target.
+- Codex must never merge or push to `main`.
 
 ## Release Classification
 

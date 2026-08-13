@@ -4,23 +4,43 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { platformApi } from "@mykhaya/api-client";
+import { resolveLoginDestination } from "./platform-mfa-logic";
+import type { PlatformActor } from "./platform-types";
 
 const navigation = [
   ["Overview", "/"], ["Users", "/users"], ["Homes", "/homes"],
-  ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"],
-  ["Settings", "/settings"], ["Feature Flags", "/feature-flags"],
-  ["Security", "/security"], ["Audit", "/audit"],
-  ["Administrators", "/administrators"], ["Public Status", "/incidents"],
+  ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
+  ["Templates", "/notification-templates"], ["Communications", "/communications"],
+  ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
+  ["Settings", "/settings"], ["Modules & Features", "/modules"],
+  ["Administrators", "/administrators"], ["Security", "/security"], ["Audit", "/audit"],
+  ["Public Status", "/incidents"],
 ] as const;
-
-type Actor = { display_name: string; email: string; role: string };
 
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const path = usePathname().replace(/^\/control-centre/, "") || "/";
   const router = useRouter();
-  const [actor, setActor] = useState<Actor | null>(null);
+  const [actor, setActor] = useState<PlatformActor | null>(null);
   useEffect(() => {
-    platformApi.get<Actor>("/auth/me").then(setActor).catch(() => router.replace("/login"));
+    platformApi
+      .get<PlatformActor>("/auth/me")
+      .then((value) => {
+        // A session still mid-MFA-flow must never render ordinary Control
+        // Centre content — the backend already refuses these routes for such
+        // a session, but bouncing to the flow it actually needs (enrollment,
+        // or the login page's inline verify step) is better than a raw 403.
+        const destination = resolveLoginDestination(value.session_status);
+        if (destination === "setup-mfa") {
+          router.replace("/setup-mfa");
+          return;
+        }
+        if (destination === "verify") {
+          router.replace("/login");
+          return;
+        }
+        setActor(value);
+      })
+      .catch(() => router.replace("/login"));
   }, [router]);
   async function signOut() {
     await platformApi.post("/auth/logout", {});
@@ -40,13 +60,19 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="operator-card">
-          <strong>{actor?.display_name ?? "Loading operator…"}</strong>
-          <small>{actor?.role?.replaceAll("_", " ")}</small>
+          {actor ? (
+            <Link href={`/administrators/${actor.id}`} className="operator-identity">
+              <strong>{actor.display_name}</strong>
+              <small>{actor.role.replaceAll("_", " ")}</small>
+            </Link>
+          ) : (
+            <strong>Loading operator…</strong>
+          )}
           <button onClick={signOut}>Sign out of Control Centre</button>
         </div>
       </aside>
       <div className="platform-main">
-        <header><strong>MyKhaya Platform Control Centre</strong><span>Restricted operator access</span></header>
+        <header><strong>MyKhaya Platform Control Centre</strong></header>
         {children}
       </div>
     </div>

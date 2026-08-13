@@ -8,6 +8,8 @@ http://localhost:8080, http://127.0.0.1:8080, http://mykhaya.localhost:8080 {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout
@@ -25,6 +27,13 @@ http://admin.localhost:8080 {
 		X-Content-Type-Options nosniff
 		Referrer-Policy no-referrer
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Frame-Options DENY
+		# PCC-SEC-008: baseline CSP for the Platform Control Centre. No inline
+		# <script>, no third-party script/font/style/image/API origins
+		# anywhere in the admin frontend; style-src keeps 'unsafe-inline'
+		# because the app uses React inline style={{...}} attributes, and
+		# img-src keeps data: for the client-generated TOTP QR code.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"
 	}
 	log {
 		output stdout
@@ -42,6 +51,8 @@ http://status.localhost:8080 {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout

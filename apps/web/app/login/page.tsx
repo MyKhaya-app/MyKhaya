@@ -67,6 +67,9 @@ export default function Login() {
               Create an account
             </Link>
           </span>
+          <span>
+            Signing in as a child? <Link href="/login/child">Child sign in</Link>
+          </span>
         </>
       }
     >

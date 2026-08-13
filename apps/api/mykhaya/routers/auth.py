@@ -1,21 +1,38 @@
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.audit import audit, outbox
+from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.models import ActionToken, AuthIdentity, Invitation, Session, TokenPurpose, User
+from mykhaya.models import (
+    ActionToken,
+    AuthIdentity,
+    ChildProfile,
+    Group,
+    HouseholdRelationship,
+    Invitation,
+    Membership,
+    Session,
+    SessionKind,
+    TokenPurpose,
+    User,
+)
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    ChildLoginRequest,
     ForgotRequest,
     LoginRequest,
     MessageResponse,
+    MobileSessionResponse,
     RegisterRequest,
     RegistrationResponse,
     ResetRequest,
@@ -29,10 +46,14 @@ from mykhaya.security import (
     consume_action_token,
     create_action_token,
     decode_derived_token,
+    derived_token,
     hash_secret,
     new_session_token,
+    normalise_child_username,
     normalise_email,
+    normalise_home_code,
     password_hash,
+    require_secure_transport,
     set_auth_cookies,
     verify_password,
 )
@@ -41,18 +62,32 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
 
 
-def user_response(user: User) -> UserResponse:
+def user_response(user: User, session: Session | None = None) -> UserResponse:
+    principal = session.kind if session is not None else SessionKind.adult
     return UserResponse(
         id=user.id,
-        email=user.email,
+        # A managed Child's synthetic .invalid placeholder address is an internal
+        # implementation detail, never returned to any client — see the field
+        # comment on schemas.UserResponse.email.
+        email=user.email if principal == SessionKind.adult else None,
         display_name=user.display_name,
         email_verified=user.email_verified_at is not None,
+        birth_month=user.birth_month,
+        birth_day=user.birth_day,
+        birth_year=user.birth_year,
+        avatar_version=user.avatar_key,
+        principal_type=principal.value,
     )
 
 
 async def issue_session(
-    db: AsyncSession, response: Response, request: Request, user: User, settings: Settings
-) -> None:
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind = SessionKind.adult,
+) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
     session = Session(
@@ -60,11 +95,75 @@ async def issue_session(
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
+        kind=kind,
     )
     db.add(session)
     await db.flush()
     set_auth_cookies(response, raw, csrf, settings)
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
+    return session
+
+
+def mobile_client_descriptor(request: Request) -> str:
+    """Display-only device label. X-MyKhaya-* headers are never trusted for
+    anything beyond this - they are diagnostic text, not authentication or
+    authorisation input."""
+    client = request.headers.get("x-mykhaya-client")
+    platform = request.headers.get("x-mykhaya-platform")
+    version = request.headers.get("x-mykhaya-app-version")
+    parts = [part for part in (client, platform, version) if part]
+    if parts:
+        return " ".join(parts)[:300]
+    return request.headers.get("user-agent", "Unknown device")[:300]
+
+
+async def issue_mobile_session(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind = SessionKind.adult,
+) -> tuple[str, Session]:
+    """Bearer-transport equivalent of issue_session: same Session model, same
+    token scheme, no cookies. Returns the raw token - callers must put it in
+    the response body only, never a cookie, never a log line."""
+    raw = new_session_token()
+    session = Session(
+        user_id=user.id,
+        token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
+        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        user_agent=mobile_client_descriptor(request),
+        kind=kind,
+    )
+    db.add(session)
+    await db.flush()
+    audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
+    return raw, session
+
+
+async def authenticate_credentials(
+    db: AsyncSession, request: Request, settings: Settings, body: LoginRequest, bucket: str
+) -> User:
+    """Shared by /auth/login and /auth/mobile/login so the security-sensitive
+    part (rate limiting, password check, active/verified checks) is never
+    duplicated between transports."""
+    await enforce_rate_limit(request, settings, bucket, settings.rate_limit_login, 60)
+    email = normalise_email(str(body.email))
+    result = await db.execute(
+        select(User, AuthIdentity)
+        .join(AuthIdentity, AuthIdentity.user_id == User.id)
+        .where(User.email == email)
+    )
+    pair = result.one_or_none()
+    valid = verify_password(body.password, pair[1].password_hash if pair else DUMMY_HASH)
+    if pair is None or not valid or not pair[0].is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
+    user = cast(User, pair[0])
+    if settings.email_verification_enabled and user.email_verified_at is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
+        )
+    return user
 
 
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -122,7 +221,23 @@ async def register(
             token = await create_action_token(
                 db, user.id, TokenPurpose.verify_email, settings, 60 * 24
             )
-            outbox(db, "email.verify", {"token_id": str(token.id)})
+            raw = derived_token(
+                token.id, token.purpose.value, settings.secret_key.get_secret_value()
+            )
+            subject, message = await render_notification(
+                db,
+                "email_verification",
+                {"link": f"{settings.public_web_url}/verify-email?token={raw}"},
+            )
+            await notify(
+                db,
+                settings=settings,
+                recipient_user_id=user.id,
+                notification_type="email_verification",
+                title=subject,
+                body=message,
+                idempotency_key=f"email_verification:{token.id}",
+            )
         audit(db, request, "user.registered", user.id, target_type="user", target_id=user.id)
         await db.commit()
     else:
@@ -163,27 +278,105 @@ async def login(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
-    await enforce_rate_limit(request, settings, "login", settings.rate_limit_login, 60)
-    email = normalise_email(str(body.email))
-    result = await db.execute(
-        select(User, AuthIdentity)
-        .join(AuthIdentity, AuthIdentity.user_id == User.id)
-        .where(User.email == email)
-    )
-    pair = result.one_or_none()
-    valid = verify_password(body.password, pair[1].password_hash if pair else DUMMY_HASH)
-    if pair is None or not valid or not pair[0].is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
-    user = pair[0]
-    if settings.email_verification_enabled and user.email_verified_at is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
-        )
-    await issue_session(db, response, request, user, settings)
+    user = await authenticate_credentials(db, request, settings, body, "login")
+    session = await issue_session(db, response, request, user, settings)
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
-    return user_response(user)
+    return user_response(user, session)
+
+
+CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
+
+
+@router.post("/child/login", response_model=UserResponse)
+async def child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Managed Child sign-in — deliberately separate from /login: no email, no
+    password, no verification/reset flow. A Home code + Child username + PIN,
+    all rate limited, all failures returning the identical generic message so
+    neither the Home, the username nor the PIN can be distinguished as the
+    wrong element (no enumeration of Homes or Child usernames).
+    """
+    # Per-IP (matches adult login's own bucket) *and* per sign-in-identity — a
+    # slow, distributed attempt against one specific Child is limited even if it
+    # never trips the per-IP bucket, and vice versa.
+    await enforce_rate_limit(request, settings, "child-login", settings.rate_limit_login, 60)
+    identity_bucket = "child-login-identity:" + hash_secret(
+        f"{normalise_home_code(body.home_code)}:{normalise_child_username(body.username)}",
+        settings.secret_key.get_secret_value(),
+    )
+    await enforce_rate_limit(request, settings, identity_bucket, 8, 900)
+
+    group = await db.scalar(
+        select(Group).where(
+            Group.child_login_code == normalise_home_code(body.home_code),
+            Group.is_active.is_(True),
+        )
+    )
+    profile = None
+    if group is not None:
+        # ChildProfile.group_id (not just the Membership join) is what
+        # uq_child_login_username_per_home is defined over, so this query can never
+        # return more than one row for a given (group, username) — the database
+        # itself guarantees that, not just the application's read pattern.
+        profile = await db.scalar(
+            select(ChildProfile)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                ChildProfile.group_id == group.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+                ChildProfile.username_normalised == normalise_child_username(body.username),
+            )
+        )
+    stored_hash = profile.pin_hash if profile and profile.pin_hash else DUMMY_HASH
+    valid = verify_password(body.pin, stored_hash)
+    if profile is None or not valid:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+
+    membership = await db.get(Membership, profile.membership_id)
+    assert membership is not None
+    user = await db.get(User, membership.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+
+    session = await issue_session(
+        db, response, request, user, settings, kind=SessionKind.managed_child
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    return user_response(user, session)
+
+
+@router.post("/mobile/login", response_model=MobileSessionResponse)
+async def mobile_login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Native-client equivalent of /login: same credential check, opaque
+    Session token, but returned in the body (not a cookie) since a native
+    app has no cookie jar to rely on. Sets no cookies. Never logs the raw
+    token - only the caller who receives this response ever sees it."""
+    require_secure_transport(request, settings)
+    user = await authenticate_credentials(db, request, settings, body, "mobile_login")
+    raw, session = await issue_mobile_session(db, request, user, settings)
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
 
 
 @router.post(
@@ -209,7 +402,21 @@ async def forgot(
             .values(consumed_at=datetime.now(UTC))
         )
         token = await create_action_token(db, user.id, TokenPurpose.reset_password, settings, 30)
-        outbox(db, "email.reset", {"token_id": str(token.id)})
+        raw = derived_token(token.id, token.purpose.value, settings.secret_key.get_secret_value())
+        subject, message = await render_notification(
+            db,
+            "password_reset",
+            {"link": f"{settings.public_web_url}/reset-password?token={raw}"},
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="password_reset",
+            title=subject,
+            body=message,
+            idempotency_key=f"password_reset:{token.id}",
+        )
         audit(
             db, request, "password.reset_requested", user.id, target_type="user", target_id=user.id
         )
@@ -265,6 +472,36 @@ async def logout(
     )
     await db.commit()
     clear_auth_cookies(response, settings)
+
+
+def require_bearer_transport(auth: AuthContext) -> None:
+    if auth.transport != "bearer":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This endpoint requires bearer authentication."
+        )
+
+
+@router.post("/mobile/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def mobile_logout(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Revokes the session; does not touch cookies (there are none for a
+    bearer session) and is not subject to CSRF (bearer transport). The
+    mobile client must still clear its SecureStore token locally even if
+    this call fails - see ADR 0010."""
+    require_bearer_transport(auth)
+    auth.session.revoked_at = datetime.now(UTC)
+    audit(
+        db,
+        request,
+        "session.revoked",
+        auth.user.id,
+        target_type="session",
+        target_id=auth.session.id,
+    )
+    await db.commit()
 
 
 @router.get("/sessions", response_model=list[SessionResponse])
@@ -324,7 +561,14 @@ async def rotate_session(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     auth.session.revoked_at = datetime.now(UTC)
-    await issue_session(db, response, request, auth.user, settings)
+    # kind must be carried over from the session being rotated, never left to
+    # issue_session's adult default — otherwise a managed Child session rotating
+    # its own session would silently come back as an *adult* session for the same
+    # underlying User row, defeating require_adult_session and every other
+    # kind-based check from that point on.
+    new_session = await issue_session(
+        db, response, request, auth.user, settings, kind=auth.session.kind
+    )
     audit(
         db,
         request,
@@ -334,4 +578,42 @@ async def rotate_session(
         target_id=auth.session.id,
     )
     await db.commit()
-    return user_response(auth.user)
+    return user_response(auth.user, new_session)
+
+
+@router.post("/mobile/sessions/rotate", response_model=MobileSessionResponse)
+async def rotate_mobile_session(
+    request: Request,
+    response: Response,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Old token is revoked and the new one created in the same transaction
+    (one commit below) - there is no window where both are simultaneously
+    valid. If the app is killed before it persists the new token to
+    SecureStore, the user is signed out and must sign in again; that is the
+    intended safe failure mode, not a bug."""
+    require_secure_transport(request, settings)
+    require_bearer_transport(auth)
+    auth.session.revoked_at = datetime.now(UTC)
+    # See the identical comment in rotate_session: kind must carry over from the
+    # session being rotated, not silently reset to issue_mobile_session's adult
+    # default.
+    raw, new_session = await issue_mobile_session(
+        db, request, auth.user, settings, kind=auth.session.kind
+    )
+    audit(
+        db,
+        request,
+        "session.rotated",
+        auth.user.id,
+        target_type="session",
+        target_id=auth.session.id,
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(
+        **user_response(auth.user, new_session).model_dump(), session_token=raw
+    )

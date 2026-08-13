@@ -1,3 +1,16 @@
+"""Creates the very first Platform Owner for a fresh MyKhaya installation, or
+recovers a deployment that has genuinely lost every Platform Administrator.
+
+This is installation/disaster-recovery tooling, not the normal way to add
+administrators. For ongoing administration, a Platform Owner should use
+Control Centre → Administrators → Add Administrator (see
+mykhaya.routers.platform's /administrators/invitations endpoints and
+docs/architecture/administrative-authentication.md) — a proper invitation the
+recipient accepts with their own password, going through the same MFA policy
+as everyone else. This script bypasses all of that by design (there is no
+existing administrator to invite through), which is exactly why it refuses to
+run once any administrator already exists — see the count check below."""
+
 import argparse
 import asyncio
 import getpass

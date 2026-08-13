@@ -1,39 +1,20 @@
 # Git Branching Strategy
 
-MyKhaya uses two permanent branches:
+MyKhaya has exactly two permanent branches:
 
-- `main`: stable production branch only
-- `dev`: active development and integration branch
+- `main`: the latest deployable, stable application. Anthony alone merges to it.
+- `dev`: all active development, fixes, documentation, refactoring and migrations.
 
-## Branch purposes
+Codex works on and may commit to `dev`. It never merges or pushes to `main`, creates release tags, creates GitHub Releases, deploys production, force-pushes, rewrites history or changes repository protection.
 
-`dev` contains features, fixes, documentation, migrations and security work that is still being validated.
+Long-lived feature, release and hotfix branches are not part of the normal workflow. A short-lived branch is created only when Anthony explicitly asks for one.
 
-`main` contains intentionally promoted, production-ready changes that passed quality and security checks.
+## Official workflow
 
-Do not develop directly on `main` during normal work.
+1. Develop and test on `dev`.
+2. Anthony reviews `dev`.
+3. Anthony merges `dev` into `main` when it is ready.
+4. Anthony creates the release tag.
+5. Anthony deploys the tagged `main` revision.
 
-## Working branches
-
-- `feature/*`
-- `fix/*`
-- `security/*`
-- `docs/*`
-- `hotfix/*`
-
-Normal pull requests target `dev`.
-
-Release pull requests target `main`.
-
-Hotfix pull requests target `main`, then the same hotfix must be merged back into `dev`.
-
-## Promotion flow
-
-1. Build and validate work in short-lived branches.
-2. Merge into `dev` through pull requests.
-3. Stabilize and prepare release.
-4. Open release pull request from `dev` to `main`.
-5. Merge after checks and review.
-6. Tag the merge commit with `vMAJOR.MINOR.PATCH`.
-
-`main` should remain the public default branch because it is the stable baseline for external readers and production operations.
+There is no automatic promotion or merge strategy.

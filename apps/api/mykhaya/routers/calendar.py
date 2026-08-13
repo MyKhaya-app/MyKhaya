@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import calendar as month_calendar
 import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -10,19 +9,26 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.calendar_occurrences import (
+    MAX_RANGE_DAYS,
+    expand_occurrences,
+    recurrence_candidate_filter,
+)
+from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.features import require_feature
+from mykhaya.household_permissions import Capability, capabilities_for, require_capability
 from mykhaya.models import (
     CalendarEvent,
     CalendarEventActivity,
     CalendarEventLabel,
     CalendarEventMember,
+    FeatureKey,
     Group,
     HomeCalendar,
     Invitation,
     Membership,
-    RecurrencePattern,
-    Role,
 )
 from mykhaya.schemas import (
     EventActivityResponse,
@@ -30,25 +36,34 @@ from mykhaya.schemas import (
     EventDetailResponse,
     EventLabelCreate,
     EventLabelResponse,
+    EventLabelUpdate,
     EventListResponse,
     EventOccurrence,
     EventUpdate,
     HomeSummaryResponse,
 )
 
-router = APIRouter(prefix="/homes", tags=["calendar"])
-READERS = {Role.owner, Role.administrator, Role.adult_member, Role.member, Role.guest}
-WRITERS = {Role.owner, Role.administrator, Role.adult_member, Role.member}
-LABEL_MANAGERS = {Role.owner, Role.administrator}
-MAX_RANGE_DAYS = 93
+
+async def require_calendar_feature(
+    home_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await require_feature(db, FeatureKey.calendar, home_id)
+
+
+router = APIRouter(
+    prefix="/homes",
+    tags=["calendar"],
+    dependencies=[Depends(require_calendar_feature)],
+)
 SYSTEM_LABELS = [
-    ("Family", "#456B76"),
-    ("School", "#7A5C99"),
-    ("Work", "#476A3A"),
-    ("Appointment", "#A05A2C"),
-    ("Birthday", "#A03F6A"),
-    ("Activity", "#336D9A"),
-    ("Other", "#666666"),
+    ("Family", ColourToken.teal),
+    ("School", ColourToken.purple),
+    ("Work", ColourToken.emerald),
+    ("Appointment", ColourToken.orange),
+    ("Birthday", ColourToken.rose),
+    ("Activity", ColourToken.blue),
+    ("Other", ColourToken.slate),
 ]
 
 
@@ -57,57 +72,6 @@ def _validate_timezone(value: str) -> None:
         ZoneInfo(value)
     except ZoneInfoNotFoundError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid timezone") from exc
-
-
-def _month_increment(value: datetime, step: int) -> datetime:
-    target_month = value.month + step
-    year = value.year + (target_month - 1) // 12
-    month = ((target_month - 1) % 12) + 1
-    day = min(value.day, month_calendar.monthrange(year, month)[1])
-    return value.replace(year=year, month=month, day=day)
-
-
-def _expand_occurrences(
-    event: CalendarEvent, range_start: datetime, range_end: datetime
-) -> list[tuple[datetime, datetime]]:
-    occurrences: list[tuple[datetime, datetime]] = []
-    duration = event.end_at - event.start_at
-    limit_end = min(range_end, range_start + timedelta(days=MAX_RANGE_DAYS))
-
-    if event.recurrence == RecurrencePattern.none:
-        if event.start_at < limit_end and event.end_at > range_start:
-            return [(event.start_at, event.end_at)]
-        return []
-
-    current_start = event.start_at
-    generated = 0
-    while current_start < limit_end:
-        current_end = current_start + duration
-        if current_end > range_start and current_start < limit_end:
-            occurrences.append((current_start, current_end))
-        generated += 1
-        if event.recurrence_count and generated >= event.recurrence_count:
-            break
-        if event.recurrence_until and current_start > event.recurrence_until:
-            break
-
-        if event.recurrence == RecurrencePattern.daily:
-            current_start = current_start + timedelta(days=event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.weekly:
-            current_start = current_start + timedelta(weeks=event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.monthly:
-            current_start = _month_increment(current_start, event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.yearly:
-            current_start = _month_increment(current_start, 12 * event.recurrence_interval)
-        elif event.recurrence == RecurrencePattern.weekdays:
-            next_day = current_start + timedelta(days=1)
-            while next_day.weekday() > 4:
-                next_day = next_day + timedelta(days=1)
-            current_start = next_day
-        else:
-            break
-
-    return occurrences
 
 
 async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCalendar:
@@ -228,7 +192,7 @@ async def labels(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[EventLabelResponse]:
-    await membership_for(home_id, auth, db, READERS)
+    await require_capability(home_id, Capability.calendar_view, auth, db)
     await _ensure_home_calendar(db, home_id)
     rows = (
         await db.scalars(
@@ -250,6 +214,17 @@ async def labels(
     ]
 
 
+async def _label_name_taken(
+    db: AsyncSession, home_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
+) -> bool:
+    query = select(CalendarEventLabel.id).where(
+        CalendarEventLabel.group_id == home_id, CalendarEventLabel.name == name
+    )
+    if exclude_id is not None:
+        query = query.where(CalendarEventLabel.id != exclude_id)
+    return await db.scalar(query) is not None
+
+
 @router.post("/{home_id}/event-labels", response_model=EventLabelResponse, status_code=201)
 async def create_label(
     home_id: uuid.UUID,
@@ -258,10 +233,14 @@ async def create_label(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventLabelResponse:
-    await membership_for(home_id, auth, db, LABEL_MANAGERS)
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    if await _label_name_taken(db, home_id, body.name):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A calendar or category with that name already exists."
+        )
     row = CalendarEventLabel(
         group_id=home_id,
-        name=" ".join(body.name.strip().split()),
+        name=body.name,
         color=body.color,
         is_system=False,
     )
@@ -278,6 +257,46 @@ async def create_label(
     )
 
 
+@router.patch("/{home_id}/event-labels/{label_id}", response_model=EventLabelResponse)
+async def update_label(
+    home_id: uuid.UUID,
+    label_id: uuid.UUID,
+    body: EventLabelUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventLabelResponse:
+    # calendar_edit_all, not calendar_edit_own: a calendar/category is shared
+    # household structure, not any one person's content — the same capability
+    # already gates creating one.
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    label = await db.get(CalendarEventLabel, label_id)
+    if label is None or label.group_id != home_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That calendar or category could not be found."
+        )
+    if body.name is not None and body.name != label.name:
+        if await _label_name_taken(db, home_id, body.name, exclude_id=label.id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "A calendar or category with that name already exists."
+            )
+        label.name = body.name
+    if body.color is not None:
+        label.color = body.color
+    if body.is_active is not None:
+        label.is_active = body.is_active
+    await db.flush()
+    audit(db, request, "calendar.label.updated", auth.user.id, home_id, "label", label.id)
+    await db.commit()
+    return EventLabelResponse(
+        id=label.id,
+        name=label.name,
+        color=label.color,
+        is_active=label.is_active,
+        sort_order=label.sort_order,
+    )
+
+
 @router.get("/{home_id}/events", response_model=EventListResponse)
 async def list_events(
     home_id: uuid.UUID,
@@ -289,7 +308,8 @@ async def list_events(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventListResponse:
-    await membership_for(home_id, auth, db, READERS)
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
     if end_at <= start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid date range")
     if end_at - start_at > timedelta(days=MAX_RANGE_DAYS):
@@ -298,9 +318,19 @@ async def list_events(
     filters = [
         CalendarEvent.group_id == home_id,
         CalendarEvent.deleted_at.is_(None),
-        CalendarEvent.start_at < end_at,
-        CalendarEvent.end_at > start_at,
+        recurrence_candidate_filter(start_at, end_at),
     ]
+    if Capability.calendar_view_all not in capabilities:
+        filters.append(
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
+                ),
+            )
+        )
     if q:
         term = f"%{q.strip()}%"
         filters.append(
@@ -329,7 +359,7 @@ async def list_events(
     for event in events:
         label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        for occurrence_start, occurrence_end in _expand_occurrences(event, start_at, end_at):
+        for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
             items.append(_occurrence(event, occurrence_start, occurrence_end, label, member_ids))
 
     items.sort(key=lambda item: item.start_at)
@@ -344,7 +374,7 @@ async def create_event(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventOccurrence:
-    await membership_for(home_id, auth, db, WRITERS)
+    await require_capability(home_id, Capability.calendar_create, auth, db)
     _validate_timezone(body.timezone)
     if body.end_at <= body.start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")
@@ -418,7 +448,8 @@ async def event_detail(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventDetailResponse:
-    await membership_for(home_id, auth, db, READERS)
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
     event = await db.scalar(
         select(CalendarEvent).where(
             CalendarEvent.id == event_id,
@@ -428,6 +459,15 @@ async def event_detail(
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    if Capability.calendar_view_all not in capabilities:
+        assigned = await db.scalar(
+            select(CalendarEventMember.id).where(
+                CalendarEventMember.event_id == event.id,
+                CalendarEventMember.user_id == auth.user.id,
+            )
+        )
+        if event.created_by != auth.user.id and assigned is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     member_ids = [
@@ -470,7 +510,7 @@ async def update_event(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> EventOccurrence:
-    await membership_for(home_id, auth, db, WRITERS)
+    membership = await require_capability(home_id, Capability.calendar_edit_own, auth, db)
     _validate_timezone(body.timezone)
     if body.end_at <= body.start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")
@@ -486,6 +526,8 @@ async def update_event(
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    if event.created_by != membership.user_id:
+        await require_capability(home_id, Capability.calendar_edit_all, auth, db)
     if event.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
 
@@ -527,9 +569,7 @@ async def update_event(
         .where(CalendarEventMember.event_id == event.id)
         .with_for_update()
     )
-    await db.execute(
-        delete(CalendarEventMember).where(CalendarEventMember.event_id == event.id)
-    )
+    await db.execute(delete(CalendarEventMember).where(CalendarEventMember.event_id == event.id))
     for user_id in requested_members:
         db.add(CalendarEventMember(group_id=home_id, event_id=event.id, user_id=user_id))
 
@@ -549,7 +589,7 @@ async def delete_event(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    await membership_for(home_id, auth, db, WRITERS)
+    await require_capability(home_id, Capability.calendar_delete, auth, db)
     event = await db.scalar(
         select(CalendarEvent)
         .where(
@@ -576,7 +616,26 @@ async def event_activity(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[EventActivityResponse]:
-    await membership_for(home_id, auth, db, READERS)
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
+    if Capability.calendar_view_all not in capabilities:
+        visible = await db.scalar(
+            select(CalendarEvent.id).where(
+                CalendarEvent.id == event_id,
+                CalendarEvent.group_id == home_id,
+                CalendarEvent.deleted_at.is_(None),
+                or_(
+                    CalendarEvent.created_by == auth.user.id,
+                    CalendarEvent.id.in_(
+                        select(CalendarEventMember.event_id).where(
+                            CalendarEventMember.user_id == auth.user.id
+                        )
+                    ),
+                ),
+            )
+        )
+        if visible is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
     rows = (
         await db.scalars(
             select(CalendarEventActivity)
@@ -606,12 +665,25 @@ async def home_summary(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> HomeSummaryResponse:
-    membership = await membership_for(home_id, auth, db, READERS)
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
     now = datetime.now(UTC)
     day_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=UTC)
     day_end = day_start + timedelta(days=1)
 
     labels = await _label_map(db, home_id)
+    visibility_filters = []
+    if Capability.calendar_view_all not in capabilities:
+        visibility_filters.append(
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
+                ),
+            )
+        )
     today_rows = (
         await db.scalars(
             select(CalendarEvent)
@@ -620,6 +692,7 @@ async def home_summary(
                 CalendarEvent.deleted_at.is_(None),
                 CalendarEvent.start_at < day_end,
                 CalendarEvent.end_at > day_start,
+                *visibility_filters,
             )
             .order_by(CalendarEvent.start_at)
             .limit(20)
@@ -643,6 +716,7 @@ async def home_summary(
             CalendarEvent.group_id == home_id,
             CalendarEvent.deleted_at.is_(None),
             CalendarEvent.end_at >= now,
+            *visibility_filters,
         )
         .order_by(CalendarEvent.start_at)
         .limit(1)
@@ -658,7 +732,7 @@ async def home_summary(
         )
 
     pending_count = None
-    if membership.role in LABEL_MANAGERS:
+    if Capability.members_invite in await capabilities_for(db, membership):
         pending_count = await db.scalar(
             select(func.count())
             .select_from(Invitation)
@@ -670,9 +744,9 @@ async def home_summary(
             )
         )
     member_count = await db.scalar(
-        select(func.count()).select_from(Membership).where(
-            Membership.group_id == home_id, Membership.removed_at.is_(None)
-        )
+        select(func.count())
+        .select_from(Membership)
+        .where(Membership.group_id == home_id, Membership.removed_at.is_(None))
     )
     home = await db.get(Group, home_id)
     assert home is not None

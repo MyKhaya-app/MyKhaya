@@ -2,16 +2,71 @@
   --colour-sage: #7d8f7a;
   --colour-sage-dark: #566b58;
   --colour-sage-soft: #e7ebe4;
+  --colour-forest: #3f5442; /* deep shade of sage — the hero/nav signature green */
+  --colour-forest-dark: #33452f;
   --colour-terracotta: #e07a5f;
   --colour-mustard: #e9b44c;
   --colour-cream: #f2ede3;
   --colour-cream-light: #faf7f1;
-  --colour-slate: #1f2933;
+  /* Forest charcoal, not near-black — see docs/design/visual-identity.md.
+     A small, deliberate warmth difference from a neutral grey-black. */
+  --colour-slate: #233028;
   --colour-muted: #62706f;
   --colour-white: #fffefb;
   --colour-danger: #a33e2b;
-  --shadow-card: 0 10px 30px rgb(31 41 51 / 8%);
+
+  /* The one curated colour palette shared by member identity and calendar
+     categories. Muted deliberately, to sit quietly against the warm paper
+     rather than compete with the terracotta accent. Mirrored by hand from
+     packages/design-tokens/src/index.ts (PALETTE_HEX) and
+     mykhaya.colour_palette (Python) — keep all three in sync. See
+     docs/design/visual-identity.md. */
+  --colour-palette-red: #b8433a;
+  --colour-palette-coral: #d97757;
+  --colour-palette-orange: #c97a2e;
+  --colour-palette-amber: #d9a83e;
+  --colour-palette-yellow: #bfa23a;
+  --colour-palette-lime: #7c9a4e;
+  --colour-palette-green: #5c8a54;
+  --colour-palette-emerald: #3f7a5c;
+  --colour-palette-teal: #456b76;
+  --colour-palette-cyan: #2e8b99;
+  --colour-palette-sky: #4c7fa6;
+  --colour-palette-blue: #3d6fb0;
+  --colour-palette-indigo: #5a63a8;
+  --colour-palette-violet: #8b6ba8;
+  --colour-palette-purple: #7a5c99;
+  --colour-palette-pink: #b85c8a;
+  --colour-palette-rose: #a03f6a;
+  --colour-palette-slate: #62706f;
+
+  /* Elevation scale: resting card, raised/pressed, overlay (sheets, menus),
+     and the deep shadow the green hero casts onto the content below it. */
+  --shadow-card: 0 12px 28px rgb(35 48 40 / 7%);
+  --shadow-raised: 0 16px 36px rgb(35 48 40 / 13%);
+  --shadow-overlay: 0 -18px 60px rgb(23 33 43 / 24%);
+  --shadow-hero: 0 20px 40px rgb(51 69 47 / 22%);
+
   --radius-small: 0.625rem;
-  --radius-card: 1rem;
+  --radius-card: 1.375rem;
   --radius-shell: 1.5rem;
+  --radius-hero: 2rem;
+
+  /* Typography: one UI face used everywhere a person has to read quickly
+     (navigation, lists, forms, buttons, settings), and one display face
+     reserved for the single moment per screen that should carry emotional
+     weight — a first-name greeting, never a routine heading. Keeping these
+     separate is deliberate: personality and scan-speed shouldn't trade off
+     against each other. See docs/design/visual-identity.md. */
+  --font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-family-display: ui-rounded, Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-hero: 2.75rem;
+  --font-display: 1.75rem; /* screen-level heading, e.g. "Calendar" */
+  --font-title: 1.375rem; /* section heading, e.g. greeting name */
+  --font-heading: 1.0625rem; /* card/list-group heading */
+  --font-body: 0.9375rem; /* default body text */
+  --font-small: 0.8125rem; /* metadata, captions */
+  --font-micro: 0.6875rem; /* nav labels, badges */
+  --line-tight: 1.08;
+  --line-body: 1.5;
 }

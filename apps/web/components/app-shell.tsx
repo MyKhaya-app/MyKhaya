@@ -1,113 +1,56 @@
 "use client";
+
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { Home, User } from "@mykhaya/shared-types";
+import type { User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
-import { Logo } from "./logo";
+import { AppHeader } from "./app-header";
+import { BottomNav } from "./bottom-nav";
 import { useActiveHome } from "./use-active-home";
-const nav = [
-  ["⌂", "Home", "/home"],
-  ["▣", "Calendar", "/calendar"],
-  ["☑", "Tasks", "/tasks"],
-  ["🛒", "Shopping", "/shopping"],
-  ["♨", "Meals", "/meals"],
-  ["◇", "Plans", "/plans"],
-  ["♧", "Wish Lists", "/wish-lists"],
-  ["♙", "People", "/people"],
-  ["♢", "Notifications", "/notifications"],
-  ["⚙", "Settings", "/settings"],
-] as const;
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const path = usePathname(),
-    router = useRouter();
+import { useUserUpdatedListener } from "./user-events";
+
+export function AppShell({
+  children,
+  hero,
+}: {
+  children: React.ReactNode;
+  /** Optional content that visually continues the header's green field
+   *  (e.g. the Home screen's greeting). When present, the header itself
+   *  renders flush (square bottom) and this slot carries the rounded
+   *  bottom edge and shadow instead, so the two read as one block. */
+  hero?: React.ReactNode;
+}) {
+  const path = usePathname();
+  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const { homes, activeHome, activeHomeId, setActiveHomeId, loading } =
-    useActiveHome();
+  const { homes, activeHome, setActiveHomeId, loading } = useActiveHome();
+
   useEffect(() => {
     api
       .me()
-      .then((u) => {
-        setUser(u);
-      })
+      .then(setUser)
       .catch(() => router.replace("/login"));
   }, [router]);
+
   useEffect(() => {
-    if (!loading && !homes.length && path !== "/onboarding") {
+    if (!loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
-    }
   }, [homes, loading, path, router]);
-  async function logout() {
-    await api.post("/auth/logout", {});
-    router.push("/login");
-  }
+
+  useUserUpdatedListener(setUser);
+
   return (
     <div className="app-shell">
-      <aside>
-        <Logo />
-        <nav aria-label="Main navigation">
-          {nav.map(([icon, label, url]) => (
-            <Link
-              key={url}
-              href={url}
-              className={
-                path === url || path.startsWith(`${url}/`) ? "active" : ""
-              }
-            >
-              <span aria-hidden="true">{icon}</span>
-              {label}
-            </Link>
-          ))}
-        </nav>
-        <div className="home-switch">
-          <div className="avatars" aria-hidden="true">
-            <i>{user?.display_name?.[0] ?? "?"}</i>
-            <i>+</i>
-          </div>
-          <strong>{activeHome?.name ?? "Your Home"}</strong>
-          {homes.length > 1 && (
-            <label className="home-select">
-              Active Home
-              <select
-                value={activeHomeId ?? ""}
-                onChange={(event) => setActiveHomeId(event.target.value)}
-              >
-                {homes.map((home: Home) => (
-                  <option key={home.id} value={home.id}>
-                    {home.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <button className="link-button" onClick={logout}>
-            Sign out
-          </button>
-        </div>
-      </aside>
-      <div className="app-main">
-        <header>
-          <button className="mobile-logo" aria-label="Open menu">
-            <Logo compact />
-          </button>
-          <div className="search" aria-label="Search is coming soon">
-            Search your Home… <span>⌕</span>
-          </div>
-          <span className="hello">{user?.display_name ?? "Welcome"}</span>
-        </header>
-        {children}
-        <nav className="mobile-nav" aria-label="Mobile navigation">
-          {nav.slice(0, 4).map(([icon, label, url]) => (
-            <Link key={url} href={url} className={path === url ? "active" : ""}>
-              <span>{icon}</span>
-              {label}
-            </Link>
-          ))}
-          <Link href="/settings">
-            <span>•••</span>More
-          </Link>
-        </nav>
-      </div>
+      <AppHeader
+        user={user}
+        homes={homes}
+        activeHome={activeHome}
+        onSwitchHome={setActiveHomeId}
+        flush={Boolean(hero)}
+      />
+      {hero}
+      <main className="app-main">{children}</main>
+      <BottomNav principalType={user?.principal_type} />
     </div>
   );
 }
