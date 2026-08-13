@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, update
 from test_platform_control_centre import (  # noqa: F401
     ADMIN_ORIGIN,
+    PASSWORD,
     admin_client,
     admin_factory,
     login,
@@ -698,3 +699,117 @@ async def test_recovery_codes_and_totp_secret_are_never_logged_in_audit_metadata
             assert secret not in blob
             for code in codes:
                 assert code not in blob
+
+
+def test_webauthn_credential_id_round_trips_through_options_instead_of_utf8_encoding() -> None:
+    """Regression for the actual root cause behind Bitwarden reporting 'No
+    passkeys found for this application' for an account with a genuinely
+    registered passkey: AdminWebAuthnCredential.credential_id is stored as a
+    base64url *string*. build_registration_options/build_authentication_options
+    must decode it back to the original raw bytes with base64url_to_bytes — a
+    previous version instead did `credential_id.encode("utf-8")`, which
+    silently produces a different, meaningless byte sequence that no real
+    authenticator can ever match, so the browser is sent an allowCredentials/
+    excludeCredentials list corresponding to no real credential."""
+    import json
+
+    from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+
+    from mykhaya.config import get_settings
+    from mykhaya.platform_mfa import build_authentication_options, build_registration_options
+
+    settings = get_settings()
+    raw_credential_id = b"\x00\x01\xff\xfe\x10\x20some-real-credential-id-bytes"
+    stored_credential_id = bytes_to_base64url(raw_credential_id)
+
+    reg_json, _ = build_registration_options(
+        settings, uuid.uuid4(), "owner@example.com", "Owner", [stored_credential_id]
+    )
+    reg_excluded = json.loads(reg_json)["excludeCredentials"][0]["id"]
+    assert base64url_to_bytes(reg_excluded) == raw_credential_id
+
+    auth_json, _ = build_authentication_options(settings, [stored_credential_id])
+    auth_allowed = json.loads(auth_json)["allowCredentials"][0]["id"]
+    assert base64url_to_bytes(auth_allowed) == raw_credential_id
+
+
+@pytest.mark.asyncio
+async def test_first_totp_factor_atomically_issues_usable_recovery_codes(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """Regression for an administrator being left with a completed MFA
+    enrollment and zero recovery codes: previously the frontend made a
+    *separate* follow-up call to generate recovery codes after enrollment
+    completed, which could be interrupted (closed tab, dropped network) and
+    leave mfa_enrolled=True with nothing to recover with. The codes must now
+    come back atomically on the same response that completes the first
+    factor."""
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    setup = await unsafe(admin_client, "POST", "/api/v1/platform/auth/mfa/totp/setup")
+    secret = setup.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+    verify = await unsafe(
+        admin_client, "POST", "/api/v1/platform/auth/mfa/totp/verify", json={"code": code}
+    )
+    assert verify.status_code == 200, verify.text
+    codes = verify.json()["recovery_codes"]
+    assert codes is not None
+    assert len(codes) == 10
+
+    async with new_admin_client() as second:
+        await login(second, admin)
+        used = await unsafe(
+            second,
+            "POST",
+            "/api/v1/platform/auth/mfa/recovery-codes/login-verify",
+            json={"code": codes[0]},
+        )
+        assert used.status_code == 200
+        assert used.json()["session_status"] == "full"
+
+    # Adding a *second* factor for an already-enrolled administrator must not
+    # silently regenerate (and thus invalidate) the codes they already saved.
+    async with SessionFactory() as db:
+        await db.execute(
+            update(PlatformSession)
+            .where(PlatformSession.administrator_id == admin.id)
+            .values(authenticated_at=datetime.now(UTC))
+        )
+        await db.commit()
+    options = await unsafe(
+        admin_client, "POST", "/api/v1/platform/auth/mfa/webauthn/register/options"
+    )
+    assert options.status_code == 200
+    status_after = await admin_client.get("/api/v1/platform/auth/mfa/recovery-codes/status")
+    assert status_after.json()["remaining"] == 9
+
+
+@pytest.mark.asyncio
+async def test_login_only_advertises_second_factors_that_actually_exist(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """Regression for the login page always rendering 'use an authenticator
+    app instead' / 'use a recovery code instead' regardless of whether either
+    was ever set up for the account — safe to disclose here since the caller
+    has already proven the account's password."""
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    await _enable_totp(admin_client)
+
+    async with new_admin_client() as second:
+        result = await second.post(
+            "/api/v1/platform/auth/login",
+            json={"email": admin.email, "password": PASSWORD},
+        )
+        assert result.status_code == 200
+        actor = result.json()
+        assert actor["session_status"] == "pending_mfa"
+        # _enable_totp completes the administrator's first factor, which now
+        # atomically issues recovery codes too (see
+        # test_first_totp_factor_atomically_issues_usable_recovery_codes) — so
+        # both are genuinely available, and passkey correctly is not.
+        assert set(actor["available_factors"]) == {"totp", "recovery_code"}
+        assert "passkey" not in actor["available_factors"]

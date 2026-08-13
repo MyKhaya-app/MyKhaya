@@ -13,8 +13,6 @@ import type { PlatformActor } from "@/components/platform-types";
 
 type Stage = "loading" | "choose" | "passkey" | "totp" | "recovery-codes" | "done";
 
-const RECOVERY_CODE_REASON = "Recovery codes generated at initial MFA enrollment.";
-
 export default function SetupMfa() {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>("loading");
@@ -35,17 +33,17 @@ export default function SetupMfa() {
       .catch(() => router.replace("/login"));
   }, [router]);
 
-  async function afterFirstFactorEnrolled() {
-    try {
-      const result = await platformApi.post<{ codes: string[] }>("/auth/mfa/recovery-codes", {
-        reason: RECOVERY_CODE_REASON,
-        confirmed: true,
-      });
-      setRecoveryCodes(result.codes);
+  // The backend generates recovery codes atomically with whichever request
+  // completes the administrator's *first* MFA factor (see
+  // routers.platform._issue_recovery_codes_if_first_factor) and returns them
+  // on that same response — there is no separate follow-up call that could
+  // be interrupted (closed tab, dropped network) and leave the account fully
+  // "MFA enrolled" with zero recovery codes.
+  function afterFirstFactorEnrolled(actor: PlatformActor) {
+    if (actor.recovery_codes && actor.recovery_codes.length > 0) {
+      setRecoveryCodes(actor.recovery_codes);
       setStage("recovery-codes");
-    } catch {
-      // Enrollment itself already succeeded; recovery codes can be generated
-      // later from the Security page. Don't block getting into the app.
+    } else {
       setStage("done");
     }
   }
@@ -62,11 +60,11 @@ export default function SetupMfa() {
       const credential = await startRegistration({
         optionsJSON: JSON.parse(options.options_json) as PublicKeyCredentialCreationOptionsJSON,
       });
-      await platformApi.post<PlatformActor>("/auth/mfa/webauthn/register/verify", {
+      const actor = await platformApi.post<PlatformActor>("/auth/mfa/webauthn/register/verify", {
         label: "My passkey",
         credential_json: JSON.stringify(credential),
       });
-      await afterFirstFactorEnrolled();
+      afterFirstFactorEnrolled(actor);
     } catch (reason) {
       setError(
         reason instanceof ApiError
@@ -101,8 +99,10 @@ export default function SetupMfa() {
     setError("");
     const data = new FormData(event.currentTarget);
     try {
-      await platformApi.post<PlatformActor>("/auth/mfa/totp/verify", { code: data.get("code") });
-      await afterFirstFactorEnrolled();
+      const actor = await platformApi.post<PlatformActor>("/auth/mfa/totp/verify", {
+        code: data.get("code"),
+      });
+      afterFirstFactorEnrolled(actor);
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : "That code is not correct.");
     } finally {

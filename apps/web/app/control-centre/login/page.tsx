@@ -12,6 +12,7 @@ import type { PlatformActor } from "@/components/platform-types";
 
 type Step = "password" | "verify";
 type VerifyMethod = "passkey" | "totp" | "recovery";
+type Factor = "passkey" | "totp" | "recovery_code";
 
 export default function PlatformLogin() {
   const router = useRouter();
@@ -19,12 +20,18 @@ export default function PlatformLogin() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [method, setMethod] = useState<VerifyMethod>("passkey");
+  const [availableFactors, setAvailableFactors] = useState<Factor[]>([]);
 
   function proceed(actor: PlatformActor) {
     const destination = resolveLoginDestination(actor.session_status);
     if (destination === "home") router.replace("/");
     else if (destination === "setup-mfa") router.replace("/setup-mfa");
-    else setStep("verify");
+    else {
+      const factors = actor.available_factors ?? [];
+      setAvailableFactors(factors);
+      setMethod(factors.includes("passkey") ? "passkey" : "totp");
+      setStep("verify");
+    }
   }
 
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
@@ -129,9 +136,11 @@ export default function PlatformLogin() {
               <button onClick={signInWithPasskey} disabled={busy}>
                 {busy ? "Waiting for your passkey…" : "Sign in with passkey"}
               </button>
-              <button type="button" className="tertiary" onClick={() => setMethod("totp")}>
-                Use an authenticator app instead
-              </button>
+              {availableFactors.includes("totp") && (
+                <button type="button" className="tertiary" onClick={() => setMethod("totp")}>
+                  Use an authenticator app instead
+                </button>
+              )}
             </div>
           )}
 
@@ -151,9 +160,11 @@ export default function PlatformLogin() {
                 />
               </label>
               <button disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
-              <button type="button" className="tertiary" onClick={() => setMethod("passkey")}>
-                Use my passkey instead
-              </button>
+              {availableFactors.includes("passkey") && (
+                <button type="button" className="tertiary" onClick={() => setMethod("passkey")}>
+                  Use my passkey instead
+                </button>
+              )}
             </form>
           )}
 
@@ -174,7 +185,7 @@ export default function PlatformLogin() {
             </form>
           )}
 
-          {method !== "recovery" && (
+          {method !== "recovery" && availableFactors.includes("recovery_code") && (
             <p className="mfa-recovery-link">
               <button type="button" className="link-button" onClick={() => setMethod("recovery")}>
                 Use a recovery code instead

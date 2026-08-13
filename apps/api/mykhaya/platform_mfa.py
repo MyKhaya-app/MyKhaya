@@ -25,7 +25,7 @@ from webauthn import (
     verify_authentication_response,
     verify_registration_response,
 )
-from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
@@ -168,6 +168,14 @@ async def pop_webauthn_challenge(
 
 # ---------------------------------------------------------------------------
 # WebAuthn registration (adding a new passkey)
+#
+# AdminWebAuthnCredential.credential_id is stored as a base64url *string*
+# (bytes_to_base64url of the raw credential ID). Every PublicKeyCredentialDescriptor
+# built from a stored credential_id must decode it back with base64url_to_bytes —
+# `.encode("utf-8")` on the string is a different, meaningless byte sequence that no
+# authenticator will ever match, and previously made passkey sign-in silently
+# unusable (the browser reports "no passkeys found" because the allowCredentials/
+# excludeCredentials list it was given doesn't correspond to any real credential).
 # ---------------------------------------------------------------------------
 
 
@@ -186,7 +194,7 @@ def build_registration_options(
         user_name=email,
         user_display_name=display_name,
         exclude_credentials=[
-            PublicKeyCredentialDescriptor(id=credential_id.encode("utf-8"))
+            PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
             for credential_id in existing_credential_ids
         ],
         authenticator_selection=AuthenticatorSelectionCriteria(
@@ -240,7 +248,7 @@ def build_authentication_options(
     options: PublicKeyCredentialRequestOptions = generate_authentication_options(
         rp_id=settings.admin_webauthn_rp_id,
         allow_credentials=[
-            PublicKeyCredentialDescriptor(id=credential_id.encode("utf-8"))
+            PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
             for credential_id in allowed_credential_ids
         ],
         user_verification=UserVerificationRequirement.PREFERRED,

@@ -14,6 +14,15 @@ export type PlatformActor = {
   role: string;
   mfa_enrolled: boolean;
   session_status: PlatformSessionStatus;
+  // Only populated at session_status "pending_mfa" — the fallback methods
+  // that genuinely exist for this account, so the login page never offers a
+  // method that isn't actually set up. Optional here only because existing
+  // callers construct PlatformActor values for other session statuses,
+  // where the backend always sends an empty array.
+  available_factors?: ("passkey" | "totp" | "recovery_code")[];
+  // Only populated once, atomically with the response that completes this
+  // administrator's first MFA factor — never retrievable again afterwards.
+  recovery_codes?: string[] | null;
 };
 
 export type WebAuthnCredential = {

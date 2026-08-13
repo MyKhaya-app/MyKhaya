@@ -176,7 +176,13 @@ SETTINGS = (PlatformRole.owner,)
 OWNER_MEMBERSHIP_LOCK_KEY = 0x4D794B68_4F776E72  # "MyKh" "Ownr" as hex, arbitrary
 
 
-def actor_response(admin: PlatformAdministrator, session_status: str) -> PlatformActorResponse:
+def actor_response(
+    admin: PlatformAdministrator,
+    session_status: str,
+    *,
+    available_factors: list[str] | None = None,
+    recovery_codes: list[str] | None = None,
+) -> PlatformActorResponse:
     return PlatformActorResponse(
         id=admin.id,
         email=admin.email,
@@ -184,7 +190,61 @@ def actor_response(admin: PlatformAdministrator, session_status: str) -> Platfor
         role=admin.role,
         mfa_enrolled=admin.mfa_enrolled,
         session_status=session_status,
+        available_factors=available_factors or [],
+        recovery_codes=recovery_codes,
     )
+
+
+async def _available_factors(db: AsyncSession, admin: PlatformAdministrator) -> list[str]:
+    factors: list[str] = []
+    if await db.scalar(
+        select(AdminWebAuthnCredential.id).where(
+            AdminWebAuthnCredential.administrator_id == admin.id
+        )
+    ):
+        factors.append("passkey")
+    if admin.totp_enabled:
+        factors.append("totp")
+    if await db.scalar(
+        select(AdminRecoveryCode.id).where(
+            AdminRecoveryCode.administrator_id == admin.id,
+            AdminRecoveryCode.used_at.is_(None),
+        )
+    ):
+        factors.append("recovery_code")
+    return factors
+
+
+async def _issue_recovery_codes_if_first_factor(
+    db: AsyncSession, settings: Settings, admin: PlatformAdministrator, was_enrolled: bool
+) -> list[str] | None:
+    """Generates this administrator's recovery codes in the same transaction
+    as their *first* completed MFA factor, rather than relying on a second,
+    separate frontend call after the fact — a passkey/TOTP registration that
+    completes here can never again leave an administrator with a "fully
+    enrolled" account and zero recovery codes, even if the browser tab closes
+    or the network drops immediately afterwards. Only fires once: an
+    administrator adding a second/third factor, or one who already holds
+    unused codes, is left untouched (regeneration is still available
+    separately via /auth/mfa/recovery-codes)."""
+    if was_enrolled:
+        return None
+    has_codes = await db.scalar(
+        select(AdminRecoveryCode.id).where(
+            AdminRecoveryCode.administrator_id == admin.id,
+            AdminRecoveryCode.used_at.is_(None),
+        )
+    )
+    if has_codes:
+        return None
+    codes = generate_recovery_codes()
+    for code in codes:
+        db.add(
+            AdminRecoveryCode(
+                administrator_id=admin.id, code_hash=hash_recovery_code(settings, code)
+            )
+        )
+    return codes
 
 
 @router.post("/auth/login", response_model=PlatformActorResponse)
@@ -242,7 +302,12 @@ async def login(
     )
     await db.commit()
     set_admin_cookies(response, raw, csrf, settings)
-    return actor_response(admin, session_status.value)
+    factors = (
+        await _available_factors(db, admin)
+        if session_status == PlatformSessionStatus.pending_mfa
+        else []
+    )
+    return actor_response(admin, session_status.value, available_factors=factors)
 
 
 @router.get("/auth/me", response_model=PlatformActorResponse)
@@ -509,6 +574,7 @@ async def verify_totp_setup(
     admin.totp_enabled = True
     admin.totp_verified_at = datetime.now(UTC)
     admin.mfa_enrolled = True
+    recovery_codes = await _issue_recovery_codes_if_first_factor(db, settings, admin, was_enrolled)
     new_context = await _complete_login_step(
         db,
         request,
@@ -517,7 +583,17 @@ async def verify_totp_setup(
         settings,
         "administrator.mfa_enrolled" if not was_enrolled else "administrator.totp_enabled",
     )
-    return actor_response(admin, new_context.session.status.value)
+    if recovery_codes is not None:
+        platform_audit(
+            db,
+            request,
+            new_context,
+            "administrator.recovery_codes_generated",
+            "administrator",
+            admin.id,
+        )
+        await db.commit()
+    return actor_response(admin, new_context.session.status.value, recovery_codes=recovery_codes)
 
 
 @router.post("/auth/mfa/totp/disable", status_code=status.HTTP_204_NO_CONTENT)
@@ -650,6 +726,7 @@ async def webauthn_register_verify(
         )
     )
     admin.mfa_enrolled = True
+    recovery_codes = await _issue_recovery_codes_if_first_factor(db, settings, admin, was_enrolled)
     new_context = await _complete_login_step(
         db,
         request,
@@ -658,7 +735,17 @@ async def webauthn_register_verify(
         settings,
         "administrator.mfa_enrolled" if not was_enrolled else "administrator.passkey_registered",
     )
-    return actor_response(admin, new_context.session.status.value)
+    if recovery_codes is not None:
+        platform_audit(
+            db,
+            request,
+            new_context,
+            "administrator.recovery_codes_generated",
+            "administrator",
+            admin.id,
+        )
+        await db.commit()
+    return actor_response(admin, new_context.session.status.value, recovery_codes=recovery_codes)
 
 
 @router.get("/auth/mfa/webauthn/credentials", response_model=list[WebAuthnCredentialResponse])

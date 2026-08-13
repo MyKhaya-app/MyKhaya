@@ -31,6 +31,18 @@ class PlatformActorResponse(BaseModel):
     # enrollment endpoints are reachable until one is set up. The frontend
     # branches its post-login screen on this field.
     session_status: Literal["full", "pending_mfa", "mfa_setup_required"]
+    # Only populated at "pending_mfa" (i.e. after password verification for
+    # this exact account) — the login page uses this to show only the
+    # fallback methods that genuinely exist, instead of always rendering
+    # "use an authenticator app" / "use a recovery code" regardless of
+    # whether either was ever set up. Safe to disclose here: the caller has
+    # already proven the password for this specific account, so this isn't
+    # an account-enumeration channel.
+    available_factors: list[Literal["passkey", "totp", "recovery_code"]] = []
+    # Only populated once, atomically with the response that completes an
+    # administrator's *first* MFA factor — never retrievable again afterwards.
+    # See routers.platform._issue_recovery_codes_if_first_factor.
+    recovery_codes: list[str] | None = None
 
 
 class SensitiveActionRequest(StrictModel):
