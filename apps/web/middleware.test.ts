@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-import { middleware } from "./middleware";
+import { config, middleware } from "./middleware";
 
 describe("hostname security boundaries", () => {
   it("rewrites the admin hostname to the internal Control Centre route", () => {
@@ -66,5 +66,26 @@ describe("hostname security boundaries", () => {
         }),
       ).status,
     ).toBe(404);
+  });
+});
+
+describe("middleware matcher", () => {
+  const [matcher] = config.matcher;
+  if (!matcher) throw new Error("middleware config.matcher is unexpectedly empty");
+  const matcherRegExp = new RegExp(matcher.source);
+
+  it("excludes the transactional email logo so it's served as a plain static file", () => {
+    // A request that runs through this middleware for that path gets a
+    // Content-Security-Policy response header set on it — harmless to a
+    // browser, but pointless overhead on a plain image fetch, and one more
+    // thing that could go wrong between an external mail client's image
+    // fetch and Next.js's own static-file serving for public/. Excluded the
+    // same way favicon.ico already is.
+    expect(matcherRegExp.test("/mykhaya-email-logo.png")).toBe(false);
+  });
+
+  it("still applies to ordinary application routes", () => {
+    expect(matcherRegExp.test("/control-centre/users")).toBe(true);
+    expect(matcherRegExp.test("/")).toBe(true);
   });
 });

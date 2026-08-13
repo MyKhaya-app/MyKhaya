@@ -61,6 +61,43 @@ def test_logo_url_is_https_and_public_not_relative_or_local() -> None:
     assert "api" not in url.split("/")[2]
 
 
+def test_logo_img_tag_is_absolute_https_with_correct_alt_and_explicit_size() -> None:
+    """Regression for the logo rendering as a broken image in Outlook: the
+    <img> tag itself must be a plain, email-safe element — an absolute
+    HTTPS src (not protocol-relative, not a path), the exact alt text, and
+    both HTML-attribute and CSS sizing (Outlook's Word rendering engine is
+    known to ignore CSS-only sizing on images, so the HTML attributes are
+    the authoritative fallback, not decoration)."""
+    html = render_html(_settings(), subject="Subject", body_text="Body.")
+    assert '<img src="https://mykhaya.app/mykhaya-email-logo.png"' in html
+    assert 'alt="MyKhaya"' in html
+    assert 'width="56" height="58"' in html
+    assert "display:block" in html
+
+
+def test_production_style_settings_never_emit_an_internal_or_local_logo_host() -> None:
+    """Same check as the URL-construction test above, but against a fully
+    production-shaped Settings object (environment=production, real
+    trusted-host/CORS/MFA validation all satisfied) rather than the
+    permissive development defaults — proves the production configuration
+    path, not just the function in isolation, can't leak a
+    localhost/internal/admin/API host into the logo src."""
+    settings = _settings(
+        environment="production",
+        admin_url="https://admin.mykhaya.app",
+        status_url="https://status.mykhaya.app",
+        trusted_hosts=["mykhaya.app", "admin.mykhaya.app", "status.mykhaya.app"],
+        cors_origins=["https://admin.mykhaya.app"],
+        cookie_secure=True,
+        admin_allowed_networks=["10.0.0.0/8"],
+        admin_mfa_required=True,
+    )
+    url = logo_url(settings)
+    assert url == "https://mykhaya.app/mykhaya-email-logo.png"
+    for forbidden in ("localhost", "127.0.0.1", "api.mykhaya.app", "admin.mykhaya.app", "://web"):
+        assert forbidden not in url
+
+
 def test_malicious_display_name_cannot_inject_html() -> None:
     html = render_email_html(
         _settings(),
