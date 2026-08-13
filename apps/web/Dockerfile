@@ -26,10 +26,14 @@ COPY VERSION ./VERSION
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mykhaya/mobile lint && pnpm --filter @mykhaya/mobile typecheck
 
-FROM mcr.microsoft.com/playwright:v1.54.2-noble AS e2e
+FROM mcr.microsoft.com/playwright:v1.55.1-noble AS e2e
 WORKDIR /workspace
-COPY --from=builder /workspace /workspace
+COPY --from=builder --chown=pwuser:pwuser /workspace /workspace
 WORKDIR /workspace/apps/web
+# pwuser is the non-root account Microsoft's Playwright image ships specifically
+# for this — browser sandboxing keeps working under it (unlike an arbitrary
+# non-root user, which typically needs --no-sandbox or extra capabilities).
+USER pwuser
 CMD ["./node_modules/.bin/playwright", "test"]
 
 FROM node:22.17.0-alpine3.22 AS runtime
