@@ -64,6 +64,7 @@ function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
     can_manage_billing: true,
     has_stripe_customer: false,
     stripe_billing_available: true,
+    calendar_usage: { count: 1, limit: 1, over_limit: false },
     ...overrides,
   };
 }

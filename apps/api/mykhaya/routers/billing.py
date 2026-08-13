@@ -53,6 +53,7 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
 from mykhaya.entitlements import (
+    calendar_usage,
     effective_plan,
     ensure_home_subscription,
     get_home_subscription,
@@ -202,6 +203,7 @@ async def billing_status(
         can_manage_billing=Capability.billing_manage in capabilities,
         has_stripe_customer=bool(subscription and subscription.external_customer_id),
         stripe_billing_available=resolve_stripe_config(settings).configured,
+        calendar_usage=await calendar_usage(db, group_id),
     )
 
 

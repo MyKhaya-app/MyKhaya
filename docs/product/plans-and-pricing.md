@@ -8,7 +8,7 @@ The default for every new Home. One Home, one calendar. Fully and indefinitely u
 
 ## Family — £3.99/month or £39/year
 
-Full household access: unlimited calendars per Home (in practice, whatever a future multi-calendar feature allows), and every module gated behind the `family` plan as those modules ship (Lists, Chores, Notes, Wish Lists are defined as Family-gated capabilities already, ready for when those modules exist). Billed per Home, not per person — everyone in the Home benefits once the Home is on Family, regardless of who pays. As of Phase 3 this is a real, configured Stripe Price (in Stripe test mode) rather than only a documented intention — see below. The *actual* amount charged always comes from Stripe at runtime (`mykhaya.billing.pricing`), never from this document or any code constant, so a future price change is a Stripe Dashboard + two environment variables change, not a code change.
+Full household access: unlimited calendars per Home — a real, usable feature as of Phase 6 (see below) — and every module gated behind the `family` plan as those modules ship (Lists, Chores, Notes, Wish Lists are defined as Family-gated capabilities already, ready for when those modules exist). Billed per Home, not per person — everyone in the Home benefits once the Home is on Family, regardless of who pays. As of Phase 3 this is a real, configured Stripe Price (in Stripe test mode) rather than only a documented intention — see below. The *actual* amount charged always comes from Stripe at runtime (`mykhaya.billing.pricing`), never from this document or any code constant, so a future price change is a Stripe Dashboard + two environment variables change, not a code change.
 
 ## Complimentary Family access
 
@@ -85,3 +85,19 @@ MyKhaya's public homepage now has a pricing section, and a new visitor gets to c
 **One subscription for the whole Home, never wording that suggests a per-person price.** This is said plainly wherever Family is described, on the homepage and in signup alike.
 
 **What Phase 5 still does not include**: Apple/Google in-app billing, promotional or discount codes, any plan beyond Free and Family, and live (real-money) billing — all remain deliberately out of scope for a later phase.
+
+## Phase 6: what Free and Family actually mean for Calendar
+
+Free and Family calendars now genuinely behave differently — this was previously just a number on a pricing page.
+
+**Free — one calendar, fully usable.** A Free Home has exactly one calendar and can use it completely normally: create, edit, delete events, invite members, set reminders — nothing about it feels limited or trial-like. Free was never meant to feel broken, and it doesn't.
+
+**Family — add calendars as you need them.** A Family Home can create as many calendars as it wants — one for the household, one for work, one for the kids' activities, whatever suits. Every calendar behaves identically; there's no "main" calendar that's more capable than the others.
+
+**Trying to add a second calendar on Free** shows a plain explanation — "Multiple calendars are included with MyKhaya Family" — with a link to see the Family plan. No price is shown there; that lives on Plan & Billing, where it's always current.
+
+**If a Home downgrades from Family to Free while it has more than one calendar** (a subscription ending, complimentary access expiring), nothing is deleted. Every calendar and every event stays exactly where it was. One calendar — the household's original one — keeps working normally. The others become read-only: still fully visible, still showing all their events, but new events can't be added to them and existing ones can't be changed or removed individually, until either the Home upgrades back to Family or the calendars are removed outright (which the Home can always choose to do). Settings → Plan & Billing explains this plainly if it applies: "Your Home has 3 calendars. The Free plan includes 1. Your calendars and events are safe. Upgrade to Family to restore full access to all calendars."
+
+**Upgrading back to Family restores everything immediately** — every previously-read-only calendar becomes fully usable again the moment the upgrade takes effect, automatically, with nothing to request or wait for.
+
+**None of this ever affects signing in, viewing your Home, managing your account, or security settings** — a Home over its Free calendar limit is never locked out of anything except adding to or editing the calendars beyond its plan.

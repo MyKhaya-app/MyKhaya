@@ -6,6 +6,7 @@ function event(overrides: Partial<EventOccurrence>): EventOccurrence {
   return {
     occurrence_id: crypto.randomUUID(),
     event_id: crypto.randomUUID(),
+    calendar_id: crypto.randomUUID(),
     title: "Event",
     start_at: "2026-07-31T10:00:00+00:00",
     end_at: "2026-07-31T11:00:00+00:00",

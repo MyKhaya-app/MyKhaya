@@ -26,12 +26,19 @@ export class MyKhayaClient {
       cache: "no-store",
     });
     if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as {
-        detail?: string;
-      } | null;
+      const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+      const detail = body?.detail;
+      if (detail && typeof detail === "object" && "message" in detail) {
+        const { code, message, ...metadata } = detail as {
+          code?: string;
+          message: string;
+          [key: string]: unknown;
+        };
+        throw new ApiError(response.status, message, code, metadata);
+      }
       throw new ApiError(
         response.status,
-        body?.detail ?? "Something went wrong. Please try again.",
+        typeof detail === "string" ? detail : "Something went wrong. Please try again.",
       );
     }
     return response.status === 204
@@ -255,6 +262,24 @@ export class MyKhayaClient {
     this.request<void>(
       `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
       { method: "DELETE" },
+    );
+  listCalendars = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").CalendarListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/calendars`,
+    );
+  createCalendar = (homeId: string, body: { name: string; timezone?: string | null }) =>
+    this.request<import("@mykhaya/shared-types").HomeCalendar>(
+      `/homes/${encodeURIComponent(homeId)}/calendars`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  deleteCalendar = (
+    homeId: string,
+    calendarId: string,
+    body: { reason?: string; confirmed: true },
+  ) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/calendars/${encodeURIComponent(calendarId)}`,
+      { method: "DELETE", body: JSON.stringify(body) },
     );
   eventDetail = (homeId: string, eventId: string) =>
     this.request<import("@mykhaya/shared-types").EventDetailResponse>(

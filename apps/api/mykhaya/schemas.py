@@ -356,6 +356,56 @@ class RegistrationResponse(MessageResponse):
     verification_required: bool
 
 
+class HomeCalendarCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+
+class HomeCalendarDeleteRequest(StrictModel):
+    # Optional — this is a routine household action, not an operator action.
+    # See MemberRelationshipUpdate.reason.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class HomeCalendarResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    timezone: str
+    is_primary: bool
+    # "normal": full create/edit/delete access on Free or Family alike.
+    # "read_only_due_to_plan": preserved after a downgrade left the Home with
+    # more calendars than its plan allows — viewable, but its events can't be
+    # created/edited/deleted, and no further calendar can be created, until
+    # either the Home returns to Family or enough calendars are voluntarily
+    # deleted to fall back within the limit. Derived fresh on every read from
+    # current entitlement + current calendar count — never a persisted flag.
+    # See docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture.
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
+    created_at: datetime
+
+
+class CalendarListResponse(BaseModel):
+    items: list[HomeCalendarResponse]
+    limit: int | None
+
+
+class CalendarUsageResponse(BaseModel):
+    """How many calendars a Home currently has vs. its plan's
+    calendar.max_calendars — used by both the Platform Control Centre's
+    commercial-detail diagnostics and the household Plan & Billing page's
+    over-limit messaging, so the two never compute this independently."""
+
+    count: int
+    limit: int | None
+    over_limit: bool
+
+
 class EventLabelCreate(StrictModel):
     name: str = Field(min_length=1, max_length=40)
     color: ColourToken = ColourToken.teal
@@ -394,6 +444,12 @@ class EventCreate(StrictModel):
     description: str | None = Field(default=None, max_length=2000)
     location_text: str | None = Field(default=None, max_length=200)
     label_id: uuid.UUID | None = None
+    # Which HomeCalendar this event belongs to. Omitted (the common,
+    # single-calendar case) defaults to the Home's primary calendar, exactly
+    # as before this field existed. A Family Home with additional calendars
+    # may target one explicitly; targeting a calendar the plan has left
+    # read-only (see HomeCalendarResponse.commercial_access) is rejected.
+    calendar_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
     recurrence: RecurrencePattern = RecurrencePattern.none
@@ -423,6 +479,7 @@ class EventUpdate(StrictModel):
 class EventOccurrence(BaseModel):
     occurrence_id: str
     event_id: uuid.UUID
+    calendar_id: uuid.UUID
     title: str
     start_at: datetime
     end_at: datetime

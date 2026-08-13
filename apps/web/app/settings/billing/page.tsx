@@ -16,6 +16,7 @@ import {
   periodLabel,
   resolvePlanCardKind,
 } from "@/components/billing-logic";
+import { overLimitExplanation } from "@/components/calendar-entitlement-logic";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -287,6 +288,12 @@ export default function PlanAndBillingSettings() {
                 <button disabled={busy} onClick={openPortal}>
                   {cardKind === "stripe_past_due" ? "Update payment method" : "Manage billing"}
                 </button>
+              )}
+
+              {overLimitExplanation(status.calendar_usage) && (
+                <p className="notice" role="status">
+                  {overLimitExplanation(status.calendar_usage)}
+                </p>
               )}
             </section>
 

@@ -192,6 +192,12 @@ export type StripePriceInfo = {
   formatted_amount: string;
 };
 
+export type CalendarUsage = {
+  count: number;
+  limit: number | null;
+  over_limit: boolean;
+};
+
 export type SubscriptionDetail = {
   id: string;
   name: string;
@@ -200,6 +206,7 @@ export type SubscriptionDetail = {
   administrators: HomeAdministratorSummary[];
   subscription: HomeSubscription;
   entitlements: Entitlements;
+  calendar_usage: CalendarUsage;
   history: SubscriptionEvent[];
   stripe_price: StripePriceInfo | null;
   stripe_dashboard_customer_url: string | null;

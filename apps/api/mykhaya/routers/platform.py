@@ -24,6 +24,7 @@ from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
+    calendar_usage,
     complimentary_expired_sql_filter,
     effective_plan_sql_filter,
     get_home_subscription,
@@ -2872,6 +2873,7 @@ async def subscription_detail(
         entitlements=EntitlementsResponse(
             plan=definition.plan, booleans=definition.booleans, limits=definition.limits
         ),
+        calendar_usage=await calendar_usage(db, group_id),
         history=[
             SubscriptionEventResponse(
                 id=event.id,

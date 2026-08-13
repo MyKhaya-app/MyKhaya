@@ -1,8 +1,18 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import type {
   BirthdayEntry,
   EventLabel,
@@ -555,6 +565,14 @@ export default function CalendarPage() {
               >
                 <Search size={16} aria-hidden="true" />
               </button>
+              <Link
+                className="icon-button secondary"
+                href="/calendar/calendars"
+                aria-label="Manage calendars"
+                title="Calendars"
+              >
+                <Layers size={16} aria-hidden="true" />
+              </Link>
               <button className="calendar-add-desktop" type="button" onClick={() => setEditorDay(focusDate)}>
                 <Plus size={16} aria-hidden="true" />
                 Add

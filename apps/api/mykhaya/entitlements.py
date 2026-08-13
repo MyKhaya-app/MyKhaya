@@ -17,20 +17,25 @@ zero, never to unlimited.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.models import (
+    HomeCalendar,
     HomeSubscription,
     HomeSubscriptionEvent,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
 )
+from mykhaya.schemas import CalendarUsageResponse
 
 # Statuses under which a subscription's own `plan` is actually honoured.
 # past_due deliberately still counts as active — this is Phase 3's explicit
@@ -90,6 +95,54 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
         limits={"calendar.max_calendars": None},
     ),
 }
+
+
+class CommercialRestrictionCode(StrEnum):
+    """Stable, provider-neutral codes a frontend can branch on without
+    parsing human-readable text. See "Future module enforcement standard" in
+    docs/architecture/commercial-entitlements.md — every module that gates a
+    boolean entitlement or a numeric limit should raise through
+    `commercial_restriction_error` with one of these, rather than inventing
+    its own error shape."""
+
+    plan_feature_unavailable = "plan_feature_unavailable"
+    plan_limit_reached = "plan_limit_reached"
+    resource_restricted_by_plan = "resource_restricted_by_plan"
+
+
+def commercial_restriction_error(
+    code: CommercialRestrictionCode, message: str, **metadata: Any
+) -> HTTPException:
+    """Builds the one standard shape for a commercial-restriction response:
+    `{"detail": {"code": ..., "message": ..., ...metadata}}`. `metadata` is
+    safe, provider-neutral context only (an entitlement key, a numeric
+    limit) — never a subscription/provider implementation detail (no Stripe
+    status, no Complimentary reason/note, no internal IDs). The existing
+    `detail: str` convention used everywhere else in this codebase keeps
+    working unchanged; `packages/api-client`'s error handling additively
+    recognises this richer shape without breaking that convention."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": code.value, "message": message, **metadata},
+    )
+
+
+def classify_ordered_resources(
+    ordered_ids: Sequence[uuid.UUID], limit: int | None
+) -> dict[uuid.UUID, bool]:
+    """Given resource ids already placed in the caller's own deterministic
+    priority order (e.g. a Home's primary calendar first, then its other
+    calendars oldest-first), returns which ids fall within `limit` — `True`
+    for the ones a Free-limited Home keeps full access to, `False` for the
+    excess ones a downgrade leaves over the limit. `limit=None` means
+    unlimited (every id is `True`). Pure and reusable: any future
+    numeric-limited resource (a second calendar today, something else
+    later) can reuse this instead of re-deriving the same "first N stay
+    normal" rule. This never deletes or mutates anything — it only answers
+    "is this one within the entitled count right now."""
+    if limit is None:
+        return {resource_id: True for resource_id in ordered_ids}
+    return {resource_id: index < limit for index, resource_id in enumerate(ordered_ids)}
 
 
 async def get_home_subscription(db: AsyncSession, home_id: uuid.UUID) -> HomeSubscription | None:
@@ -272,8 +325,10 @@ async def has_entitlement(db: AsyncSession, home_id: uuid.UUID, key: str) -> boo
 
 async def require_entitlement(db: AsyncSession, home_id: uuid.UUID, key: str) -> None:
     if not await has_entitlement(db, home_id, key):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "This feature isn't included in your current plan."
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "This feature isn't included in your current plan.",
+            entitlement=key,
         )
 
 
@@ -305,10 +360,34 @@ async def require_within_limit(
     does this yet in Phase 1 — MyKhaya has no user-facing "create another
     calendar" endpoint at all (see docs/architecture/commercial-entitlements.md
     "Calendar as proof of architecture"), so there is nothing to enforce this
-    against yet."""
+    against yet.
+
+    Phase 6 note: this is now used — see routers.calendar's calendar-creation
+    endpoint, which wraps the count-then-call sequence in a
+    `pg_advisory_xact_lock` per this docstring's own precaution."""
     limit = await get_limit(db, home_id, key)
     if limit is not None and current_count >= limit:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_limit_reached,
             "This would exceed what your current plan allows. Upgrade to add more.",
+            entitlement=key,
+            limit=limit,
         )
+
+
+async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many calendars a Home currently has vs. its plan's
+    calendar.max_calendars — shared by the Platform Control Centre's
+    commercial-detail diagnostics (routers.platform) and the household Plan
+    & Billing over-limit messaging (routers.billing), so the two can never
+    compute this differently."""
+    count = (
+        await db.scalar(
+            select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "calendar.max_calendars")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )

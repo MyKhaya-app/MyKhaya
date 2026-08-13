@@ -372,6 +372,18 @@ export default function SubscriptionDetailPage({
                     <dd>{value ? "Enabled" : "Not available"}</dd>
                   </div>
                 ))}
+                <div>
+                  <dt>Current calendars</dt>
+                  <dd>
+                    {data.calendar_usage.count}
+                    {data.calendar_usage.over_limit && (
+                      <>
+                        {" "}
+                        <strong className="state-label state-warning">Over plan limit</strong>
+                      </>
+                    )}
+                  </dd>
+                </div>
               </dl>
             </section>
 

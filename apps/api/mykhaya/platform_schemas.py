@@ -15,7 +15,7 @@ from mykhaya.models import (
     SubscriptionStatus,
 )
 from mykhaya.module_registry import ReleaseState
-from mykhaya.schemas import StrictModel
+from mykhaya.schemas import CalendarUsageResponse, StrictModel
 
 
 class PlatformLoginRequest(StrictModel):
@@ -583,6 +583,11 @@ class SubscriptionDetailResponse(BaseModel):
     administrators: list[HomeAdministratorSummary]
     subscription: HomeSubscriptionResponse
     entitlements: EntitlementsResponse
+    # Diagnostic only: lets an operator see "this Home has more calendars
+    # than its plan allows" without a manual query. Never a control — there
+    # is no unlock action here, only the existing Complimentary grant or a
+    # real Stripe upgrade change what a Home is entitled to.
+    calendar_usage: CalendarUsageResponse
     history: list[SubscriptionEventResponse]
     stripe_price: StripePriceInfo | None = None
     # Built from validated Stripe object IDs already stored on this Home —

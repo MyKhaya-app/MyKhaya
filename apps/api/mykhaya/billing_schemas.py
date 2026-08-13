@@ -6,7 +6,7 @@ from mykhaya.models import (
     SubscriptionProvider,
     SubscriptionStatus,
 )
-from mykhaya.schemas import StrictModel
+from mykhaya.schemas import CalendarUsageResponse, StrictModel
 
 
 class PricingOptionResponse(BaseModel):
@@ -80,6 +80,11 @@ class BillingStatusResponse(BaseModel):
     can_manage_billing: bool
     has_stripe_customer: bool
     stripe_billing_available: bool
+    # How many calendars this Home currently has vs. what its effective plan
+    # allows. Populated for every Home (not just over-limit ones) so the
+    # page can show "1 of 1" on a normal Free Home too; see "Household Plan
+    # & Billing messaging" in docs/architecture/commercial-entitlements.md.
+    calendar_usage: CalendarUsageResponse
 
 
 class PlanComparisonRow(BaseModel):

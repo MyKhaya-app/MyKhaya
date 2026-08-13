@@ -19,6 +19,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
@@ -278,7 +279,19 @@ class Membership(UuidTimeMixin, Base):
 
 class HomeCalendar(UuidTimeMixin, Base):
     __tablename__ = "home_calendars"
-    __table_args__ = (UniqueConstraint("group_id", "is_primary", name="uq_home_primary_calendar"),)
+    # Partial unique index, not a plain UniqueConstraint: exactly one primary
+    # calendar per Home is still enforced, but any number of secondary
+    # (is_primary=False) calendars is now allowed — see migration
+    # 0022_multi_calendar_entitlement and
+    # docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture.
+    __table_args__ = (
+        Index(
+            "ix_home_calendar_one_primary_per_group",
+            "group_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+    )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -18,6 +18,13 @@ from mykhaya.colour_palette import ColourToken
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.entitlements import (
+    CommercialRestrictionCode,
+    classify_ordered_resources,
+    commercial_restriction_error,
+    get_limit,
+    require_within_limit,
+)
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
 from mykhaya.models import (
@@ -34,6 +41,7 @@ from mykhaya.models import (
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.schemas import (
+    CalendarListResponse,
     EventActivityResponse,
     EventCreate,
     EventDetailResponse,
@@ -43,8 +51,13 @@ from mykhaya.schemas import (
     EventListResponse,
     EventOccurrence,
     EventUpdate,
+    HomeCalendarCreate,
+    HomeCalendarDeleteRequest,
+    HomeCalendarResponse,
     HomeSummaryResponse,
 )
+
+CALENDAR_LIMIT_KEY = "calendar.max_calendars"
 
 
 async def require_calendar_feature(
@@ -105,6 +118,149 @@ async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCa
     return calendar
 
 
+async def _ordered_calendars(db: AsyncSession, group_id: uuid.UUID) -> list[HomeCalendar]:
+    """Deterministic priority order for commercial classification: the
+    primary calendar always sorts first (it can never be deleted — see
+    delete_calendar — so it's always the retained Free calendar), then the
+    rest oldest-first. Never randomly ordered. See "Choosing the retained
+    Free calendar" in docs/architecture/commercial-entitlements.md."""
+    return list(
+        (
+            await db.scalars(
+                select(HomeCalendar)
+                .where(HomeCalendar.group_id == group_id)
+                .order_by(HomeCalendar.is_primary.desc(), HomeCalendar.created_at.asc())
+            )
+        ).all()
+    )
+
+
+async def _calendar_access(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, bool]:
+    """True = normal (within the Home's current calendar.max_calendars
+    entitlement), False = read_only_due_to_plan. Computed fresh from current
+    usage + entitlement on every call — never a persisted flag, so it can
+    never drift when the Home's plan changes (upgrade/downgrade/re-upgrade
+    all just change what this function returns next time, with no migration
+    or backfill needed). One query for the calendars, one for the limit —
+    safe to call once per request and reuse, never once per calendar (see
+    "Avoid N+1 entitlement resolution" in the architecture doc)."""
+    calendars = await _ordered_calendars(db, group_id)
+    limit = await get_limit(db, group_id, CALENDAR_LIMIT_KEY)
+    return classify_ordered_resources([calendar.id for calendar in calendars], limit)
+
+
+def _require_calendar_writable(access: dict[uuid.UUID, bool], calendar_id: uuid.UUID) -> None:
+    if not access.get(calendar_id, False):
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.resource_restricted_by_plan,
+            "This calendar is included with MyKhaya Family. Upgrade to add or edit events here.",
+            entitlement=CALENDAR_LIMIT_KEY,
+        )
+
+
+@router.get("/{home_id}/calendars", response_model=CalendarListResponse)
+async def list_calendars(
+    home_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> CalendarListResponse:
+    await require_capability(home_id, Capability.calendar_view, auth, db)
+    await _ensure_home_calendar(db, home_id)
+    calendars = await _ordered_calendars(db, home_id)
+    limit = await get_limit(db, home_id, CALENDAR_LIMIT_KEY)
+    access = classify_ordered_resources([calendar.id for calendar in calendars], limit)
+    return CalendarListResponse(
+        items=[
+            HomeCalendarResponse(
+                id=calendar.id,
+                name=calendar.name,
+                timezone=calendar.timezone,
+                is_primary=calendar.is_primary,
+                commercial_access="normal" if access[calendar.id] else "read_only_due_to_plan",
+                created_at=calendar.created_at,
+            )
+            for calendar in calendars
+        ],
+        limit=limit,
+    )
+
+
+@router.post("/{home_id}/calendars", response_model=HomeCalendarResponse, status_code=201)
+async def create_calendar(
+    home_id: uuid.UUID,
+    body: HomeCalendarCreate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> HomeCalendarResponse:
+    # calendar_edit_all, not calendar_create: a calendar is shared household
+    # structure, not any one person's content — same reasoning as
+    # create_label above.
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    if body.timezone is not None:
+        _validate_timezone(body.timezone)
+    await _ensure_home_calendar(db, home_id)
+
+    # Race-safe: serialises concurrent "create another calendar" attempts
+    # for this Home so two simultaneous requests can't both observe the
+    # same under-limit count and both insert past it — identical pattern to
+    # routers.billing.checkout_session's per-Home advisory lock. See
+    # mykhaya.entitlements.require_within_limit's docstring.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"calendar:{home_id}"}
+    )
+    current_count = await db.scalar(
+        select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
+    )
+    await require_within_limit(db, home_id, CALENDAR_LIMIT_KEY, current_count or 0)
+
+    calendar = HomeCalendar(
+        group_id=home_id,
+        name=body.name,
+        timezone=body.timezone or "Europe/London",
+        is_primary=False,
+    )
+    db.add(calendar)
+    await db.flush()
+    audit(db, request, "calendar.calendar.created", auth.user.id, home_id, "calendar", calendar.id)
+    await db.commit()
+    return HomeCalendarResponse(
+        id=calendar.id,
+        name=calendar.name,
+        timezone=calendar.timezone,
+        is_primary=False,
+        commercial_access="normal",
+        created_at=calendar.created_at,
+    )
+
+
+@router.delete("/{home_id}/calendars/{calendar_id}", status_code=204)
+async def delete_calendar(
+    home_id: uuid.UUID,
+    calendar_id: uuid.UUID,
+    body: HomeCalendarDeleteRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    calendar = await db.get(HomeCalendar, calendar_id)
+    if calendar is None or calendar.group_id != home_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+    if calendar.is_primary:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The primary calendar can't be deleted.")
+    # Deliberate, customer-initiated action only — never automatic. Deletes
+    # this calendar's own events too (CalendarEvent.calendar_id cascades),
+    # which is exactly how a Home voluntarily reduces usage back within a
+    # Free limit; see "Reducing usage back within Free" in the architecture
+    # doc. Read-only-due-to-plan calendars can still be deleted this way —
+    # restriction only ever blocks *creating/editing* paid-resource content,
+    # never a customer choosing to remove it.
+    await db.execute(delete(HomeCalendar).where(HomeCalendar.id == calendar.id))
+    audit(db, request, "calendar.calendar.deleted", auth.user.id, home_id, "calendar", calendar.id)
+    await db.commit()
+
+
 async def _label_map(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, CalendarEventLabel]:
     labels = (
         await db.scalars(
@@ -155,6 +311,7 @@ def _occurrence(
     return EventOccurrence(
         occurrence_id=f"{event.id}:{start_at.isoformat()}",
         event_id=event.id,
+        calendar_id=event.calendar_id,
         title=event.title,
         start_at=start_at,
         end_at=end_at,
@@ -514,6 +671,13 @@ async def create_event(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")
 
     calendar_row = await _ensure_home_calendar(db, home_id)
+    if body.calendar_id is not None and body.calendar_id != calendar_row.id:
+        target_calendar = await db.get(HomeCalendar, body.calendar_id)
+        if target_calendar is None or target_calendar.group_id != home_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+        calendar_row = target_calendar
+    access = await _calendar_access(db, home_id)
+    _require_calendar_writable(access, calendar_row.id)
     if body.label_id is not None:
         label = await db.scalar(
             select(CalendarEventLabel).where(
@@ -675,6 +839,8 @@ async def update_event(
         await require_capability(home_id, Capability.calendar_edit_all, auth, db)
     if event.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
+    access = await _calendar_access(db, home_id)
+    _require_calendar_writable(access, event.calendar_id)
 
     requested_members = sorted(set(body.member_ids + [event.created_by]))
     if requested_members:
@@ -796,6 +962,8 @@ async def delete_event(
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    access = await _calendar_access(db, home_id)
+    _require_calendar_writable(access, event.calendar_id)
     member_ids = {
         row.user_id
         for row in (

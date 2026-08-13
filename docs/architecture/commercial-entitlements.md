@@ -73,9 +73,7 @@ Adding a new entitlement is "add a key to `PLAN_DEFINITIONS`" — never `if home
 
 ## Calendar as proof of architecture
 
-The brief for this phase asked for Calendar to be the first real proof that the entitlement model fits MyKhaya's existing domain model, without inventing a redundant one and without building enforcement against nothing.
-
-Investigation confirmed `HomeCalendar` already has a `(group_id, is_primary)` unique constraint — the schema already structurally supports "at most one calendar per Home" — but **no endpoint exists that can create a second calendar** for a Home. `calendar.max_calendars` is therefore defined as plan data (`1` for Free, unlimited for Family) so the concept is ready, but `require_within_limit` has no live caller in Phase 1. Its docstring documents the concurrency precaution (an advisory lock or `SELECT ... FOR UPDATE` around the count-then-insert, matching `routers.platform`'s `pg_advisory_xact_lock` pattern for the last-Owner check) that whichever future endpoint creates a second calendar must apply — a plain count check without that lock could race two concurrent "create calendar" requests past the limit.
+Phase 1 defined `calendar.max_calendars` (`1` for Free, unlimited for Family) as plan data only — `require_within_limit` had no live caller, because no endpoint could create a second calendar. **Phase 6 is where this becomes real enforcement** — see "Phase 6: feature entitlement enforcement and safe downgrades" below for the full implementation.
 
 ## Migration and grandfathering
 
@@ -303,3 +301,129 @@ The homepage (`apps/web/app/page.tsx`) remains a plain server component — hero
 ### Explicitly out of scope for Phase 5
 
 No Apple/Google billing. No promotional codes/discount UI. No new commercial tiers. No custom card-entry form. No destructive downgrade enforcement. No MRR/ARR. No referral/affiliate programmes. No broad public-site redesign beyond the pricing section. No live Stripe activation.
+
+## Phase 6: feature entitlement enforcement and safe downgrades
+
+Phases 1–5 built the commercial model, its administration, its billing provider, and its customer-facing surfaces — but nothing in the product itself actually *changed behaviour* based on plan. Phase 6 closes that gap using Calendar as the first real implementation, and establishes the pattern every future module should follow.
+
+### The three-layer authorization order
+
+Every protected calendar action checks, in this order:
+
+```
+Platform Feature Flag  (mykhaya.features.require_feature)
+        ↓
+Commercial Entitlement (mykhaya.entitlements — has_entitlement / require_within_limit)
+        ↓
+Home/User Permission   (mykhaya.household_permissions.require_capability)
+        ↓
+Allow
+```
+
+`routers.calendar`'s router-level `require_calendar_feature` dependency (unchanged from earlier phases) enforces the feature-flag layer for every route on the router before any handler runs. Each calendar-management/event handler then calls `require_capability` (permission) and, for calendar creation, `require_within_limit` (entitlement) — independently. A Family subscription never grants a permission a user doesn't otherwise have (`test_family_entitlement_does_not_grant_permission_to_an_unauthorised_member`); a Home Admin's full permission never bypasses a commercial limit (`test_free_home_admin_still_cannot_exceed_the_limit`); a disabled feature flag blocks access even on Family (`test_disabled_calendar_feature_blocks_access_even_on_family`). All three tests live in `apps/api/tests/test_calendar_entitlements.py`.
+
+### What counts toward `calendar.max_calendars`
+
+Only real `HomeCalendar` rows. Investigation (this phase) confirmed birthdays and household routines are synthesized views computed from `ChildProfile`/`User`/routine data at read time — they never materialize as `HomeCalendar` or `CalendarEvent` rows, so they structurally cannot inflate the count. No filtering logic was needed to exclude "system" calendars because none exist.
+
+### The calendar-management endpoints
+
+`HomeCalendar` already had an `is_primary` column and a `(group_id, is_primary)` uniqueness invariant from Phase 1's schema (migration `0003_calendar_module`) — but that was a full `UniqueConstraint`, which also (accidentally) capped a Home at exactly one *non-primary* calendar. Migration `0022_multi_calendar_entitlement` replaces it with a partial unique index (`WHERE is_primary`) that keeps "exactly one primary calendar per Home" while allowing any number of secondary ones. No other schema change was needed — no `is_paid_locked` flag, no second Subscription table; commercial access is derived fresh on every read (see below), never persisted.
+
+New endpoints on the existing `routers.calendar` router (same feature-flag gate, same `Capability.calendar_edit_all` a calendar/category label creation already uses — a calendar is shared household structure, not personal content):
+
+- `GET /homes/{home_id}/calendars` — every calendar plus its `commercial_access` (`"normal"` / `"read_only_due_to_plan"`) and the Home's current limit.
+- `POST /homes/{home_id}/calendars` — creates a secondary (`is_primary=False`) calendar, enforcing the limit (below).
+- `DELETE /homes/{home_id}/calendars/{id}` — deletes a non-primary calendar (and, via `CalendarEvent.calendar_id`'s existing `ondelete=CASCADE`, its events). The primary calendar can never be deleted (`409`). This is the customer's own voluntary way to reduce usage back within a Free limit — see "Reducing usage" below.
+
+`EventCreate` gained an optional `calendar_id` (defaults to the primary calendar, exactly matching pre-Phase-6 behaviour when omitted) so a Family Home can actually target its additional calendars. `EventOccurrence` gained `calendar_id` in its response for the same reason. No other event-response field, and no change to `list_events`, month/week/day/agenda rendering, recurrence, reminders, or notifications — see "Why event views needed no changes" below.
+
+### Race-safe limit enforcement
+
+`create_calendar` acquires `SELECT pg_advisory_xact_lock(hashtext('calendar:{home_id}'))` — the identical pattern `routers.billing.checkout_session` already uses to serialize concurrent Checkout attempts per Home — before counting existing calendars and calling `require_within_limit` within the same transaction. `test_concurrent_calendar_creation_cannot_exceed_the_limit` demonstrates this with genuine concurrent requests (`asyncio.gather`) against the real test database: since Free/Family only offer limits of `1` or unlimited (neither has an observable race window on its own — Free starts already at its limit, Family has none), the test temporarily widens Free's limit to `3` via `monkeypatch.setitem` on `PLAN_DEFINITIONS`, fires 5 concurrent creation requests when only 1 slot remains, and asserts exactly one succeeds and the Home never ends up with more than 3 calendars.
+
+### The reusable pattern: `classify_ordered_resources`
+
+`mykhaya.entitlements.classify_ordered_resources(ordered_ids, limit)` is a small, pure, generically-reusable function: given resource ids already placed in the caller's own deterministic priority order, it returns which ones fall within `limit`. Calendar is the only caller today, but any future numeric-limited resource (once a second one exists) reuses this instead of re-deriving "first N stay normal." It performs no database access and never mutates anything — `mykhaya.routers.calendar._calendar_access` is the thin, calendar-specific wrapper that supplies the ordering (primary first, then oldest-first) and calls it.
+
+### Choosing the retained Free calendar
+
+The primary calendar always sorts first and can never be deleted (`delete_calendar` returns `409` for it) — so it is always, deterministically, the calendar that stays `"normal"` after a downgrade. No fallback logic for "no valid primary exists" was needed, because that state is unreachable by construction. This was a simpler, safer design than an arbitrary "oldest calendar" rule that could change if a delete were ever allowed to remove the primary.
+
+### Downgrade behaviour: nothing is deleted, excess calendars go read-only
+
+`commercial_access` is **derived, never persisted** — computed fresh on every `GET /calendars`, `POST .../events`, `PATCH .../events/{id}`, and `DELETE .../events/{id}` call from the Home's *current* effective entitlement and *current* calendar count. A downgrade (Stripe ending, Complimentary expiring/being revoked, or any future transition) never deletes a `HomeCalendar` or `CalendarEvent` row — it just changes what `classify_ordered_resources` returns the next time it's asked. Concretely, for a Family Home with calendars A (primary), B, C that becomes effectively Free (limit 1):
+
+- All three `HomeCalendar` rows, and every event in them, remain in the database untouched.
+- A is `"normal"` — full create/edit/delete, exactly as a plain Free Home's only calendar already works.
+- B and C are `"read_only_due_to_plan"` — still fully **viewable** (their events remain in `GET /events` results exactly as before, since that endpoint filters by `group_id`, not `calendar_id` — see "Why event views needed no changes"), but `create_event`/`update_event`/`delete_event` targeting them return `403 resource_restricted_by_plan`.
+- Creating a fourth calendar is blocked (`403 plan_limit_reached`), same as a plain Free Home.
+- The customer can still `DELETE` B or C outright (a deliberate, confirmed action — `HomeCalendarDeleteRequest` requires `confirmed: true`, matching the existing child-removal/relationship-change confirmation convention) to voluntarily reduce usage.
+
+### Re-upgrade and reducing usage both "just work"
+
+Because nothing is persisted, there is nothing to restore. The moment the Home's effective plan resolves back to Family (Stripe reactivation, a new Complimentary grant, any future path), `classify_ordered_resources` returns `"normal"` for every calendar on the very next read — no migration, no backfill, no support action, no stale flag to clear. The same is true in the other direction: if a customer manually deletes calendars until the Home is back within its Free limit, the remaining calendar(s) are `"normal"` immediately, for the same reason. `test_reupgrade_restores_full_access_to_preserved_calendars` and the voluntary-delete assertion inside `test_downgrade_preserves_all_calendars_and_restricts_the_excess_ones` cover both directions.
+
+### Why event views needed no changes
+
+`list_events` (and therefore every month/week/day/agenda rendering built on it) already filters by `CalendarEvent.group_id`, not `calendar_id` — it has always returned every event for the Home regardless of which calendar owns it. This meant Phase 6 could satisfy "prefer preserving visibility" (events in a read-only-due-to-plan calendar remain visible everywhere they always were) and "a restricted event must not be editable in one view but not another" (the restriction is enforced once, server-side, in `create_event`/`update_event`/`delete_event` — never per-view) **without touching the view layer at all**. This was a deliberate scope decision: rather than building a calendar-switcher UI that filters which events render, the existing unified view was left exactly as it was, and only the mutation endpoints gained the check. Reminders, notifications, recurrence, multi-day events, participants, and invitations are all untouched code paths, so none of them needed re-verification against this phase's changes.
+
+### The structured commercial-restriction error
+
+Every other error response in this codebase is `HTTPException(status_code, detail="<sentence>")` with `detail` as a plain string — that convention is preserved everywhere it already existed. Phase 6 adds one new, additive shape for commercial restrictions specifically: `mykhaya.entitlements.commercial_restriction_error(code, message, **metadata)` builds `HTTPException(403, detail={"code": ..., "message": ..., **metadata})`. Three stable, provider-neutral codes:
+
+- `plan_feature_unavailable` — a boolean entitlement is off for this plan (`require_entitlement`, still uncalled by any live module, updated for when one exists).
+- `plan_limit_reached` — a numeric limit has been hit trying to create a new resource (`require_within_limit`; metadata: `entitlement`, `limit`).
+- `resource_restricted_by_plan` — an *existing* over-limit resource can't be mutated (Calendar's `_require_calendar_writable`; metadata: `entitlement`).
+
+`packages/api-client`'s `request()` was extended additively: a string `detail` behaves exactly as before (every existing caller across the whole app is unaffected); an object `detail` with a `message` field populates `ApiError.message` from it and additionally exposes `ApiError.code`/`ApiError.metadata`, so frontend code can branch on `code` without parsing message text. `metadata` is always safe, provider-neutral context (an entitlement key, a numeric limit) — never a Stripe status, a Complimentary reason/note, or an internal ID.
+
+### Future module enforcement standard
+
+For a boolean entitlement:
+
+```python
+await require_entitlement(db, home_id, "lists.enabled")
+```
+
+For a numeric resource limit, inside one transaction:
+
+```python
+await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"<module>:{home_id}"})
+count = await db.scalar(select(func.count()).select_from(Model).where(Model.group_id == home_id))
+await require_within_limit(db, home_id, "<module>.max_x", count or 0)
+# ... insert, same transaction, commit
+```
+
+For deriving which of several existing resources stay fully usable after a downgrade:
+
+```python
+ordered_ids = [...]  # caller's own deterministic priority order
+limit = await get_limit(db, home_id, "<module>.max_x")
+access = classify_ordered_resources(ordered_ids, limit)  # {id: True/False}
+```
+
+Every check stays three independent layers (feature flag → entitlement → permission) — never merge them, never branch on `subscription.provider`/`subscription.status` outside `mykhaya.entitlements` itself. Raise through `commercial_restriction_error` with one of the three standard codes rather than a bespoke shape. No module needs to invent its own upgrade UX — reuse `apps/web/components/calendar-entitlement-logic.ts`'s pattern (or extract it further once a second module needs it) and link to `/settings/billing`, which already owns pricing display.
+
+### Diagnostics: Platform Control Centre and household Plan & Billing
+
+Both surfaces call the same new `mykhaya.entitlements.calendar_usage(db, home_id)` helper (one `COUNT(*)` plus the existing `get_limit`) so they can never disagree:
+
+- Platform Control Centre's `GET /platform/subscriptions/{id}` gained `calendar_usage` (`count`, `limit`, `over_limit`) in `SubscriptionDetailResponse`, shown as a read-only diagnostic line ("Current calendars: 3, Over plan limit") next to the existing entitlements block. No unlock action was added — an operator's only way to change what a Home is entitled to remains the existing Complimentary grant/revoke or a real Stripe change, exactly as before.
+- The household `GET /groups/{id}/billing` (`BillingStatusResponse`) gained the same `calendar_usage` field; Settings → Plan & Billing shows an explanatory notice only when `over_limit` is true ("Your Home has 3 calendars. The Free plan includes 1. Your calendars and events are safe. Upgrade to Family to restore full access to all calendars.") — never a warning for a Home that's simply on Free within its limit, and never a hard-coded price (the existing pricing cards below it already own that).
+
+### No forced payment, no security-function restriction
+
+Nothing in Phase 6 blocks login, MFA, password change, security settings, account deletion, or access to the Home itself — commercial enforcement is scoped entirely to the calendar-creation/-mutation endpoints. An over-limit Home can still sign in, view every calendar (including restricted ones), manage its account, and reach Plan & Billing to resolve the situation, exactly per "No restrictions on security/account functions."
+
+### Performance
+
+`_calendar_access` resolves the Home's entitlement and calendar list once per request and reuses the resulting map — never once per calendar or per event. No Stripe call happens anywhere in the calendar-enforcement path; entitlement resolution is entirely local (`mykhaya.entitlements`), consistent with every earlier phase's provider-abstraction rule.
+
+### Hidden modules: investigated, not enabled
+
+Lists, Chores, Notes and Wish Lists remain `ReleaseState.hidden` in `mykhaya.module_registry` — Phase 6 added no navigation, no placeholder screens, and did not turn them on. Investigation found no live backend route for any of the four (no `routers/lists.py`, `routers/chores.py`, etc. exist) — their `*.enabled` booleans in `PLAN_DEFINITIONS` remain data only, with nothing to enforce against, exactly as Phase 1 left them. There is therefore no "backend functionality reachable despite being hidden in the frontend" gap to close for these four modules.
+
+### Explicitly out of scope for Phase 6
+
+No Apple/Google billing. No live Stripe activation (still Phase 7). No promotional codes. No MRR/ARR. No new commercial tiers. No enabling of Lists/Chores/Notes/Wish Lists. No destructive data cleanup of any kind. No per-Home entitlement overrides outside the existing Complimentary mechanism. No calendar rename/move-events/participant-management UI beyond what already existed on events themselves.

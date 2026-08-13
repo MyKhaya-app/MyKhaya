@@ -76,6 +76,7 @@ export interface EventLabel {
 export interface EventOccurrence {
   occurrence_id: string;
   event_id: string;
+  calendar_id: string;
   title: string;
   start_at: string;
   end_at: string;
@@ -100,12 +101,38 @@ export interface EventPayload {
   description?: string | null;
   location_text?: string | null;
   label_id?: string | null;
+  // Omitted defaults to the Home's primary calendar — see
+  // HomeCalendar.commercial_access. Targeting a read-only-due-to-plan
+  // calendar is rejected server-side.
+  calendar_id?: string | null;
   member_ids?: string[];
   reminder_minutes?: number | null;
   recurrence?: RecurrencePattern;
   recurrence_interval?: number;
   recurrence_until?: string | null;
   recurrence_count?: number | null;
+}
+
+export type CalendarCommercialAccess = "normal" | "read_only_due_to_plan";
+
+export interface HomeCalendar {
+  id: string;
+  name: string;
+  timezone: string;
+  is_primary: boolean;
+  commercial_access: CalendarCommercialAccess;
+  created_at: string;
+}
+
+export interface CalendarListResponse {
+  items: HomeCalendar[];
+  limit: number | null;
+}
+
+export interface CalendarUsage {
+  count: number;
+  limit: number | null;
+  over_limit: boolean;
 }
 
 export interface EventUpdatePayload extends EventPayload {
@@ -369,6 +396,7 @@ export interface BillingStatus {
   can_manage_billing: boolean;
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;
+  calendar_usage: CalendarUsage;
 }
 
 export interface PricingOption {

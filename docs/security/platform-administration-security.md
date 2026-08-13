@@ -133,3 +133,35 @@ An invited member reaches `/auth/register` with `invitation_token` set but never
 ### Public endpoint exposure
 
 `GET /billing/pricing` and `GET /billing/plans` are unchanged from Phase 3/4 — both remain public, rate-limited (`billing-pricing`/`billing-plans`, 60/60s), read-only, and expose no Stripe Price ID, Customer/subscription data, or provider secret; see the Phase 4 section above ("Household-safe billing response") for the exhaustive exclusion list, which Phase 5 introduces no exception to. The homepage and onboarding plan step call these two endpoints and nothing else unauthenticated.
+
+## Commercial entitlements — feature entitlement enforcement and safe downgrades (Phase 6)
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Phase 6" section.
+
+### Server-side enforcement is authoritative
+
+Every calendar-creation/-mutation endpoint enforces its limit/restriction in `mykhaya/routers/calendar.py` itself, not only in frontend conditionals. `apps/web/app/calendar/calendars/page.tsx`'s "Add a calendar" form hiding behind an upgrade CTA is UX only — a direct `POST /homes/{id}/calendars` call from a Free Home at its limit is rejected with `403` regardless of what the frontend would have shown, and a direct `POST /homes/{id}/events` targeting a read-only-due-to-plan `calendar_id` is rejected the same way. Covered by every test in `apps/api/tests/test_calendar_entitlements.py`, which exercises the HTTP layer directly rather than any frontend state.
+
+### Direct API protection cannot be bypassed by permission or plan alone
+
+Three properties are independently tested, matching the three-layer authorization order: (1) a disabled Calendar feature flag blocks access even on a Family-entitled Home (`test_disabled_calendar_feature_blocks_access_even_on_family`) — commercial entitlement never overrides a platform-level module disablement; (2) a Family entitlement never grants permission to a member who lacks it (`test_family_entitlement_does_not_grant_permission_to_an_unauthorised_member`) — entitlement is additive to availability, never to authorization; (3) full permission (Home Admin) never bypasses a commercial limit (`test_free_home_admin_still_cannot_exceed_the_limit`).
+
+### Race-condition protection
+
+`create_calendar` acquires a per-Home `pg_advisory_xact_lock` before counting existing calendars and enforcing the limit, inside the same transaction as the insert — the identical pattern `routers.billing.checkout_session` already used for concurrent-Checkout protection. `test_concurrent_calendar_creation_cannot_exceed_the_limit` proves this with genuine concurrent HTTP requests against the real test database, not a sequential assertion: five concurrent creation attempts with exactly one slot remaining produce exactly one success and four `403`s.
+
+### Provider-neutral logic and errors
+
+`mykhaya/routers/calendar.py` never branches on `subscription.provider` or `subscription.status` — every check goes through `mykhaya.entitlements.get_limit`/`require_within_limit`/`classify_ordered_resources`, which resolve *effective* plan only. This is directly tested by the commercial-state matrix in `test_calendar_entitlements.py`: Complimentary active, Stripe active, Stripe `past_due`, and Stripe `cancel_at_period_end` all behave identically (as Family), while Complimentary expired and Stripe `cancelled` both behave identically (as Free) — proving Calendar code has no provider-specific paths to audit. The structured `commercial_restriction_error` responses (`plan_feature_unavailable`, `plan_limit_reached`, `resource_restricted_by_plan`) carry only an entitlement key and a numeric limit as metadata — never a Stripe status, a Complimentary reason/note, or an internal subscription/customer/price ID. `test_free_home_second_calendar_is_blocked_with_a_structured_error` asserts neither "stripe" nor "complimentary" appears anywhere in the error body.
+
+### No Stripe call during ordinary feature authorization
+
+Every entitlement check in the calendar-enforcement path (`get_limit`, `require_within_limit`, `classify_ordered_resources`, `calendar_usage`) reads only `HomeSubscription`, MyKhaya's own local row — none of them call `mykhaya.billing` or the Stripe SDK. This preserves the provider-abstraction rule from Phase 1/3: Stripe is only ever consulted for the narrow set of things only Stripe can answer (creating a Checkout/Portal session, resolving a live price, processing a webhook), never for "can this Home do X right now."
+
+### No downgrade deletes data
+
+`DELETE .../calendars/{id}` is the **only** code path in Phase 6 that removes a `HomeCalendar` row (and, via the existing `ondelete=CASCADE`, its events) — and it requires an authenticated, capability-checked, explicitly confirmed (`confirmed: true`) request from a member of that Home. No subscription-state transition (Stripe ending, Complimentary expiring or being revoked, any future path) ever calls it or any other delete. `test_downgrade_preserves_all_calendars_and_restricts_the_excess_ones`, `test_stripe_ended_becomes_free_with_data_preserved`, and `test_complimentary_expired_behaves_as_free_with_data_preserved` each assert the Home's calendar rows are byte-identical (by id) before and after the plan transition.
+
+### No persisted commercial-lock state to drift
+
+`commercial_access` is computed on every read from current entitlement + current calendar ordering — there is no `is_paid_locked`-style column anywhere in the schema for Calendar. This removes an entire class of bug (a stale lock flag surviving a plan change) by construction rather than by careful invalidation logic.
