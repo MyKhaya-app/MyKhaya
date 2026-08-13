@@ -77,3 +77,31 @@ Success redirects cannot grant access: `checkout.session.completed` only records
 ### Paid ↔ Complimentary conflict
 
 `grant_complimentary` now 409s if the Home's `provider == stripe` and `status != cancelled` — an operator cannot accidentally leave a Home simultaneously billed by Stripe and marked Complimentary. See "Complimentary ↔ Stripe transitions" in the architecture doc.
+
+## Commercial entitlements — household Plan & Billing (Phase 4)
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Phase 4" section.
+
+### `billing_manage` requirement
+
+Unchanged from Phase 3: only `Capability.billing_manage` (home_admin only) can start Checkout or open the Customer Portal. Phase 4 adds no new mutating endpoint, so no new permission surface exists — the polished page calls exactly the same two Phase 3 write endpoints. A member without `billing_manage` sees the same read-only `BillingStatusResponse` as anyone else in the Home (see "household-safe billing response" below); the frontend hides the action buttons for them, but this is presentation only — the backend `require_capability` check is what actually stops the request, so a non-manager calling the endpoints directly still gets 403, not a silently-hidden-but-reachable action.
+
+### No browser-based entitlement activation
+
+Reaffirmed from Phase 3: the success redirect from Stripe Checkout carries no authority. The Phase 4 page's delayed one-shot re-fetch after returning from Checkout is a UX affordance only — it calls the same authenticated `GET /groups/{id}/billing` any other page load would, which itself only ever reflects whatever `apply_stripe_subscription_state` has already committed from a verified webhook. There is no code path, in Phase 4 or earlier, where a query string or client-side timer writes to `HomeSubscription`.
+
+### Household-safe billing response
+
+`BillingStatusResponse` is deliberately narrow. Confirmed excluded, by construction (the response model has no such field, not by a filtering step that could regress): `complimentary_note`, `HomeSubscriptionEvent` history, `StripeWebhookEvent`/webhook event IDs, raw Stripe Customer/Subscription objects, `MYKHAYA_STRIPE_SECRET_KEY`/`MYKHAYA_STRIPE_WEBHOOK_SECRET`, and `external_customer_id`/`external_subscription_id` themselves (the household page has no use for the raw Stripe identifiers — only the derived `price`/`billing_interval`/dates it actually renders). Covered by `test_billing_status_response_never_exposes_internal_or_secret_fields`. `GET /billing/plans` and `GET /billing/pricing` return only plan-comparison/pricing data — no Home-specific or provider-secret information at all, so they're safe to leave public/unauthenticated, matching Phase 3's existing pricing endpoint.
+
+### No payment credential storage
+
+Unchanged: no card number, CVV, or bank credential is collected or stored by MyKhaya at any point in the Phase 4 UI — Checkout and the Customer Portal are the only surfaces that ever see payment details, and both are Stripe-hosted, opened via a plain redirect (never an iframe).
+
+### No arbitrary provider/plan mutation
+
+Phase 4 adds zero new write endpoints. The household Plan & Billing page can only ever trigger the same two actions Phase 3 already gated: start Checkout (`interval` only) and open the Portal. There remains no `PATCH /groups/{id}/billing` or equivalent — commercial state still only ever changes via a verified Stripe webhook or the Platform Control Centre's Complimentary/reconciliation actions.
+
+### IDOR
+
+`GET /groups/{id}/billing` resolves the caller's membership via `membership_for(group_id, auth, db)` (the same dependency every other Home-scoped household endpoint uses) and 404s for a Home the caller doesn't belong to — a user cannot view, let alone manage, another Home's billing state. Covered by `test_user_cannot_view_another_homes_billing_state`.

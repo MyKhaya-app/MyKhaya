@@ -13,11 +13,14 @@ const links = [
   ["Routines", "Bins, medication and other recurring reminders", "/settings/routines"],
   ["Security", "Password and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
-  ["Billing", "Plan, payment and subscription status", "/settings/billing"],
+  ["Plan & Billing", "Your Home's plan, and payment status if applicable", "/settings/billing"],
 ] as const;
 // Not part of a managed Child's restricted surface — a Child has no password, no
-// household administration rights, and no invite/membership controls.
-const ADULT_ONLY_LINKS = new Set(["Security", "Home settings", "Billing"]);
+// household administration rights, and no invite/membership controls. Any adult
+// member (not just a Home Admin) can still open Plan & Billing — the page itself
+// shows read-only status to anyone without billing_manage, per
+// docs/security/platform-administration-security.md#household-billing-response.
+const ADULT_ONLY_LINKS = new Set(["Security", "Home settings", "Plan & Billing"]);
 export function SettingsPage({
   title = "Settings",
   children,

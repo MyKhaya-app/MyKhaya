@@ -351,6 +351,8 @@ export class MyKhayaClient {
     );
   familyPricing = () =>
     this.request<import("@mykhaya/shared-types").FamilyPricing>("/billing/pricing");
+  planComparison = () =>
+    this.request<import("@mykhaya/shared-types").PlanComparison>("/billing/plans");
   createCheckoutSession = (
     homeId: string,
     interval: import("@mykhaya/shared-types").BillingInterval,

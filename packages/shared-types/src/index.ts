@@ -333,8 +333,8 @@ export interface BirthdayListResponse {
   items: BirthdayEntry[];
 }
 
-// Phase 3 commercial billing (Stripe) — mirrors mykhaya.billing_schemas. See
-// docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+// Commercial billing (Stripe, Phases 3–4) — mirrors mykhaya.billing_schemas.
+// See docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
 
 export type BillingInterval = "month" | "year";
 export type SubscriptionPlanValue = "free" | "family";
@@ -346,14 +346,26 @@ export type SubscriptionStatusValue =
   | "cancel_at_period_end"
   | "cancelled";
 
+export interface SubscriptionPrice {
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+}
+
 export interface BillingStatus {
   stored_plan: SubscriptionPlanValue;
   provider: SubscriptionProviderValue;
   status: SubscriptionStatusValue;
   effective_plan: SubscriptionPlanValue;
+  effective_status_reason: string | null;
   billing_interval: BillingInterval | null;
+  // The actual amount this Home's own subscription is billed — resolved
+  // live from Stripe, reflecting a grandfathered price if applicable. Never
+  // a hard-coded figure. Null unless the Home is Stripe-backed.
+  price: SubscriptionPrice | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  complimentary_expires_at: string | null;
   can_manage_billing: boolean;
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;
@@ -362,7 +374,6 @@ export interface BillingStatus {
 export interface PricingOption {
   interval: BillingInterval;
   provider: string;
-  provider_price_id: string;
   currency: string;
   unit_amount: number;
   formatted_amount: string;
@@ -372,4 +383,18 @@ export interface FamilyPricing {
   plan: string;
   options: PricingOption[];
   annual_saving_formatted: string | null;
+  // True only when the current provider prices make annual mathematically
+  // cheaper than 12 monthly periods — never a hard-coded assumption.
+  annual_is_best_value: boolean;
+}
+
+export interface PlanComparisonRow {
+  key: string;
+  label: string;
+  free_display: string;
+  family_display: string;
+}
+
+export interface PlanComparison {
+  rows: PlanComparisonRow[];
 }

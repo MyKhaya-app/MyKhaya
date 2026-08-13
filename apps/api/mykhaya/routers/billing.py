@@ -27,7 +27,12 @@ from mykhaya.billing.checkout import (
 )
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
 from mykhaya.billing.config import StripeNotConfiguredError, resolve_stripe_config
-from mykhaya.billing.pricing import StripePriceConfigurationError, format_amount, get_family_pricing
+from mykhaya.billing.pricing import (
+    StripePriceConfigurationError,
+    fetch_price_amount,
+    format_amount,
+    get_family_pricing,
+)
 from mykhaya.billing.webhooks import (
     WebhookSignatureError,
     process_webhook_event,
@@ -38,15 +43,24 @@ from mykhaya.billing_schemas import (
     CheckoutSessionRequest,
     CheckoutSessionResponse,
     FamilyPricingResponse,
+    PlanComparisonResponse,
+    PlanComparisonRow,
     PortalSessionResponse,
     PricingOptionResponse,
+    SubscriptionPriceResponse,
 )
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
-from mykhaya.entitlements import effective_plan, ensure_home_subscription, get_home_subscription
+from mykhaya.entitlements import (
+    effective_plan,
+    ensure_home_subscription,
+    get_home_subscription,
+    plan_definition_for,
+    resolve_effective_state,
+)
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
-from mykhaya.models import SubscriptionProvider, SubscriptionStatus
+from mykhaya.models import SubscriptionPlan, SubscriptionProvider, SubscriptionStatus
 from mykhaya.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -76,18 +90,20 @@ async def pricing(
         ) from exc
 
     monthly, annual = family_pricing.options
-    saving = None
-    if (
+    is_best_value = (
         family_pricing.annual_saving_unit_amount is not None
         and family_pricing.annual_saving_unit_amount > 0
-    ):
-        saving = format_amount(family_pricing.annual_saving_unit_amount, annual.currency)
+    )
+    saving = (
+        format_amount(family_pricing.annual_saving_unit_amount, annual.currency)
+        if is_best_value and family_pricing.annual_saving_unit_amount is not None
+        else None
+    )
     return FamilyPricingResponse(
         plan=family_pricing.plan,
         options=[
             PricingOptionResponse(
                 interval=option.interval,
-                provider_price_id=option.provider_price_id,
                 currency=option.currency,
                 unit_amount=option.unit_amount,
                 formatted_amount=option.formatted_amount,
@@ -95,6 +111,39 @@ async def pricing(
             for option in (monthly, annual)
         ],
         annual_saving_formatted=saving,
+        annual_is_best_value=is_best_value,
+    )
+
+
+@router.get("/plans", response_model=PlanComparisonResponse)
+async def plan_comparison(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> PlanComparisonResponse:
+    """Free vs Family, sourced from mykhaya.entitlements.PLAN_DEFINITIONS —
+    never duplicated by hand in the frontend. Deliberately shows only
+    calendar.max_calendars: PLAN_DEFINITIONS also carries lists/chores/notes/
+    wishlists boolean entitlements, but none of those correspond to a
+    currently-released module (see mykhaya.module_registry — those modules
+    are all "hidden"), so surfacing them here would market features that
+    don't exist yet. Preserves Platform Feature Flag -> Commercial
+    Entitlement -> Home/User Permission: an entitlement being technically
+    "on" for Family is not enough to advertise it."""
+    await enforce_rate_limit(request, settings, "billing-plans", 60, 60)
+    free = plan_definition_for(SubscriptionPlan.free)
+    family = plan_definition_for(SubscriptionPlan.family)
+    free_calendars = free.limits.get("calendar.max_calendars")
+    family_calendars = family.limits.get("calendar.max_calendars")
+    return PlanComparisonResponse(
+        rows=[
+            PlanComparisonRow(
+                key="calendar.max_calendars",
+                label="Calendars",
+                free_display=f"{free_calendars} calendar"
+                if free_calendars is not None
+                else "Unlimited",
+                family_display="Unlimited" if family_calendars is None else str(family_calendars),
+            )
+        ]
     )
 
 
@@ -105,25 +154,51 @@ async def billing_status(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> BillingStatusResponse:
-    """Minimal household-facing billing surface for Phase 3 — enough to
-    confirm Checkout/Portal/webhook activation actually worked end to end.
-    The polished Plan & Billing page is a later phase."""
+    """The household-facing Plan & Billing read model (Phase 4) — a single
+    backend-prepared, display-safe view of the Home's commercial state, so
+    the frontend never has to infer Stripe semantics itself. See
+    docs/architecture/commercial-entitlements.md#household-plan-billing."""
     membership = await membership_for(group_id, auth, db)
     subscription = await get_home_subscription(db, group_id)
     resolved_plan = await effective_plan(db, group_id)
+    resolution = resolve_effective_state(subscription)
     capabilities = await capabilities_for(db, membership)
+
+    price: SubscriptionPriceResponse | None = None
+    if (
+        subscription
+        and subscription.provider == SubscriptionProvider.stripe
+        and subscription.external_price_id
+    ):
+        config = resolve_stripe_config(settings)
+        if config.configured and config.secret_key:
+            price_option = await fetch_price_amount(
+                config.secret_key, subscription.external_price_id
+            )
+            if price_option is not None:
+                price = SubscriptionPriceResponse(
+                    currency=price_option.currency,
+                    unit_amount=price_option.unit_amount,
+                    formatted_amount=price_option.formatted_amount,
+                )
+
     return BillingStatusResponse(
         stored_plan=subscription.plan if subscription else resolved_plan,
         provider=subscription.provider if subscription else SubscriptionProvider.free,
         status=subscription.status if subscription else SubscriptionStatus.active,
         effective_plan=resolved_plan,
+        effective_status_reason=resolution.reason,
         billing_interval=subscription.billing_interval if subscription else None,
+        price=price,
         current_period_end=subscription.current_period_end.isoformat()
         if subscription and subscription.current_period_end
         else None,
         cancel_at_period_end=bool(
             subscription and subscription.status == SubscriptionStatus.cancel_at_period_end
         ),
+        complimentary_expires_at=subscription.complimentary_expires_at.isoformat()
+        if subscription and subscription.complimentary_expires_at
+        else None,
         can_manage_billing=Capability.billing_manage in capabilities,
         has_stripe_customer=bool(subscription and subscription.external_customer_id),
         stripe_billing_available=resolve_stripe_config(settings).configured,

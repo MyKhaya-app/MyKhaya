@@ -45,3 +45,23 @@ Family becomes purchasable through Stripe Checkout — **in Stripe test mode onl
 **Cancellation**: cancelling (via the Customer Portal) schedules the subscription to end at the current paid period's close — the Home keeps Family access until then, exactly like any other subscription product. Once the period ends, the Home returns to Free. No Home data — calendars, events, members, anything — is ever deleted by a cancellation, at any point in this flow.
 
 This phase deliberately does not include: the public marketing site's pricing page, a payment step during signup, or the polished household Plan & Billing experience — `/settings/billing` is a minimal, functional surface built to prove the underlying billing plumbing works end to end, not the finished product page.
+
+## Phase 4: the household Plan & Billing experience
+
+`/settings/billing` becomes the finished product page — still in Stripe test/sandbox mode, still no real payment taken. Any adult member of a Home can open it and see the Home's plan status; only a Home Administrator (or anyone else with `billing_manage`) sees the buttons to actually change anything.
+
+**Free**: "Your Home is currently using MyKhaya Free," with an invitation to upgrade to Family. A Home whose complimentary access or Stripe subscription has since ended is shown as Free too, but with a short explanation of what happened ("Your complimentary Family access ended on DATE" / "Your Family subscription ended on DATE") rather than looking identical to a Home that was never on Family — and a reassurance that no Home data was deleted.
+
+**Family upgrade flow**: a Free Home eligible to self-serve sees Monthly and Annual options, each showing the real price read live from Stripe at the moment the page loads — never a number written into this document or the app's code. When Stripe's own configured prices make the annual option genuinely cheaper per year than paying monthly twelve times, it's marked "Best value" and shows the amount saved; when it isn't (or can't be calculated), no badge is shown and no saving is invented. Starting Checkout hands off to Stripe's own payment page — MyKhaya never sees or stores a card number. Returning from Checkout shows "Payment received. We're confirming your subscription" until the backend has verified it via Stripe's own confirmation — normally a few seconds, and refreshing the page always shows the true current state.
+
+**Complimentary Family access** (admin-granted, see Phase 2) is shown as Family with a "Complimentary access" label instead of a price, either "Access does not expire" or "Access until DATE" depending on whether an expiry was set.
+
+**A live paying Family subscription** shows Monthly or Annual, the actual amount currently charged (which may be an older, grandfathered price — see the architecture doc), and the renewal date. A "Manage billing" button opens Stripe's own Customer Portal for payment method and invoice details — MyKhaya does not build or store any of that itself.
+
+**A payment problem** ("Payment needs attention") is shown clearly but calmly — the Home keeps its Family access while Stripe automatically retries, and the button becomes "Update payment method," taking the member straight to the Customer Portal to fix it.
+
+**A cancelled-but-not-yet-ended subscription** shows "Cancels on DATE, keep access until then" — access continues exactly as paid for until that date, then the Home returns to Free with nothing deleted.
+
+Throughout, the page only ever compares Free and Family on things that actually exist today — currently just calendars per Home — never lists or advertises a module (Lists, Chores, Notes, Wish Lists, and similar) that is defined in the commercial model for a future release but isn't actually available to use yet, so nothing on this page over-promises.
+
+**What Phase 4 still does not include**: the public marketing site's pricing page, a payment step during signup, promotional codes, and any plan other than Free and Family — all remain out of scope for a later phase.

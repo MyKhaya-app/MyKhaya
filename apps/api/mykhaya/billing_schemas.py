@@ -10,9 +10,12 @@ from mykhaya.schemas import StrictModel
 
 
 class PricingOptionResponse(BaseModel):
+    """Deliberately omits the Stripe Price ID — the frontend never needs one
+    (Checkout only ever sends an interval; see CheckoutSessionRequest), so
+    it is not exposed here. See docs/security/platform-administration-security.md."""
+
     interval: BillingInterval
     provider: str = "stripe"
-    provider_price_id: str
     currency: str
     unit_amount: int
     formatted_amount: str
@@ -22,6 +25,10 @@ class FamilyPricingResponse(BaseModel):
     plan: str
     options: list[PricingOptionResponse]
     annual_saving_formatted: str | None
+    # True only when the current provider prices make annual mathematically
+    # cheaper than 12 monthly periods — never a hard-coded assumption. See
+    # mykhaya.billing.pricing.get_family_pricing.
+    annual_is_best_value: bool
 
 
 class CheckoutSessionRequest(StrictModel):
@@ -40,18 +47,53 @@ class PortalSessionResponse(BaseModel):
     portal_url: str
 
 
+class SubscriptionPriceResponse(BaseModel):
+    """The actual amount this Home's own subscription is billed — resolved
+    live from Stripe against HomeSubscription.external_price_id, which may
+    be an older, grandfathered Price than the one currently offered to new
+    signups. Never a hard-coded figure."""
+
+    currency: str
+    unit_amount: int
+    formatted_amount: str
+
+
 class BillingStatusResponse(BaseModel):
-    """The minimal household-facing billing surface for Phase 3 — enough to
-    test starting Checkout, opening the Portal, and seeing confirmation
-    state. The polished Plan & Billing experience is a later phase."""
+    """The household-facing Plan & Billing read model (Phase 4). Deliberately
+    excludes anything Platform-Admin-only or provider-internal: no
+    complimentary_note, no HomeSubscriptionEvent history, no webhook event
+    IDs, no raw Stripe Customer/Subscription objects, no secrets. See
+    docs/security/platform-administration-security.md#household-billing-response."""
 
     stored_plan: SubscriptionPlan
     provider: SubscriptionProvider
     status: SubscriptionStatus
     effective_plan: SubscriptionPlan
+    # Populated only when effective_plan/status diverges from the stored
+    # state in a way worth explaining (e.g. "Complimentary access expired").
+    effective_status_reason: str | None
     billing_interval: BillingInterval | None
+    price: SubscriptionPriceResponse | None
     current_period_end: str | None
     cancel_at_period_end: bool
+    complimentary_expires_at: str | None
     can_manage_billing: bool
     has_stripe_customer: bool
     stripe_billing_available: bool
+
+
+class PlanComparisonRow(BaseModel):
+    """One comparable dimension between Free and Family. Only ever populated
+    for capabilities backed by a currently-released module — see
+    mykhaya.routers.billing.plan_comparison's docstring for why the
+    lists/chores/notes/wishlists entitlement keys never appear here despite
+    existing in mykhaya.entitlements.PLAN_DEFINITIONS."""
+
+    key: str
+    label: str
+    free_display: str
+    family_display: str
+
+
+class PlanComparisonResponse(BaseModel):
+    rows: list[PlanComparisonRow]

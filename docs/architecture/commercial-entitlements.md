@@ -222,4 +222,44 @@ Phase 1 left `past_due` in `_PLAN_HONOURED_STATUSES` because there was no paymen
 
 ### Explicitly out of scope for Phase 3
 
-No production/live Stripe activation. No hard-coded monetary pricing anywhere. No public homepage pricing cards. No polished signup plan-selection UI. No full household Plan & Billing page (`/settings/billing` is a deliberately minimal test/development surface — see its module comment). No Apple/Google billing. No promotional codes. No new commercial tiers. No destructive downgrade cleanup. No MRR/ARR (see `SubscriptionSummaryResponse`'s docstring for why — multiple historical Prices/currencies/intervals make a single blended figure non-trivial to compute correctly, so it's deferred rather than approximated).
+No production/live Stripe activation. No hard-coded monetary pricing anywhere. No public homepage pricing cards. No polished signup plan-selection UI. No full household Plan & Billing page (`/settings/billing` was a deliberately minimal test/development surface in Phase 3 — Phase 4, below, replaces it). No Apple/Google billing. No promotional codes. No new commercial tiers. No destructive downgrade cleanup. No MRR/ARR (see `SubscriptionSummaryResponse`'s docstring for why — multiple historical Prices/currencies/intervals make a single blended figure non-trivial to compute correctly, so it's deferred rather than approximated).
+
+## Phase 4: household Plan & Billing
+
+Phase 4 replaces Phase 3's minimal `/settings/billing` test surface with the polished, authenticated household experience — still no public pricing page, still no signup payment step (both remain later phases). It adds no new commercial write path: every state change still flows through Checkout → verified webhook → Family, or the existing Portal/Complimentary flows from Phases 1–3.
+
+### Household Plan & Billing read model
+
+`GET /groups/{id}/billing` (`BillingStatusResponse`, `mykhaya/billing_schemas.py`) is the single backend-prepared, display-safe view the page renders from — the frontend never infers Stripe semantics itself. Extended in Phase 4 beyond Phase 3's minimal shape with:
+
+- `effective_status_reason` — reuses `mykhaya.entitlements.resolve_effective_state`'s human-readable divergence explanation (e.g. "Complimentary access expired"), the same field the Platform Control Centre already showed operators in Phase 2.
+- `price` — the Home's own actual current amount, resolved live from Stripe against `HomeSubscription.external_price_id` (via `mykhaya.billing.pricing.fetch_price_amount`, the same function the Platform Control Centre detail view uses) — correctly reflects a grandfathered price, never the current signup price.
+- `complimentary_expires_at` — so the page can distinguish "no expiry" from "expires on this date" without the frontend inferring it from other fields.
+
+Deliberately still excludes (unchanged from Phase 3's intent, now made explicit): `complimentary_note` (Platform-Admin-only), any `HomeSubscriptionEvent`/audit history, `StripeWebhookEvent` IDs, raw Stripe Customer/Subscription objects, and any secret. See "Security" below.
+
+### Pricing and plan-comparison consumption
+
+The page reuses Phase 3's public `GET /billing/pricing` unchanged in spirit, with two Phase 4 additions to `FamilyPricingResponse`: `annual_is_best_value` (computed server-side — true only when `annual_saving_unit_amount` is positive, i.e. the current provider prices genuinely make annual cheaper than 12 monthly periods; never a hard-coded assumption) and the removal of `provider_price_id` from the wire response (the frontend never needed it — Checkout only ever sends an interval — so it's no longer sent).
+
+`GET /billing/plans` (new, public, rate-limited like pricing) is the Free vs Family comparison — sourced directly from `mykhaya.entitlements.PLAN_DEFINITIONS`, never hand-duplicated in a frontend file. It deliberately returns only a `calendar.max_calendars` row: `PLAN_DEFINITIONS` also carries `lists.enabled`/`chores.enabled`/`notes.enabled`/`wishlists.enabled`, but none of those correspond to a currently-released module (`mykhaya.module_registry` marks Tasks/Shopping/Meals/Plans/Wish Lists/External sharing all `hidden`) — advertising them as a Family benefit would market features that don't exist yet. This is the `Platform Feature Flag -> Commercial Entitlement -> Home/User Permission` layering applied to marketing copy, not just authorization: an entitlement being technically `True` for Family is not sufficient reason to show it to a customer.
+
+### Checkout handoff (unchanged authority, new UI)
+
+The page still only ever sends `{interval: "month" | "year"}` to `POST /groups/{id}/billing/checkout-session` — no Price ID, amount, currency, or Stripe identifier, exactly as Phase 3 established. What's new in Phase 4 is presentation: two pricing cards (Monthly/Annual) built entirely from `GET /billing/pricing`'s response, a "Best value" badge shown only when `annual_is_best_value` is true (reusing the existing `.release-badge.core` visual treatment — no new badge component), and a busy-state guard preventing a double-submit while a Checkout Session is being created.
+
+### Authoritative webhook/refetch flow (unchanged authority, new UI)
+
+Returning from Stripe still never activates Family by itself. The page reads `?checkout=success`/`?checkout=cancelled` only to decide which banner to show, then always re-fetches `GET /groups/{id}/billing` for the authoritative state (the same request the page makes on every load). If the webhook hasn't landed yet when the page first loads back from Checkout, it schedules exactly **one** additional re-fetch a few seconds later — not continuous polling — and always shows a coherent "still confirming" message rather than flashing between Free and Family while independent requests settle. A manual reload always re-triggers the same authoritative fetch.
+
+### Portal handoff (unchanged authority, new UI)
+
+`POST /groups/{id}/billing/portal-session` is unchanged from Phase 3. The button label switches between "Manage billing" and "Update payment method" purely as frontend copy (`resolvePlanCardKind`/`canShowPortalAction` in `apps/web/components/billing-logic.ts`) depending on whether the Home is `past_due` — both labels create an identical fresh Portal session server-side; there is no separate "payment method update" backend action. No Portal URL is ever stored or reused — a fresh session is created on every click.
+
+### Provider vs entitlement separation (reaffirmed)
+
+Nothing in the Phase 4 frontend calls `has_entitlement`/`effective_plan` itself, and nothing asks Stripe anything — the page only ever reads the single `BillingStatusResponse`/`FamilyPricingResponse`/`PlanComparisonResponse` shapes the backend already resolved. This keeps the same layering Phase 1 established intact through the customer-facing surface, not just the admin one.
+
+### Explicitly out of scope for Phase 4
+
+No public homepage pricing cards. No signup/onboarding plan selection or payment requirement. No custom card-entry form (Stripe Checkout/Portal handle all payment-method UI). No local invoice/billing-history UI beyond pointing at "Manage billing" (Stripe's Portal already provides this). No Apple/Google billing. No promotional codes. No MRR/ARR. No new commercial tiers. No destructive downgrade behaviour beyond what Phases 1–3 already established.
