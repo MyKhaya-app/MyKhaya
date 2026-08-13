@@ -74,6 +74,7 @@ ignore = ["S101", "B008"]
 "tests/test_platform_health_cards.py" = ["F811"]
 "tests/test_platform_admin_invitations.py" = ["F811"]
 "tests/test_platform_security_remediation.py" = ["F811"]
+"tests/test_calendar_notifications.py" = ["F811"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -15,6 +15,7 @@ from mykhaya.calendar_occurrences import (
     recurrence_candidate_filter,
 )
 from mykhaya.colour_palette import ColourToken
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.features import require_feature
@@ -30,6 +31,8 @@ from mykhaya.models import (
     Invitation,
     Membership,
 )
+from mykhaya.notifications.deep_links import target
+from mykhaya.notifications.engine import notify
 from mykhaya.schemas import (
     EventActivityResponse,
     EventCreate,
@@ -184,6 +187,136 @@ async def _record_activity(
             summary=summary,
         )
     )
+
+
+def _format_event_when(event: CalendarEvent) -> str:
+    tz: tzinfo
+    try:
+        tz = ZoneInfo(event.timezone)
+    except ZoneInfoNotFoundError:
+        tz = UTC
+    local_start = event.start_at.astimezone(tz)
+    if event.is_all_day:
+        return local_start.strftime("%A, %d %B")
+    return local_start.strftime("%A, %d %B at %H:%M")
+
+
+async def _notify_members_added(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    actor_id: uuid.UUID,
+    actor_name: str,
+    recipient_ids: set[uuid.UUID],
+    version_marker: int,
+) -> None:
+    """One "added to an event" notification per newly-assigned member, never
+    the actor themselves. `version_marker` (CalendarEvent.version, already
+    incremented for this mutation before this is called) makes the
+    idempotency key distinct per actual mutation — a retried/duplicate
+    request that re-applies the *same* version never reaches here twice
+    anyway, since update_event's optimistic-concurrency check
+    (expected_updated_at) rejects it before any of this runs; this is
+    belt-and-braces against NotificationDelivery's own unique constraint,
+    consistent with mykhaya.notifications.reminders' key construction."""
+    when = _format_event_when(event)
+    for recipient_id in recipient_ids:
+        if recipient_id == actor_id:
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=recipient_id,
+            notification_type="event_invitation",
+            title="Added to an event",
+            body=f"{actor_name} added you to {event.title}. {when}.",
+            idempotency_key=f"calendar_event_member_added:{event.id}:{recipient_id}:{version_marker}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )
+
+
+async def _notify_members_removed(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    actor_id: uuid.UUID,
+    actor_name: str,
+    recipient_ids: set[uuid.UUID],
+    version_marker: int,
+) -> None:
+    for recipient_id in recipient_ids:
+        if recipient_id == actor_id:
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=recipient_id,
+            notification_type="event_updated",
+            title="Removed from an event",
+            body=f"{actor_name} removed you from {event.title}.",
+            idempotency_key=f"calendar_event_member_removed:{event.id}:{recipient_id}:{version_marker}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )
+
+
+async def _notify_members_event_updated(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    actor_id: uuid.UUID,
+    actor_name: str,
+    recipient_ids: set[uuid.UUID],
+    version_marker: int,
+) -> None:
+    when = _format_event_when(event)
+    for recipient_id in recipient_ids:
+        if recipient_id == actor_id:
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=recipient_id,
+            notification_type="event_updated",
+            title="Event updated",
+            body=f"{actor_name} updated {event.title}. {when}.",
+            idempotency_key=f"calendar_event_updated:{event.id}:{recipient_id}:{version_marker}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )
+
+
+async def _notify_members_event_cancelled(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    actor_id: uuid.UUID,
+    actor_name: str,
+    recipient_ids: set[uuid.UUID],
+) -> None:
+    for recipient_id in recipient_ids:
+        if recipient_id == actor_id:
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=recipient_id,
+            notification_type="event_cancelled",
+            title="Event cancelled",
+            body=f"{actor_name} cancelled {event.title}.",
+            idempotency_key=f"calendar_event_cancelled:{event.id}:{recipient_id}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )
 
 
 @router.get("/{home_id}/event-labels", response_model=list[EventLabelResponse])
@@ -373,6 +506,7 @@ async def create_event(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> EventOccurrence:
     await require_capability(home_id, Capability.calendar_create, auth, db)
     _validate_timezone(body.timezone)
@@ -435,7 +569,17 @@ async def create_event(
 
     await _record_activity(db, event, auth.user.id, "event.created", "created this event")
     audit(db, request, "calendar.event.created", auth.user.id, home_id, "event", event.id)
+    await _notify_members_added(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        set(requested_members),
+        event.version,
+    )
     await db.commit()
+    await db.refresh(event)
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     return _occurrence(event, event.start_at, event.end_at, label, requested_members)
@@ -509,6 +653,7 @@ async def update_event(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> EventOccurrence:
     membership = await require_capability(home_id, Capability.calendar_edit_own, auth, db)
     _validate_timezone(body.timezone)
@@ -548,6 +693,24 @@ async def update_event(
                 "A selected member is invalid",
             )
 
+    previous_member_ids = {
+        row.user_id
+        for row in (
+            await db.scalars(
+                select(CalendarEventMember)
+                .where(CalendarEventMember.event_id == event.id)
+                .with_for_update()
+            )
+        ).all()
+    }
+    material_change = (
+        event.title.strip() != body.title.strip()
+        or event.start_at != body.start_at
+        or event.end_at != body.end_at
+        or event.is_all_day != body.is_all_day
+        or event.location_text != body.location_text
+    )
+
     event.title = " ".join(body.title.strip().split())
     event.description = body.description
     event.start_at = body.start_at
@@ -564,18 +727,46 @@ async def update_event(
     event.last_edited_by = auth.user.id
     event.version += 1
 
-    await db.execute(
-        select(CalendarEventMember)
-        .where(CalendarEventMember.event_id == event.id)
-        .with_for_update()
-    )
     await db.execute(delete(CalendarEventMember).where(CalendarEventMember.event_id == event.id))
     for user_id in requested_members:
         db.add(CalendarEventMember(group_id=home_id, event_id=event.id, user_id=user_id))
 
     await _record_activity(db, event, auth.user.id, "event.updated", "updated this event")
     audit(db, request, "calendar.event.updated", auth.user.id, home_id, "event", event.id)
+
+    new_member_ids = set(requested_members) - previous_member_ids
+    removed_member_ids = previous_member_ids - set(requested_members)
+    unchanged_member_ids = set(requested_members) & previous_member_ids
+    await _notify_members_added(
+        db, settings, event, auth.user.id, auth.user.display_name, new_member_ids, event.version
+    )
+    await _notify_members_removed(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        removed_member_ids,
+        event.version,
+    )
+    if material_change:
+        await _notify_members_event_updated(
+            db,
+            settings,
+            event,
+            auth.user.id,
+            auth.user.display_name,
+            unchanged_member_ids,
+            event.version,
+        )
+
     await db.commit()
+    # Async SQLAlchemy expires every attribute on commit; touching one
+    # without an explicit refresh first (updated_at, server-computed via
+    # onupdate=func.now()) can fail with MissingGreenlet rather than
+    # silently lazy-loading the way sync SQLAlchemy would. Explicit refresh
+    # is the correct async-safe way to read it back.
+    await db.refresh(event)
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     return _occurrence(event, event.start_at, event.end_at, label, requested_members)
@@ -588,6 +779,7 @@ async def delete_event(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> None:
     await require_capability(home_id, Capability.calendar_delete, auth, db)
     event = await db.scalar(
@@ -601,11 +793,22 @@ async def delete_event(
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    member_ids = {
+        row.user_id
+        for row in (
+            await db.scalars(
+                select(CalendarEventMember).where(CalendarEventMember.event_id == event.id)
+            )
+        ).all()
+    }
     event.deleted_at = datetime.now(UTC)
     event.deleted_by = auth.user.id
     event.last_edited_by = auth.user.id
     await _record_activity(db, event, auth.user.id, "event.deleted", "deleted this event")
     audit(db, request, "calendar.event.deleted", auth.user.id, home_id, "event", event.id)
+    await _notify_members_event_cancelled(
+        db, settings, event, auth.user.id, auth.user.display_name, member_ids
+    )
     await db.commit()
 
 
