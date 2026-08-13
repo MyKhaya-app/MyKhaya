@@ -19,6 +19,11 @@ from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
+from mykhaya.entitlements import (
+    effective_plan,
+    get_home_subscription,
+    record_subscription_event,
+)
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.models import (
     ActionToken,
@@ -33,6 +38,7 @@ from mykhaya.models import (
     FeatureKey,
     FeatureOverride,
     Group,
+    HomeSubscription,
     Invitation,
     Membership,
     NotificationChannel,
@@ -55,6 +61,9 @@ from mykhaya.models import (
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
     TokenPurpose,
     User,
     WorkerJobRecord,
@@ -100,6 +109,8 @@ from mykhaya.platform_schemas import (
     AdministratorSecuritySummaryResponse,
     AdministratorUpdate,
     FeatureFlagUpdate,
+    GrantComplimentaryRequest,
+    HomeSubscriptionResponse,
     IncidentCreate,
     IncidentUpdate,
     InvitationState,
@@ -122,6 +133,7 @@ from mykhaya.platform_schemas import (
     RecoveryCodesResponse,
     RecoveryCodeStatusResponse,
     RecoveryCodeVerifyRequest,
+    RevokeComplimentaryRequest,
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
@@ -2379,12 +2391,38 @@ async def home_detail(
             .limit(50)
         )
     ).all()
+    subscription = await get_home_subscription(db, group_id)
+    resolved_plan = await effective_plan(db, group_id)
     return {
         "id": group.id,
         "name": group.name,
         "created_at": group.created_at,
         "last_activity_at": group.last_activity_at,
         "active": group.is_active,
+        "subscription": HomeSubscriptionResponse(
+            plan=subscription.plan if subscription else SubscriptionPlan.free,
+            provider=subscription.provider if subscription else SubscriptionProvider.free,
+            status=subscription.status if subscription else SubscriptionStatus.active,
+            billing_owner_user_id=subscription.billing_owner_user_id if subscription else None,
+            external_customer_id=subscription.external_customer_id if subscription else None,
+            external_subscription_id=subscription.external_subscription_id
+            if subscription
+            else None,
+            current_period_start=subscription.current_period_start if subscription else None,
+            current_period_end=subscription.current_period_end if subscription else None,
+            complimentary_reason=subscription.complimentary_reason if subscription else None,
+            complimentary_note=subscription.complimentary_note if subscription else None,
+            complimentary_granted_by=subscription.complimentary_granted_by
+            if subscription
+            else None,
+            complimentary_granted_at=subscription.complimentary_granted_at
+            if subscription
+            else None,
+            complimentary_expires_at=subscription.complimentary_expires_at
+            if subscription
+            else None,
+            effective_plan=resolved_plan,
+        ),
         "members": [
             {
                 "user_id": user.id,
@@ -2403,6 +2441,163 @@ async def home_detail(
         ],
         "notes": [{"id": row.id, "body": row.body, "created_at": row.created_at} for row in notes],
     }
+
+
+@router.put("/homes/{group_id}/subscription/complimentary", response_model=HomeSubscriptionResponse)
+async def grant_complimentary(
+    group_id: uuid.UUID,
+    body: GrantComplimentaryRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """The only pathway that can ever set provider=complimentary — never
+    reachable from any household-facing API. Complimentary access is a
+    first-class MyKhaya concept (Plan: Family, Provider: Complimentary), not
+    a disguised/free Stripe subscription."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None:
+        subscription = HomeSubscription(group_id=group_id)
+        db.add(subscription)
+        await db.flush()
+    previous = {
+        "plan": subscription.plan.value,
+        "provider": subscription.provider.value,
+        "status": subscription.status.value,
+    }
+    from_plan, from_provider, from_status = (
+        subscription.plan,
+        subscription.provider,
+        subscription.status,
+    )
+    subscription.plan = SubscriptionPlan.family
+    subscription.provider = SubscriptionProvider.complimentary
+    subscription.status = SubscriptionStatus.active
+    subscription.complimentary_reason = body.complimentary_reason
+    subscription.complimentary_note = body.complimentary_note
+    subscription.complimentary_granted_by = context.administrator.id
+    subscription.complimentary_granted_at = datetime.now(UTC)
+    subscription.complimentary_expires_at = body.expires_at
+    await record_subscription_event(
+        db,
+        group_id,
+        event_type="complimentary_granted",
+        from_plan=from_plan,
+        to_plan=subscription.plan,
+        from_provider=from_provider,
+        to_provider=subscription.provider,
+        from_status=from_status,
+        to_status=subscription.status,
+        actor_administrator_id=context.administrator.id,
+        reason=body.reason,
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.complimentary_granted",
+        "home",
+        group_id,
+        reason=body.reason,
+        previous=previous,
+        new={
+            "plan": subscription.plan.value,
+            "provider": subscription.provider.value,
+            "complimentary_reason": subscription.complimentary_reason,
+            "complimentary_expires_at": subscription.complimentary_expires_at.isoformat()
+            if subscription.complimentary_expires_at
+            else None,
+        },
+    )
+    await db.commit()
+    resolved_plan = await effective_plan(db, group_id)
+    return HomeSubscriptionResponse(
+        plan=subscription.plan,
+        provider=subscription.provider,
+        status=subscription.status,
+        billing_owner_user_id=subscription.billing_owner_user_id,
+        external_customer_id=subscription.external_customer_id,
+        external_subscription_id=subscription.external_subscription_id,
+        current_period_start=subscription.current_period_start,
+        current_period_end=subscription.current_period_end,
+        complimentary_reason=subscription.complimentary_reason,
+        complimentary_note=subscription.complimentary_note,
+        complimentary_granted_by=subscription.complimentary_granted_by,
+        complimentary_granted_at=subscription.complimentary_granted_at,
+        complimentary_expires_at=subscription.complimentary_expires_at,
+        effective_plan=resolved_plan,
+    )
+
+
+@router.delete(
+    "/homes/{group_id}/subscription/complimentary", response_model=HomeSubscriptionResponse
+)
+async def revoke_complimentary(
+    group_id: uuid.UUID,
+    body: RevokeComplimentaryRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """Returns the Home to Free/free — does not delete any Home data (see
+    "Safe downgrade principles" in docs/architecture/commercial-entitlements.md)."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None or subscription.provider != SubscriptionProvider.complimentary:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Home does not have complimentary access."
+        )
+    from_plan, from_provider, from_status = (
+        subscription.plan,
+        subscription.provider,
+        subscription.status,
+    )
+    subscription.plan = SubscriptionPlan.free
+    subscription.provider = SubscriptionProvider.free
+    subscription.status = SubscriptionStatus.active
+    subscription.complimentary_reason = None
+    subscription.complimentary_note = None
+    subscription.complimentary_expires_at = None
+    await record_subscription_event(
+        db,
+        group_id,
+        event_type="downgraded",
+        from_plan=from_plan,
+        to_plan=subscription.plan,
+        from_provider=from_provider,
+        to_provider=subscription.provider,
+        from_status=from_status,
+        to_status=subscription.status,
+        actor_administrator_id=context.administrator.id,
+        reason=body.reason,
+    )
+    platform_audit(
+        db, request, context, "home.complimentary_revoked", "home", group_id, reason=body.reason
+    )
+    await db.commit()
+    return HomeSubscriptionResponse(
+        plan=subscription.plan,
+        provider=subscription.provider,
+        status=subscription.status,
+        billing_owner_user_id=subscription.billing_owner_user_id,
+        external_customer_id=subscription.external_customer_id,
+        external_subscription_id=subscription.external_subscription_id,
+        current_period_start=subscription.current_period_start,
+        current_period_end=subscription.current_period_end,
+        complimentary_reason=None,
+        complimentary_note=None,
+        complimentary_granted_by=subscription.complimentary_granted_by,
+        complimentary_granted_at=subscription.complimentary_granted_at,
+        complimentary_expires_at=None,
+        effective_plan=SubscriptionPlan.free,
+    )
 
 
 @router.post("/homes/{group_id}/notes", status_code=status.HTTP_201_CREATED)

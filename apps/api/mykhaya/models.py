@@ -1073,3 +1073,140 @@ class NotificationTemplateRevision(Base):
     replaced_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
+
+
+# ---------------------------------------------------------------------------
+# Commercial: plans, subscriptions, entitlements. See
+# docs/architecture/commercial-entitlements.md. A subscription belongs to a
+# Home (Group), never to an individual user — every member inherits the
+# Home's commercial capabilities, subject to their normal permissions.
+# Deliberately a separate layer from FeatureKey/FeatureOverride (platform
+# feature flags) and Capability (Home/user permissions): a feature can be
+# globally enabled but still unavailable to a Free Home, and a Family
+# subscription never grants a permission a role wouldn't otherwise have.
+# ---------------------------------------------------------------------------
+
+
+class SubscriptionPlan(StrEnum):
+    free = "free"
+    family = "family"
+
+
+class SubscriptionProvider(StrEnum):
+    free = "free"
+    complimentary = "complimentary"
+    stripe = "stripe"
+    # Reserved for later phases — not implemented, not selectable via any
+    # current API. Present now so the enum doesn't need a migration when
+    # they arrive.
+    apple = "apple"
+    google = "google"
+
+
+class SubscriptionStatus(StrEnum):
+    """Normalised regardless of provider — mykhaya.entitlements.effective_plan
+    is the single place that decides which of these count as "paying"."""
+
+    active = "active"
+    trialing = "trialing"
+    past_due = "past_due"
+    cancel_at_period_end = "cancel_at_period_end"
+    cancelled = "cancelled"
+
+
+class HomeSubscription(UuidTimeMixin, Base):
+    """One row per Home — the authoritative commercial state. Only ever
+    written through mykhaya.entitlements or a privileged Platform Control
+    Centre pathway; never accepts client-submitted plan/provider/status
+    (see routers.groups, which never exposes these fields on ordinary Home
+    update endpoints, and routers.platform's complimentary-grant endpoint,
+    which is the only writer of provider=complimentary)."""
+
+    __tablename__ = "home_subscriptions"
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    plan: Mapped[SubscriptionPlan] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan"),
+        default=SubscriptionPlan.free,
+        server_default=SubscriptionPlan.free.value,
+    )
+    provider: Mapped[SubscriptionProvider] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider"),
+        default=SubscriptionProvider.free,
+        server_default=SubscriptionProvider.free.value,
+    )
+    status: Mapped[SubscriptionStatus] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status"),
+        default=SubscriptionStatus.active,
+        server_default=SubscriptionStatus.active.value,
+    )
+    # Nominally responsible member for billing/plan questions — informational only
+    # in Phase 1 (no billing exists yet); not required for Free or Complimentary.
+    billing_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # External-provider metadata — meaningless for free/complimentary, populated
+    # only once Stripe (Phase 3) actually creates a customer/subscription. Kept
+    # minimal deliberately: Stripe remains authoritative for anything MyKhaya
+    # doesn't itself need for entitlement resolution or admin visibility.
+    external_customer_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    external_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off
+    # Stripe subscription. Only ever set via the Platform Control Centre.
+    complimentary_reason: Mapped[str | None] = mapped_column(String(200))
+    # Operator-only context (e.g. "friend of the founder, see ticket #123") —
+    # never returned to household users. See routers.platform's household-facing
+    # response builder, which omits this field entirely for non-admin callers.
+    complimentary_note: Mapped[str | None] = mapped_column(String(1000))
+    complimentary_granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    complimentary_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Null = never expires. Evaluated dynamically at resolution time
+    # (mykhaya.entitlements.effective_plan) — no scheduler needed to "notice"
+    # an expiry; the very next resolution after the timestamp passes simply
+    # stops returning Family.
+    complimentary_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeSubscriptionEvent(Base):
+    """Append-only, structured commercial-state history — separate from the
+    free-text metadata on AuditEvent/AdministrativeAuditEvent so a future
+    billing-support investigation can query "every plan/provider/status
+    transition for this Home" directly, without parsing JSON blobs. Written
+    by mykhaya.entitlements.record_subscription_event alongside (not instead
+    of) the normal platform_audit()/audit() call for whatever action caused
+    the change."""
+
+    __tablename__ = "home_subscription_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(60))
+    from_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    to_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    from_provider: Mapped[SubscriptionProvider | None] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider", create_type=False)
+    )
+    to_provider: Mapped[SubscriptionProvider | None] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider", create_type=False)
+    )
+    from_status: Mapped[SubscriptionStatus | None] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status", create_type=False)
+    )
+    to_status: Mapped[SubscriptionStatus | None] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status", create_type=False)
+    )
+    actor_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    reason: Mapped[str | None] = mapped_column(String(300))

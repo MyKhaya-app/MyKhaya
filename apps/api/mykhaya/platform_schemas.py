@@ -5,7 +5,14 @@ from typing import Any, Literal
 from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from mykhaya.models import FeatureKey, PlatformRole, ServiceState
+from mykhaya.models import (
+    FeatureKey,
+    PlatformRole,
+    ServiceState,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
+)
 from mykhaya.module_registry import ReleaseState
 from mykhaya.schemas import StrictModel
 
@@ -446,3 +453,34 @@ class DiagnosticsEntryResponse(BaseModel):
 class DiagnosticsResponse(BaseModel):
     items: list[DiagnosticsEntryResponse]
     next_page: int | None
+
+
+class HomeSubscriptionResponse(BaseModel):
+    """Platform-Admin-only view of a Home's commercial state — everything
+    Phase 2's subscription management UI will need to display. Never
+    returned from any household-facing endpoint."""
+
+    plan: SubscriptionPlan
+    provider: SubscriptionProvider
+    status: SubscriptionStatus
+    billing_owner_user_id: uuid.UUID | None
+    external_customer_id: str | None
+    external_subscription_id: str | None
+    current_period_start: datetime | None
+    current_period_end: datetime | None
+    complimentary_reason: str | None
+    complimentary_note: str | None
+    complimentary_granted_by: uuid.UUID | None
+    complimentary_granted_at: datetime | None
+    complimentary_expires_at: datetime | None
+    effective_plan: SubscriptionPlan
+
+
+class GrantComplimentaryRequest(SensitiveActionRequest):
+    complimentary_reason: str = Field(min_length=1, max_length=200)
+    complimentary_note: str | None = Field(default=None, max_length=1000)
+    expires_at: datetime | None = None
+
+
+class RevokeComplimentaryRequest(SensitiveActionRequest):
+    pass

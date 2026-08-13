@@ -9,6 +9,7 @@ from mykhaya.audit import audit
 from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
+from mykhaya.entitlements import ensure_home_subscription
 from mykhaya.household_permissions import (
     Capability,
     capabilities_for,
@@ -125,6 +126,7 @@ async def create_group(
     db.add(membership)
     calendar = HomeCalendar(group_id=group.id, name="Home Calendar")
     db.add(calendar)
+    await ensure_home_subscription(db, group.id)
     await db.flush()
     for index, (name, color) in enumerate(DEFAULT_LABELS):
         db.add(
