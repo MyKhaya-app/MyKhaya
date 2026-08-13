@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.models import (
@@ -152,10 +152,14 @@ def _complimentary_active(subscription: HomeSubscription) -> bool:
     return subscription.complimentary_expires_at > datetime.now(UTC)
 
 
-async def effective_plan(db: AsyncSession, home_id: uuid.UUID) -> SubscriptionPlan:
-    """The single authoritative resolution. See module docstring for the
-    fail-safe rules this enforces."""
-    subscription = await get_home_subscription(db, home_id)
+def resolve_effective_plan(subscription: HomeSubscription | None) -> SubscriptionPlan:
+    """The pure resolution rule — no DB access — shared by `effective_plan()`
+    (single Home) and any bulk listing/summary query that has already fetched
+    a batch of `HomeSubscription` rows and wants to resolve each one without
+    an extra query per row. This is still the one place the rule is written;
+    `effective_plan()` is a thin fetch-then-call-this wrapper, not a second
+    implementation. See module docstring for the fail-safe rules enforced
+    here."""
     if subscription is None:
         return SubscriptionPlan.free
     if subscription.status not in _PLAN_HONOURED_STATUSES:
@@ -169,9 +173,90 @@ async def effective_plan(db: AsyncSession, home_id: uuid.UUID) -> SubscriptionPl
     return subscription.plan
 
 
+@dataclass(frozen=True)
+class EffectiveStateResolution:
+    plan: SubscriptionPlan
+    # None when the effective plan matches the stored plan exactly (the
+    # common case). Populated with a short, human-readable explanation
+    # whenever they diverge — e.g. expired complimentary access, a
+    # cancelled/lapsed status — for display in the Platform Control Centre.
+    reason: str | None
+
+
+def resolve_effective_state(subscription: HomeSubscription | None) -> EffectiveStateResolution:
+    """Like resolve_effective_plan, but also explains *why* when the
+    effective plan differs from the stored one — for Platform Control Centre
+    diagnostics (mykhaya.routers.platform's subscription detail endpoint).
+    Never used for authorization; only for display."""
+    plan = resolve_effective_plan(subscription)
+    if subscription is None:
+        return EffectiveStateResolution(plan=plan, reason=None)
+    if plan == subscription.plan:
+        return EffectiveStateResolution(plan=plan, reason=None)
+    if subscription.provider == SubscriptionProvider.complimentary and not _complimentary_active(
+        subscription
+    ):
+        return EffectiveStateResolution(plan=plan, reason="Complimentary access expired")
+    if subscription.status == SubscriptionStatus.cancelled:
+        return EffectiveStateResolution(plan=plan, reason="Subscription cancelled")
+    if subscription.status not in _PLAN_HONOURED_STATUSES:
+        return EffectiveStateResolution(plan=plan, reason="Subscription not currently active")
+    if subscription.plan not in PLAN_DEFINITIONS:
+        return EffectiveStateResolution(plan=plan, reason="Unrecognised stored plan value")
+    return EffectiveStateResolution(plan=plan, reason=None)
+
+
+def effective_plan_sql_filter(plan: SubscriptionPlan) -> ColumnElement[bool]:
+    """A SQL-expressible mirror of resolve_effective_plan's Free/Family split,
+    for filtering a listing query (mykhaya.routers.platform's subscription
+    list/summary endpoints) without fetching every row into Python first.
+
+    This is a *filter*, never an authorization decision — resolve_effective_plan
+    (via effective_plan()) remains the only authoritative per-Home resolution.
+    Query against an outer join of Group -> HomeSubscription, since a Home
+    with no subscription row must count as Free here exactly as it does in
+    resolve_effective_plan. Kept in sync with resolve_effective_plan by
+    test_effective_plan_sql_filter_matches_python_resolution."""
+    complimentary_expired = and_(
+        HomeSubscription.provider == SubscriptionProvider.complimentary,
+        HomeSubscription.complimentary_expires_at.is_not(None),
+        HomeSubscription.complimentary_expires_at <= func.now(),
+    )
+    is_effectively_free = or_(
+        HomeSubscription.id.is_(None),
+        HomeSubscription.status.not_in(_PLAN_HONOURED_STATUSES),
+        complimentary_expired,
+        HomeSubscription.plan == SubscriptionPlan.free,
+    )
+    if plan == SubscriptionPlan.free:
+        return is_effectively_free
+    return and_(HomeSubscription.id.is_not(None), not_(is_effectively_free))
+
+
+def complimentary_expired_sql_filter() -> ColumnElement[bool]:
+    """SQL mirror of the complimentary-expiry check in resolve_effective_plan,
+    for the "expired complimentary" summary count and list filter."""
+    return and_(
+        HomeSubscription.provider == SubscriptionProvider.complimentary,
+        HomeSubscription.complimentary_expires_at.is_not(None),
+        HomeSubscription.complimentary_expires_at <= func.now(),
+    )
+
+
+async def effective_plan(db: AsyncSession, home_id: uuid.UUID) -> SubscriptionPlan:
+    """The single authoritative resolution. See module docstring for the
+    fail-safe rules this enforces."""
+    subscription = await get_home_subscription(db, home_id)
+    return resolve_effective_plan(subscription)
+
+
+def plan_definition_for(plan: SubscriptionPlan) -> PlanDefinition:
+    return PLAN_DEFINITIONS.get(plan, PLAN_DEFINITIONS[SubscriptionPlan.free])
+
+
 async def _plan_definition(db: AsyncSession, home_id: uuid.UUID) -> PlanDefinition:
     plan = await effective_plan(db, home_id)
-    return PLAN_DEFINITIONS[plan]
+    return plan_definition_for(plan)
 
 
 async def has_entitlement(db: AsyncSession, home_id: uuid.UUID, key: str) -> bool:

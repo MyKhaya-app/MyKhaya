@@ -14,12 +14,15 @@ from sqlalchemy import select
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import (
     effective_plan,
+    effective_plan_sql_filter,
     ensure_home_subscription,
     get_home_subscription,
     get_limit,
     has_entitlement,
     require_entitlement,
     require_within_limit,
+    resolve_effective_plan,
+    resolve_effective_state,
 )
 from mykhaya.models import (
     Group,
@@ -281,3 +284,119 @@ async def test_downgrading_plan_does_not_delete_the_home_or_its_subscription_row
         subscription = await get_home_subscription(db, home_id)
         assert subscription is not None
         assert subscription.plan == SubscriptionPlan.free
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: effective-state resolution / reason, and the SQL filter mirror
+# used by the Platform Control Centre summary/list endpoints.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_state_has_no_reason_when_stored_matches_effective() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        resolution = resolve_effective_state(subscription)
+        assert resolution.plan == SubscriptionPlan.free
+        assert resolution.reason is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_state_explains_expired_complimentary_access() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    await _set_subscription(
+        home_id,
+        plan=SubscriptionPlan.family,
+        provider=SubscriptionProvider.complimentary,
+        status=SubscriptionStatus.active,
+        complimentary_expires_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        resolution = resolve_effective_state(subscription)
+        assert resolution.plan == SubscriptionPlan.free
+        assert resolution.reason == "Complimentary access expired"
+
+
+@pytest.mark.asyncio
+async def test_resolve_effective_state_explains_cancelled_subscription() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    await _set_subscription(
+        home_id,
+        plan=SubscriptionPlan.family,
+        provider=SubscriptionProvider.stripe,
+        status=SubscriptionStatus.cancelled,
+    )
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        resolution = resolve_effective_state(subscription)
+        assert resolution.plan == SubscriptionPlan.free
+        assert resolution.reason == "Subscription cancelled"
+
+
+@pytest.mark.asyncio
+async def test_effective_plan_sql_filter_matches_python_resolution() -> None:
+    """Guards against the SQL mirror (used by the Platform Control Centre
+    summary/list endpoints for scalable filtering) drifting from the
+    authoritative Python resolver."""
+    scenarios = [
+        {"plan": SubscriptionPlan.free, "provider": SubscriptionProvider.free},
+        {"plan": SubscriptionPlan.family, "provider": SubscriptionProvider.stripe},
+        {
+            "plan": SubscriptionPlan.family,
+            "provider": SubscriptionProvider.complimentary,
+            "complimentary_expires_at": None,
+        },
+        {
+            "plan": SubscriptionPlan.family,
+            "provider": SubscriptionProvider.complimentary,
+            "complimentary_expires_at": datetime.now(UTC) + timedelta(days=1),
+        },
+        {
+            "plan": SubscriptionPlan.family,
+            "provider": SubscriptionProvider.complimentary,
+            "complimentary_expires_at": datetime.now(UTC) - timedelta(days=1),
+        },
+        {
+            "plan": SubscriptionPlan.family,
+            "provider": SubscriptionProvider.stripe,
+            "status": SubscriptionStatus.cancelled,
+        },
+        {
+            "plan": SubscriptionPlan.family,
+            "provider": SubscriptionProvider.stripe,
+            "status": SubscriptionStatus.past_due,
+        },
+    ]
+    home_ids: list[uuid.UUID] = []
+    for scenario in scenarios:
+        home_id = await _make_home()
+        async with SessionFactory() as db:
+            await ensure_home_subscription(db, home_id)
+            await db.commit()
+        await _set_subscription(home_id, **scenario)
+        home_ids.append(home_id)
+
+    async with SessionFactory() as db:
+        for plan in (SubscriptionPlan.free, SubscriptionPlan.family):
+            sql_matches = (
+                await db.scalars(
+                    select(HomeSubscription.group_id)
+                    .where(HomeSubscription.group_id.in_(home_ids))
+                    .where(effective_plan_sql_filter(plan))
+                )
+            ).all()
+            for home_id in home_ids:
+                subscription = await get_home_subscription(db, home_id)
+                python_plan = resolve_effective_plan(subscription)
+                assert (home_id in sql_matches) == (python_plan == plan)

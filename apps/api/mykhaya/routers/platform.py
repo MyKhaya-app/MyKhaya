@@ -20,9 +20,13 @@ from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
-    effective_plan,
+    complimentary_expired_sql_filter,
+    effective_plan_sql_filter,
     get_home_subscription,
+    plan_definition_for,
     record_subscription_event,
+    resolve_effective_plan,
+    resolve_effective_state,
 )
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.models import (
@@ -39,6 +43,8 @@ from mykhaya.models import (
     FeatureOverride,
     Group,
     HomeSubscription,
+    HomeSubscriptionEvent,
+    HouseholdRelationship,
     Invitation,
     Membership,
     NotificationChannel,
@@ -108,8 +114,10 @@ from mykhaya.platform_schemas import (
     AdministratorSecurityResponse,
     AdministratorSecuritySummaryResponse,
     AdministratorUpdate,
+    EntitlementsResponse,
     FeatureFlagUpdate,
     GrantComplimentaryRequest,
+    HomeAdministratorSummary,
     HomeSubscriptionResponse,
     IncidentCreate,
     IncidentUpdate,
@@ -137,6 +145,11 @@ from mykhaya.platform_schemas import (
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
+    SubscriptionDetailResponse,
+    SubscriptionEventResponse,
+    SubscriptionListItem,
+    SubscriptionListResponse,
+    SubscriptionSummaryResponse,
     TestEmailRequest,
     TotpCodeRequest,
     TotpDisableRequest,
@@ -2349,6 +2362,39 @@ async def homes(
     return PageResponse(items=items, page=page, page_size=page_size, total=total)
 
 
+async def _subscription_response(
+    db: AsyncSession, subscription: HomeSubscription | None
+) -> HomeSubscriptionResponse:
+    """The one place a HomeSubscription row (or its absence) is turned into
+    the Platform-Admin-facing response shape — used by home_detail,
+    grant/revoke complimentary, and the Phase 2 subscription detail endpoint,
+    so the effective-state resolution and the granted-by lookup can never
+    drift between them."""
+    granted_by_name: str | None = None
+    if subscription is not None and subscription.complimentary_granted_by is not None:
+        granter = await db.get(PlatformAdministrator, subscription.complimentary_granted_by)
+        granted_by_name = granter.display_name if granter else None
+    resolution = resolve_effective_state(subscription)
+    return HomeSubscriptionResponse(
+        plan=subscription.plan if subscription else SubscriptionPlan.free,
+        provider=subscription.provider if subscription else SubscriptionProvider.free,
+        status=subscription.status if subscription else SubscriptionStatus.active,
+        billing_owner_user_id=subscription.billing_owner_user_id if subscription else None,
+        external_customer_id=subscription.external_customer_id if subscription else None,
+        external_subscription_id=subscription.external_subscription_id if subscription else None,
+        current_period_start=subscription.current_period_start if subscription else None,
+        current_period_end=subscription.current_period_end if subscription else None,
+        complimentary_reason=subscription.complimentary_reason if subscription else None,
+        complimentary_note=subscription.complimentary_note if subscription else None,
+        complimentary_granted_by=subscription.complimentary_granted_by if subscription else None,
+        complimentary_granted_by_display_name=granted_by_name,
+        complimentary_granted_at=subscription.complimentary_granted_at if subscription else None,
+        complimentary_expires_at=subscription.complimentary_expires_at if subscription else None,
+        effective_plan=resolution.plan,
+        effective_status_reason=resolution.reason,
+    )
+
+
 @router.get("/homes/{group_id}")
 async def home_detail(
     group_id: uuid.UUID,
@@ -2392,37 +2438,13 @@ async def home_detail(
         )
     ).all()
     subscription = await get_home_subscription(db, group_id)
-    resolved_plan = await effective_plan(db, group_id)
     return {
         "id": group.id,
         "name": group.name,
         "created_at": group.created_at,
         "last_activity_at": group.last_activity_at,
         "active": group.is_active,
-        "subscription": HomeSubscriptionResponse(
-            plan=subscription.plan if subscription else SubscriptionPlan.free,
-            provider=subscription.provider if subscription else SubscriptionProvider.free,
-            status=subscription.status if subscription else SubscriptionStatus.active,
-            billing_owner_user_id=subscription.billing_owner_user_id if subscription else None,
-            external_customer_id=subscription.external_customer_id if subscription else None,
-            external_subscription_id=subscription.external_subscription_id
-            if subscription
-            else None,
-            current_period_start=subscription.current_period_start if subscription else None,
-            current_period_end=subscription.current_period_end if subscription else None,
-            complimentary_reason=subscription.complimentary_reason if subscription else None,
-            complimentary_note=subscription.complimentary_note if subscription else None,
-            complimentary_granted_by=subscription.complimentary_granted_by
-            if subscription
-            else None,
-            complimentary_granted_at=subscription.complimentary_granted_at
-            if subscription
-            else None,
-            complimentary_expires_at=subscription.complimentary_expires_at
-            if subscription
-            else None,
-            effective_plan=resolved_plan,
-        ),
+        "subscription": await _subscription_response(db, subscription),
         "members": [
             {
                 "user_id": user.id,
@@ -2514,23 +2536,7 @@ async def grant_complimentary(
         },
     )
     await db.commit()
-    resolved_plan = await effective_plan(db, group_id)
-    return HomeSubscriptionResponse(
-        plan=subscription.plan,
-        provider=subscription.provider,
-        status=subscription.status,
-        billing_owner_user_id=subscription.billing_owner_user_id,
-        external_customer_id=subscription.external_customer_id,
-        external_subscription_id=subscription.external_subscription_id,
-        current_period_start=subscription.current_period_start,
-        current_period_end=subscription.current_period_end,
-        complimentary_reason=subscription.complimentary_reason,
-        complimentary_note=subscription.complimentary_note,
-        complimentary_granted_by=subscription.complimentary_granted_by,
-        complimentary_granted_at=subscription.complimentary_granted_at,
-        complimentary_expires_at=subscription.complimentary_expires_at,
-        effective_plan=resolved_plan,
-    )
+    return await _subscription_response(db, subscription)
 
 
 @router.delete(
@@ -2582,21 +2588,205 @@ async def revoke_complimentary(
         db, request, context, "home.complimentary_revoked", "home", group_id, reason=body.reason
     )
     await db.commit()
-    return HomeSubscriptionResponse(
-        plan=subscription.plan,
-        provider=subscription.provider,
-        status=subscription.status,
-        billing_owner_user_id=subscription.billing_owner_user_id,
-        external_customer_id=subscription.external_customer_id,
-        external_subscription_id=subscription.external_subscription_id,
-        current_period_start=subscription.current_period_start,
-        current_period_end=subscription.current_period_end,
-        complimentary_reason=None,
-        complimentary_note=None,
-        complimentary_granted_by=subscription.complimentary_granted_by,
-        complimentary_granted_at=subscription.complimentary_granted_at,
-        complimentary_expires_at=None,
-        effective_plan=SubscriptionPlan.free,
+    return await _subscription_response(db, subscription)
+
+
+@router.get("/subscriptions/summary", response_model=SubscriptionSummaryResponse)
+async def subscriptions_summary(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionSummaryResponse:
+    """One aggregate query — every count is a SQL FILTER over a single outer
+    join, not N queries or a full row fetch, so this scales as Home count
+    grows. No revenue/MRR/ARR here: there is no payment provider in Phase 2
+    to source that from."""
+    row = (
+        await db.execute(
+            select(
+                func.count(Group.id),
+                func.count(Group.id).filter(effective_plan_sql_filter(SubscriptionPlan.free)),
+                func.count(Group.id).filter(effective_plan_sql_filter(SubscriptionPlan.family)),
+                func.count(Group.id).filter(
+                    HomeSubscription.provider == SubscriptionProvider.complimentary
+                ),
+                func.count(Group.id).filter(complimentary_expired_sql_filter()),
+                func.count(Group.id).filter(HomeSubscription.status == SubscriptionStatus.past_due),
+                func.count(Group.id).filter(
+                    HomeSubscription.status == SubscriptionStatus.cancelled
+                ),
+            )
+            .select_from(Group)
+            .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+        )
+    ).one()
+    total, free, family, complimentary, complimentary_expired, past_due, cancelled = row
+    return SubscriptionSummaryResponse(
+        total_homes=total,
+        free=free,
+        family=family,
+        complimentary=complimentary,
+        complimentary_expired=complimentary_expired,
+        past_due=past_due,
+        cancelled=cancelled,
+    )
+
+
+@router.get("/subscriptions", response_model=SubscriptionListResponse)
+async def subscriptions(
+    q: str | None = Query(default=None, max_length=100),
+    effective: SubscriptionPlan | None = None,
+    provider: SubscriptionProvider | None = None,
+    status_filter: SubscriptionStatus | None = Query(default=None, alias="status"),
+    expired_complimentary: bool | None = None,
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionListResponse:
+    """Searchable, filterable, paginated Home listing with commercial state —
+    a dedicated endpoint rather than N per-Home detail requests, since a
+    Platform Control Centre operator needs to scan every Home, and MyKhaya is
+    expected to hold significantly more Homes than the existing generic
+    /homes listing was built to browse commercially."""
+    member_counts = (
+        select(Membership.group_id, func.count(Membership.id).label("member_count"))
+        .where(Membership.removed_at.is_(None))
+        .group_by(Membership.group_id)
+        .subquery()
+    )
+    filters: list[Any] = []
+    if q:
+        filters.append(Group.name.ilike(f"%{q.strip()}%"))
+    if effective is not None:
+        filters.append(effective_plan_sql_filter(effective))
+    if provider is not None:
+        filters.append(HomeSubscription.provider == provider)
+    if status_filter is not None:
+        filters.append(HomeSubscription.status == status_filter)
+    if expired_complimentary:
+        filters.append(complimentary_expired_sql_filter())
+    where = and_(*filters)
+    base = (
+        select(Group, HomeSubscription, func.coalesce(member_counts.c.member_count, 0))
+        .select_from(Group)
+        .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+        .outerjoin(member_counts, member_counts.c.group_id == Group.id)
+        .where(where)
+    )
+    total = (
+        await db.scalar(
+            select(func.count(Group.id))
+            .select_from(Group)
+            .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+            .where(where)
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            base.order_by(Group.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+    ).all()
+    items = [
+        SubscriptionListItem(
+            id=group.id,
+            name=group.name,
+            stored_plan=subscription.plan if subscription else SubscriptionPlan.free,
+            provider=subscription.provider if subscription else SubscriptionProvider.free,
+            status=subscription.status if subscription else SubscriptionStatus.active,
+            effective_plan=resolve_effective_plan(subscription),
+            effective_status_reason=resolve_effective_state(subscription).reason,
+            complimentary_expires_at=subscription.complimentary_expires_at
+            if subscription
+            else None,
+            member_count=member_count,
+            last_commercial_change=subscription.updated_at if subscription else group.created_at,
+        )
+        for group, subscription, member_count in rows
+    ]
+    return SubscriptionListResponse(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get("/subscriptions/{group_id}", response_model=SubscriptionDetailResponse)
+async def subscription_detail(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionDetailResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    admin_rows = (
+        await db.execute(
+            select(User.id, User.display_name, User.email)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                Membership.group_id == group_id,
+                Membership.removed_at.is_(None),
+                Membership.relationship == HouseholdRelationship.home_admin,
+            )
+            .limit(10)
+        )
+    ).all()
+    history_rows = (
+        await db.scalars(
+            select(HomeSubscriptionEvent)
+            .where(HomeSubscriptionEvent.group_id == group_id)
+            .order_by(HomeSubscriptionEvent.created_at.desc())
+            .limit(100)
+        )
+    ).all()
+    actor_ids = {row.actor_administrator_id for row in history_rows if row.actor_administrator_id}
+    actor_names: dict[uuid.UUID, str] = {}
+    if actor_ids:
+        actors = (
+            await db.scalars(
+                select(PlatformAdministrator).where(PlatformAdministrator.id.in_(actor_ids))
+            )
+        ).all()
+        actor_names = {actor.id: actor.display_name for actor in actors}
+    definition = plan_definition_for(resolve_effective_plan(subscription))
+    return SubscriptionDetailResponse(
+        id=group.id,
+        name=group.name,
+        created_at=group.created_at,
+        member_count=member_count,
+        administrators=[
+            HomeAdministratorSummary(user_id=row.id, display_name=row.display_name, email=row.email)
+            for row in admin_rows
+        ],
+        subscription=await _subscription_response(db, subscription),
+        entitlements=EntitlementsResponse(
+            plan=definition.plan, booleans=definition.booleans, limits=definition.limits
+        ),
+        history=[
+            SubscriptionEventResponse(
+                id=event.id,
+                created_at=event.created_at,
+                event_type=event.event_type,
+                from_plan=event.from_plan,
+                to_plan=event.to_plan,
+                from_provider=event.from_provider,
+                to_provider=event.to_provider,
+                from_status=event.from_status,
+                to_status=event.to_status,
+                actor_administrator_id=event.actor_administrator_id,
+                actor_display_name=actor_names.get(event.actor_administrator_id)
+                if event.actor_administrator_id
+                else None,
+                reason=event.reason,
+            )
+            for event in history_rows
+        ],
     )
 
 

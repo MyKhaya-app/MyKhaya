@@ -31,7 +31,11 @@ export class PlatformClient {
     this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
   put = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PUT", body: JSON.stringify(body) });
-  delete = <T>(path: string) => this.request<T>(path, { method: "DELETE" });
+  // Most DELETEs need no body; the complimentary-access revoke endpoint
+  // (Phase 2) is a privileged action that requires a reason, so `body` is
+  // optional rather than adding a second method.
+  delete = <T>(path: string, body?: unknown) =>
+    this.request<T>(path, { method: "DELETE", ...(body ? { body: JSON.stringify(body) } : {}) });
 }
 
 export const platformApi = new PlatformClient();

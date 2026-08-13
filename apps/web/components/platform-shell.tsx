@@ -9,6 +9,7 @@ import type { PlatformActor } from "./platform-types";
 
 const navigation = [
   ["Overview", "/"], ["Users", "/users"], ["Homes", "/homes"],
+  ["Subscriptions", "/subscriptions"],
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
   ["Templates", "/notification-templates"], ["Communications", "/communications"],
   ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],

@@ -471,9 +471,13 @@ class HomeSubscriptionResponse(BaseModel):
     complimentary_reason: str | None
     complimentary_note: str | None
     complimentary_granted_by: uuid.UUID | None
+    complimentary_granted_by_display_name: str | None
     complimentary_granted_at: datetime | None
     complimentary_expires_at: datetime | None
     effective_plan: SubscriptionPlan
+    # Populated only when effective_plan differs from plan — e.g. "Complimentary
+    # access expired". None when the effective plan matches the stored one.
+    effective_status_reason: str | None
 
 
 class GrantComplimentaryRequest(SensitiveActionRequest):
@@ -484,3 +488,74 @@ class GrantComplimentaryRequest(SensitiveActionRequest):
 
 class RevokeComplimentaryRequest(SensitiveActionRequest):
     pass
+
+
+class SubscriptionSummaryResponse(BaseModel):
+    """Backend-computed counts only — no revenue/MRR/ARR figures exist until
+    Stripe (Phase 3) supplies real payment data."""
+
+    total_homes: int
+    free: int
+    family: int
+    complimentary: int
+    complimentary_expired: int
+    past_due: int
+    cancelled: int
+
+
+class SubscriptionListItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    stored_plan: SubscriptionPlan
+    provider: SubscriptionProvider
+    status: SubscriptionStatus
+    effective_plan: SubscriptionPlan
+    effective_status_reason: str | None
+    complimentary_expires_at: datetime | None
+    member_count: int
+    last_commercial_change: datetime | None
+
+
+class SubscriptionListResponse(BaseModel):
+    items: list[SubscriptionListItem]
+    page: int
+    page_size: int
+    total: int
+
+
+class EntitlementsResponse(BaseModel):
+    plan: SubscriptionPlan
+    booleans: dict[str, bool]
+    limits: dict[str, int | None]
+
+
+class SubscriptionEventResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    event_type: str
+    from_plan: SubscriptionPlan | None
+    to_plan: SubscriptionPlan | None
+    from_provider: SubscriptionProvider | None
+    to_provider: SubscriptionProvider | None
+    from_status: SubscriptionStatus | None
+    to_status: SubscriptionStatus | None
+    actor_administrator_id: uuid.UUID | None
+    actor_display_name: str | None
+    reason: str | None
+
+
+class HomeAdministratorSummary(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    email: str
+
+
+class SubscriptionDetailResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    member_count: int
+    administrators: list[HomeAdministratorSummary]
+    subscription: HomeSubscriptionResponse
+    entitlements: EntitlementsResponse
+    history: list[SubscriptionEventResponse]

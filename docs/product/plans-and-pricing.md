@@ -16,4 +16,16 @@ An admin-granted Family-equivalent plan for beta testers, friends and family, or
 
 ## What Phase 1 does not include
 
-No payment collection of any kind — no card form, no Stripe Checkout, no in-app purchase. No pricing page on the public site or in the app. No payment step in the signup flow. No Plan & Billing management screen for households. A household on Free today cannot yet self-serve upgrade to Family; that arrives with the Stripe integration (Phase 3) and its accompanying UI (Phase 2 prepares the Platform Control Centre view; a household-facing billing UI is a later phase still). Until then, the only way onto Family is a Platform Control Centre operator granting Complimentary access.
+No payment collection of any kind — no card form, no Stripe Checkout, no in-app purchase. No pricing page on the public site or in the app. No payment step in the signup flow. No Plan & Billing management screen for households. A household on Free today cannot yet self-serve upgrade to Family; that arrives with the Stripe integration (Phase 3) and its accompanying UI. Until then, the only way onto Family is a Platform Control Centre operator granting Complimentary access.
+
+## Phase 2: the administrator-facing complimentary-access workflow
+
+Phase 2 gives Platform Control Centre operators (support/administrator/owner roles) a proper working surface for the above, under a new **Subscriptions** area — still no payment collection, still no household-facing change.
+
+- **Subscriptions overview**: summary counts (Total Homes, Free, Family, Complimentary, Expired complimentary, Past due, Cancelled) and a searchable/filterable table of every Home's stored and effective commercial state, so an operator can answer "which Homes are on Complimentary access" or "did this Home's trial expire" without querying the database directly.
+- **Home commercial detail**: a single Home's full stored state (plan, provider, status, complimentary reason/note/expiry/who-granted-it), its currently effective state (which may differ, e.g. after expiry), its resolved entitlements in plain language ("Calendar maximum: 1", "Lists: Not available"), and its full commercial event history.
+- **Grant complimentary Family access**: an operator picks a reason (a short preset list — Beta tester, Friends & Family, Internal testing, Partner, Promotional — or free text), an optional internal note (never shown to the household), and an expiry (Never, or a specific date), then confirms with a required reason for the administrative action itself. This is the same underlying grant used for MyKhaya's beta programme.
+- **Remove complimentary access**: returns the Home to Free, with the consequence ("returns to Free plan entitlements; no data is deleted") shown before confirming.
+- **Extending or making complimentary access permanent** reuses the same grant action with a new expiry — there is no separate "edit" flow, keeping every commercial-state change a single, well-defined, audited action rather than a free-form edit.
+
+The £0/£3.99/£39 figures shown throughout this Subscriptions area are the same read-only informational figures as above — a label for operators to understand plan intent, not a price an operator can change from the UI, and not (yet) a price connected to any payment system.

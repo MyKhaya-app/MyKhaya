@@ -98,6 +98,98 @@ export type AdministratorInvitationPreview = {
   expires_at: string;
 };
 
+// Phase 2 commercial entitlements (Platform Control Centre "Subscriptions"
+// area). Mirrors mykhaya.platform_schemas' HomeSubscriptionResponse /
+// SubscriptionSummaryResponse / SubscriptionListItem / SubscriptionDetailResponse
+// — see docs/architecture/commercial-entitlements.md.
+
+export type HomeSubscription = {
+  plan: string;
+  provider: string;
+  status: string;
+  billing_owner_user_id: string | null;
+  external_customer_id: string | null;
+  external_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  complimentary_reason: string | null;
+  complimentary_note: string | null;
+  complimentary_granted_by: string | null;
+  complimentary_granted_by_display_name: string | null;
+  complimentary_granted_at: string | null;
+  complimentary_expires_at: string | null;
+  effective_plan: string;
+  effective_status_reason: string | null;
+};
+
+export type SubscriptionSummary = {
+  total_homes: number;
+  free: number;
+  family: number;
+  complimentary: number;
+  complimentary_expired: number;
+  past_due: number;
+  cancelled: number;
+};
+
+export type SubscriptionListItem = {
+  id: string;
+  name: string;
+  stored_plan: string;
+  provider: string;
+  status: string;
+  effective_plan: string;
+  effective_status_reason: string | null;
+  complimentary_expires_at: string | null;
+  member_count: number;
+  last_commercial_change: string | null;
+};
+
+export type SubscriptionListResponse = {
+  items: SubscriptionListItem[];
+  page: number;
+  page_size: number;
+  total: number;
+};
+
+export type Entitlements = {
+  plan: string;
+  booleans: Record<string, boolean>;
+  limits: Record<string, number | null>;
+};
+
+export type SubscriptionEvent = {
+  id: string;
+  created_at: string;
+  event_type: string;
+  from_plan: string | null;
+  to_plan: string | null;
+  from_provider: string | null;
+  to_provider: string | null;
+  from_status: string | null;
+  to_status: string | null;
+  actor_administrator_id: string | null;
+  actor_display_name: string | null;
+  reason: string | null;
+};
+
+export type HomeAdministratorSummary = {
+  user_id: string;
+  display_name: string;
+  email: string;
+};
+
+export type SubscriptionDetail = {
+  id: string;
+  name: string;
+  created_at: string;
+  member_count: number;
+  administrators: HomeAdministratorSummary[];
+  subscription: HomeSubscription;
+  entitlements: Entitlements;
+  history: SubscriptionEvent[];
+};
+
 export const PLATFORM_ROLES: { value: string; label: string }[] = [
   { value: "platform_owner", label: "Owner" },
   { value: "platform_administrator", label: "Administrator" },
