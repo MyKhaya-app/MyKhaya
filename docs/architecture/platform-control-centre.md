@@ -34,6 +34,14 @@ stored configuration, never both at once:
 3. **Unconfigured** — no env var and no enabled stored row. Email-dependent journeys are
    blocked with a clear "email not configured" condition rather than failing silently.
 
+The environment path supports the same three connection-security options as the stored
+path (`MYKHAYA_SMTP_CONNECTION_SECURITY=none|starttls|tls`, `tls` being implicit TLS —
+typically port 465), plus `MYKHAYA_SMTP_TIMEOUT_SECONDS` and `MYKHAYA_SMTP_REPLY_TO`. In
+production, once `MYKHAYA_EMAIL_DELIVERY_CONFIGURED=true`, `Settings` refuses to start
+with `MYKHAYA_SMTP_HOST`/`MYKHAYA_EMAIL_FROM` still pointed at this repo's
+development-only defaults (Mailpit, `*.local`) — see
+`docs/architecture/notification-engine.md` "Email".
+
 The SMTP password is encrypted at rest with a Fernet key derived (HKDF-SHA256) from
 `MYKHAYA_SECRET_KEY`; rotating that secret invalidates stored SMTP passwords the same way
 it invalidates sessions, so it must be re-entered after a `SECRET_KEY` rotation. The

@@ -70,7 +70,7 @@ from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_conf
 from mykhaya.notifications.templates import (
     UnknownTemplateVariable,
     get_override,
-    render_notification,
+    render_notification_email,
     substitute,
     validate_override_text,
 )
@@ -1353,8 +1353,9 @@ async def _send_invitation_email(
     inviter_display_name: str,
     raw_token: str,
 ) -> None:
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "platform_administrator_invitation",
         {
             "inviter_display_name": inviter_display_name,
@@ -1371,6 +1372,7 @@ async def _send_invitation_email(
         title=subject,
         body=message,
         idempotency_key=f"platform_administrator_invitation:{row.id}:{row.token_hash}",
+        html_body=html,
     )
 
 
@@ -2178,7 +2180,9 @@ async def _enqueue_user_mail(
     else:
         notification_type = "password_reset"
         link = f"{settings.public_web_url}/reset-password?token={raw}"
-    subject, message = await render_notification(db, notification_type, {"link": link})
+    subject, message, html = await render_notification_email(
+        db, settings, notification_type, {"link": link}
+    )
     await notify(
         db,
         settings=settings,
@@ -2187,6 +2191,7 @@ async def _enqueue_user_mail(
         title=subject,
         body=message,
         idempotency_key=f"{notification_type}:{token.id}",
+        html_body=html,
     )
     platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
     await db.commit()
@@ -3973,9 +3978,11 @@ async def test_notification_template(
     config = await resolve_smtp_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
-    subject, message = await render_notification(db, template_type, SAMPLE_VARIABLES[template_type])
+    subject, message, html = await render_notification_email(
+        db, settings, template_type, SAMPLE_VARIABLES[template_type]
+    )
     try:
-        await asyncio.to_thread(send_email, config, str(body.recipient), subject, message)
+        await asyncio.to_thread(send_email, config, str(body.recipient), subject, message, html)
     except Exception as exc:
         platform_audit(
             db,

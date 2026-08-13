@@ -16,6 +16,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.config import Settings
+from mykhaya.email_branding import render_email_html
 from mykhaya.models import NotificationChannel, NotificationTemplate
 from mykhaya.notifications.default_templates import TEMPLATES, TemplateDefault
 
@@ -85,3 +87,17 @@ async def render_notification(
     subject = substitute(default.subject, variables, default.allowed_variables)
     body = substitute(default.body, variables, default.allowed_variables)
     return subject, body
+
+
+async def render_notification_email(
+    db: AsyncSession, settings: Settings, template_type: str, variables: dict[str, str]
+) -> tuple[str, str, str]:
+    """Like render_notification, but also returns the branded HTML companion
+    (mykhaya.email_branding) for the email channel specifically — push/in-app
+    keep using render_notification's plain text alone. HTML is built from the
+    same resolved (override-aware) subject/body, so a customised template's
+    wording is reflected in both, and user-controlled variables are
+    HTML-escaped by email_branding before reaching markup."""
+    subject, body = await render_notification(db, template_type, variables)
+    html = render_email_html(settings, template_type, subject, body, variables.get("link"))
+    return subject, body, html

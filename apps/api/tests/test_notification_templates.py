@@ -354,9 +354,12 @@ async def test_test_send_uses_saved_override(
 
     captured: dict[str, object] = {}
 
-    def fake_send_email(config: object, recipient: str, subject: str, text: str) -> None:
+    def fake_send_email(
+        config: object, recipient: str, subject: str, text: str, html: str | None = None
+    ) -> None:
         captured["subject"] = subject
         captured["body"] = text
+        captured["html"] = html
 
     monkeypatch.setattr(platform_router, "send_email", fake_send_email)
     response = await unsafe(

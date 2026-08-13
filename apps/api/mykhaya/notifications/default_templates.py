@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEFAULT_TEMPLATE_VERSION = 1
+DEFAULT_TEMPLATE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,9 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "email_verification": TemplateDefault(
         subject="Verify your MyKhaya email",
         body=(
-            "Open this secure link:\n\n{{link}}\n\nIf you did not request this, you can ignore it."
+            "Please verify your email address to finish setting up your MyKhaya account.\n\n"
+            "Open this secure link:\n\n{{link}}\n\n"
+            "If you didn't create a MyKhaya account, you can safely ignore this email."
         ),
         allowed_variables=frozenset({"link"}),
         description="Sent when someone registers or an administrator resends verification.",
@@ -40,13 +42,16 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "password_reset": TemplateDefault(
         subject="Reset your MyKhaya password",
         body=(
-            "Open this secure link:\n\n{{link}}\n\nIf you did not request this, you can ignore it."
+            "Somebody requested a password reset for your MyKhaya account.\n\n"
+            "Open this secure link:\n\n{{link}}\n\n"
+            "If you didn't request a password reset, you can safely ignore this email — "
+            "your password has not been changed."
         ),
         allowed_variables=frozenset({"link"}),
         description="Sent when someone requests a password reset.",
     ),
     "household_invitation": TemplateDefault(
-        subject="You are invited to a MyKhaya Home",
+        subject="You're invited to join a MyKhaya Home",
         body=(
             "{{inviter_display_name}} invited you to join {{home_name}}.\n\n"
             "Use this secure link to accept the invitation:\n\n"

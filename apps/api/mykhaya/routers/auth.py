@@ -25,7 +25,7 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     ChildLoginRequest,
@@ -224,8 +224,9 @@ async def register(
             raw = derived_token(
                 token.id, token.purpose.value, settings.secret_key.get_secret_value()
             )
-            subject, message = await render_notification(
+            subject, message, html = await render_notification_email(
                 db,
+                settings,
                 "email_verification",
                 {"link": f"{settings.public_web_url}/verify-email?token={raw}"},
             )
@@ -237,6 +238,7 @@ async def register(
                 title=subject,
                 body=message,
                 idempotency_key=f"email_verification:{token.id}",
+                html_body=html,
             )
         audit(db, request, "user.registered", user.id, target_type="user", target_id=user.id)
         await db.commit()
@@ -403,8 +405,9 @@ async def forgot(
         )
         token = await create_action_token(db, user.id, TokenPurpose.reset_password, settings, 30)
         raw = derived_token(token.id, token.purpose.value, settings.secret_key.get_secret_value())
-        subject, message = await render_notification(
+        subject, message, html = await render_notification_email(
             db,
+            settings,
             "password_reset",
             {"link": f"{settings.public_web_url}/reset-password?token={raw}"},
         )
@@ -416,6 +419,7 @@ async def forgot(
             title=subject,
             body=message,
             idempotency_key=f"password_reset:{token.id}",
+            html_body=html,
         )
         audit(
             db, request, "password.reset_requested", user.id, target_type="user", target_id=user.id

@@ -239,7 +239,7 @@ async def test_invitation_email_sent_with_no_account(client: AsyncClient) -> Non
 
     rows = await email_outbox_rows(invitee_email)
     assert len(rows) == 1
-    assert rows[0].payload["subject"] == "You are invited to a MyKhaya Home"
+    assert rows[0].payload["subject"] == "You're invited to join a MyKhaya Home"
     assert "/register?invitation=" in rows[0].payload["body"]
     assert "Home Owner invited you to join Invite Test Home" in rows[0].payload["body"]
 
@@ -374,6 +374,8 @@ async def test_worker_delivers_queued_email(client: AsyncClient) -> None:
     rows = await email_outbox_rows(email)
     assert len(rows) == 1
     event_id = rows[0].id
+    assert rows[0].payload["html_body"]
+    assert "<html" in rows[0].payload["html_body"]
 
     # SMTP is unconfigured in the test environment, so delivery fails — this still
     # proves the single notification.email handler is reached and the diagnostic

@@ -20,7 +20,7 @@ from mykhaya.household_permissions import (
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     InvitationAccept,
@@ -90,8 +90,9 @@ async def invite(
     row.token_hash = hash_secret(raw, settings.secret_key.get_secret_value())
     home = await db.get(Group, row.group_id)
     assert home is not None
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "household_invitation",
         {
             "inviter_display_name": auth.user.display_name,
@@ -108,6 +109,7 @@ async def invite(
         title=subject,
         body=message,
         idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+        html_body=html,
     )
     audit(
         db,
@@ -217,8 +219,9 @@ async def resend_invitation(
     raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
     home = await db.get(Group, row.group_id)
     assert home is not None
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "household_invitation",
         {
             "inviter_display_name": auth.user.display_name,
@@ -235,6 +238,7 @@ async def resend_invitation(
         title=subject,
         body=message,
         idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+        html_body=html,
     )
     audit(db, request, "invitation.resent", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

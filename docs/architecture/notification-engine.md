@@ -139,10 +139,38 @@ optional-communications surface.
 `send_email`) — see `docs/architecture/platform-control-centre.md` for the
 environment-vs-Platform-Admin precedence rule. `send_email` is called from exactly one
 place: `worker.py`'s `_process_email()`, handling the `notification.email` topic.
-Content (subject/body) is rendered once, at `notify()`-call time, by the caller —
-`mykhaya/notifications/default_templates.py` holds the trusted built-in copy for the
-three mandatory types today. This is the file the (planned) Platform Admin template
-override system reads its fallback from — see "Future: template overrides" below.
+Content (subject/body) is rendered once, at `notify()`-call time, by the caller, via
+`mykhaya/notifications/templates.render_notification_email` — `default_templates.py`
+holds the trusted built-in copy per type, overridable by a Platform Admin
+(`NotificationTemplate`, text only) via `templates.render_notification`.
+
+Every send is `multipart/alternative` (`text/plain` + `text/html`), never HTML-only.
+The HTML half is built by `mykhaya/email_branding.py` from the *same* resolved
+subject/body — one conservative, inline-styled, table-based layout (no external CSS, no
+web fonts, no JavaScript, no tracking pixels) reused by every email type, so an admin's
+text override is reflected in both without a second content-authoring path. The logo is
+a static PNG at `apps/web/public/mykhaya-email-logo.png`, served over HTTPS on
+`MYKHAYA_PUBLIC_WEB_URL` — reachable by an unauthenticated external mail client, unlike
+anything on the admin/API hosts — and reproduces `apps/web/components/logo.tsx`'s
+existing mark exactly.
+
+`send_email` raises a specific `EmailSendError` subclass
+(`EmailConnectionError`/`EmailAuthenticationError`/`EmailTlsError`/`EmailPermanentError`/
+`EmailTemporaryError`) rather than a bare `Exception`, so `worker.py` can tell a
+permanent rejection (5xx — never retried) from a transient one (4xx/connectivity/TLS —
+retried with the existing backoff) without inspecting `smtplib`-specific exception
+types itself. `NotificationDelivery.sanitised_failure_reason` stores only the category,
+never the raw exception text (which some SMTP servers echo the recipient address or
+other detail into).
+
+In production (`MYKHAYA_ENVIRONMENT=production`), once
+`MYKHAYA_EMAIL_DELIVERY_CONFIGURED=true`, `Settings` refuses to start with
+`MYKHAYA_SMTP_HOST`/`MYKHAYA_EMAIL_FROM` still pointed at the development-only
+defaults this repo ships (Mailpit's service name, `*.local`) — see
+`Settings.reject_placeholder_production_email_configuration` in `mykhaya/config.py`.
+This does not, on its own, make mail land in the inbox — see the deliverability
+report from the branding/deliverability work for SPF/DKIM/DMARC and sending-IP
+reputation, which are DNS/provider configuration outside this repository.
 
 ## Push
 

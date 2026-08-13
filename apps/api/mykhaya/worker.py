@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.mailer import resolve_smtp_config, send_email
+from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -102,9 +102,25 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
             event.payload["recipient_email"],
             event.payload["subject"],
             event.payload["body"],
+            event.payload.get("html_body"),
         )
         delivery.status = NotificationDeliveryStatus.sent
         delivery.attempted_at = datetime.now(UTC)
+    except EmailPermanentError as exc:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.sanitised_failure_reason = exc.category
+        # Permanent (e.g. recipient/sender rejected) failures are never
+        # retried — retrying a 5xx recipient rejection indefinitely wastes
+        # sends and can itself hurt sender reputation. Not re-raised, so the
+        # outbox event is marked processed rather than scheduled for retry.
+    except EmailTemporaryError as exc:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.sanitised_failure_reason = exc.category
+        raise
     except Exception:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1

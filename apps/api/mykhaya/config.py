@@ -1,4 +1,5 @@
 import os
+from email.utils import parseaddr
 from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from ipaddress import ip_network
@@ -71,7 +72,18 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     smtp_username: str | None = None
     smtp_password: SecretStr | None = None
-    smtp_starttls: bool = False
+    # Mirrors PlatformSmtpSettings.connection_security's values (mykhaya.models) exactly
+    # — same three options as the Platform-Admin-managed SMTP path, including implicit
+    # TLS (typically port 465), not just STARTTLS. Kept as a plain Literal rather than
+    # importing that enum: mykhaya.models imports mykhaya.db, which imports
+    # mykhaya.config, so importing mykhaya.models here would be circular.
+    smtp_connection_security: Literal["none", "starttls", "tls"] = "none"
+    # How long to wait on the SMTP connection/handshake before giving up — the worker
+    # already retries with backoff on failure, so this only bounds a single attempt.
+    smtp_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    # Distinct from email_from's address so a bounce/reply mailbox can differ from the
+    # sending identity without a Home/Reply-To workaround at the notify() call sites.
+    smtp_reply_to: str | None = None
     email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
     email_verification_enabled: bool = True
@@ -173,6 +185,32 @@ class Settings(BaseSettings):
                 raise ValueError("MYKHAYA_ADMIN_ALLOWED_NETWORKS is required in production")
             if not self.admin_mfa_required:
                 raise ValueError("MYKHAYA_ADMIN_MFA_REQUIRED must be true in production")
+        return self
+
+    @model_validator(mode="after")
+    def reject_placeholder_production_email_configuration(self) -> "Settings":
+        """Only fires once email is actually turned on
+        (MYKHAYA_EMAIL_DELIVERY_CONFIGURED=true) — an unconfigured production
+        deployment isn't lying about its mail setup, it just hasn't set one up
+        yet. Once configured, catches exactly the values this repo ships as
+        development-only defaults (Mailpit's service name, the .local
+        placeholder domain) so a production deployment can't silently inherit
+        them by omission — a real SMTP relay's own hostname/domain will never
+        collide with these."""
+        if self.environment != "production" or not self.email_delivery_configured:
+            return self
+        host = self.smtp_host.strip().lower()
+        if host in {"mailpit", "localhost", "127.0.0.1", ""} or host.endswith(".local"):
+            raise ValueError(
+                f"MYKHAYA_SMTP_HOST ({self.smtp_host!r}) looks like a development-only "
+                "value and must not be used in production."
+            )
+        from_email = parseaddr(self.email_from)[1].lower()
+        if not from_email or from_email.endswith("@mykhaya.local"):
+            raise ValueError(
+                f"MYKHAYA_EMAIL_FROM ({self.email_from!r}) must be a real, deliverable "
+                "MyKhaya-owned address in production, not the mykhaya.local placeholder."
+            )
         return self
 
     @model_validator(mode="after")

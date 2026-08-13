@@ -93,6 +93,7 @@ async def notify(
     deep_link: DeepLinkTarget | None = None,
     is_critical: bool = False,
     timezone_override: str | None = None,
+    html_body: str | None = None,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -123,6 +124,7 @@ async def notify(
             title=title,
             body=body,
             idempotency_key=idempotency_key,
+            html_body=html_body,
         )
         return None
 
@@ -188,6 +190,7 @@ async def notify(
                 title=title,
                 body=body,
                 idempotency_key=idempotency_key,
+                html_body=html_body,
             )
 
     return notification
@@ -202,6 +205,7 @@ async def _enqueue_email(
     title: str,
     body: str,
     idempotency_key: str,
+    html_body: str | None = None,
 ) -> None:
     email_key = f"{idempotency_key}:email"
     already_queued = await db.scalar(
@@ -215,6 +219,7 @@ async def _enqueue_email(
             "recipient_email": recipient_email,
             "subject": title,
             "body": body,
+            "html_body": html_body,
             "delivery_idempotency_key": email_key,
             "notification_type": notification_type,
         },
