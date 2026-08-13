@@ -5,13 +5,16 @@
 // Requires the dev stack running (default http://localhost:8089).
 
 import { execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chromium } from "@playwright/test";
 
 const BASE = process.argv[2] ?? "http://localhost:8089";
 const WIDTHS = [320, 375, 390, 393, 430];
 const stamp = Date.now();
 const email = `overflow-diag-${stamp}@example.com`;
-const password = "Correct-Horse-Battery-Staple-9";
+// Freshly random per run — this account is thrown away immediately after,
+// so there's no reason to reuse a fixed password across runs.
+const password = `Demo-${randomUUID()}`;
 
 const browser = await chromium.launch();
 const page = await browser.newPage();

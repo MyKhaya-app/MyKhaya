@@ -1,0 +1,28 @@
+# Gitleaks findings reviewed and confirmed safe — see docs/operations/release-process.md
+# for how this file is used and why. Each entry is the exact
+# commit:file:rule:line fingerprint Gitleaks reports (`gitleaks detect -v`), not a
+# path/rule-wide exclusion, so this can never accidentally suppress a real future
+# secret in the same file. Do not add broader entries here.
+
+# Synthetic, well-known placeholder password ("Correct Horse Battery Staple" — the
+# XKCD 936 joke password) used only to register a brand-new, randomly-timestamped,
+# throwaway account for local visual-QA/screenshot scripts that explicitly refuse to
+# run against anything but localhost. Never protected real data. Fixed at source in
+# the current tree (the password is now generated per-run via node:crypto
+# randomUUID() instead of a fixed literal) — these three entries cover the commits
+# where the old literal is still present in history, which cannot be rewritten
+# without rewriting already-pushed shared history.
+4fd5c4c5add141dced130d167c67e376a870b5c9:apps/web/scripts/calendar-review-screenshots.mjs:generic-api-key:11
+4fd5c4c5add141dced130d167c67e376a870b5c9:apps/web/scripts/calendar-screenshots.mjs:generic-api-key:12
+2fc452aa7aa6d194a62decfdcb644faa57d406b9:apps/web/scripts/diagnose-overflow.mjs:generic-api-key:14
+7ca7899f50fa918429273a2cd42f930875e59c98:apps/web/scripts/seed-demo-data.mjs:generic-api-key:18
+
+# False positive in the push-subscription registration endpoint: an ORM field
+# is assigned from the client-supplied, non-secret Web Push subscription
+# public-key value (RFC 8291/8292's ECDH public key parameter). Not a
+# hardcoded credential of any kind — Gitleaks' generic-api-key heuristic
+# matched on that parameter name's entropy shape, not an actual secret value.
+# (Deliberately not spelling out the exact dotted attribute access here —
+# doing so previously made this comment itself match the same heuristic and
+# get flagged as a brand new finding in this file.)
+1df4de0e2009f2566c49543971332dc80cc8ef61:apps/api/mykhaya/routers/notifications.py:generic-api-key:221
