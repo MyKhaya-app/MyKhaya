@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check compose-check release-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -52,6 +52,26 @@ generate-client:
 	docker compose exec api python -c "import json; from mykhaya.main import app; print(json.dumps(app.openapi()))" > apps/api/openapi.json
 version-check:
 	python infrastructure/scripts/validate_version.py
+	python -m unittest discover -s infrastructure/tests -v
+compose-check:
+	docker compose config --quiet
+	docker compose -f compose.yml -f compose.dev.yml config --quiet
+	docker compose -f compose.yml -f compose.production.yml config --quiet
+	docker compose config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "local dev"
+	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "persistent dev server"
+	docker compose -f compose.yml -f compose.production.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "production"
+# The single canonical pre-release command: everything the `quality` GitHub
+# Actions workflow checks that can meaningfully run outside CI's own runner
+# (image builds/pushes and Gitleaks are the two things this deliberately
+# doesn't reproduce — run those exactly as CI does separately; see
+# docs/operations/release-process.md). Added after a release candidate was
+# reported green without ever running `validate_version.py`, which then
+# failed immediately in CI.
+release-check: version-check compose-check
+	docker compose run --rm migrate alembic heads
+	$(MAKE) lint
+	$(MAKE) typecheck
+	$(MAKE) test
 
 dev-preflight:
 	sh infrastructure/scripts/dev-deploy.sh preflight

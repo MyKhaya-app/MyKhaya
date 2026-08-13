@@ -15,19 +15,48 @@ SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-COMPONENT_MANIFESTS = (
-    Path("apps/web/package.json"),
-    Path("apps/mobile/package.json"),
-    Path("packages/api-client/package.json"),
-    Path("packages/design-tokens/package.json"),
-    Path("packages/eslint-config/package.json"),
-    Path("packages/shared-types/package.json"),
-    Path("packages/typescript-config/package.json"),
-)
-
-
 class ValidationError(RuntimeError):
     pass
+
+
+def workspace_package_patterns(workspace_file: Path = Path("pnpm-workspace.yaml")) -> list[str]:
+    """The `packages:` glob patterns from pnpm-workspace.yaml — deliberately
+    small, line-based parsing rather than a PyYAML dependency, since this
+    script runs standalone (via plain `python3`, no requirements.txt) both in
+    CI and locally, and the file's structure is a short, fixed list."""
+    if not workspace_file.is_file():
+        raise ValidationError(f"{workspace_file} does not exist")
+    patterns: list[str] = []
+    in_packages = False
+    for line in workspace_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "packages:":
+            in_packages = True
+            continue
+        if not in_packages:
+            continue
+        if stripped.startswith("- "):
+            patterns.append(stripped.removeprefix("- ").strip())
+        elif stripped and not stripped.startswith("#"):
+            break
+    if not patterns:
+        raise ValidationError(f"{workspace_file} declares no packages: entries")
+    return patterns
+
+
+def workspace_package_manifests(workspace_file: Path = Path("pnpm-workspace.yaml")) -> list[Path]:
+    """Every package.json that actually exists under a pattern
+    pnpm-workspace.yaml declares — the single source of truth for which
+    JS/TS components are real workspace members, so this validator can't
+    drift from reality the way a hand-maintained path list did:
+    apps/mobile/package.json was deliberately removed from the tree in
+    commit 7ca7899 ("Commit to Dev") when the mobile app was pulled out of
+    the workspace, but a static COMPONENT_MANIFESTS tuple here kept
+    assuming it still existed, crashing every CI run unconditionally."""
+    manifests: list[Path] = []
+    for pattern in workspace_package_patterns(workspace_file):
+        manifests.extend(sorted(Path().glob(f"{pattern}/package.json")))
+    return manifests
 
 
 def root_version() -> str:
@@ -44,7 +73,7 @@ def component_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
     api_data = tomllib.loads(Path("apps/api/pyproject.toml").read_text(encoding="utf-8"))
     versions["apps/api/pyproject.toml"] = str(api_data["project"]["version"])
-    for path in COMPONENT_MANIFESTS:
+    for path in workspace_package_manifests():
         data = json.loads(path.read_text(encoding="utf-8"))
         versions[path.as_posix()] = str(data["version"])
     return versions
