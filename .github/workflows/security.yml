@@ -8,21 +8,69 @@ concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  scan:
+  # Independent jobs (not steps) so one scanner failing doesn't hide whether
+  # the others also failed — GitHub reports each as its own check, instead of
+  # the old single sequential job stopping at the first red step and leaving
+  # every later scanner's status unknown. `security-gate` below requires all
+  # of them via `needs:`, so the overall run still cannot report success
+  # unless every scanner genuinely passed.
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      # fetch-depth: 0 is required, not cosmetic — Gitleaks scans full git
+      # history by default (repository policy, not --no-git), and
+      # .gitleaksignore entries are exact commit:file:rule:line fingerprints.
+      # A shallow (default depth-1) checkout makes every present-tree finding
+      # get attributed to the shallow clone's synthetic single commit instead
+      # of the real historical commit, so legitimate fingerprint ignores stop
+      # matching and Gitleaks fails on findings that are already reviewed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Secrets
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-banner
+  python-dependencies:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Secrets
-        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-banner
       - name: Python dependencies
         run: docker run --rm -v "$PWD/apps/api:/src" -w /src python:3.13.5-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
+  filesystem:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Filesystem dependencies and configuration
         run: docker run --rm -v "$PWD:/src" aquasec/trivy:0.64.1 fs --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig /src
+  semgrep:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Static analysis
-        run: docker run --rm -v "$PWD:/src" semgrep/semgrep:1.129.0 semgrep scan --config p/owasp-top-ten --error /src/apps
-      - name: Compose and IaC
-        run: docker run --rm -v "$PWD:/src" bridgecrew/checkov:3.2.451 -d /src --framework dockerfile docker_compose github_actions --quiet
+        run: docker run --rm -v "$PWD:/src" semgrep/semgrep:1.172.0 semgrep scan --config p/owasp-top-ten --error /src/apps
+  checkov:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Dockerfile and GitHub Actions IaC
+        # `docker_compose` is not (and, checked against the current latest
+        # checkov 3.3.10 too, never currently is) a valid --framework value —
+        # confirmed by direct invocation, not assumed; Checkov has no distinct
+        # Compose-file scanning capability in any presently available
+        # version, so keeping that token here was a hard CLI-parse failure
+        # that broke this whole step, dockerfile/github_actions included.
+        # This is a real tool capability gap, not a config typo — see the
+        # release report for what compose.yml/compose.*.yml coverage this
+        # leaves unaddressed.
+        run: docker run --rm -v "$PWD:/src" bridgecrew/checkov:3.2.451 -d /src --framework dockerfile github_actions --quiet
+  sbom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: SBOM
         run: docker run --rm -v "$PWD:/src" anchore/syft:v1.30.0 dir:/src -o cyclonedx-json=/src/mykhaya-sbom.cdx.json
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: mykhaya-sbom, path: mykhaya-sbom.cdx.json, retention-days: 30 }
+  security-gate:
+    runs-on: ubuntu-24.04
+    needs: [secrets, python-dependencies, filesystem, semgrep, checkov, sbom]
+    steps:
+      - run: echo "All security scans passed."

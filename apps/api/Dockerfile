@@ -15,6 +15,10 @@ COPY apps/api/tests ./tests
 # source directly to prove mykhaya.colour_palette never silently drifts from
 # packages/design-tokens, rather than trusting a hand-maintained comment.
 COPY packages/design-tokens ./packages/design-tokens
+RUN groupadd --system --gid 10001 mykhaya \
+	&& useradd --system --uid 10001 --gid mykhaya --home-dir /build mykhaya \
+	&& chown -R mykhaya:mykhaya /build
+USER 10001:10001
 CMD ["python", "-m", "pytest"]
 
 FROM python:3.13.5-slim-bookworm AS runtime
