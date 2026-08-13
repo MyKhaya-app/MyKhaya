@@ -6,10 +6,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import { intervalName } from "@/components/billing-logic";
+import { parseIntentFromParams, saveOnboardingIntent } from "@/components/onboarding-intent";
 export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
+  // Plan/interval carried from the public pricing section (or a direct
+  // /signup?plan=family&interval=year link) are untrusted onboarding intent
+  // only — see components/onboarding-intent.ts. An invited member joins an
+  // existing Home and never gets asked to choose a plan for it, so intent is
+  // ignored entirely on the invite path.
+  const intent = invitation ? null : parseIntentFromParams(params.get("plan"), params.get("interval"));
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [inviteContext, setInviteContext] = useState<{
@@ -44,6 +52,7 @@ export default function Register() {
         password: d.get("password"),
         invitation_token: invitation,
       });
+      if (intent && intent.plan === "family") saveOnboardingIntent(intent);
       router.push(
         result.verification_required
           ? invitation
@@ -85,6 +94,12 @@ export default function Register() {
       {inviteContext && (
         <p className="notice success">
           {inviteContext.invited_by_display_name} invited you to join {inviteContext.group_name}.
+        </p>
+      )}
+      {!inviteContext && intent?.plan === "family" && (
+        <p className="notice success">
+          You selected Family ({intervalName(intent.interval)} billing) — you&rsquo;ll confirm this
+          after creating your Home.
         </p>
       )}
       <form onSubmit={submit}>

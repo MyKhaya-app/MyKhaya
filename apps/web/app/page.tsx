@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "@/components/logo";
+import { PublicPricing } from "@/components/public-pricing";
 export default function Welcome() {
   return (
     <main className="welcome">
@@ -54,6 +55,7 @@ export default function Welcome() {
           </span>
         </div>
       </section>
+      <PublicPricing />
     </main>
   );
 }

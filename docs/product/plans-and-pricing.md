@@ -65,3 +65,23 @@ This phase deliberately does not include: the public marketing site's pricing pa
 Throughout, the page only ever compares Free and Family on things that actually exist today — currently just calendars per Home — never lists or advertises a module (Lists, Chores, Notes, Wish Lists, and similar) that is defined in the commercial model for a future release but isn't actually available to use yet, so nothing on this page over-promises.
 
 **What Phase 4 still does not include**: the public marketing site's pricing page, a payment step during signup, promotional codes, and any plan other than Free and Family — all remain out of scope for a later phase.
+
+## Phase 5: public pricing and signing up
+
+MyKhaya's public homepage now has a pricing section, and a new visitor gets to choose a plan as part of creating their account — the two things Phase 4 deliberately left out.
+
+**On the homepage**: two cards, Free and Family, side by side. Free reads simply — "1 calendar, core MyKhaya experience, no payment details required, £0." Family shows the real current monthly and annual price (never a number written into this app's code — see the architecture doc), a Monthly/Annual switch, and, only when it's genuinely true, a "Best value" badge on the annual option with the amount saved. Underneath, a short Free vs Family comparison, sourced from the same plan definitions the Settings page already uses — so the homepage can never say something different from what a signed-in Home actually sees. If Family pricing can't be loaded (Stripe temporarily unavailable), the page says so plainly and Free signup stays fully available — the homepage never crashes, never shows a stale price, and never blocks anyone from starting for free.
+
+**Choosing a plan is a hint, not a purchase.** Whether someone picks Free or Family on the homepage, the very next thing that happens is ordinary account creation — the same email, name and password form as always. Nothing about payment is asked yet, and nothing about the plan choice can itself unlock Family; it's only carried forward so the next screen knows what to suggest.
+
+**Creating your Home always starts on Free.** Every new Home is created the same way it always has been — Free, no Stripe Customer, no payment prompt — regardless of what was picked earlier. Immediately after, a short "How would you like to use MyKhaya?" step offers Free (just continue) or Family (choose Monthly or Annual, see the live price, and go to Stripe Checkout). Someone who arrives straight at the signup page, without ever visiting the homepage, gets exactly the same choice — it isn't a homepage-only feature.
+
+**Family at signup uses the exact same Checkout as Settings → Plan & Billing.** There's no separate "signup checkout" — it's the same Stripe handoff, the same "we're confirming your subscription" message on return, and the same rule that a browser redirect is never, by itself, proof of payment. Family access only ever turns on once Stripe's own confirmation has been received.
+
+**If Checkout doesn't finish** — the visitor closes the tab, payment fails, Stripe is briefly unavailable, or they simply come back another day — nothing is lost and nothing is broken. Their account and Home are already fully valid and already on Free. They can carry on using MyKhaya normally, and upgrade whenever they like from Settings → Plan & Billing. Nobody is shown an error, made to feel like something went wrong, or funnelled back into Checkout on every subsequent sign-in.
+
+**Someone joining an existing Home through an invitation never sees a plan choice at all.** The Home's plan belongs to the Home, not to each person who joins it — an invited member simply joins and starts using whatever plan that Home is already on.
+
+**One subscription for the whole Home, never wording that suggests a per-person price.** This is said plainly wherever Family is described, on the homepage and in signup alike.
+
+**What Phase 5 still does not include**: Apple/Google in-app billing, promotional or discount codes, any plan beyond Free and Family, and live (real-money) billing — all remain deliberately out of scope for a later phase.

@@ -340,3 +340,35 @@ later phase does:
 5. Verify the full lifecycle (Checkout → activation → renewal → cancellation) against
    a real card in live mode before announcing billing is live — none of Phase 3's
    verification substitutes for this.
+
+### Public pricing (Phase 5)
+
+The homepage pricing section and the signup/onboarding plan step read `GET
+/billing/pricing` — the same endpoint, same 5-minute in-process cache, same
+Stripe Price IDs (`MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID` /
+`MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID`) as everywhere else in the app. There is
+nothing to configure specifically for Phase 5:
+
+- If Stripe billing is not configured at all
+  (`MYKHAYA_STRIPE_BILLING_CONFIGURED=false`), the homepage shows the Free card
+  normally and the Family card's "temporarily unavailable" message — Free signup
+  is unaffected. This is the expected state for any deployment that hasn't set up
+  Stripe yet, not an error condition to chase.
+- Changing the configured Price IDs (e.g. a price increase — see "Price increases
+  and grandfathering" in the architecture doc) changes what the public homepage
+  shows on its own once the in-process cache expires (up to 5 minutes) — no
+  frontend deploy, migration, or restart required. A restart clears the cache
+  immediately if a change needs to show up sooner than that.
+- The public pricing/plan endpoints are rate-limited (`billing-pricing`,
+  `billing-plans`; 60 requests/60s per client IP) the same way every other public
+  endpoint in this app is — see `mykhaya/rate_limit.py`. There is no separate
+  public-pricing-specific rate limit to configure.
+- Real Stripe test-mode verification of the full public → signup → Checkout →
+  webhook journey is a manual step, same as Phase 3/4 — see "Real Stripe test-mode
+  checkpoint" in the relevant phase's final report. Automated CI always uses a
+  mocked Stripe SDK (`stripe.Price.retrieve` monkeypatched), never a real sandbox
+  call, per this repository's test-isolation rules above.
+- Before enabling **live** billing (see "Going live" above), the public pricing
+  section and signup plan step should be included in that phase's real-card
+  verification pass — they are the first surfaces a real customer sees, and
+  neither has been exercised against a real Stripe account by any phase so far.

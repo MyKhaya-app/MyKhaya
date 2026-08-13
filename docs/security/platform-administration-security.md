@@ -105,3 +105,31 @@ Phase 4 adds zero new write endpoints. The household Plan & Billing page can onl
 ### IDOR
 
 `GET /groups/{id}/billing` resolves the caller's membership via `membership_for(group_id, auth, db)` (the same dependency every other Home-scoped household endpoint uses) and 404s for a Home the caller doesn't belong to — a user cannot view, let alone manage, another Home's billing state. Covered by `test_user_cannot_view_another_homes_billing_state`.
+
+## Commercial entitlements — public pricing and signup/onboarding (Phase 5)
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Phase 5" section. Phase 5 adds no new endpoint, no new capability, and no new write path — it is a new pre-login UI in front of already-public read endpoints and the existing registration/Home-creation/Checkout endpoints, used in their existing order.
+
+### Public plan intent is untrusted
+
+The plan/interval a visitor picks on the homepage travels only as a `?plan=&interval=` query string into `/register` and, from there, an opportunistic `localStorage` hint (`apps/web/components/onboarding-intent.ts`) read back by the onboarding plan step. Both the query-string parser and the stored-value reader constrain every value to a closed enum (`free`/`family`, `month`/`year`) and silently fall back to the safe default (`free`/`month`) for anything else — an out-of-enum, malformed, or tampered value is never surfaced as an error, it's just treated as no selection. Neither value is ever sent to `POST /auth/register` or `POST /groups` — see "No plan activation via query/frontend" below — so even a maximally adversarial value here has no path to commercial effect; the worst case is the wrong card being preselected on a screen the visitor is about to look at anyway.
+
+### No plan activation via query or frontend state
+
+`RegisterRequest` and `GroupCreate` (the schemas behind `POST /auth/register` and `POST /groups`) are both `StrictModel` (`extra="forbid"`) and accept no plan/provider/status field at all — a request body containing `{"plan": "family", "provider": "stripe", "status": "active"}` alongside valid registration/Home-creation fields is rejected with `422` before any handler logic runs, not silently ignored. `POST /groups` also takes no query parameters it reads; a `?plan=family&interval=year` suffix on the request URL is inert. Every new Home is created through the same `ensure_home_subscription` call Phase 1 established, which takes no plan argument — it always writes `plan=free, provider=free, status=active`. Covered by `test_register_rejects_commercial_fields`, `test_group_creation_rejects_commercial_fields`, and `test_new_home_is_always_free_regardless_of_query_string` (all in `test_signup_commercial_intent.py`).
+
+### No arbitrary Price/amount submission at signup
+
+The onboarding plan step's Family action calls the exact same `POST /groups/{id}/billing/checkout-session` Phase 3 built, sending only `{interval}` — the same client-supplied-amount/Price-ID rejection Phase 3's `test_client_cannot_supply_a_price_id_or_amount` already covers applies unchanged, since no new Checkout code path is introduced.
+
+### Checkout redirect still carries no authority
+
+Unchanged from Phase 3/4: Stripe's success/cancel redirect always points at `/settings/billing` (not back into onboarding), and that page's existing "confirm, then re-fetch once" behaviour is what decides what to show — a query string is never treated as proof of payment anywhere in this codebase, at signup or afterwards.
+
+### Invite-path protection
+
+An invited member reaches `/auth/register` with `invitation_token` set but never `POST /groups` — they join the inviter's *existing* Home via the already-authenticated `POST /invitations/accept`, which only ever creates/reactivates a `Membership` on the invitation's stored `group_id` and never touches that Home's `HomeSubscription`. `apps/web/app/register/page.tsx` additionally ignores `?plan=`/`?interval=` outright whenever an `invitation` token is present, so an invite link cannot be crafted to imply a purchase. Covered by `test_invited_member_joins_existing_home_without_a_new_home_or_plan_choice`, which asserts the joined Home's stored plan/provider/status are byte-identical before and after.
+
+### Public endpoint exposure
+
+`GET /billing/pricing` and `GET /billing/plans` are unchanged from Phase 3/4 — both remain public, rate-limited (`billing-pricing`/`billing-plans`, 60/60s), read-only, and expose no Stripe Price ID, Customer/subscription data, or provider secret; see the Phase 4 section above ("Household-safe billing response") for the exhaustive exclusion list, which Phase 5 introduces no exception to. The homepage and onboarding plan step call these two endpoints and nothing else unauthenticated.

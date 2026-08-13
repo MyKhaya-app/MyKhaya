@@ -259,6 +259,62 @@ textarea {
   bottom: 5%;
   right: 8%;
 }
+.pricing-section {
+  margin: 0 auto 9vh;
+  max-width: 1120px;
+}
+.pricing-heading {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+.pricing-heading h2 {
+  margin: 0.4rem 0 0;
+}
+.pricing-cards {
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.pricing-cards .feature-card {
+  padding: 1.5rem;
+}
+.plan-points {
+  color: var(--colour-muted);
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.pricing-amount {
+  font-size: 1.8rem;
+  font-weight: 800;
+  margin: 0.25rem 0 0;
+}
+.pricing-amount span {
+  color: var(--colour-muted);
+  font-size: 1rem;
+  font-weight: 600;
+}
+.interval-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+.interval-toggle button {
+  flex: 1;
+  min-height: 40px;
+  padding: 0.55rem 0.75rem;
+}
+.toggle-active {
+  background: var(--colour-sage-dark);
+  color: white;
+}
+.pricing-comparison {
+  margin-top: 1.5rem;
+}
+@media (max-width: 640px) {
+  .pricing-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .auth-page {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);
