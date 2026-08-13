@@ -17,6 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
+from mykhaya.billing.config import resolve_stripe_config
+from mykhaya.billing.pricing import fetch_price_amount
+from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
@@ -38,6 +42,7 @@ from mykhaya.models import (
     AuditEvent,
     AuthIdentity,
     BackupRun,
+    BillingInterval,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -145,6 +150,7 @@ from mykhaya.platform_schemas import (
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
+    StripePriceInfo,
     SubscriptionDetailResponse,
     SubscriptionEventResponse,
     SubscriptionListItem,
@@ -2382,6 +2388,8 @@ async def _subscription_response(
         billing_owner_user_id=subscription.billing_owner_user_id if subscription else None,
         external_customer_id=subscription.external_customer_id if subscription else None,
         external_subscription_id=subscription.external_subscription_id if subscription else None,
+        external_price_id=subscription.external_price_id if subscription else None,
+        billing_interval=subscription.billing_interval if subscription else None,
         current_period_start=subscription.current_period_start if subscription else None,
         current_period_end=subscription.current_period_end if subscription else None,
         complimentary_reason=subscription.complimentary_reason if subscription else None,
@@ -2486,6 +2494,23 @@ async def grant_complimentary(
         subscription = HomeSubscription(group_id=group_id)
         db.add(subscription)
         await db.flush()
+    # A Home paying through Stripe must never silently become Complimentary
+    # underneath a still-live billing relationship — that would leave the
+    # customer being billed while MyKhaya says their provider is
+    # Complimentary. The Stripe subscription must be genuinely cancelled
+    # first (status=cancelled) before complimentary access can be granted.
+    # See "Paid to complimentary transition" in
+    # docs/architecture/commercial-entitlements.md.
+    is_live_stripe_subscription = (
+        subscription.provider == SubscriptionProvider.stripe
+        and subscription.status != SubscriptionStatus.cancelled
+    )
+    if is_live_stripe_subscription:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Home has an active Stripe subscription. Cancel it in Stripe (or via the "
+            "Customer Portal) before granting complimentary access.",
+        )
     previous = {
         "plan": subscription.plan.value,
         "provider": subscription.provider.value,
@@ -2498,6 +2523,15 @@ async def grant_complimentary(
     )
     subscription.plan = SubscriptionPlan.family
     subscription.provider = SubscriptionProvider.complimentary
+    # external_customer_id/external_subscription_id/external_price_id are
+    # deliberately left as-is even when they belonged to a now-cancelled
+    # Stripe subscription — they remain useful reconciliation history (a
+    # cancelled subscription id is never reused by Stripe), and
+    # billing_interval/current_period_* are cleared since they no longer
+    # describe anything live.
+    subscription.billing_interval = None
+    subscription.current_period_start = None
+    subscription.current_period_end = None
     subscription.status = SubscriptionStatus.active
     subscription.complimentary_reason = body.complimentary_reason
     subscription.complimentary_note = body.complimentary_note
@@ -2598,8 +2632,11 @@ async def subscriptions_summary(
 ) -> SubscriptionSummaryResponse:
     """One aggregate query — every count is a SQL FILTER over a single outer
     join, not N queries or a full row fetch, so this scales as Home count
-    grows. No revenue/MRR/ARR here: there is no payment provider in Phase 2
-    to source that from."""
+    grows. No revenue/MRR/ARR: with multiple historical Stripe Prices,
+    currencies and billing intervals possibly in play, see
+    SubscriptionSummaryResponse's docstring for why that figure is deferred
+    rather than approximated."""
+    is_stripe = HomeSubscription.provider == SubscriptionProvider.stripe
     row = (
         await db.execute(
             select(
@@ -2614,12 +2651,42 @@ async def subscriptions_summary(
                 func.count(Group.id).filter(
                     HomeSubscription.status == SubscriptionStatus.cancelled
                 ),
+                func.count(Group.id).filter(is_stripe),
+                func.count(Group.id).filter(
+                    is_stripe & effective_plan_sql_filter(SubscriptionPlan.family)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe
+                    & (HomeSubscription.billing_interval == BillingInterval.month)
+                    & (HomeSubscription.status != SubscriptionStatus.cancelled)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe
+                    & (HomeSubscription.billing_interval == BillingInterval.year)
+                    & (HomeSubscription.status != SubscriptionStatus.cancelled)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe & (HomeSubscription.status == SubscriptionStatus.cancel_at_period_end)
+                ),
             )
             .select_from(Group)
             .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
         )
     ).one()
-    total, free, family, complimentary, complimentary_expired, past_due, cancelled = row
+    (
+        total,
+        free,
+        family,
+        complimentary,
+        complimentary_expired,
+        past_due,
+        cancelled,
+        stripe_total,
+        stripe_active_family,
+        stripe_monthly,
+        stripe_annual,
+        stripe_cancelling,
+    ) = row
     return SubscriptionSummaryResponse(
         total_homes=total,
         free=free,
@@ -2628,6 +2695,11 @@ async def subscriptions_summary(
         complimentary_expired=complimentary_expired,
         past_due=past_due,
         cancelled=cancelled,
+        stripe_total=stripe_total,
+        stripe_active_family=stripe_active_family,
+        stripe_monthly=stripe_monthly,
+        stripe_annual=stripe_annual,
+        stripe_cancelling=stripe_cancelling,
     )
 
 
@@ -2712,6 +2784,7 @@ async def subscription_detail(
     group_id: uuid.UUID,
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> SubscriptionDetailResponse:
     group = await db.get(Group, group_id)
     if group is None:
@@ -2755,6 +2828,37 @@ async def subscription_detail(
         ).all()
         actor_names = {actor.id: actor.display_name for actor in actors}
     definition = plan_definition_for(resolve_effective_plan(subscription))
+
+    stripe_price: StripePriceInfo | None = None
+    dashboard_customer_url: str | None = None
+    dashboard_subscription_url: str | None = None
+    if subscription is not None and subscription.provider == SubscriptionProvider.stripe:
+        stripe_config = resolve_stripe_config(settings)
+        is_test_mode = bool(
+            stripe_config.secret_key and stripe_config.secret_key.startswith("sk_test_")
+        )
+        dashboard_root = (
+            "https://dashboard.stripe.com/test" if is_test_mode else "https://dashboard.stripe.com"
+        )
+        if subscription.external_customer_id:
+            dashboard_customer_url = (
+                f"{dashboard_root}/customers/{subscription.external_customer_id}"
+            )
+        if subscription.external_subscription_id:
+            dashboard_subscription_url = (
+                f"{dashboard_root}/subscriptions/{subscription.external_subscription_id}"
+            )
+        if stripe_config.configured and stripe_config.secret_key and subscription.external_price_id:
+            price_option = await fetch_price_amount(
+                stripe_config.secret_key, subscription.external_price_id
+            )
+            if price_option is not None:
+                stripe_price = StripePriceInfo(
+                    currency=price_option.currency,
+                    unit_amount=price_option.unit_amount,
+                    formatted_amount=price_option.formatted_amount,
+                )
+
     return SubscriptionDetailResponse(
         id=group.id,
         name=group.name,
@@ -2787,7 +2891,74 @@ async def subscription_detail(
             )
             for event in history_rows
         ],
+        stripe_price=stripe_price,
+        stripe_dashboard_customer_url=dashboard_customer_url,
+        stripe_dashboard_subscription_url=dashboard_subscription_url,
     )
+
+
+@router.post(
+    "/homes/{group_id}/subscription/reconcile-stripe", response_model=HomeSubscriptionResponse
+)
+async def reconcile_stripe_subscription(
+    group_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """Support/operations action: re-fetches this Home's Stripe Subscription
+    directly from Stripe and re-applies it through the exact same normalized
+    transition logic the webhook handler uses — never a manual field editor.
+    See "Reconciliation / repair" in docs/architecture/commercial-entitlements.md."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    stripe_config = resolve_stripe_config(settings)
+    if not stripe_config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    subscription_before = await get_home_subscription(db, group_id)
+    previous = (
+        {
+            "plan": subscription_before.plan.value,
+            "provider": subscription_before.provider.value,
+            "status": subscription_before.status.value,
+        }
+        if subscription_before
+        else None
+    )
+    try:
+        await reconcile_home_subscription(
+            db, stripe_config, group_id, actor_administrator_id=context.administrator.id
+        )
+    except NoStripeSubscriptionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_reconciliation_error", group_id=str(group_id), detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    subscription_after = await get_home_subscription(db, group_id)
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.subscription_reconciled",
+        "home",
+        group_id,
+        reason=body.reason,
+        previous=previous,
+        new={
+            "plan": subscription_after.plan.value,
+            "provider": subscription_after.provider.value,
+            "status": subscription_after.status.value,
+        }
+        if subscription_after
+        else None,
+    )
+    await db.commit()
+    return await _subscription_response(db, subscription_after)
 
 
 @router.post("/homes/{group_id}/notes", status_code=status.HTTP_201_CREATED)

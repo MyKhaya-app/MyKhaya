@@ -252,3 +252,91 @@ these at once, permanently, rather than requiring every new test file to remembe
 clean up after itself. Do not point `MYKHAYA_DATABASE_URL`/`MYKHAYA_REDIS_URL` for the
 `test` service back at `postgres`/`redis`, and do not add application-code cleanup
 (e.g. deleting `@example.com` users) as a substitute for this isolation.
+
+The automated suite's own login/register volume grew with Phase 3's Stripe billing
+tests (each does a full register/verify/login/create-Home round trip); `MYKHAYA_RATE_LIMIT_LOGIN`/
+`MYKHAYA_RATE_LIMIT_REGISTER` for the `test` service were raised from 100/300 to
+1000/1000 accordingly — see the field comments on `rate_limit_login`/`rate_limit_register`
+in `mykhaya/config.py`, which already anticipated this. If the full suite starts
+returning 429s from `/auth/login` again, this is the first thing to check.
+
+## Stripe sandbox (Phase 3)
+
+Stripe billing is entirely optional and off by default (`MYKHAYA_STRIPE_BILLING_CONFIGURED=false`)
+— Free and Complimentary Homes need no Stripe setup at all. This section is only for
+actually exercising Checkout/Portal/webhooks locally.
+
+### One-time setup (Stripe test-mode account)
+
+1. Create or use an existing Stripe account, switch to **test mode** (toggle in the
+   Stripe Dashboard).
+2. Create one Product ("MyKhaya Family") with two recurring Prices: monthly and
+   annual, in GBP. Copy both Price IDs (`price_...`).
+3. Copy the test-mode secret key (`sk_test_...`) from
+   `dashboard.stripe.com/test/apikeys`. Never copy the live-mode key for local
+   development — `Settings.validate_stripe_configuration` rejects a live key
+   outside `MYKHAYA_ENVIRONMENT=production` anyway, but don't rely on that as the
+   only safeguard.
+4. Set in `.env` (never commit real values — `.env` is gitignored):
+   ```
+   MYKHAYA_STRIPE_BILLING_CONFIGURED=true
+   MYKHAYA_STRIPE_SECRET_KEY=sk_test_...
+   MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID=price_...
+   MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID=price_...
+   MYKHAYA_STRIPE_PUBLISHABLE_KEY=pk_test_...   # only if a future phase needs it client-side
+   ```
+5. `MYKHAYA_STRIPE_WEBHOOK_SECRET` comes from the Stripe CLI, not the Dashboard, for
+   local development — see below.
+
+### Local webhook forwarding (Stripe CLI)
+
+Stripe cannot reach a developer's machine directly, so local verification uses the
+[Stripe CLI](https://stripe.com/docs/stripe-cli) to forward test-mode events:
+
+```
+stripe login
+stripe listen --forward-to localhost:8089/api/v1/billing/stripe/webhook
+```
+
+The CLI prints a webhook signing secret (`whsec_...`) each time it starts — put that
+in `MYKHAYA_STRIPE_WEBHOOK_SECRET` and restart `api`. This secret is ephemeral to the
+CLI session; do not treat it as a stable value, and never commit it. A production
+deployment instead registers a webhook endpoint in the Stripe Dashboard and uses
+*that* endpoint's own permanent signing secret.
+
+With `stripe listen` running, trigger individual test events without a real Checkout:
+
+```
+stripe trigger customer.subscription.created
+stripe trigger invoice.payment_failed
+```
+
+or drive the full flow through the actual UI — `/settings/billing` on the household
+app starts a real test-mode Checkout Session; Stripe's documented test card
+`4242 4242 4242 4242` (any future expiry, any CVC) completes it.
+
+Do not assume every deployment runs the Stripe CLI — it's a local-development
+convenience only; production uses a registered webhook endpoint as above.
+
+### Going live (not performed in Phase 3)
+
+Phase 3 is test-mode only; do not switch to live mode as part of this phase. When a
+later phase does:
+
+1. Create the equivalent live-mode Product/Prices in the Stripe Dashboard (live and
+   test mode have entirely separate catalogues — a test Price ID is never valid in
+   live mode and vice versa).
+2. Register a permanent webhook endpoint in the live Dashboard pointing at the
+   production `/api/v1/billing/stripe/webhook` URL, and copy its signing secret.
+3. Set `MYKHAYA_ENVIRONMENT=production`, `MYKHAYA_STRIPE_SECRET_KEY=sk_live_...`, the
+   live Price IDs, and the live webhook secret — all as real deployment secrets, never
+   committed. `Settings.validate_stripe_configuration` requires a live key when
+   `MYKHAYA_ENVIRONMENT=production` and rejects a test key there, so a stale test key
+   left in production configuration fails startup rather than silently taking no
+   payments.
+4. Rotate the webhook secret by registering a second endpoint alongside the first,
+   confirming events arrive successfully, then removing the old endpoint — Stripe
+   supports multiple simultaneous webhook endpoints for exactly this overlap.
+5. Verify the full lifecycle (Checkout → activation → renewal → cancellation) against
+   a real card in live mode before announcing billing is live — none of Phase 3's
+   verification substitutes for this.

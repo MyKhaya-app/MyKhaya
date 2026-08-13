@@ -345,6 +345,25 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}/complete/${encodeURIComponent(occurrenceDate)}`,
       { method: "DELETE" },
     );
+  billingStatus = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").BillingStatus>(
+      `/groups/${encodeURIComponent(homeId)}/billing`,
+    );
+  familyPricing = () =>
+    this.request<import("@mykhaya/shared-types").FamilyPricing>("/billing/pricing");
+  createCheckoutSession = (
+    homeId: string,
+    interval: import("@mykhaya/shared-types").BillingInterval,
+  ) =>
+    this.request<{ checkout_url: string }>(
+      `/groups/${encodeURIComponent(homeId)}/billing/checkout-session`,
+      { method: "POST", body: JSON.stringify({ interval }) },
+    );
+  createPortalSession = (homeId: string) =>
+    this.request<{ portal_url: string }>(
+      `/groups/${encodeURIComponent(homeId)}/billing/portal-session`,
+      { method: "POST" },
+    );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   patch = <T>(path: string, body: unknown) =>

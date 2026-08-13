@@ -33,11 +33,17 @@ from mykhaya.models import (
 )
 
 # Statuses under which a subscription's own `plan` is actually honoured.
-# past_due deliberately still counts as active — MyKhaya doesn't have payment
-# retry/dunning logic yet (that's Phase 3 territory), so treating a first
-# missed payment as an instant downgrade would be needlessly harsh; a fully
-# `cancelled` subscription (or one whose complimentary access has expired)
-# resolves to Free.
+# past_due deliberately still counts as active — this is Phase 3's explicit
+# dunning policy, not a placeholder: Stripe's own Smart Retries handle
+# reattempting payment, and MyKhaya only reacts to the terminal outcome
+# (customer.subscription.deleted -> cancelled) rather than running a second,
+# competing downgrade timer of its own. A single missed payment never causes
+# an instant downgrade; retain access, let the customer fix their payment
+# method via the Stripe Customer Portal, and downgrade only once Stripe
+# itself gives up. See "past_due and dunning" in
+# docs/architecture/commercial-entitlements.md. A fully `cancelled`
+# subscription (or one whose complimentary access has expired) resolves to
+# Free.
 _PLAN_HONOURED_STATUSES = frozenset(
     {
         SubscriptionStatus.active,

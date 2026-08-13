@@ -110,6 +110,8 @@ export type HomeSubscription = {
   billing_owner_user_id: string | null;
   external_customer_id: string | null;
   external_subscription_id: string | null;
+  external_price_id: string | null;
+  billing_interval: string | null;
   current_period_start: string | null;
   current_period_end: string | null;
   complimentary_reason: string | null;
@@ -130,6 +132,11 @@ export type SubscriptionSummary = {
   complimentary_expired: number;
   past_due: number;
   cancelled: number;
+  stripe_total: number;
+  stripe_active_family: number;
+  stripe_monthly: number;
+  stripe_annual: number;
+  stripe_cancelling: number;
 };
 
 export type SubscriptionListItem = {
@@ -179,6 +186,12 @@ export type HomeAdministratorSummary = {
   email: string;
 };
 
+export type StripePriceInfo = {
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+};
+
 export type SubscriptionDetail = {
   id: string;
   name: string;
@@ -188,6 +201,9 @@ export type SubscriptionDetail = {
   subscription: HomeSubscription;
   entitlements: Entitlements;
   history: SubscriptionEvent[];
+  stripe_price: StripePriceInfo | null;
+  stripe_dashboard_customer_url: string | null;
+  stripe_dashboard_subscription_url: string | null;
 };
 
 export const PLATFORM_ROLES: { value: string; label: string }[] = [

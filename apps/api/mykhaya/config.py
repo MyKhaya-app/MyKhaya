@@ -91,6 +91,20 @@ class Settings(BaseSettings):
     vapid_private_key: SecretStr | None = None
     vapid_subject: str | None = None
     push_delivery_configured: bool = False
+    # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
+    # which also support a Platform-Admin-managed DB override. A payment
+    # provider's credentials are rotated through infrastructure, not typed into
+    # an admin text field, and Stripe secrets never touch the database — see
+    # docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+    stripe_secret_key: SecretStr | None = None
+    stripe_webhook_secret: SecretStr | None = None
+    stripe_publishable_key: str | None = None
+    # Price IDs, never monetary amounts — the actual sellable price is always
+    # read from Stripe at request time (mykhaya.billing.pricing), so a price
+    # change is "update these two IDs", never a code or migration change.
+    stripe_family_monthly_price_id: str | None = None
+    stripe_family_annual_price_id: str | None = None
+    stripe_billing_configured: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
     avatar_max_upload_bytes: int = Field(default=5_242_880, ge=1024, le=10_485_760)
@@ -210,6 +224,59 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"MYKHAYA_EMAIL_FROM ({self.email_from!r}) must be a real, deliverable "
                 "MyKhaya-owned address in production, not the mykhaya.local placeholder."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_stripe_configuration(self) -> "Settings":
+        """MYKHAYA_STRIPE_BILLING_CONFIGURED=true is an explicit assertion that
+        every piece Stripe billing needs is present — a half-configured
+        deployment (flag on, one Price ID missing) fails startup loudly here
+        rather than silently misbehaving the first time a Home tries to check
+        out. Unconfigured (the default) is a fully supported, valid state:
+        Free and Complimentary Homes work with no Stripe setup at all.
+        """
+        if not self.stripe_billing_configured:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("MYKHAYA_STRIPE_SECRET_KEY", self.stripe_secret_key),
+                ("MYKHAYA_STRIPE_WEBHOOK_SECRET", self.stripe_webhook_secret),
+                ("MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID", self.stripe_family_monthly_price_id),
+                ("MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID", self.stripe_family_annual_price_id),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                "MYKHAYA_STRIPE_BILLING_CONFIGURED is true but required settings are "
+                f"missing: {', '.join(missing)}."
+            )
+        secret_value = self.stripe_secret_key.get_secret_value() if self.stripe_secret_key else ""
+        is_live_key = secret_value.startswith("sk_live_")
+        is_test_key = secret_value.startswith("sk_test_")
+        if not is_live_key and not is_test_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY does not look like a Stripe secret key "
+                "(expected it to start with sk_test_ or sk_live_)."
+            )
+        # Phase 3 is test-mode only (see docs/operations/dev-deployment.md#stripe-sandbox) —
+        # a live key anywhere outside production is almost certainly a mistake, and a test
+        # key in production would silently take no real payments. Both directions are
+        # rejected rather than just the production one, since "wrong environment" is the
+        # actual risk, not "which specific environment".
+        if self.environment == "production" and is_test_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY is a test-mode key (sk_test_...) but "
+                "MYKHAYA_ENVIRONMENT is production. Live billing is out of scope for this "
+                "phase — see docs/operations/dev-deployment.md#stripe-sandbox."
+            )
+        if self.environment != "production" and is_live_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY is a live-mode key (sk_live_...) but "
+                f"MYKHAYA_ENVIRONMENT is {self.environment!r}. Live Stripe keys must never "
+                "be used outside production."
             )
         return self
 

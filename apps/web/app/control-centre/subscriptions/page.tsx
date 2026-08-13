@@ -121,6 +121,28 @@ export default function SubscriptionsPage() {
               <h2>Cancelled</h2>
               <p className="stat-number">{summary.cancelled}</p>
             </section>
+            <section className="overview-panel">
+              <h2>Paid Stripe Homes</h2>
+              <p className="stat-number">{summary.stripe_total}</p>
+              <small>Ever linked to Stripe, any status</small>
+            </section>
+            <section className="overview-panel">
+              <h2>Active paid Family</h2>
+              <p className="stat-number">{summary.stripe_active_family}</p>
+            </section>
+            <section className="overview-panel">
+              <h2>Monthly subscribers</h2>
+              <p className="stat-number">{summary.stripe_monthly}</p>
+            </section>
+            <section className="overview-panel">
+              <h2>Annual subscribers</h2>
+              <p className="stat-number">{summary.stripe_annual}</p>
+            </section>
+            <section className="overview-panel">
+              <h2>Cancelling</h2>
+              <p className="stat-number">{summary.stripe_cancelling}</p>
+              <small>Cancels at period end</small>
+            </section>
           </div>
         )}
 

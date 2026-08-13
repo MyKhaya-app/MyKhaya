@@ -1,10 +1,12 @@
-// Pure display logic for the Platform Control Centre Subscriptions area —
-// kept separate from the page components so it can be unit-tested directly
-// (this repo has no component-rendering test infra; see
-// platform-mfa-logic.test.ts for the established pattern). Never
-// re-implements entitlement *resolution* — that stays server-side in
-// mykhaya.entitlements; this only turns already-resolved values into labels
-// and badge classes.
+// Pure display logic for plan/provider/status labelling — originally built
+// for the Platform Control Centre Subscriptions area (Phase 2), also reused
+// by the minimal household /settings/billing surface (Phase 3), since both
+// are just presenting the same MyKhaya commercial enums. Kept separate from
+// page components so it can be unit-tested directly (this repo has no
+// component-rendering test infra; see platform-mfa-logic.test.ts for the
+// established pattern). Never re-implements entitlement *resolution* — that
+// stays server-side in mykhaya.entitlements; this only turns already-resolved
+// values into labels and badge classes.
 
 export type SubscriptionPlanValue = "free" | "family";
 export type SubscriptionProviderValue = "free" | "complimentary" | "stripe" | "apple" | "google";

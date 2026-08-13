@@ -1114,6 +1114,15 @@ class SubscriptionStatus(StrEnum):
     cancelled = "cancelled"
 
 
+class BillingInterval(StrEnum):
+    """Monthly vs. annual are two billing intervals of the same `family`
+    plan — never separate MyKhaya plans. Null on HomeSubscription for
+    free/complimentary, where no billing interval applies."""
+
+    month = "month"
+    year = "year"
+
+
 class HomeSubscription(UuidTimeMixin, Base):
     """One row per Home — the authoritative commercial state. Only ever
     written through mykhaya.entitlements or a privileged Platform Control
@@ -1150,8 +1159,17 @@ class HomeSubscription(UuidTimeMixin, Base):
     # only once Stripe (Phase 3) actually creates a customer/subscription. Kept
     # minimal deliberately: Stripe remains authoritative for anything MyKhaya
     # doesn't itself need for entitlement resolution or admin visibility.
-    external_customer_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    # Unique: one Stripe Customer must never be attached to more than one Home.
+    external_customer_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     external_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # The exact Stripe Price this subscription is actually billed against right
+    # now — never the currently-configured signup price. A later change to
+    # Settings.stripe_family_*_price_id only affects new Checkout Sessions;
+    # this column is how an existing subscriber's grandfathered price is known.
+    external_price_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    billing_interval: Mapped[BillingInterval | None] = mapped_column(
+        Enum(BillingInterval, name="billing_interval")
+    )
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off
@@ -1210,3 +1228,32 @@ class HomeSubscriptionEvent(Base):
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
     reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class StripeWebhookEvent(Base):
+    """Durable, transactional deduplication for Stripe webhook delivery —
+    Stripe retries events, and can deliver the same event more than once even
+    without a retry (see docs/architecture/commercial-entitlements.md#webhooks).
+    The unique constraint on stripe_event_id, inserted in the same transaction
+    as any resulting HomeSubscription mutation, is the actual safety
+    mechanism — not an in-memory cache. Deliberately minimal: no full webhook
+    payload is stored, only enough to dedupe and to support troubleshooting a
+    failed/ignored event."""
+
+    __tablename__ = "stripe_webhook_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    stripe_event_id: Mapped[str] = mapped_column(String(255), unique=True)
+    event_type: Mapped[str] = mapped_column(String(100))
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "processed" | "ignored" (valid event, no handler / no material change) |
+    # "failed" (see error_message).
+    outcome: Mapped[str] = mapped_column(String(20))
+    # Sanitised troubleshooting context only — never a raw Stripe exception
+    # string or any part of the webhook payload.
+    error_message: Mapped[str | None] = mapped_column(String(500))

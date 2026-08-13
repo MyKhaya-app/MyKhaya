@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from mykhaya.config import get_settings
 from mykhaya.routers import (
     auth,
+    billing,
     birthdays,
     calendar,
     children,
@@ -109,6 +110,8 @@ for router in (
     notifications.router,
     platform.router,
     communications_admin.router,
+    billing.router,
+    billing.group_router,
     status_router.router,
 ):
     app.include_router(router, prefix="/api/v1")

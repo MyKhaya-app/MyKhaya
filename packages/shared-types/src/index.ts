@@ -332,3 +332,44 @@ export interface BirthdayEntry {
 export interface BirthdayListResponse {
   items: BirthdayEntry[];
 }
+
+// Phase 3 commercial billing (Stripe) — mirrors mykhaya.billing_schemas. See
+// docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+
+export type BillingInterval = "month" | "year";
+export type SubscriptionPlanValue = "free" | "family";
+export type SubscriptionProviderValue = "free" | "complimentary" | "stripe" | "apple" | "google";
+export type SubscriptionStatusValue =
+  | "active"
+  | "trialing"
+  | "past_due"
+  | "cancel_at_period_end"
+  | "cancelled";
+
+export interface BillingStatus {
+  stored_plan: SubscriptionPlanValue;
+  provider: SubscriptionProviderValue;
+  status: SubscriptionStatusValue;
+  effective_plan: SubscriptionPlanValue;
+  billing_interval: BillingInterval | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  can_manage_billing: boolean;
+  has_stripe_customer: boolean;
+  stripe_billing_available: boolean;
+}
+
+export interface PricingOption {
+  interval: BillingInterval;
+  provider: string;
+  provider_price_id: string;
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+}
+
+export interface FamilyPricing {
+  plan: string;
+  options: PricingOption[];
+  annual_saving_formatted: string | null;
+}

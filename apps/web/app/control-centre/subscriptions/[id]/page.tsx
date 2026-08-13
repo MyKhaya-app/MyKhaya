@@ -41,6 +41,7 @@ export default function SubscriptionDetailPage({
   const [message, setMessage] = useState("");
   const [showGrantForm, setShowGrantForm] = useState(false);
   const [showRevokeForm, setShowRevokeForm] = useState(false);
+  const [showReconcileForm, setShowReconcileForm] = useState(false);
   const { guarded, modal } = useReauthGuard();
 
   const load = useCallback(async () => {
@@ -82,6 +83,22 @@ export default function SubscriptionDetailPage({
       setError(
         cause instanceof ApiError ? cause.message : "Complimentary access could not be granted.",
       );
+    }
+  });
+
+  const reconcileStripe = guarded(async (formData: FormData) => {
+    setError("");
+    try {
+      await platformApi.post(`/homes/${encodeURIComponent(id)}/subscription/reconcile-stripe`, {
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage("Reconciled with Stripe's current subscription state.");
+      setShowReconcileForm(false);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(cause instanceof ApiError ? cause.message : "Could not reconcile with Stripe.");
     }
   });
 
@@ -227,7 +244,48 @@ export default function SubscriptionDetailPage({
                     </dd>
                   </>
                 )}
+                {data.subscription.billing_interval && (
+                  <>
+                    <dt>Billing interval</dt>
+                    <dd>{data.subscription.billing_interval === "month" ? "Monthly" : "Annual"}</dd>
+                  </>
+                )}
+                {data.stripe_price && (
+                  <>
+                    <dt>Current price</dt>
+                    <dd>
+                      {data.stripe_price.formatted_amount} / {data.subscription.billing_interval}{" "}
+                      <small>
+                        (<code>{data.subscription.external_price_id}</code>)
+                      </small>
+                    </dd>
+                  </>
+                )}
               </dl>
+              {(data.stripe_dashboard_customer_url || data.stripe_dashboard_subscription_url) && (
+                <div className="platform-modal-actions">
+                  {data.stripe_dashboard_customer_url && (
+                    <a
+                      className="secondary"
+                      href={data.stripe_dashboard_customer_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Customer in Stripe
+                    </a>
+                  )}
+                  {data.stripe_dashboard_subscription_url && (
+                    <a
+                      className="secondary"
+                      href={data.stripe_dashboard_subscription_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Subscription in Stripe
+                    </a>
+                  )}
+                </div>
+              )}
             </section>
 
             <section>
@@ -253,9 +311,31 @@ export default function SubscriptionDetailPage({
               </dl>
             </section>
 
+            {data.subscription.provider === "stripe" && (
+              <section className="action-panel">
+                <h2>Stripe</h2>
+                <p>
+                  This Home&rsquo;s commercial state is driven by Stripe. Provider, plan and
+                  status cannot be edited directly here — reconciliation re-fetches Stripe&rsquo;s
+                  own current subscription state and re-applies it through the same logic
+                  webhooks use.
+                </p>
+                <button className="secondary" onClick={() => setShowReconcileForm(true)}>
+                  Reconcile with Stripe
+                </button>
+              </section>
+            )}
+
             <section className="action-panel">
               <h2>Complimentary access</h2>
-              {data.subscription.provider === "complimentary" ? (
+              {data.subscription.provider === "stripe" &&
+              data.subscription.status !== "cancelled" ? (
+                <p className="notice error" role="alert">
+                  This Home has an active Stripe subscription. Complimentary access cannot be
+                  granted while it is still billing — the Stripe subscription must be cancelled
+                  first (via the Customer Portal or Stripe directly).
+                </p>
+              ) : data.subscription.provider === "complimentary" ? (
                 <>
                   <p>This Home currently has complimentary Family access.</p>
                   <div className="platform-modal-actions">
@@ -435,6 +515,49 @@ export default function SubscriptionDetailPage({
                 <button type="submit" className="danger">
                   Remove complimentary access
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {showReconcileForm && (
+        <div
+          className="platform-modal-backdrop"
+          role="presentation"
+          onClick={() => setShowReconcileForm(false)}
+        >
+          <div
+            className="platform-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reconcile-stripe-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="reconcile-stripe-title">Reconcile with Stripe</h2>
+            <p>
+              Re-fetches this Home&rsquo;s subscription directly from Stripe and re-applies it
+              through the same logic webhooks use. Use this if the Home&rsquo;s state here looks
+              out of date compared to Stripe.
+            </p>
+            <form
+              onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault();
+                void reconcileStripe(new FormData(event.currentTarget));
+              }}
+            >
+              <label>
+                Reason for this administrative action (at least 10 characters)
+                <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+              </label>
+              <div className="platform-modal-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setShowReconcileForm(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit">Reconcile</button>
               </div>
             </form>
           </div>

@@ -13,10 +13,11 @@ const links = [
   ["Routines", "Bins, medication and other recurring reminders", "/settings/routines"],
   ["Security", "Password and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
+  ["Billing", "Plan, payment and subscription status", "/settings/billing"],
 ] as const;
 // Not part of a managed Child's restricted surface — a Child has no password, no
 // household administration rights, and no invite/membership controls.
-const ADULT_ONLY_LINKS = new Set(["Security", "Home settings"]);
+const ADULT_ONLY_LINKS = new Set(["Security", "Home settings", "Billing"]);
 export function SettingsPage({
   title = "Settings",
   children,

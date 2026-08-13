@@ -34,6 +34,13 @@ class Capability(StrEnum):
     household_export = "household.export"
     security_manage = "security.manage"
     household_manage_routines = "household.manage_routines"
+    # Starting Stripe Checkout, opening the Customer Portal, and (future)
+    # cancellation actions — home_admin only, matching household.manage and
+    # features.manage. A standard_partner belonging to the Home is not
+    # automatically trusted with payment-method management just by being a
+    # member; billing decisions stay with whoever administers the Home. See
+    # docs/security/platform-administration-security.md#billing-manage.
+    billing_manage = "billing.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)

@@ -6,6 +6,7 @@ from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from mykhaya.models import (
+    BillingInterval,
     FeatureKey,
     PlatformRole,
     ServiceState,
@@ -466,6 +467,11 @@ class HomeSubscriptionResponse(BaseModel):
     billing_owner_user_id: uuid.UUID | None
     external_customer_id: str | None
     external_subscription_id: str | None
+    # The exact Stripe Price this subscription is actually billed against —
+    # never the currently-configured signup price (see "Price increases and
+    # grandfathering" in docs/architecture/commercial-entitlements.md).
+    external_price_id: str | None
+    billing_interval: BillingInterval | None
     current_period_start: datetime | None
     current_period_end: datetime | None
     complimentary_reason: str | None
@@ -491,8 +497,12 @@ class RevokeComplimentaryRequest(SensitiveActionRequest):
 
 
 class SubscriptionSummaryResponse(BaseModel):
-    """Backend-computed counts only — no revenue/MRR/ARR figures exist until
-    Stripe (Phase 3) supplies real payment data."""
+    """Backend-computed factual counts only. Still no MRR/ARR: with multiple
+    historical Stripe Prices, currencies and billing intervals possibly in
+    play, a single blended revenue figure would be non-trivial to compute
+    correctly — see "Platform summary metrics" in
+    docs/architecture/commercial-entitlements.md. Never calculated from a
+    hard-coded plan price."""
 
     total_homes: int
     free: int
@@ -501,6 +511,11 @@ class SubscriptionSummaryResponse(BaseModel):
     complimentary_expired: int
     past_due: int
     cancelled: int
+    stripe_total: int
+    stripe_active_family: int
+    stripe_monthly: int
+    stripe_annual: int
+    stripe_cancelling: int
 
 
 class SubscriptionListItem(BaseModel):
@@ -550,6 +565,16 @@ class HomeAdministratorSummary(BaseModel):
     email: str
 
 
+class StripePriceInfo(BaseModel):
+    """The actual amount this specific subscription is billed, resolved live
+    from Stripe — never a hard-coded figure. None when the Home has no
+    Stripe price on record, or Stripe couldn't be reached."""
+
+    currency: str
+    unit_amount: int
+    formatted_amount: str
+
+
 class SubscriptionDetailResponse(BaseModel):
     id: uuid.UUID
     name: str
@@ -559,3 +584,9 @@ class SubscriptionDetailResponse(BaseModel):
     subscription: HomeSubscriptionResponse
     entitlements: EntitlementsResponse
     history: list[SubscriptionEventResponse]
+    stripe_price: StripePriceInfo | None = None
+    # Built from validated Stripe object IDs already stored on this Home —
+    # never round-tripped through a client-supplied value. Test-mode Stripe
+    # Dashboard links only, matching this phase's test-mode-only scope.
+    stripe_dashboard_customer_url: str | None = None
+    stripe_dashboard_subscription_url: str | None = None

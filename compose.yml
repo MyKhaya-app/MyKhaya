@@ -136,8 +136,15 @@ services:
     environment:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
-      MYKHAYA_RATE_LIMIT_LOGIN: "100"
-      MYKHAYA_RATE_LIMIT_REGISTER: "300"
+      # Raised from the original 100/300 once the full suite's total
+      # register+login volume (now several hundred, following Phase 3's
+      # Stripe billing tests, each doing a full register/verify/login/create-Home
+      # flow per case) started tripping the shared per-IP login rate limit
+      # within a single 60s window — see the `rate_limit_login`/
+      # `rate_limit_register` field comments in mykhaya/config.py, which
+      # already anticipated raising this for CI/test volume.
+      MYKHAYA_RATE_LIMIT_LOGIN: "1000"
+      MYKHAYA_RATE_LIMIT_REGISTER: "1000"
       MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
       MYKHAYA_ADMIN_URL: "http://admin.localhost:8080"
       MYKHAYA_STATUS_URL: "http://status.localhost:8080"

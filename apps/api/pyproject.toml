@@ -24,6 +24,7 @@ dependencies = [
   "pywebpush>=2,<3",
   "redis>=6.2,<7",
   "sqlalchemy[asyncio]>=2.0.41,<3",
+  "stripe>=11,<13",
   "structlog>=25.4,<26",
   "uvicorn[standard]>=0.35,<1",
   "webauthn>=2.5,<3"

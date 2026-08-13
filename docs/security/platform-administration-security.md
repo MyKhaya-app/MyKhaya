@@ -47,3 +47,33 @@ Phase 2 (`docs/architecture/commercial-entitlements.md`'s "Phase 2" section) add
 **Audit behaviour is unchanged.** Because grant/revoke still go through Phase 1's existing endpoints, `platform_audit`'s `home.complimentary_granted`/`home.complimentary_revoked` events and the `HomeSubscriptionEvent` history are written exactly as documented in Phase 1 — Phase 2's UI does not, and structurally cannot, bypass them, since there is no alternative write path.
 
 **Confirmed: no household-level route can mutate commercial state.** `GroupUpdate`/`GroupCreate` remain `StrictModel`s with no commercial fields (Phase 1); Phase 2 added zero household-facing endpoints or fields.
+
+## Commercial entitlements — Stripe billing (Phase 3)
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Phase 3" section. Security-specific points:
+
+### Webhooks
+
+`POST /billing/stripe/webhook` trusts exactly one thing: Stripe's cryptographic signature (`stripe.Webhook.construct_event`, computed over the **raw** request body — the route reads `await request.body()` directly rather than a parsed model, since re-serialising a parsed body would not reproduce Stripe's exact bytes and would break verification). An invalid or missing signature is rejected (400) before any database work. There is no IP allowlist as a trust mechanism — Stripe's published IP ranges change, and signature verification is the correct control regardless of source IP. No ordinary authenticated API path can substitute for it: `HomeSubscription.provider = stripe` is only ever set by `apply_stripe_subscription_state`, called exclusively from the webhook handler and the admin-only reconciliation endpoint, both of which resolve state from Stripe's own object, never from client-supplied fields.
+
+Duplicate/replayed events are harmless: `StripeWebhookEvent.stripe_event_id` is unique, checked (with a lock-protected re-check) before any mutation, and a duplicate short-circuits to the previously-recorded outcome without re-processing. A processing failure does not commit a dedup row, so Stripe's retry is never silently swallowed.
+
+### Checkout
+
+`billing_manage` (new `Capability`, `mykhaya/household_permissions.py`) gates both Checkout Session and Customer Portal Session creation — granted only to `home_admin`, not `standard_partner` or any other profile, so an ordinary Home member cannot start Checkout or reach the Portal for a Home merely by being a member. `CheckoutSessionRequest` is a `StrictModel` accepting only `interval: "month" | "year"` — a client cannot supply a Price ID, amount, currency, Stripe Customer, or subscription identifier; all of those are resolved server-side from `Settings`/the Home's existing `HomeSubscription` row. Success/cancel URLs are built from `Settings.public_web_url`, never from a request header. Duplicate-subscription protection (a `_LIVE_STRIPE_STATUSES` check before any Stripe call, backed by a per-Home Postgres advisory lock around the whole operation) prevents a double-click, multiple tabs, or a retried request from creating two active subscriptions for the same Home; a Stripe idempotency key on the Checkout Session creation call is defense-in-depth beneath that.
+
+### Portal
+
+Portal sessions are created only for the Home's own already-stored `external_customer_id` — there is no code path that accepts a Stripe Customer ID from the client, so a Portal session can never be opened against another Home's Stripe Customer (no IDOR surface). `billing_manage` gates this the same as Checkout. The return URL is `Settings.public_web_url`-derived, never client-supplied.
+
+### Data
+
+`MYKHAYA_STRIPE_SECRET_KEY`/`MYKHAYA_STRIPE_WEBHOOK_SECRET` are `SecretStr`, environment-only (no DB storage — see the architecture doc's "Stripe provider boundary" for why this differs from SMTP/push), and never returned by any API response. No card number, CVV, or bank credential is ever stored by MyKhaya — Stripe Checkout and the Customer Portal handle all payment-method collection and display directly; MyKhaya only stores Stripe's own opaque identifiers (`external_customer_id`, `external_subscription_id`, `external_price_id`). `StripeWebhookEvent` stores no payload data, only IDs/timestamps/outcome. `call_stripe`'s error classification (`client.py`) ensures a raw Stripe exception — which can include request/response detail not meant for an API consumer — never reaches a response body; sanitised context goes to the structured server log only.
+
+### Commercial state
+
+Success redirects cannot grant access: `checkout.session.completed` only records IDs, never calls `apply_stripe_subscription_state`. The frontend cannot grant Family under any circumstance — `/settings/billing`'s only state-changing actions are starting Checkout and opening the Portal, both of which redirect to Stripe; there is no client-side write to `HomeSubscription`. Ordinary Home APIs (`PATCH /groups/{id}` etc.) still cannot change provider/status — unchanged from Phase 1/2. `apply_stripe_subscription_state` fails safe on any unrecognised Stripe status (no mutation) exactly as the Phase 1 entitlement resolver fails safe on any unrecognised stored value.
+
+### Paid ↔ Complimentary conflict
+
+`grant_complimentary` now 409s if the Home's `provider == stripe` and `status != cancelled` — an operator cannot accidentally leave a Home simultaneously billed by Stripe and marked Complimentary. See "Complimentary ↔ Stripe transitions" in the architecture doc.
