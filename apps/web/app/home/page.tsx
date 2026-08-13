@@ -12,7 +12,7 @@ import type {
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
-import { Avatar, memberColour } from "@/components/avatar";
+import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { isStandalone } from "@/components/install-prompt";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
@@ -88,19 +88,22 @@ function birthdayTodayPhrase(name: string) {
 
 function EventRow({
   event,
-  member,
+  members,
   leading,
 }: {
   event: EventOccurrence;
-  member: Member | null;
+  members: Member[];
   leading: React.ReactNode;
 }) {
+  const [firstMember] = members;
   return (
     <Link className="home-event-row" href="/calendar">
       <span
         className="home-event-colour"
         style={{
-          background: member ? memberColour(member.user_id, member.colour) : "var(--colour-sage)",
+          background: firstMember
+            ? memberColour(firstMember.user_id, firstMember.colour)
+            : "var(--colour-sage)",
         }}
         aria-hidden="true"
       />
@@ -109,14 +112,8 @@ function EventRow({
         <strong>{event.title}</strong>
         {event.location_text && <small>{event.location_text}</small>}
       </span>
-      {member ? (
-        <Avatar
-          id={member.user_id}
-          name={member.display_name}
-          colour={member.colour}
-          avatarVersion={member.avatar_version}
-          size="sm"
-        />
+      {members.length > 0 ? (
+        <AvatarStack people={members} size="sm" />
       ) : (
         <span className="home-event-avatar-placeholder" aria-hidden="true" />
       )}
@@ -178,8 +175,12 @@ export default function HomePage() {
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
 
-  function firstMember(memberIds: string[]) {
-    return members.find((member) => memberIds.includes(member.user_id)) ?? null;
+  // Reuses GET /groups/{id}/members' existing display_name ordering (members
+  // is already fetched once, in that order, for the whole Home) rather than
+  // inventing a new order — same list, just filtered per event, so it's
+  // always deterministic and never depends on event.member_ids' own order.
+  function membersForEvent(memberIds: string[]) {
+    return members.filter((member) => memberIds.includes(member.user_id));
   }
 
   async function enableNotifications() {
@@ -290,7 +291,7 @@ export default function HomePage() {
                   <EventRow
                     key={event.occurrence_id}
                     event={event}
-                    member={firstMember(event.member_ids)}
+                    members={membersForEvent(event.member_ids)}
                     leading={eventTime(event.start_at, event.timezone)}
                   />
                 ))}
@@ -317,7 +318,7 @@ export default function HomePage() {
                     <EventRow
                       key={event.occurrence_id}
                       event={event}
-                      member={firstMember(event.member_ids)}
+                      members={membersForEvent(event.member_ids)}
                       leading={
                         <span className="home-event-date-stack">
                           <strong>

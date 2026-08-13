@@ -777,6 +777,21 @@ textarea {
 .home-event-avatar-placeholder {
   width: 32px;
 }
+.avatar-stack {
+  display: flex;
+  flex: none;
+}
+.avatar-stack .avatar {
+  box-shadow: 0 0 0 2px var(--colour-white);
+}
+.avatar-stack .avatar:not(:first-child) {
+  margin-left: -0.5rem;
+}
+.avatar-stack-more {
+  background: var(--colour-cream-light);
+  color: var(--colour-muted);
+  font-size: 0.7rem;
+}
 .birthday-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

@@ -2,6 +2,13 @@
 
 import { useState } from "react";
 import { contrastText, resolveColour } from "@mykhaya/design-tokens";
+import {
+  type AvatarStackPerson,
+  avatarStackLabel,
+  buildAvatarStack,
+} from "./avatar-stack-logic";
+
+export type { AvatarStackPerson } from "./avatar-stack-logic";
 
 // Identity belongs to a person, not an event category — every family
 // member gets one colour, used everywhere they appear (avatar, their
@@ -73,6 +80,62 @@ export function Avatar({
         />
       ) : (
         initial
+      )}
+    </span>
+  );
+}
+
+/** A compact overlapping avatar group for "who's involved in this" contexts
+ *  (event cards, etc.) — one Avatar for a single person (byte-for-byte the
+ *  same markup Avatar alone would render, so single-participant call sites
+ *  see no visual change), an overlapping row of up to MAX_STACK_AVATARS for
+ *  more, and a "+N" tile for the remainder. Ordering is whatever order
+ *  `people` is passed in — callers own that (see home/page.tsx, which
+ *  reuses GET /groups/{id}/members' existing display_name order rather than
+ *  this component inventing its own).
+ *
+ *  Individual Avatars stay aria-hidden (as Avatar always is); the group
+ *  carries one combined aria-label instead of one announcement per circle,
+ *  so a screen reader hears "Alice, Bob and Charlie" once rather than three
+ *  redundant "image" announcements. */
+export function AvatarStack({
+  people,
+  size = "sm",
+}: {
+  people: AvatarStackPerson[];
+  size?: keyof typeof SIZES;
+}) {
+  if (people.length === 0) return null;
+  if (people.length === 1) {
+    const [person] = people;
+    return (
+      <Avatar
+        id={person!.user_id}
+        name={person!.display_name}
+        colour={person!.colour}
+        avatarVersion={person!.avatar_version}
+        size={size}
+      />
+    );
+  }
+  const { shown, extra } = buildAvatarStack(people);
+  const label = avatarStackLabel(people);
+  return (
+    <span className="avatar-stack" role="img" aria-label={label}>
+      {shown.map((person) => (
+        <Avatar
+          key={person.user_id}
+          id={person.user_id}
+          name={person.display_name}
+          colour={person.colour}
+          avatarVersion={person.avatar_version}
+          size={size}
+        />
+      ))}
+      {extra > 0 && (
+        <span className={`avatar avatar-${size} avatar-stack-more`} aria-hidden="true">
+          +{extra}
+        </span>
       )}
     </span>
   );
