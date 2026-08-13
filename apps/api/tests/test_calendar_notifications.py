@@ -199,6 +199,47 @@ async def test_resaving_an_event_unchanged_does_not_duplicate_the_added_notifica
 
 
 @pytest.mark.asyncio
+async def test_title_only_edit_does_not_notify_assigned_members(client: AsyncClient) -> None:
+    """A wording/typo fix to the title alone is deliberately excluded from
+    "material change" — it shouldn't notify every assigned member the way an
+    actual date/time/location change should."""
+    await create_verified_user(client, unique_email("creator"), "Creator")
+    home_id = await _home_with_calendar(client, "Title Only Edit Home")
+    member_id = await _join_home(home_id, unique_email("member"))
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=await _event_body(home_id, [str(member_id)]),
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["event_id"]
+    updated_at = created.json()["updated_at"]
+    assert len(await _notifications_for(member_id)) == 1  # the initial "added" notification
+
+    retitled = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event_id}",
+        json=await _event_body(
+            home_id,
+            [str(member_id)],
+            expected_updated_at=updated_at,
+            title="Family dinner (corrected spelling)",
+        ),
+    )
+    assert retitled.status_code == 200, retitled.text
+    assert retitled.json()["title"] == "Family dinner (corrected spelling)"
+
+    # Still just the one "added" notification — no "event updated" for a
+    # title-only change.
+    member_notifications = await _notifications_for(member_id)
+    assert len(member_notifications) == 1
+    assert member_notifications[0].notification_type == "event_invitation"
+
+
+@pytest.mark.asyncio
 async def test_editing_to_add_a_second_member_only_notifies_the_new_one(
     client: AsyncClient,
 ) -> None:

@@ -703,9 +703,12 @@ async def update_event(
             )
         ).all()
     }
+    # Deliberately excludes title: a wording/typo fix to an event's title
+    # shouldn't notify every assigned member the way a date/time/location
+    # change (something that actually affects whether/where they show up)
+    # should.
     material_change = (
-        event.title.strip() != body.title.strip()
-        or event.start_at != body.start_at
+        event.start_at != body.start_at
         or event.end_at != body.end_at
         or event.is_all_day != body.is_all_day
         or event.location_text != body.location_text
