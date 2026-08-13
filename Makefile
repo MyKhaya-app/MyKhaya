@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check compose-check release-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -28,6 +28,7 @@ test:
 lint:
 	pnpm lint
 	sh infrastructure/scripts/run-tests.sh ruff check mykhaya tests
+	sh infrastructure/scripts/run-tests.sh ruff format --check mykhaya tests
 typecheck:
 	pnpm typecheck
 	sh infrastructure/scripts/run-tests.sh mypy mykhaya
@@ -60,6 +61,14 @@ compose-check:
 	docker compose config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "local dev"
 	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "persistent dev server"
 	docker compose -f compose.yml -f compose.production.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "production"
+caddy-check:
+	docker run --rm \
+		-e MYKHAYA_DEV_PROXY_TRUSTED_CIDRS=100.64.0.0/10 \
+		-v "$(CURDIR)/infrastructure/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro" \
+		caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
+web-check:
+	docker build --target check -f apps/web/Dockerfile .
+	docker build --target mobile-check -f apps/web/Dockerfile .
 # The single canonical pre-release command: everything the `quality` GitHub
 # Actions workflow checks that can meaningfully run outside CI's own runner
 # (image builds/pushes and Gitleaks are the two things this deliberately
@@ -67,11 +76,25 @@ compose-check:
 # docs/operations/release-process.md). Added after a release candidate was
 # reported green without ever running `validate_version.py`, which then
 # failed immediately in CI.
-release-check: version-check compose-check
+release-check: version-check compose-check caddy-check
 	docker compose run --rm migrate alembic heads
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test
+	$(MAKE) web-check
+
+# Docker/network-heavy scanners, deliberately kept out of release-check so
+# every-commit local runs stay fast — but promoting dev to main requires both
+# `make release-check` and `make security-check` to have passed; see
+# docs/operations/release-process.md. Mirrors the parallel jobs in
+# .github/workflows/security.yml one-for-one, same images/flags/versions.
+security-check:
+	docker run --rm -v "$(CURDIR):/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-banner
+	docker run --rm -v "$(CURDIR)/apps/api:/src" -w /src python:3.13.5-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
+	docker run --rm -v "$(CURDIR):/src" aquasec/trivy:0.64.1 fs --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig /src
+	docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.172.0 semgrep scan --config p/owasp-top-ten --error /src/apps
+	docker run --rm -v "$(CURDIR):/src" bridgecrew/checkov:3.2.451 -d /src --framework dockerfile github_actions --quiet
+	docker run --rm -v "$(CURDIR):/src" anchore/syft:v1.30.0 dir:/src -o cyclonedx-json=/src/mykhaya-sbom.cdx.json
 
 dev-preflight:
 	sh infrastructure/scripts/dev-deploy.sh preflight
