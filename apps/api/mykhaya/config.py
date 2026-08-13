@@ -1,4 +1,6 @@
+import os
 from functools import lru_cache
+from importlib import metadata as importlib_metadata
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
@@ -7,8 +9,10 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_DISTRIBUTION_NAME = "mykhaya-api"
 
-def _read_repo_version() -> str:
+
+def _read_repo_version_file() -> str | None:
     here = Path(__file__).resolve()
     candidates = [Path("/app/VERSION"), Path.cwd() / "VERSION"]
     candidates.extend(parent / "VERSION" for parent in here.parents[:4])
@@ -17,7 +21,33 @@ def _read_repo_version() -> str:
             value = path.read_text(encoding="utf-8").strip()
             if value:
                 return value
-    return "unknown"
+    return None
+
+
+def resolve_app_version() -> str:
+    """The single source of truth for the running application's version.
+
+    Precedence: an explicit MYKHAYA_VERSION override > installed package
+    metadata (infrastructure/scripts/validate_version.py already enforces
+    apps/api/pyproject.toml's version stays equal to the repository VERSION
+    file, so this is never stale) > the repository VERSION file when running
+    from source > a safe non-empty fallback.
+
+    "unknown" is deliberately not treated as a meaningful override even
+    though it's present as a literal env var value in several places
+    (compose.yml's `${MYKHAYA_VERSION:-unknown}` substitution, the
+    Dockerfiles' `ARG MYKHAYA_VERSION=unknown`) — those exist so a build/run
+    never fails for lacking the var, not to assert "the version really is
+    unknown" over a better source that's actually available.
+    """
+    override = os.environ.get("MYKHAYA_VERSION", "").strip()
+    if override and override != "unknown":
+        return override
+    try:
+        return importlib_metadata.version(_DISTRIBUTION_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    return _read_repo_version_file() or "unknown"
 
 
 class Settings(BaseSettings):
@@ -25,7 +55,7 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "test", "production"] = "development"
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
-    version: str = _read_repo_version()
+    version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
@@ -78,6 +108,20 @@ class Settings(BaseSettings):
     commit_sha: str = "unknown"
     build_time: str = "unknown"
     build_channel: Literal["development", "stable"] = "development"
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def resolve_blank_version(cls, value: object) -> object:
+        """.env.example ships MYKHAYA_VERSION= (blank) with the comment
+        "leave blank to use the repository VERSION file" — but a
+        present-but-empty env var is still a value as far as pydantic-settings
+        is concerned, so without this it silently overrides the default_factory
+        with "", and FastAPI(version="") fails its own non-empty assertion at
+        startup. Blank is treated as unset, not as an explicit empty override.
+        """
+        if isinstance(value, str) and not value.strip():
+            return resolve_app_version()
+        return value
 
     @field_validator(
         "cors_origins",
