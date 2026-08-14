@@ -600,3 +600,49 @@ Both `member_usage` and `calendar_usage` reuse the same `CalendarUsageResponse` 
 ### Explicitly out of scope for this cleanup
 
 No Stripe billing/architecture change of any kind. No live billing enablement. No hard-coded prices. No enabling of Lists/Chores/Wishlists/Notes/Family Plans. No new commercial tier. No automatic deletion of over-limit data (a Home already exceeding the new Free member/routine limits keeps everything — only *new* growth is blocked, exactly like Calendar's existing downgrade model). No automatic member suspension or eviction. No enforcement of `events.shared.enabled` or `members.external_invites.enabled` (explicitly deferred, documented above as follow-up work).
+
+## Free plan enforcement pass
+
+A follow-up audit and correction pass, prompted by Free Homes still being able to reach Family functionality through surfaces the Commercial Plan Cleanup task above hadn't touched: the Home dashboard's "Invite family" action, the Family page's "Add member" button, the Routines form's freely-selectable "Household" scope, and — critically — two genuine backend bypasses of `home.max_members` that the previous pass's invite-creation-only check missed. No new entitlement keys were introduced; this closes gaps in *where* the existing `PLAN_DEFINITIONS` keys were actually being checked.
+
+### Two real backend bypasses of `home.max_members`, now closed
+
+1. **Invitation acceptance.** The previous pass checked `home.max_members` only at `POST /invitations` (invite *creation*). But a Home's effective plan can change between an invitation being sent and being accepted — a Family Home invites several people, then downgrades before they respond — and `POST /invitations/accept` added the resulting `Membership` unconditionally. Fixed by re-checking the limit in `accept()`, under the same `pg_advisory_xact_lock` pattern as `invite()`, but **only** when acceptance would actually grow membership (`existing is None or existing.removed_at is not None`) — a no-op re-accept of an already-active membership is exempt, since it doesn't increase the count. The invitation itself is never revoked by this check; it can still be accepted once the Home is Family again.
+2. **Direct child-profile creation.** `routers.children.create_child` adds a full `Membership` row (relationship=`child`) directly — entirely separately from the invitation flow, with no invitation involved at all. It had no `home.max_members` check whatsoever. Fixed with the identical race-safe pattern (same lock key, `f"members:{group_id}"`, so it serialises against concurrent invitation acceptance for the same Home too).
+
+Both fixes reuse `require_within_limit`/`commercial_restriction_error` unchanged — no new enforcement mechanism was invented.
+
+### Frontend: gating that was missing, not wrong
+
+The routine and household-routine entitlement *enforcement* from the Commercial Plan Cleanup task was already correct; what was missing was the frontend telling a Free user *before* they act rather than only after a rejected request:
+
+- **Home dashboard** (`/home`): the "Invite family" quick action now only renders once `GET /groups/{id}/billing`'s new `member_usage` field confirms the Home can actually add another person — it fails closed (hidden) while that's still loading, never optimistically shown.
+- **Family page** (`/people`): "Add member" is gated the same way; when the Home is at its member limit, a small "Invite household members — Available with MyKhaya Family" notice replaces it (never removes profile/member-viewing, per the "don't lock someone out of their own account" rule). The invite form itself is also gated as a second layer.
+- **Routines form** (`/settings/routines`): the "Household" scope option is now `disabled` when the Home's plan doesn't include `routines.household.enabled` — a Free user can no longer select it and discover only on save that it's rejected. An existing household routine being edited on a since-downgraded Free Home keeps its option enabled specifically for that edit (so the transition-only downgrade-safety behaviour documented above still works from the UI, not just the API), with a Family upsell note shown alongside.
+- **Settings → Plan & Billing**: gained a member-count "over plan limit" explanation, mirroring the existing calendar one, driven by the same new `member_usage` field.
+
+A new `BillingStatusResponse.member_usage` (same `CalendarUsageResponse` shape as `calendar_usage`) and `household_routines_enabled: bool` field were added to `GET /groups/{id}/billing` specifically so these surfaces could gate correctly without each inventing its own entitlement lookup — the single household-facing read model Phase 4 already established stays the single source of truth.
+
+### Seeded "categories" were never the commercial resource
+
+Investigated why a test Home's UI showed several categories (Family/School/Work/Appointment/Birthday/Activity) despite Free being limited to one. These are `CalendarEventLabel` rows — free-form, unlimited event tags seeded once at Home creation (`routers.groups.DEFAULT_LABELS`) — not `HomeCalendar` rows, and were never counted against `calendar.max_categories`; a Free Home has exactly one persisted `HomeCalendar` ("Home Calendar") at creation, as designed. The actual bug was cosmetic: the Calendar page's label filter dropdown was accessibility-labelled "Calendar or category", which reads as if it were the entitlement-limited resource. Relabelled to "Filter by label" so the two concepts are never conflated again — no change to the underlying `CalendarEventLabel` model, seeding, or limits.
+
+### Shared family events — still deferred, not silently broadened
+
+Re-confirmed the Commercial Plan Cleanup task's original conclusion: `events.shared.enabled` remains commercial data only, unenforced. In practice, `home.max_members = 1` already prevents a *newly created* Free Home from having more than one person to share an event with in the first place, so the live bypass surface is narrower than it looks; a Family Home that downgrades while retaining multiple existing members can still assign them to shared events, which is intentional (non-destructive downgrade — "preserve existing, block only new growth" applies here exactly as it does to calendars and routines). A real product definition of what "shared" restricts is still required before any enforcement is added.
+
+### Test account reproduction — before / after
+
+The exact scenario reported (a Free Home with one member) is now covered directly by `apps/api/tests/test_free_plan_enforcement.py`:
+
+| | Before this pass | After this pass |
+|---|---|---|
+| Invite a second household member | Blocked at invite *creation* only — an already-sent invite could still be accepted after a downgrade | Blocked at both creation and acceptance |
+| Add a child | Not blocked at all — no entitlement check existed | Blocked once at the member limit |
+| Select "Household" for a routine | Selectable in the UI, rejected only after submitting | Disabled in the UI before submission; API enforcement unchanged (was already correct) |
+| Multiple event categories | Never actually possible on a genuinely Free Home (label/category confusion was cosmetic only) | Unchanged — confirmed, not a real gap |
+| Calendar, Events, Notes, up to 3 Personal routines | Fully available | Unchanged — fully available |
+
+### Explicitly out of scope for this pass
+
+Unchanged from the Commercial Plan Cleanup task: no Stripe/billing changes, no live billing, no hard-coded prices, no enabling of Lists/Chores/Wishlists/Family Plans, no new commercial tier, no automatic deletion or suspension of over-limit data. `events.shared.enabled` and `members.external_invites.enabled` remain deferred, unchanged.

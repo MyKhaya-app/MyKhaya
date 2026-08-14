@@ -241,3 +241,23 @@ Both enforced in `routers/household_routines.py` using the same `require_entitle
 ### No new attack surface
 
 Both new checks reuse `commercial_restriction_error`/`CommercialRestrictionCode` (Phase 6) for their error shape — provider-neutral, no Stripe-specific branching, no information disclosure beyond the entitlement key and limit already exposed by every other entitlement error in the system. Neither check touches authentication, session handling, or existing capability/permission checks — a request is still refused as `404` before it ever reaches the entitlement check if the caller isn't a member of the Home in question, matching the existing IDOR-prevention convention audited in Phase 7 above.
+
+## Free plan enforcement pass: closing two member-limit bypasses
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Free plan enforcement pass" section. A follow-up security-relevant finding: the Commercial Plan Cleanup task's `home.max_members` enforcement covered invitation *creation* only, leaving two paths that could still grow a Free Home past its single-person limit.
+
+### Invitation acceptance re-checked, not just invitation creation
+
+`POST /invitations/accept` (`routers.invitations.accept`) previously added the resulting `Membership` unconditionally once a token validated. A Home's effective plan can change between an invitation being *sent* (when the original check ran) and being *accepted* — e.g. a Family Home invites several people, then its subscription lapses or is downgraded before they respond — so acceptance itself is a genuine, separate member-add surface. Fixed by re-checking `home.max_members` inside `accept()`, under the same `pg_advisory_xact_lock(hashtext('members:{group_id}'))` pattern `invite()` already uses, so the two endpoints correctly serialise against each other for the same Home. The check only fires when acceptance would actually increase the active member count — a duplicate/idempotent re-accept of an already-active membership is exempt, matching the endpoint's existing idempotency semantics. `test_invitation_acceptance_cannot_bypass_member_limit_after_downgrade` proves the downgrade-before-accept race is blocked; `test_invitation_acceptance_allowed_within_family_limit` proves ordinary acceptance is untouched.
+
+### Direct child-profile creation was entirely unchecked
+
+`routers.children.create_child` adds a full `Membership` row directly (relationship=`child`) — a second, entirely independent member-add path with no invitation, and no relationship to `routers.invitations` at all. It had **no** commercial entitlement check before this pass, meaning a Free Home could add unlimited children regardless of `home.max_members`. Fixed with the identical race-safe advisory-lock pattern, same lock key (`f"members:{group_id}"`) as invitations, so child creation and invitation acceptance for the same Home cannot race each other into an over-limit state either. `test_free_home_cannot_add_a_child_beyond_the_member_limit` / `test_family_home_can_add_a_child` cover both outcomes.
+
+### Why this matters as a security finding, not just a UX gap
+
+Both were genuine authorization gaps, not merely missing UI polish: a Free-plan household could reach Family-tier household size through either endpoint via ordinary, unmodified API calls — no manipulated payload, no hidden button, no client-state tampering required. Per the standing rule (`docs/engineering/engineering-standards.md`: "Every commercial (plan-based) restriction must go through the central entitlement service"), any Home-scoped endpoint capable of increasing membership must check `home.max_members`; this pass makes that true for all three such endpoints (`invite`, `accept`, `create_child`) rather than only the one exercised by the original Commercial Plan Cleanup test suite.
+
+### Direct API bypass verification (this pass)
+
+Re-ran the same style of check Phase 7's review used: attempted to grow a Free Home past one member by (a) accepting a stale invitation issued while the Home was Family, and (b) calling `create_child` directly against a Free Home with no other manipulation. Both are refused with the standard `plan_limit_reached` error shape; neither can be worked around by omitting fields, since `guardian_membership_ids`/`email` validation happens before or independently of the entitlement check and doesn't influence it.

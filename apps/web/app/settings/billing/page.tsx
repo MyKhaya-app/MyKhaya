@@ -17,6 +17,7 @@ import {
   resolvePlanCardKind,
 } from "@/components/billing-logic";
 import { overLimitExplanation } from "@/components/calendar-entitlement-logic";
+import { memberOverLimitExplanation } from "@/components/member-entitlement-logic";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -293,6 +294,12 @@ export default function PlanAndBillingSettings() {
               {overLimitExplanation(status.calendar_usage) && (
                 <p className="notice" role="status">
                   {overLimitExplanation(status.calendar_usage)}
+                </p>
+              )}
+
+              {memberOverLimitExplanation(status.member_usage) && (
+                <p className="notice" role="status">
+                  {memberOverLimitExplanation(status.member_usage)}
                 </p>
               )}
             </section>

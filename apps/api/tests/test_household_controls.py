@@ -1,3 +1,4 @@
+import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     AuditEvent,
@@ -15,6 +17,7 @@ from mykhaya.models import (
     Membership,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     User,
 )
 
@@ -37,6 +40,11 @@ async def test_home_admin_features_relationships_and_managed_child(
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Control Home"})
     assert created.status_code == 201
     home_id = created.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
     assert created.json()["relationship"] == "home_admin"
     assert "features.manage" in created.json()["capabilities"]
 
@@ -187,6 +195,11 @@ async def test_member_colours_are_assigned_and_collision_free(
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Colour Home"})
     assert created.status_code == 201
     home_id = created.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     members = await client.get(f"/api/v1/groups/{home_id}/members")
     admin = members.json()[0]

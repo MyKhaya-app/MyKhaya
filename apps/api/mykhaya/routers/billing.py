@@ -270,7 +270,9 @@ async def billing_status(
         stripe_billing_available=config.configured and config.acquisition_enabled,
         calendar_usage=await calendar_usage(db, group_id),
         member_usage=await member_usage(db, group_id),
-        household_routines_enabled=await has_entitlement(db, group_id, "routines.household.enabled"),
+        household_routines_enabled=await has_entitlement(
+            db, group_id, "routines.household.enabled"
+        ),
     )
 
 

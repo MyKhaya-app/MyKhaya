@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { Routine, RoutineReminderTiming, RoutineRepeatUnit, RoutineScope } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
+import { FamilyUpsell } from "@/components/family-upsell";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 
@@ -32,6 +33,15 @@ export default function RoutineSettings() {
   const [busy, setBusy] = useState(false);
   const [repeatUnit, setRepeatUnit] = useState<RoutineRepeatUnit>("weekly");
   const [weekInterval, setWeekInterval] = useState(1);
+  const [householdRoutinesEnabled, setHouseholdRoutinesEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setHouseholdRoutinesEnabled(billing.household_routines_enabled))
+      .catch(() => setHouseholdRoutinesEnabled(false));
+  }, [activeHomeId]);
 
   function openForm(routine: Routine | null) {
     setEditing(routine);
@@ -76,7 +86,7 @@ export default function RoutineSettings() {
     const payload = {
       title: ((form.get("title") as string | null) ?? "").trim(),
       description: (form.get("description") as string) || null,
-      scope: (form.get("scope") as RoutineScope | null) ?? "household",
+      scope: (form.get("scope") as RoutineScope | null) ?? "personal",
       interval_weeks: repeatUnit === "daily" ? 1 : Number(form.get("interval_weeks") ?? 1),
       repeat_unit: repeatUnit,
       week_anchor_date: (form.get("week_anchor_date") as string | null) ?? todayIso(),
@@ -204,7 +214,28 @@ export default function RoutineSettings() {
             <label>Description (optional)<input name="description" maxLength={1000} defaultValue={editing?.description ?? ""} /></label>
           </fieldset>
           <fieldset><legend>Schedule</legend>
-            <label>Who this is for<select name="scope" defaultValue={editing?.scope ?? "household"}><option value="household">{SCOPE_LABELS.household}</option><option value="personal">{SCOPE_LABELS.personal}</option></select></label>
+            <label>
+              Who this is for
+              <select
+                name="scope"
+                defaultValue={editing?.scope ?? (householdRoutinesEnabled ? "household" : "personal")}
+              >
+                <option
+                  value="household"
+                  disabled={!householdRoutinesEnabled && editing?.scope !== "household"}
+                >
+                  {SCOPE_LABELS.household}
+                  {!householdRoutinesEnabled && editing?.scope !== "household" ? " (Family)" : ""}
+                </option>
+                <option value="personal">{SCOPE_LABELS.personal}</option>
+              </select>
+            </label>
+            {!householdRoutinesEnabled && (
+              <FamilyUpsell
+                title="Household routines"
+                description="Available with MyKhaya Family — reminds everyone in the household, not just you."
+              />
+            )}
             <div className="routine-choice" role="group" aria-label="Repeat frequency">
               <span className="routine-choice-label">Repeat</span>
               {(["daily", "weekly"] as RoutineRepeatUnit[]).map((unit) => <button key={unit} type="button" aria-pressed={repeatUnit === unit} className={repeatUnit === unit ? "toggle-active" : "secondary"} onClick={() => setRepeatUnit(unit)}>{unit === "daily" ? "Daily" : "Weekly"}</button>)}

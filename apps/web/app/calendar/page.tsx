@@ -582,8 +582,13 @@ export default function CalendarPage() {
 
           <div className="calendar-selectors-row">
             <label className="calendar-selector">
-              <span className="sr-only">Calendar or category</span>
-              <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Calendar or category">
+              {/* This filters by CalendarEventLabel — a free-form, unlimited event
+                  tag (Family/School/Work/...), not the commercial "event category"
+                  (HomeCalendar) concept limited by calendar.max_categories. Labelled
+                  "label" here specifically so it's never confused with that limit —
+                  see docs/architecture/commercial-entitlements.md#commercial-plan-cleanup. */}
+              <span className="sr-only">Filter by label</span>
+              <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by label">
                 <option value="">{activeHome?.name ?? "Household"} calendar</option>
                 {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
               </select>

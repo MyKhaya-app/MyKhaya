@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { UserPlus } from "lucide-react";
 import type {
+  CalendarUsage,
   HouseholdRelationship,
   InvitationListItem,
   Member,
@@ -13,7 +14,9 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { canAddMember, memberLimitMessage } from "@/components/member-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
 
 type FamilyFilter = "all" | "adults" | "children" | "extended";
@@ -74,15 +77,27 @@ export default function People() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [colourEditing, setColourEditing] = useState<string | null>(null);
   const [colourBusy, setColourBusy] = useState(false);
+  const [memberUsage, setMemberUsage] = useState<CalendarUsage | null>(null);
 
   useEffect(() => {
     api.me().then((user) => setCurrentUserId(user.id));
   }, []);
 
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setMemberUsage(billing.member_usage))
+      .catch(() => setMemberUsage(null));
+  }, [activeHomeId]);
+
   const canInvite =
     activeHome?.capabilities.includes("members.invite") ?? false;
   const canManage =
     activeHome?.capabilities.includes("members.manage_relationships") ?? false;
+  // Fails closed while loading/unknown — "Add member" only ever appears once
+  // the plan's actual member limit is confirmed, never optimistically.
+  const canGrowMembership = memberUsage ? canAddMember(memberUsage) : false;
   const nonChildRelationships = useMemo(
     () =>
       [
@@ -253,7 +268,7 @@ export default function People() {
             <h1>Family</h1>
             <p className="muted">The people that make {activeHome?.name ?? "your Home"}</p>
           </div>
-          {canInvite && (
+          {canInvite && canGrowMembership && (
             <button type="button" onClick={() => setOpen((value) => !value)}>
               <UserPlus size={18} aria-hidden="true" />
               Add member
@@ -261,7 +276,17 @@ export default function People() {
           )}
         </div>
 
-        {open && canInvite && (
+        {canInvite && memberUsage && !canGrowMembership && (
+          <FamilyUpsell
+            title="Invite household members"
+            description={
+              memberLimitMessage(memberUsage) ??
+              "Available with MyKhaya Family."
+            }
+          />
+        )}
+
+        {open && canInvite && canGrowMembership && (
           <section className="card invite-card">
             <div className="section-heading">
               <div>
