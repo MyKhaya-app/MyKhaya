@@ -990,6 +990,7 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     __table_args__ = (
         CheckConstraint("char_length(title) >= 1", name="ck_routine_title_nonempty"),
         CheckConstraint("interval_weeks >= 1", name="ck_routine_interval_weeks"),
+        CheckConstraint("repeat_unit IN ('daily', 'weekly')", name="ck_routine_repeat_unit"),
         # A personal routine must have an owner to notify; a household routine's
         # recipients come from HouseholdRoutineMember/whole-household instead, so it
         # must not carry a single owner that notification targeting could mistake for
@@ -1019,6 +1020,10 @@ class HouseholdRoutine(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     interval_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # Weekly is the legacy behaviour. Daily routines keep the same anchor/date
+    # bounds while using a separate unit so existing interval_weeks data remains
+    # backwards compatible.
+    repeat_unit: Mapped[str] = mapped_column(String(10), default="weekly", server_default="weekly")
     week_anchor_date: Mapped[date] = mapped_column(Date)
     reminder_timing: Mapped[RoutineReminderTiming] = mapped_column(
         Enum(RoutineReminderTiming, name="routine_reminder_timing"),

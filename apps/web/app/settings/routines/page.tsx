@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import type { Routine, RoutineReminderTiming, RoutineScope } from "@mykhaya/shared-types";
+import type { Routine, RoutineReminderTiming, RoutineRepeatUnit, RoutineScope } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
@@ -30,6 +30,16 @@ export default function RoutineSettings() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [repeatUnit, setRepeatUnit] = useState<RoutineRepeatUnit>("weekly");
+  const [weekInterval, setWeekInterval] = useState(1);
+
+  function openForm(routine: Routine | null) {
+    setEditing(routine);
+    setRepeatUnit(routine?.repeat_unit ?? "weekly");
+    setWeekInterval(routine?.interval_weeks ?? 1);
+    setShowForm(true);
+    setError("");
+  }
 
   const load = useCallback(async () => {
     if (!activeHomeId) return;
@@ -67,7 +77,8 @@ export default function RoutineSettings() {
       title: ((form.get("title") as string | null) ?? "").trim(),
       description: (form.get("description") as string) || null,
       scope: (form.get("scope") as RoutineScope | null) ?? "household",
-      interval_weeks: Number(form.get("interval_weeks") ?? 1),
+      interval_weeks: repeatUnit === "daily" ? 1 : Number(form.get("interval_weeks") ?? 1),
+      repeat_unit: repeatUnit,
       week_anchor_date: (form.get("week_anchor_date") as string | null) ?? todayIso(),
       reminder_timing: (form.get("reminder_timing") as RoutineReminderTiming) ?? "evening_before",
       is_critical: form.get("is_critical") === "on",
@@ -131,8 +142,7 @@ export default function RoutineSettings() {
                 <h2>{routine.title}</h2>
                 {routine.description && <p>{routine.description}</p>}
                 <small>
-                  {routine.scope === "personal" ? "Personal" : "Household"} · Every{" "}
-                  {routine.interval_weeks === 1 ? "week" : `${routine.interval_weeks} weeks`} ·{" "}
+                  {routine.scope === "personal" ? "Personal" : "Household"} · {routine.repeat_unit === "daily" ? "Daily" : `Every ${routine.interval_weeks === 1 ? "week" : `${routine.interval_weeks} weeks`}`} ·{" "}
                   {TIMING_LABELS[routine.reminder_timing]}
                   {routine.is_critical ? " · Critical" : ""}
                   {!routine.enabled ? " · Disabled" : ""}
@@ -159,8 +169,7 @@ export default function RoutineSettings() {
                     type="button"
                     className="secondary"
                     onClick={() => {
-                      setEditing(routine);
-                      setShowForm(true);
+                      openForm(routine);
                     }}
                   >
                     Edit
@@ -180,8 +189,7 @@ export default function RoutineSettings() {
         <button
           type="button"
           onClick={() => {
-            setEditing(null);
-            setShowForm(true);
+            openForm(null);
           }}
         >
           Add a routine
@@ -189,66 +197,28 @@ export default function RoutineSettings() {
       )}
 
       {canManage && showForm && (
-        <form className="card details" onSubmit={save}>
+        <form className="card details routine-form" key={editing?.id ?? "new"} onSubmit={save}>
           <h2>{editing ? "Edit routine" : "New routine"}</h2>
-          <label>
-            Title
-            <input name="title" required maxLength={160} defaultValue={editing?.title ?? ""} />
-          </label>
-          <label>
-            Description (optional)
-            <input name="description" maxLength={1000} defaultValue={editing?.description ?? ""} />
-          </label>
-          <label>
-            Who this is for
-            <select name="scope" defaultValue={editing?.scope ?? "household"}>
-              <option value="household">{SCOPE_LABELS.household}</option>
-              <option value="personal">{SCOPE_LABELS.personal}</option>
-            </select>
-          </label>
-          <label>
-            Repeats every
-            <select name="interval_weeks" defaultValue={String(editing?.interval_weeks ?? 1)}>
-              <option value="1">Week</option>
-              <option value="2">2 weeks (alternating)</option>
-              <option value="3">3 weeks</option>
-              <option value="4">4 weeks</option>
-            </select>
-          </label>
-          <label>
-            An occurrence date (used to anchor the schedule)
-            <input
-              type="date"
-              name="week_anchor_date"
-              required
-              defaultValue={editing?.week_anchor_date ?? todayIso()}
-            />
-          </label>
-          <label>
-            Remind
-            <select name="reminder_timing" defaultValue={editing?.reminder_timing ?? "evening_before"}>
-              <option value="evening_before">The evening before</option>
-              <option value="same_day">The morning of</option>
-              <option value="both">Both</option>
-            </select>
-          </label>
-          <label className="check-row">
-            <input type="checkbox" name="is_critical" defaultChecked={editing?.is_critical ?? false} />{" "}
-            Critical (e.g. medication — bypasses quiet hours)
-          </label>
-          <label className="check-row">
-            <input type="checkbox" name="pinned" defaultChecked={editing?.pinned ?? false} />{" "}
-            Pin to the Home screen checklist
-          </label>
-          <label>
-            Starts
-            <input type="date" name="start_date" required defaultValue={editing?.start_date ?? todayIso()} />
-          </label>
-          <label>
-            Ends (optional)
-            <input type="date" name="end_date" defaultValue={editing?.end_date ?? ""} />
-          </label>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <fieldset><legend>Routine</legend>
+            <label>Title<input name="title" required maxLength={160} defaultValue={editing?.title ?? ""} /></label>
+            <label>Description (optional)<input name="description" maxLength={1000} defaultValue={editing?.description ?? ""} /></label>
+          </fieldset>
+          <fieldset><legend>Schedule</legend>
+            <label>Who this is for<select name="scope" defaultValue={editing?.scope ?? "household"}><option value="household">{SCOPE_LABELS.household}</option><option value="personal">{SCOPE_LABELS.personal}</option></select></label>
+            <div className="routine-choice" role="group" aria-label="Repeat frequency">
+              <span className="routine-choice-label">Repeat</span>
+              {(["daily", "weekly"] as RoutineRepeatUnit[]).map((unit) => <button key={unit} type="button" aria-pressed={repeatUnit === unit} className={repeatUnit === unit ? "toggle-active" : "secondary"} onClick={() => setRepeatUnit(unit)}>{unit === "daily" ? "Daily" : "Weekly"}</button>)}
+            </div>
+            {repeatUnit === "weekly" && <label>Every<select name="interval_weeks" value={weekInterval} onChange={(event) => setWeekInterval(Number(event.target.value))}><option value={1}>1 week</option><option value={2}>2 weeks</option><option value={3}>3 weeks</option><option value={4}>4 weeks</option></select></label>}
+            <label>{repeatUnit === "daily" ? "Start date" : "Anchor date"}<input type="date" name="week_anchor_date" required defaultValue={editing?.week_anchor_date ?? todayIso()} /><small>{repeatUnit === "daily" ? "Repeats every day from this date." : "Choose a date when this routine occurs."}</small></label>
+            <label>Remind<select name="reminder_timing" defaultValue={editing?.reminder_timing ?? "evening_before"}><option value="evening_before">The evening before</option><option value="same_day">The morning of</option><option value="both">Both</option></select></label>
+            <div className="routine-date-grid"><label>Starts<input type="date" name="start_date" required defaultValue={editing?.start_date ?? todayIso()} /></label><label>Ends (optional)<input type="date" name="end_date" defaultValue={editing?.end_date ?? ""} /></label></div>
+          </fieldset>
+          <fieldset><legend>Notifications & Home</legend>
+            <label className="routine-setting"><input type="checkbox" name="is_critical" defaultChecked={editing?.is_critical ?? false} /><span><strong>Critical reminder</strong><small>Can bypass quiet hours for medication and other important routines.</small></span></label>
+            <label className="routine-setting"><input type="checkbox" name="pinned" defaultChecked={editing?.pinned ?? false} /><span><strong>Pin to Home checklist</strong><small>Keep this routine visible on your Home screen.</small></span></label>
+          </fieldset>
+          <div className="routine-form-actions">
             <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
             <button
               type="button"

@@ -293,6 +293,7 @@ export interface PushSubscriptionSummary {
 export type RoutineReminderTiming = "evening_before" | "same_day" | "both";
 
 export type RoutineScope = "personal" | "household";
+export type RoutineRepeatUnit = "daily" | "weekly";
 
 export interface Routine {
   id: string;
@@ -301,6 +302,7 @@ export interface Routine {
   scope: RoutineScope;
   owner_user_id: string | null;
   interval_weeks: number;
+  repeat_unit: RoutineRepeatUnit;
   week_anchor_date: string;
   reminder_timing: RoutineReminderTiming;
   is_critical: boolean;
@@ -320,6 +322,7 @@ export interface RoutinePayload {
   description?: string | null;
   scope: RoutineScope;
   interval_weeks: number;
+  repeat_unit: RoutineRepeatUnit;
   week_anchor_date: string;
   reminder_timing: RoutineReminderTiming;
   is_critical: boolean;

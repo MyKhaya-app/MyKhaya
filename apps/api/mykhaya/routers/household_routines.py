@@ -87,6 +87,7 @@ async def _to_response(db: AsyncSession, routine: HouseholdRoutine) -> RoutineRe
         scope=routine.scope,
         owner_user_id=routine.owner_user_id,
         interval_weeks=routine.interval_weeks,
+        repeat_unit=routine.repeat_unit,
         week_anchor_date=routine.week_anchor_date,
         reminder_timing=routine.reminder_timing,
         is_critical=routine.is_critical,
@@ -194,6 +195,7 @@ async def create_routine(
         scope=body.scope,
         owner_user_id=auth.user.id if body.scope == RoutineScope.personal else None,
         interval_weeks=body.interval_weeks,
+        repeat_unit=body.repeat_unit,
         week_anchor_date=body.week_anchor_date,
         reminder_timing=body.reminder_timing,
         is_critical=body.is_critical,
@@ -287,6 +289,7 @@ async def update_routine(
     else:
         routine.owner_user_id = None
     routine.interval_weeks = body.interval_weeks
+    routine.repeat_unit = body.repeat_unit
     routine.week_anchor_date = body.week_anchor_date
     routine.reminder_timing = body.reminder_timing
     routine.is_critical = body.is_critical

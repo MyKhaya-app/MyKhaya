@@ -24,6 +24,8 @@ def is_occurrence_date(routine: HouseholdRoutine, day: date) -> bool:
     if routine.end_date is not None and day > routine.end_date:
         return False
     offset_days = (day - routine.week_anchor_date).days
+    if routine.repeat_unit == "daily":
+        return True
     if offset_days % 7 != 0:
         return False
     weeks_since_anchor = offset_days // 7

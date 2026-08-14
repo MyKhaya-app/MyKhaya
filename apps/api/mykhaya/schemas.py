@@ -530,6 +530,7 @@ class RoutineCreate(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
+    repeat_unit: Literal["daily", "weekly"] = "weekly"
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
     is_critical: bool = False
@@ -545,6 +546,8 @@ class RoutineCreate(StrictModel):
         # household-routine concept and would be misleading here.
         if self.scope == RoutineScope.personal and self.member_ids:
             raise ValueError("A personal routine cannot have explicit members")
+        if self.repeat_unit == "daily" and self.interval_weeks != 1:
+            raise ValueError("Daily routines must use an interval of one")
         return self
 
 
@@ -553,6 +556,7 @@ class RoutineUpdate(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
+    repeat_unit: Literal["daily", "weekly"] = "weekly"
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
     is_critical: bool = False
@@ -567,6 +571,8 @@ class RoutineUpdate(StrictModel):
     def _personal_has_no_explicit_members(self) -> "RoutineUpdate":
         if self.scope == RoutineScope.personal and self.member_ids:
             raise ValueError("A personal routine cannot have explicit members")
+        if self.repeat_unit == "daily" and self.interval_weeks != 1:
+            raise ValueError("Daily routines must use an interval of one")
         return self
 
 
@@ -577,6 +583,7 @@ class RoutineResponse(BaseModel):
     scope: RoutineScope
     owner_user_id: uuid.UUID | None
     interval_weeks: int
+    repeat_unit: Literal["daily", "weekly"]
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming
     is_critical: bool

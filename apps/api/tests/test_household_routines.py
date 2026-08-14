@@ -138,6 +138,7 @@ def make_routine(
     created_by: uuid.UUID,
     week_anchor_date: date,
     interval_weeks: int = 1,
+    repeat_unit: str = "weekly",
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before,
     is_critical: bool = False,
     enabled: bool = True,
@@ -152,6 +153,7 @@ def make_routine(
         scope=scope,
         owner_user_id=owner_user_id,
         interval_weeks=interval_weeks,
+        repeat_unit=repeat_unit,
         week_anchor_date=week_anchor_date,
         reminder_timing=reminder_timing,
         is_critical=is_critical,
@@ -173,6 +175,22 @@ def test_is_occurrence_date_weekly() -> None:
     assert is_occurrence_date(routine, anchor + timedelta(weeks=5))
     assert is_occurrence_date(routine, anchor - timedelta(weeks=3))
     assert not is_occurrence_date(routine, anchor + timedelta(days=1))
+    assert not is_occurrence_date(routine, anchor + timedelta(days=3))
+
+
+def test_is_occurrence_date_daily_uses_anchor_and_date_bounds() -> None:
+    anchor = date(2026, 1, 6)
+    routine = make_routine(
+        group_id=uuid.uuid4(),
+        created_by=uuid.uuid4(),
+        week_anchor_date=anchor,
+        repeat_unit="daily",
+        start_date=anchor,
+        end_date=anchor + timedelta(days=2),
+    )
+    assert is_occurrence_date(routine, anchor)
+    assert is_occurrence_date(routine, anchor + timedelta(days=1))
+    assert is_occurrence_date(routine, anchor + timedelta(days=2))
     assert not is_occurrence_date(routine, anchor + timedelta(days=3))
 
 
@@ -254,6 +272,45 @@ async def test_home_admin_can_create_and_list_routine(client: AsyncClient) -> No
     listed = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
     assert listed.status_code == 200
     assert len(listed.json()["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_routine_round_trips_and_can_be_updated(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("daily"), "Daily Owner")
+    home_id = await create_home_with_notifications(client)
+    anchor = datetime.now(UTC).date().isoformat()
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Feed the dog",
+            "repeat_unit": "daily",
+            "interval_weeks": 1,
+            "week_anchor_date": anchor,
+            "start_date": anchor,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["repeat_unit"] == "daily"
+    assert created.json()["next_occurrence_date"] == anchor
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/routines/{created.json()['id']}",
+        json={
+            "title": "Feed the dog",
+            "repeat_unit": "weekly",
+            "interval_weeks": 2,
+            "week_anchor_date": anchor,
+            "start_date": anchor,
+            "expected_updated_at": created.json()["updated_at"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["repeat_unit"] == "weekly"
+    assert updated.json()["interval_weeks"] == 2
 
 
 @pytest.mark.asyncio

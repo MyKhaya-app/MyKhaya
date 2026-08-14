@@ -1085,6 +1085,39 @@ textarea {
   max-width: 760px;
   padding: 1.5rem;
 }
+.routine-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.routine-form h2 { margin: 0; }
+.routine-form fieldset {
+  border: 0;
+  border-top: 1px solid #eee8df;
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 1rem 0 0;
+}
+.routine-form legend {
+  color: var(--colour-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 0 0.4rem 0 0;
+  text-transform: uppercase;
+}
+.routine-form label { display: grid; gap: 0.35rem; }
+.routine-form label small,
+.routine-setting small { color: var(--colour-muted); font-size: 0.8rem; }
+.routine-choice { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.routine-choice-label { font-weight: 700; margin-right: 0.25rem; }
+.routine-choice button { min-height: 44px; }
+.routine-date-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.routine-setting { align-items: center; display: flex !important; gap: 0.7rem; min-height: 48px; }
+.routine-setting input { flex: 0 0 auto; height: 24px; width: 24px; }
+.routine-setting span { display: grid; gap: 0.1rem; }
+.routine-form-actions { display: flex; gap: 0.5rem; }
 .details dl > div,
 .session {
   align-items: center;
@@ -2983,6 +3016,9 @@ button.danger,
 }
 
 @media (max-width: 760px) {
+  .routine-form { padding: 1rem; }
+  .routine-date-grid { grid-template-columns: 1fr; }
+  .routine-form-actions { position: sticky; bottom: 0; background: var(--colour-surface, #fff); padding: 0.75rem 0 calc(0.75rem + env(safe-area-inset-bottom)); }
   .platform-shell {
     display: block;
   }
