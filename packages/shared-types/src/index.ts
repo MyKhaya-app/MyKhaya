@@ -71,6 +71,12 @@ export interface EventLabel {
   color: string;
   is_active: boolean;
   sort_order: number;
+  // This is the actual user-facing "event category" resource
+  // calendar.max_categories governs — see HomeCalendar.commercial_access
+  // for the equivalent on the separate, lower-level Calendar concept. Only
+  // populated by the management listing (GET /event-labels) — null when
+  // embedded on an event or returned from create/update.
+  commercial_access: CalendarCommercialAccess | null;
 }
 
 export interface EventOccurrence {
@@ -405,6 +411,7 @@ export interface BillingStatus {
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;
   calendar_usage: CalendarUsage;
+  category_usage: CalendarUsage;
   member_usage: CalendarUsage;
   household_routines_enabled: boolean;
   shared_events_enabled: boolean;

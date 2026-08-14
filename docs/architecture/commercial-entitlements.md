@@ -687,3 +687,37 @@ Every Family-only object already representable in the data model was re-checked 
 ### Test result (this delta)
 
 `sh infrastructure/scripts/run-tests.sh`: **538 passed, 2 failed**. The 2 failures (`test_migration_integrity.py::test_alembic_revision_ids_fit_version_column_and_form_one_chain`, `test_worker.py::test_database_rejects_duplicate_scheduler_occurrence`) are unrelated to commercial entitlements — reproduced identically (same 2 failures) on the pre-existing baseline commit (`382c278`, before any of this pass's work) via an isolated `git worktree`, and their failure content (an Alembic-migrations-directory glob returning empty; a `MissingGreenlet` error from re-reading an ORM attribute after a rollback in a scheduler-occurrence test) has no connection to entitlements, plans, members, events, or routines.
+
+## Event categories are CalendarEventLabel, not HomeCalendar
+
+A production-blocking correction: a review found that a Free Home could visit Settings -> Home settings' "Calendars & categories" page and see (and freely activate, rename, recolour) all 7 seeded default categories — Family, School, Work, Appointment, Birthday, Activity, Other — with no plan restriction whatsoever, directly contradicting "Free = 1 event category". The Commercial Plan Cleanup and Free Plan Enforcement passes above had correctly enforced `calendar.max_categories` against `HomeCalendar` creation (the `/calendar/calendars` page, itself relabelled "Event categories" during that work) — but `HomeCalendar` is not the resource this settings page manages, or the resource an ordinary user experiences as "category". This page manages `CalendarEventLabel` rows, and its own copy says so plainly: *"Every event belongs to one of these — its colour, not who created it, is what shows on Calendar."* That is the actual, user-facing event-category feature. The earlier passes enforced the right entitlement key against the wrong resource.
+
+### The corrected model
+
+- **Calendar** — the container itself (`HomeCalendar`). Always included on both plans. A Free Home structurally has exactly one (Phase 6, unchanged).
+- **Event category** — `CalendarEventLabel`. The thing every event belongs to; its colour is what Calendar renders. **This is what `calendar.max_categories` now also governs** — Free: 1 active, Family: unlimited. Managed at Settings -> Home settings, and selected per-event via the "Calendar or category" field on the Calendar page.
+- **Label/tag** — there is no third, separate "tag" concept; `CalendarEventLabel` *is* both the category and what was previously called a "label" internally. The class name stays `CalendarEventLabel` (cosmetic rename avoided, per the established pattern of not renaming a model merely for terminology alignment) but its commercial treatment is now correct.
+
+Both `HomeCalendar` and `CalendarEventLabel` share the single `calendar.max_categories` entitlement key rather than each having their own — reusing one entitlement across two independently-tracked resources, not a second plan-checking system. In practice a Free Home is capped at 1 of each, which is what "1 event category" actually means end to end on every surface a customer can reach.
+
+### Seeding fixed at the source
+
+`routers.groups.create_group` (Home creation) and `routers.calendar._ensure_home_calendar` (the lazy fallback) both previously seeded all 7 `DEFAULT_LABELS`/`SYSTEM_LABELS` with `is_active=True`. Now only the first (`"Family"`) starts active; the other 6 are seeded `is_active=False`. Every new Home is Free at creation time (per the standing signup rule), so this is correct unconditionally — a Home that upgrades to Family can activate the pre-seeded rest (or create new ones) without needing to re-type anything.
+
+### Backend enforcement
+
+`routers.calendar.create_label` and `update_label` (the only two label-mutating endpoints — there is no delete, no duplicate/copy) now enforce `calendar.max_categories`, race-safe under the same `pg_advisory_xact_lock` pattern as calendar/member/routine creation:
+
+- **Create**: a new label is always active, so creating one when already at the limit is blocked outright (`plan_limit_reached`).
+- **Activate**: transition-safe — only `is_active: false -> true` is checked (excluding the label's own row from the count). Deactivating, renaming, or recolouring a label is never blocked, at any plan — this is what lets a user "rename/customise their one usable entry" freely and lets a Family Home reorganise without hitting a race against its own edits.
+
+`create_event`/`update_event` gained the same `_require_label_selectable` check `_require_calendar_writable` already provided for `HomeCalendar`: a `label_id` must resolve to a label the Home can currently use (`classify_ordered_resources` over the active set, same deterministic "lowest sort_order/oldest wins" ordering as calendars). For `update_event`, this is transition-safe exactly like the shared-events check — only a genuine label *change* is validated; resaving an event with the label it already has is always allowed, which is what lets a historical event assigned to a since-downgraded, over-limit label keep rendering and being edited (title, time, other fields) indefinitely.
+
+### Downgrade behaviour
+
+Deactivating labels is never automatic. A Family Home with 3 active labels that downgrades keeps all 3 rows `is_active=True` in the database — nothing is deleted or flipped. What changes is which one is usable for *new* activity: `GET /event-labels?include_inactive=true`'s `commercial_access` (computed fresh every read, exactly like `HomeCalendar.commercial_access`) marks the lowest-`sort_order` active label `"normal"` and the rest `"read_only_due_to_plan"`. A locked label can still be viewed, still renders on every historical event that already carries it, and can still have events resaved against it unchanged — it just can't be assigned to a *new* event, reactivated, or have a brand-new label created alongside it, until the Home is Family again (at which point every preserved label becomes usable immediately, no migration or manual re-activation needed) or enough labels are manually deactivated to fall back under the limit.
+
+### Frontend
+
+- **Settings -> Home settings "Calendars & categories"** (`app/settings/home/page.tsx`): now fetches `include_inactive=true` so every label — not just the currently-active one — is visible. A `commercial_access: "read_only_due_to_plan"` row renders muted, with a lock icon and "Family" indicator, no working "Active" checkbox, no rename/recolour controls (Option A from the review). The create form is replaced entirely by a locked "Add another category 🔒 — Unlimited categories are included with MyKhaya Family" card (`FamilyUpsell`, Option B) once the Home is at its limit — driven by a new `category_usage` field on `GET /groups/{id}/billing`, computed by the new `mykhaya.entitlements.category_usage` (parallel to the existing `calendar_usage`/`member_usage`).
+- **Calendar page's event-category selector** (`app/calendar/page.tsx`): the same transition-safe locking as the routine-scope and household-member selectors — a locked category shows `disabled` with a "(Family)" suffix, except when it's the event's own current category (so editing an existing event never breaks).

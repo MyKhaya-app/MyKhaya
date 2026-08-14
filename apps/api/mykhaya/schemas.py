@@ -437,6 +437,21 @@ class EventLabelResponse(BaseModel):
     color: ColourToken
     is_active: bool
     sort_order: int
+    # This is the actual user-facing "event category" resource
+    # calendar.max_categories governs — see "Event categories are
+    # CalendarEventLabel, not HomeCalendar" in
+    # docs/architecture/commercial-entitlements.md. Same meaning as
+    # HomeCalendarResponse.commercial_access: "normal" means usable now
+    # (an active label within the plan's limit, or an inactive one that
+    # could still be activated); "read_only_due_to_plan" means an active
+    # label preserved past a downgrade beyond the limit, or an inactive
+    # label that can't currently be activated. Derived fresh on every read,
+    # never persisted. Only ever populated by the GET /event-labels listing
+    # (the management surface) — None when a label is embedded on an
+    # EventOccurrence or returned directly from create/update, neither of
+    # which needs it (the settings page always reloads the list after a
+    # mutation, which is where this is actually read).
+    commercial_access: Literal["normal", "read_only_due_to_plan"] | None = None
 
 
 class EventCreate(StrictModel):

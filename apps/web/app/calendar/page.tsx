@@ -236,11 +236,21 @@ function EventForm({
         Calendar or category
         <select name="label" defaultValue={initial?.label?.id ?? ""}>
           <option value="">Family calendar</option>
-          {labels.map((label) => (
-            <option key={label.id} value={label.id}>
-              {label.name}
-            </option>
-          ))}
+          {labels.map((label) => {
+            // Transition-safe, matching update_event's own check: a category
+            // already assigned to this event stays selectable (so resaving
+            // never breaks), but a different, over-the-plan-limit category
+            // preserved past a downgrade can't be newly assigned.
+            const locked =
+              label.commercial_access === "read_only_due_to_plan" &&
+              initial?.label?.id !== label.id;
+            return (
+              <option key={label.id} value={label.id} disabled={locked}>
+                {label.name}
+                {locked ? " (Family)" : ""}
+              </option>
+            );
+          })}
         </select>
       </label>
       <label>

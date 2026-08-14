@@ -348,6 +348,13 @@ async def _home_with_calendar(client: AsyncClient, name: str) -> str:
                 feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
             )
         )
+        # The label-management tests using this helper create a second
+        # event-category label (calendar.max_categories) — Free seeds only
+        # one active by default (see routers.groups' DEFAULT_LABELS
+        # seeding), so this needs Family.
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 

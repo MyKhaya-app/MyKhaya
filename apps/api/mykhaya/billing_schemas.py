@@ -90,6 +90,10 @@ class BillingStatusResponse(BaseModel):
     # page can show "1 of 1" on a normal Free Home too; see "Household Plan
     # & Billing messaging" in docs/architecture/commercial-entitlements.md.
     calendar_usage: CalendarUsageResponse
+    # The actual user-facing "event category" resource (CalendarEventLabel,
+    # not HomeCalendar) shown on Settings -> Home settings' "Calendars &
+    # categories" page — see mykhaya.entitlements.category_usage.
+    category_usage: CalendarUsageResponse
     # Same shape/purpose as calendar_usage, for household member count vs.
     # home.max_members — lets People/Home surfaces gate "Add member"/"Invite
     # family" without duplicating the entitlement lookup themselves.

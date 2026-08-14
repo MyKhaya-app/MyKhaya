@@ -136,6 +136,17 @@ async def create_group(
                 color=color,
                 is_system=True,
                 sort_order=(index + 1) * 10,
+                # This is the actual, user-facing "event category" resource
+                # (see Settings -> Home settings "Calendars & categories" —
+                # every event belongs to one of these) and calendar.max_categories
+                # is enforced against its active count (routers.calendar's
+                # create_label/update_label). A brand-new Home is always Free
+                # at creation time, so only the first seeded label starts
+                # active; the rest stay available to activate once/if the
+                # Home is on Family, rather than all appearing active
+                # immediately. See docs/architecture/commercial-entitlements.md
+                # "Event categories are CalendarEventLabel, not HomeCalendar".
+                is_active=index == 0,
             )
         )
     audit(db, request, "group.created", auth.user.id, group.id, "group", group.id)

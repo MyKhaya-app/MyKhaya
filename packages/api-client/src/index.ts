@@ -207,9 +207,11 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/event-labels`,
       { method: "POST", body: JSON.stringify(body) },
     );
-  listLabels = (homeId: string) =>
+  listLabels = (homeId: string, options?: { includeInactive?: boolean }) =>
     this.request<import("@mykhaya/shared-types").EventLabel[]>(
-      `/homes/${encodeURIComponent(homeId)}/event-labels`,
+      `/homes/${encodeURIComponent(homeId)}/event-labels${
+        options?.includeInactive ? "?include_inactive=true" : ""
+      }`,
     );
   updateLabel = (
     homeId: string,

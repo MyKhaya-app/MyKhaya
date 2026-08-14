@@ -118,6 +118,10 @@ async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCa
                 color=color,
                 is_system=True,
                 sort_order=(index + 1) * 10,
+                # See routers.groups' matching seeding block — only the
+                # first default label starts active, matching a new Home
+                # always being Free at this point.
+                is_active=index == 0,
             )
         )
     await db.flush()
@@ -160,6 +164,52 @@ def _require_calendar_writable(access: dict[uuid.UUID, bool], calendar_id: uuid.
         raise commercial_restriction_error(
             CommercialRestrictionCode.resource_restricted_by_plan,
             "This calendar is included with MyKhaya Family. Upgrade to add or edit events here.",
+            entitlement=CALENDAR_LIMIT_KEY,
+        )
+
+
+async def _ordered_active_labels(db: AsyncSession, group_id: uuid.UUID) -> list[CalendarEventLabel]:
+    """Deterministic priority order for commercial classification of the
+    *active* event-category labels (see 'Event categories are
+    CalendarEventLabel, not HomeCalendar' in
+    docs/architecture/commercial-entitlements.md) — lowest sort_order (the
+    first seeded default, or the first one a Home ever created) sorts
+    first, so it's always the one that stays usable on Free. Only active
+    rows are classified; an inactive label is already unreachable for new
+    events (see create_event's is_active filter) so it has no commercial
+    state to compute."""
+    return list(
+        (
+            await db.scalars(
+                select(CalendarEventLabel)
+                .where(
+                    CalendarEventLabel.group_id == group_id,
+                    CalendarEventLabel.is_active.is_(True),
+                )
+                .order_by(CalendarEventLabel.sort_order.asc(), CalendarEventLabel.created_at.asc())
+            )
+        ).all()
+    )
+
+
+async def _label_access(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, bool]:
+    """Same shape/purpose as _calendar_access, for the active event-category
+    labels shown on Settings -> Home settings 'Calendars & categories' —
+    this is the actual user-facing resource calendar.max_categories governs
+    (HomeCalendar's own, separate limit is enforced independently by
+    _calendar_access; a Free Home is structurally capped at one
+    HomeCalendar anyway, so this is what a Free user actually experiences
+    as "1 event category" on the page they use to manage them)."""
+    labels = await _ordered_active_labels(db, group_id)
+    limit = await get_limit(db, group_id, CALENDAR_LIMIT_KEY)
+    return classify_ordered_resources([label.id for label in labels], limit)
+
+
+def _require_label_selectable(access: dict[uuid.UUID, bool], label_id: uuid.UUID | None) -> None:
+    if label_id is not None and not access.get(label_id, False):
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.resource_restricted_by_plan,
+            "This category is included with MyKhaya Family. Upgrade to assign new events to it.",
             entitlement=CALENDAR_LIMIT_KEY,
         )
 
@@ -485,19 +535,41 @@ async def _notify_members_event_cancelled(
 @router.get("/{home_id}/event-labels", response_model=list[EventLabelResponse])
 async def labels(
     home_id: uuid.UUID,
+    include_inactive: bool = False,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[EventLabelResponse]:
+    """Active-only by default — this is what the event-creation dropdown
+    (calendar/page.tsx) uses, and an inactive/locked category must never be
+    selectable there. Settings -> Home settings' management page passes
+    include_inactive=True so it can show every label (including ones a Free
+    Home can't currently use) with an accurate commercial_access, per "Event
+    categories are CalendarEventLabel, not HomeCalendar" in
+    docs/architecture/commercial-entitlements.md."""
     await require_capability(home_id, Capability.calendar_view, auth, db)
     await _ensure_home_calendar(db, home_id)
+    query = select(CalendarEventLabel).where(CalendarEventLabel.group_id == home_id)
+    if not include_inactive:
+        query = query.where(CalendarEventLabel.is_active.is_(True))
     rows = (
         await db.scalars(
-            select(CalendarEventLabel)
-            .where(CalendarEventLabel.group_id == home_id, CalendarEventLabel.is_active.is_(True))
-            .order_by(CalendarEventLabel.sort_order, CalendarEventLabel.name)
-            .limit(100)
+            query.order_by(CalendarEventLabel.sort_order, CalendarEventLabel.name).limit(100)
         )
     ).all()
+
+    access = await _label_access(db, home_id)
+    limit = await get_limit(db, home_id, CALENDAR_LIMIT_KEY)
+    active_count = await db.scalar(
+        select(func.count())
+        .select_from(CalendarEventLabel)
+        .where(CalendarEventLabel.group_id == home_id, CalendarEventLabel.is_active.is_(True))
+    )
+    can_activate_another = limit is None or (active_count or 0) < limit
+
+    def _access_for(row: CalendarEventLabel) -> str:
+        normal = access.get(row.id, False) if row.is_active else can_activate_another
+        return "normal" if normal else "read_only_due_to_plan"
+
     return [
         EventLabelResponse(
             id=row.id,
@@ -505,6 +577,7 @@ async def labels(
             color=row.color,
             is_active=row.is_active,
             sort_order=row.sort_order,
+            commercial_access=_access_for(row),
         )
         for row in rows
     ]
@@ -534,6 +607,21 @@ async def create_label(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "A calendar or category with that name already exists."
         )
+    # Race-safe, identical pattern to create_calendar above — a new label is
+    # always created active, so this is the actual user-facing "add another
+    # event category" action calendar.max_categories governs (see "Event
+    # categories are CalendarEventLabel, not HomeCalendar" in
+    # docs/architecture/commercial-entitlements.md).
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"labels:{home_id}"}
+    )
+    current_count = await db.scalar(
+        select(func.count())
+        .select_from(CalendarEventLabel)
+        .where(CalendarEventLabel.group_id == home_id, CalendarEventLabel.is_active.is_(True))
+    )
+    await require_within_limit(db, home_id, CALENDAR_LIMIT_KEY, current_count or 0)
+
     row = CalendarEventLabel(
         group_id=home_id,
         name=body.name,
@@ -580,6 +668,25 @@ async def update_label(
     if body.color is not None:
         label.color = body.color
     if body.is_active is not None:
+        # Transition-safe: only reactivating an *inactive* label is a new
+        # commitment against calendar.max_categories — deactivating, or
+        # resubmitting an already-active label's current state, never
+        # blocks. Race-safe under the same lock create_label uses, so the
+        # two endpoints can't both push the active count past the limit.
+        if body.is_active and not label.is_active:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"labels:{home_id}"}
+            )
+            current_count = await db.scalar(
+                select(func.count())
+                .select_from(CalendarEventLabel)
+                .where(
+                    CalendarEventLabel.group_id == home_id,
+                    CalendarEventLabel.is_active.is_(True),
+                    CalendarEventLabel.id != label.id,
+                )
+            )
+            await require_within_limit(db, home_id, CALENDAR_LIMIT_KEY, current_count or 0)
         label.is_active = body.is_active
     await db.flush()
     audit(db, request, "calendar.label.updated", auth.user.id, home_id, "label", label.id)
@@ -694,6 +801,12 @@ async def create_event(
         )
         if label is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "That label could not be found")
+        # An active label preserved past a downgrade (never auto-deactivated
+        # — see _label_access) must not be assignable to a *new* event; only
+        # the Home's current calendar.max_categories worth of labels stay
+        # selectable. Inactive labels already 404 above, so this only ever
+        # catches the "over the limit but still active" case.
+        _require_label_selectable(await _label_access(db, home_id), body.label_id)
 
     requested_members = sorted(set(body.member_ids + [auth.user.id]))
     if requested_members:
@@ -856,6 +969,23 @@ async def update_event(
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
     access = await _calendar_access(db, home_id)
     _require_calendar_writable(access, event.calendar_id)
+
+    # Transition-safe, same rule as shared events/routines: only a genuine
+    # *change* of label is checked against the entitlement — resaving an
+    # event with the label it already had (even one that's now over the
+    # Home's plan limit after a downgrade) never blocks, so existing
+    # historical events keep rendering with their original category/colour.
+    if body.label_id is not None and body.label_id != event.label_id:
+        new_label = await db.scalar(
+            select(CalendarEventLabel).where(
+                CalendarEventLabel.id == body.label_id,
+                CalendarEventLabel.group_id == home_id,
+                CalendarEventLabel.is_active.is_(True),
+            )
+        )
+        if new_label is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That label could not be found")
+        _require_label_selectable(await _label_access(db, home_id), body.label_id)
 
     requested_members = sorted(set(body.member_ids + [event.created_by]))
     if requested_members:

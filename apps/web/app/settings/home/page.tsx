@@ -1,9 +1,11 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
-import type { EventLabel, Home } from "@mykhaya/shared-types";
+import { Lock } from "lucide-react";
+import type { CalendarUsage, EventLabel, Home } from "@mykhaya/shared-types";
 import { resolveColour, type ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
@@ -17,6 +19,7 @@ type PageStatus =
 
 function CalendarsAndCategories({ homeId }: { homeId: string }) {
   const [labels, setLabels] = useState<EventLabel[]>([]);
+  const [categoryUsage, setCategoryUsage] = useState<CalendarUsage | null>(null);
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [colourEditingId, setColourEditingId] = useState<string | null>(null);
@@ -25,14 +28,29 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
   const [newName, setNewName] = useState("");
   const [newColour, setNewColour] = useState<ColourKey>("teal");
 
+  // This page is the actual user-facing "event category" resource
+  // calendar.max_categories governs (every event belongs to one of these —
+  // see the copy below) — not the separate, lower-level Calendar concept.
+  // See docs/architecture/commercial-entitlements.md "Event categories are
+  // CalendarEventLabel, not HomeCalendar".
   async function load() {
-    const rows = await api.listLabels(homeId);
+    const [rows, billing] = await Promise.all([
+      api.listLabels(homeId, { includeInactive: true }),
+      api.billingStatus(homeId),
+    ]);
     setLabels(rows);
+    setCategoryUsage(billing.category_usage);
   }
 
   useEffect(() => {
     load().catch((cause: Error) => setStatus({ kind: "error", message: cause.message }));
   }, [homeId]);
+
+  // Fails closed while loading — the create form/CTA only ever appears
+  // once the plan's actual category limit is confirmed, never optimistically.
+  const canAddMore = categoryUsage
+    ? categoryUsage.limit === null || categoryUsage.count < categoryUsage.limit
+    : false;
 
   async function createLabel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,12 +61,12 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
       await api.createLabel(homeId, { name: newName.trim(), color: newColour });
       setNewName("");
       setNewColour("teal");
-      setStatus({ kind: "success", message: "Calendar added." });
+      setStatus({ kind: "success", message: "Category added." });
       await load();
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not add that calendar.",
+        message: cause instanceof ApiError ? cause.message : "Could not add that category.",
       });
     } finally {
       setBusy(false);
@@ -65,7 +83,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not rename that calendar.",
+        message: cause instanceof ApiError ? cause.message : "Could not rename that category.",
       });
     } finally {
       setBusy(false);
@@ -100,7 +118,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not update that calendar.",
+        message: cause instanceof ApiError ? cause.message : "Could not update that category.",
       });
     } finally {
       setBusy(false);
@@ -119,101 +137,128 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
         error={status.kind === "error" ? status.message : undefined}
       />
       <ul className="label-list">
-        {labels.map((label) => (
-          <li key={label.id} className="label-row">
-            <div className="label-row-main">
-              <button
-                type="button"
-                className="colour-dot"
-                style={{ "--swatch-colour": resolveColour(label.color) } as React.CSSProperties}
-                aria-label={`Change ${label.name} colour`}
-                aria-expanded={colourEditingId === label.id}
-                disabled={busy}
-                onClick={() =>
-                  setColourEditingId((current) => (current === label.id ? null : label.id))
-                }
-              />
-              {editingId === label.id ? (
-                <input
-                  type="text"
-                  defaultValue={label.name}
-                  maxLength={40}
-                  disabled={busy}
-                  onBlur={(event) => {
-                    renameLabel(label, event.target.value);
-                    setEditingId(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                    if (event.key === "Escape") setEditingId(null);
-                  }}
-                  autoFocus
-                />
-              ) : (
+        {labels.map((label) => {
+          const locked = label.commercial_access === "read_only_due_to_plan";
+          if (locked) {
+            return (
+              <li key={label.id} className="label-row label-row-locked">
+                <div className="label-row-main">
+                  <span
+                    className="colour-dot"
+                    style={{ "--swatch-colour": resolveColour(label.color) } as React.CSSProperties}
+                    aria-hidden="true"
+                  />
+                  <span className="muted label-name-locked">{label.name}</span>
+                  <span className="quiet-state label-locked-indicator">
+                    <Lock size={14} aria-hidden="true" /> Family
+                  </span>
+                </div>
+              </li>
+            );
+          }
+          return (
+            <li key={label.id} className="label-row">
+              <div className="label-row-main">
                 <button
                   type="button"
-                  className="tertiary label-name-button"
-                  onClick={() => setEditingId(label.id)}
-                >
-                  {label.name}
-                </button>
-              )}
-              <label className="check-row label-active-toggle">
-                <input
-                  type="checkbox"
-                  checked={label.is_active}
+                  className="colour-dot"
+                  style={{ "--swatch-colour": resolveColour(label.color) } as React.CSSProperties}
+                  aria-label={`Change ${label.name} colour`}
+                  aria-expanded={colourEditingId === label.id}
                   disabled={busy}
-                  onChange={() => toggleActive(label)}
+                  onClick={() =>
+                    setColourEditingId((current) => (current === label.id ? null : label.id))
+                  }
                 />
-                Active
-              </label>
-            </div>
-            {colourEditingId === label.id && (
-              <ColourSwatchPicker
-                value={label.color}
-                onChange={(colour) => recolourLabel(label, colour)}
-                groupLabel={`${label.name} colour`}
-                disabled={busy}
-              />
-            )}
-          </li>
-        ))}
+                {editingId === label.id ? (
+                  <input
+                    type="text"
+                    defaultValue={label.name}
+                    maxLength={40}
+                    disabled={busy}
+                    onBlur={(event) => {
+                      renameLabel(label, event.target.value);
+                      setEditingId(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                      if (event.key === "Escape") setEditingId(null);
+                    }}
+                    autoFocus
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="tertiary label-name-button"
+                    onClick={() => setEditingId(label.id)}
+                  >
+                    {label.name}
+                  </button>
+                )}
+                <label className="check-row label-active-toggle">
+                  <input
+                    type="checkbox"
+                    checked={label.is_active}
+                    disabled={busy || (!label.is_active && !canAddMore)}
+                    onChange={() => toggleActive(label)}
+                  />
+                  Active
+                </label>
+              </div>
+              {colourEditingId === label.id && (
+                <ColourSwatchPicker
+                  value={label.color}
+                  onChange={(colour) => recolourLabel(label, colour)}
+                  groupLabel={`${label.name} colour`}
+                  disabled={busy}
+                />
+              )}
+            </li>
+          );
+        })}
       </ul>
-      <form className="label-create-form" onSubmit={createLabel}>
-        <label>
-          New calendar or category
-          <input
-            type="text"
-            value={newName}
-            maxLength={40}
-            placeholder="e.g. Sport"
-            onChange={(event) => setNewName(event.target.value)}
-          />
-        </label>
-        <div className="label-row-main">
-          <button
-            type="button"
-            className="colour-dot"
-            style={{ "--swatch-colour": resolveColour(newColour) } as React.CSSProperties}
-            aria-label="Change new calendar colour"
-            aria-expanded={newColourOpen}
-            onClick={() => setNewColourOpen((open) => !open)}
-          />
-          <span className="muted">Colour</span>
-        </div>
-        {newColourOpen && (
-          <ColourSwatchPicker
-            value={newColour}
-            onChange={(colour) => {
-              setNewColour(colour);
-              setNewColourOpen(false);
-            }}
-            groupLabel="New calendar colour"
-            disabled={busy}
-          />
-        )}
-        <button disabled={busy || !newName.trim()}>Add calendar</button>
-      </form>
+      {canAddMore ? (
+        <form className="label-create-form" onSubmit={createLabel}>
+          <label>
+            New calendar or category
+            <input
+              type="text"
+              value={newName}
+              maxLength={40}
+              placeholder="e.g. Sport"
+              onChange={(event) => setNewName(event.target.value)}
+            />
+          </label>
+          <div className="label-row-main">
+            <button
+              type="button"
+              className="colour-dot"
+              style={{ "--swatch-colour": resolveColour(newColour) } as React.CSSProperties}
+              aria-label="Change new calendar colour"
+              aria-expanded={newColourOpen}
+              onClick={() => setNewColourOpen((open) => !open)}
+            />
+            <span className="muted">Colour</span>
+          </div>
+          {newColourOpen && (
+            <ColourSwatchPicker
+              value={newColour}
+              onChange={(colour) => {
+                setNewColour(colour);
+                setNewColourOpen(false);
+              }}
+              groupLabel="New calendar colour"
+              disabled={busy}
+            />
+          )}
+          <button disabled={busy || !newName.trim()}>Add category</button>
+        </form>
+      ) : (
+        <FamilyUpsell
+          title="Add another category 🔒"
+          description="Unlimited categories are included with MyKhaya Family."
+        />
+      )}
     </section>
   );
 }

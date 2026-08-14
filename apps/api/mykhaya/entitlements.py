@@ -28,6 +28,7 @@ from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.models import (
+    CalendarEventLabel,
     HomeCalendar,
     HomeSubscription,
     HomeSubscriptionEvent,
@@ -411,17 +412,39 @@ async def require_within_limit(
 
 
 async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
-    """How many event categories (HomeCalendar rows — see
-    docs/architecture/commercial-entitlements.md#event-categories for why
-    the customer-facing name differs from the internal model name) a Home
-    currently has vs. its plan's calendar.max_categories — shared by the
-    Platform Control Centre's commercial-detail diagnostics
-    (routers.platform) and the household Plan & Billing over-limit
-    messaging (routers.billing), so the two can never compute this
-    differently."""
+    """How many HomeCalendar rows a Home currently has vs. its plan's
+    calendar.max_categories. HomeCalendar itself is *not* the resource
+    customers manage as "event categories" day to day — see category_usage
+    below for that — but it shares the same limit key and is independently
+    enforced (routers.calendar's create_calendar), so this stays accurate
+    for the Platform Control Centre's commercial-detail diagnostics."""
     count = (
         await db.scalar(
             select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "calendar.max_categories")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def category_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many *active* CalendarEventLabel rows a Home currently has vs.
+    calendar.max_categories. This is the actual resource shown on Settings
+    -> Home settings' "Calendars & categories" page — the one customers
+    experience as "event categories" (every event belongs to one; its
+    colour is what Calendar renders) — see "Event categories are
+    CalendarEventLabel, not HomeCalendar" in
+    docs/architecture/commercial-entitlements.md. Shares the same limit key
+    as calendar_usage/HomeCalendar by design (one entitlement, two
+    independently-tracked resources), not a second plan-checking system."""
+    count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(CalendarEventLabel)
+            .where(CalendarEventLabel.group_id == home_id, CalendarEventLabel.is_active.is_(True))
         )
         or 0
     )

@@ -1817,6 +1817,18 @@ body.sheet-open {
   gap: 0.5rem;
   padding: 0.7rem 0.8rem;
 }
+.label-row-locked {
+  background: #f7f5f1;
+  opacity: 0.72;
+}
+.label-name-locked {
+  margin-right: auto;
+}
+.label-locked-indicator {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.3rem;
+}
 .label-row-main {
   align-items: center;
   display: flex;

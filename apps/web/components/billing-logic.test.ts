@@ -65,6 +65,7 @@ function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
     has_stripe_customer: false,
     stripe_billing_available: true,
     calendar_usage: { count: 1, limit: 1, over_limit: false },
+    category_usage: { count: 1, limit: 1, over_limit: false },
     member_usage: { count: 1, limit: 1, over_limit: false },
     household_routines_enabled: false,
     shared_events_enabled: false,
