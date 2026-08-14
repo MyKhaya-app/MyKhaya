@@ -22,6 +22,7 @@ from mykhaya.models import (
     Membership,
     OutboxEvent,
     RoutineReminderTiming,
+    RoutineScope,
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
@@ -103,6 +104,11 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
 
 
 async def _recipients_for(db: AsyncSession, routine: HouseholdRoutine) -> set[uuid.UUID]:
+    if routine.scope == RoutineScope.personal:
+        # A personal routine's only recipient is its owner — never derived from
+        # group_id/household membership, and HouseholdRoutineMember rows (a
+        # household-routine concept) are never consulted here even if present.
+        return {routine.owner_user_id} if routine.owner_user_id else set()
     explicit = (
         await db.scalars(
             select(HouseholdRoutineMember.user_id).where(

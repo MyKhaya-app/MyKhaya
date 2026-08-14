@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import type { Routine, RoutineReminderTiming } from "@mykhaya/shared-types";
+import type { Routine, RoutineReminderTiming, RoutineScope } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
@@ -10,6 +10,11 @@ const TIMING_LABELS: Record<RoutineReminderTiming, string> = {
   evening_before: "The evening before",
   same_day: "The morning of",
   both: "Both",
+};
+
+const SCOPE_LABELS: Record<RoutineScope, string> = {
+  personal: "Personal — only reminds you",
+  household: "Household — reminds the home",
 };
 
 function todayIso(): string {
@@ -61,6 +66,7 @@ export default function RoutineSettings() {
     const payload = {
       title: ((form.get("title") as string | null) ?? "").trim(),
       description: (form.get("description") as string) || null,
+      scope: (form.get("scope") as RoutineScope | null) ?? "household",
       interval_weeks: Number(form.get("interval_weeks") ?? 1),
       week_anchor_date: (form.get("week_anchor_date") as string | null) ?? todayIso(),
       reminder_timing: (form.get("reminder_timing") as RoutineReminderTiming) ?? "evening_before",
@@ -125,7 +131,8 @@ export default function RoutineSettings() {
                 <h2>{routine.title}</h2>
                 {routine.description && <p>{routine.description}</p>}
                 <small>
-                  Every {routine.interval_weeks === 1 ? "week" : `${routine.interval_weeks} weeks`} ·{" "}
+                  {routine.scope === "personal" ? "Personal" : "Household"} · Every{" "}
+                  {routine.interval_weeks === 1 ? "week" : `${routine.interval_weeks} weeks`} ·{" "}
                   {TIMING_LABELS[routine.reminder_timing]}
                   {routine.is_critical ? " · Critical" : ""}
                   {!routine.enabled ? " · Disabled" : ""}
@@ -191,6 +198,13 @@ export default function RoutineSettings() {
           <label>
             Description (optional)
             <input name="description" maxLength={1000} defaultValue={editing?.description ?? ""} />
+          </label>
+          <label>
+            Who this is for
+            <select name="scope" defaultValue={editing?.scope ?? "household"}>
+              <option value="household">{SCOPE_LABELS.household}</option>
+              <option value="personal">{SCOPE_LABELS.personal}</option>
+            </select>
           </label>
           <label>
             Repeats every

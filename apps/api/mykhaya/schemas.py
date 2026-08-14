@@ -13,6 +13,7 @@ from mykhaya.models import (
     RecurrencePattern,
     Role,
     RoutineReminderTiming,
+    RoutineScope,
 )
 
 
@@ -524,6 +525,7 @@ class HomeSummaryResponse(BaseModel):
 class RoutineCreate(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
@@ -533,10 +535,20 @@ class RoutineCreate(StrictModel):
     end_date: date | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
 
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "RoutineCreate":
+        # A personal routine's only recipient is its owner (inferred from the
+        # authenticated actor, never client input) — explicit member assignment is a
+        # household-routine concept and would be misleading here.
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal routine cannot have explicit members")
+        return self
+
 
 class RoutineUpdate(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
@@ -548,11 +560,19 @@ class RoutineUpdate(StrictModel):
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     expected_updated_at: datetime
 
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "RoutineUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal routine cannot have explicit members")
+        return self
+
 
 class RoutineResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
     interval_weeks: int
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming

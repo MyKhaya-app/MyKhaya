@@ -18,6 +18,7 @@ from mykhaya.models import (
     HouseholdRoutineCompletion,
     HouseholdRoutineMember,
     Membership,
+    RoutineScope,
 )
 from mykhaya.notifications.routine_occurrences import is_occurrence_date, next_occurrence_date
 from mykhaya.notifications.visibility import active_membership
@@ -62,6 +63,14 @@ async def _member_ids(db: AsyncSession, routine_id: uuid.UUID) -> list[uuid.UUID
     return sorted(rows)
 
 
+def _is_visible(routine: HouseholdRoutine, user_id: uuid.UUID) -> bool:
+    # A personal routine is private to its owner — not shown to, editable by, or
+    # completable by any other household member, even one with manage_routines.
+    if routine.scope == RoutineScope.personal:
+        return routine.owner_user_id == user_id
+    return True
+
+
 async def _to_response(db: AsyncSession, routine: HouseholdRoutine) -> RoutineResponse:
     today = datetime.now(UTC).date()
     completed = await db.scalar(
@@ -74,6 +83,8 @@ async def _to_response(db: AsyncSession, routine: HouseholdRoutine) -> RoutineRe
         id=routine.id,
         title=routine.title,
         description=routine.description,
+        scope=routine.scope,
+        owner_user_id=routine.owner_user_id,
         interval_weeks=routine.interval_weeks,
         week_anchor_date=routine.week_anchor_date,
         reminder_timing=routine.reminder_timing,
@@ -120,7 +131,11 @@ async def list_routines(
     routines = (
         await db.scalars(
             select(HouseholdRoutine)
-            .where(HouseholdRoutine.group_id == home_id)
+            .where(
+                HouseholdRoutine.group_id == home_id,
+                (HouseholdRoutine.scope == RoutineScope.household)
+                | (HouseholdRoutine.owner_user_id == auth.user.id),
+            )
             .order_by(HouseholdRoutine.created_at)
             .limit(200)
         )
@@ -141,10 +156,16 @@ async def create_routine(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be on or after start")
     member_ids = await _validate_members(db, home_id, body.member_ids)
 
+    # owner_user_id is never accepted from client input (RoutineCreate has no such
+    # field) — a personal routine's owner is always the authenticated actor. There is
+    # no "create personal routine on someone else's behalf" capability in MyKhaya's
+    # authorization model; see docs task notes on routine scope.
     routine = HouseholdRoutine(
         group_id=home_id,
         title=" ".join(body.title.strip().split()),
         description=body.description,
+        scope=body.scope,
+        owner_user_id=auth.user.id if body.scope == RoutineScope.personal else None,
         interval_weeks=body.interval_weeks,
         week_anchor_date=body.week_anchor_date,
         reminder_timing=body.reminder_timing,
@@ -182,7 +203,7 @@ async def update_routine(
         .where(HouseholdRoutine.id == routine_id, HouseholdRoutine.group_id == home_id)
         .with_for_update()
     )
-    if routine is None:
+    if routine is None or not _is_visible(routine, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     if routine.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This routine changed. Reload and try again.")
@@ -196,6 +217,14 @@ async def update_routine(
 
     routine.title = " ".join(body.title.strip().split())
     routine.description = body.description
+    routine.scope = body.scope
+    # Switching a routine to personal makes the editing actor its owner unless it's
+    # already personal (owner stays put — editing isn't a transfer-of-ownership
+    # action); switching to household clears it, matching ck_routine_scope_owner.
+    if body.scope == RoutineScope.personal:
+        routine.owner_user_id = routine.owner_user_id or auth.user.id
+    else:
+        routine.owner_user_id = None
     routine.interval_weeks = body.interval_weeks
     routine.week_anchor_date = body.week_anchor_date
     routine.reminder_timing = body.reminder_timing
@@ -225,7 +254,7 @@ async def delete_routine(
             HouseholdRoutine.id == routine_id, HouseholdRoutine.group_id == home_id
         )
     )
-    if routine is None:
+    if routine is None or not _is_visible(routine, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     audit(db, request, "household_routine.deleted", auth.user.id, home_id, "routine", routine.id)
     await db.delete(routine)
@@ -246,7 +275,7 @@ async def complete_routine(
             HouseholdRoutine.id == routine_id, HouseholdRoutine.group_id == home_id
         )
     )
-    if routine is None:
+    if routine is None or not _is_visible(routine, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     if not is_occurrence_date(routine, body.occurrence_date):
         raise HTTPException(
@@ -285,7 +314,7 @@ async def uncomplete_routine(
             HouseholdRoutine.id == routine_id, HouseholdRoutine.group_id == home_id
         )
     )
-    if routine is None:
+    if routine is None or not _is_visible(routine, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     parsed_date = date.fromisoformat(occurrence_date)
     completion = await db.scalar(

@@ -847,6 +847,16 @@ class RoutineReminderTiming(StrEnum):
     both = "both"
 
 
+class RoutineScope(StrEnum):
+    """Personal: owned by exactly one member, notifications go only to that owner.
+    Household: Home-level, notifications go to explicit HouseholdRoutineMember
+    assignees or (if none) the whole household. See
+    docs/architecture/notification-engine.md and mykhaya.notifications.routines."""
+
+    personal = "personal"
+    household = "household"
+
+
 class PushSubscription(UuidTimeMixin, Base):
     __tablename__ = "push_subscriptions"
     __table_args__ = (Index("ix_push_subscriptions_user", "user_id", "disabled_at"),)
@@ -980,6 +990,15 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     __table_args__ = (
         CheckConstraint("char_length(title) >= 1", name="ck_routine_title_nonempty"),
         CheckConstraint("interval_weeks >= 1", name="ck_routine_interval_weeks"),
+        # A personal routine must have an owner to notify; a household routine's
+        # recipients come from HouseholdRoutineMember/whole-household instead, so it
+        # must not carry a single owner that notification targeting could mistake for
+        # the recipient. See mykhaya.notifications.routines._recipients_for.
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_routine_scope_owner",
+        ),
         Index("ix_routine_group_enabled", "group_id", "enabled"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
@@ -987,6 +1006,18 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(1000))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope"),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    # Set only for scope=personal — the sole notification recipient. Never trusted
+    # from client input; always inferred from the authenticated actor. Distinct from
+    # created_by, which is audit attribution and exists for every routine regardless
+    # of scope.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     interval_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     week_anchor_date: Mapped[date] = mapped_column(Date)
     reminder_timing: Mapped[RoutineReminderTiming] = mapped_column(

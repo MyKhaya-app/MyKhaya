@@ -30,6 +30,7 @@ from mykhaya.models import (
     PermissionProfile,
     Role,
     RoutineReminderTiming,
+    RoutineScope,
     TokenPurpose,
     User,
 )
@@ -132,10 +133,14 @@ def make_routine(
     enabled: bool = True,
     start_date: date | None = None,
     end_date: date | None = None,
+    scope: RoutineScope = RoutineScope.household,
+    owner_user_id: uuid.UUID | None = None,
 ) -> HouseholdRoutine:
     return HouseholdRoutine(
         group_id=group_id,
         title="Bins out",
+        scope=scope,
+        owner_user_id=owner_user_id,
         interval_weeks=interval_weeks,
         week_anchor_date=week_anchor_date,
         reminder_timing=reminder_timing,
@@ -693,3 +698,218 @@ async def test_deliver_passes_through_is_critical(client: AsyncClient) -> None:
         )
         assert notification is not None
         assert notification.notification_type == "household_routine_reminder"
+
+
+# --- personal vs. household scope --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_personal_routine_infers_owner_from_actor(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("personalowner"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date().isoformat()
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Take medication",
+            "scope": "personal",
+            "interval_weeks": 1,
+            "week_anchor_date": today,
+            "start_date": today,
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["scope"] == "personal"
+    assert body["owner_user_id"] == str(owner_id)
+
+
+@pytest.mark.asyncio
+async def test_create_personal_routine_rejects_explicit_members(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("personalmembers"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date().isoformat()
+
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Take medication",
+            "scope": "personal",
+            "interval_weeks": 1,
+            "week_anchor_date": today,
+            "start_date": today,
+            "member_ids": [str(owner_id)],
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_routines_excludes_other_members_personal_routines(
+    client: AsyncClient,
+) -> None:
+    owner_id = await create_verified_user(client, unique_email("privateowner"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+
+    async with SessionFactory() as db:
+        routine = make_routine(
+            group_id=home_id,
+            created_by=owner_id,
+            week_anchor_date=today,
+            scope=RoutineScope.personal,
+            owner_user_id=owner_id,
+        )
+        db.add(routine)
+        await db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        other_id = await create_verified_user(other_client, unique_email("privateother"), "Other")
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=other_id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+
+        listed = await unsafe(other_client, "GET", f"/api/v1/homes/{home_id}/routines")
+        assert listed.status_code == 200
+        assert listed.json()["items"] == []
+
+    owner_listed = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert len(owner_listed.json()["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_delete_complete_other_users_personal_routine_returns_404(
+    client: AsyncClient,
+) -> None:
+    owner_id = await create_verified_user(client, unique_email("guardowner"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+
+    async with SessionFactory() as db:
+        routine = make_routine(
+            group_id=home_id,
+            created_by=owner_id,
+            week_anchor_date=today,
+            scope=RoutineScope.personal,
+            owner_user_id=owner_id,
+        )
+        db.add(routine)
+        await db.commit()
+        await db.refresh(routine)
+        routine_id = str(routine.id)
+        updated_at = routine.updated_at.isoformat()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        other_id = await create_verified_user(other_client, unique_email("guardother"), "Other")
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=other_id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+
+        update = await unsafe(
+            other_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/routines/{routine_id}",
+            json={
+                "title": "Hijacked",
+                "scope": "household",
+                "interval_weeks": 1,
+                "week_anchor_date": today.isoformat(),
+                "start_date": today.isoformat(),
+                "expected_updated_at": updated_at,
+            },
+        )
+        assert update.status_code == 404
+
+        complete = await unsafe(
+            other_client,
+            "POST",
+            f"/api/v1/homes/{home_id}/routines/{routine_id}/complete",
+            json={"occurrence_date": today.isoformat()},
+        )
+        assert complete.status_code == 404
+
+        delete = await unsafe(
+            other_client, "DELETE", f"/api/v1/homes/{home_id}/routines/{routine_id}"
+        )
+        assert delete.status_code == 404
+    assert other_id  # keep reference; ownership is what's under test
+
+
+@pytest.mark.asyncio
+async def test_deliver_notifies_only_owner_for_personal_routine(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("personaldeliver"), "Owner")
+    home_id = await create_home_with_notifications(client)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        other_id = await create_verified_user(
+            other_client, unique_email("personaldeliverother"), "Other"
+        )
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=other_id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+
+    today = datetime.now(UTC).date()
+    async with SessionFactory() as db:
+        routine = make_routine(
+            group_id=home_id,
+            created_by=owner_id,
+            week_anchor_date=today,
+            scope=RoutineScope.personal,
+            owner_user_id=owner_id,
+        )
+        db.add(routine)
+        # Even if a HouseholdRoutineMember row exists (e.g. left over from a prior
+        # scope switch), a personal routine must never consult it — only owner_user_id.
+        await db.flush()
+        db.add(HouseholdRoutineMember(routine_id=routine.id, user_id=other_id))
+        await db.commit()
+        routine_id = str(routine.id)
+
+        await deliver_routine_reminder(
+            db, get_settings(), routine_id, today.isoformat(), "evening_before"
+        )
+        await db.commit()
+
+        owner_notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == owner_id)
+        )
+        other_notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == other_id)
+        )
+        assert owner_notification is not None
+        assert other_notification is None
