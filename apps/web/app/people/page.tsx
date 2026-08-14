@@ -78,6 +78,7 @@ export default function People() {
   const [colourEditing, setColourEditing] = useState<string | null>(null);
   const [colourBusy, setColourBusy] = useState(false);
   const [memberUsage, setMemberUsage] = useState<CalendarUsage | null>(null);
+  const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
 
   useEffect(() => {
     api.me().then((user) => setCurrentUserId(user.id));
@@ -87,8 +88,14 @@ export default function People() {
     if (!activeHomeId) return;
     api
       .billingStatus(activeHomeId)
-      .then((billing) => setMemberUsage(billing.member_usage))
-      .catch(() => setMemberUsage(null));
+      .then((billing) => {
+        setMemberUsage(billing.member_usage);
+        setExternalInvitesEnabled(billing.external_invites_enabled);
+      })
+      .catch(() => {
+        setMemberUsage(null);
+        setExternalInvitesEnabled(false);
+      });
   }, [activeHomeId]);
 
   const canInvite =
@@ -316,10 +323,19 @@ export default function People() {
                   <option value="home_admin">Home Admin</option>
                   <option value="partner">Partner</option>
                   <option value="child">Child</option>
-                  <option value="extended_family">Extended Family</option>
-                  <option value="friend">Friend</option>
+                  <option value="extended_family" disabled={!externalInvitesEnabled}>
+                    Extended Family{!externalInvitesEnabled ? " (Family)" : ""}
+                  </option>
+                  <option value="friend" disabled={!externalInvitesEnabled}>
+                    Friend{!externalInvitesEnabled ? " (Family)" : ""}
+                  </option>
                 </select>
               </label>
+              {!externalInvitesEnabled && (
+                <p className="quiet-state">
+                  Inviting Extended Family or Friends is available with MyKhaya Family.
+                </p>
+              )}
               <p className="relationship-help">
                 {
                   relationshipHelp[
@@ -487,11 +503,24 @@ export default function People() {
                             )
                           }
                         >
-                          {nonChildRelationships.map((value) => (
-                            <option key={value} value={value}>
-                              {relationshipLabels[value]}
-                            </option>
-                          ))}
+                          {nonChildRelationships.map((value) => {
+                            const isExternal = value === "extended_family" || value === "friend";
+                            // Transition-safe, matching the backend: a member
+                            // already Extended Family/Friend can stay that
+                            // way (their own current option always stays
+                            // selectable) — only a *new* transition into it
+                            // is locked on Free.
+                            const locked =
+                              isExternal &&
+                              !externalInvitesEnabled &&
+                              member.relationship !== value;
+                            return (
+                              <option key={value} value={value} disabled={locked}>
+                                {relationshipLabels[value]}
+                                {locked ? " (Family)" : ""}
+                              </option>
+                            );
+                          })}
                         </select>
                       </label>
                     )}

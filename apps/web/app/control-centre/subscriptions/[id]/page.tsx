@@ -31,23 +31,31 @@ import { CcConfirmDialog } from "@/components/control-centre/dialog";
 // docs/product/plans-and-pricing.md "Commercial plan cleanup"), rendered in
 // this fixed order regardless of key iteration order in the API response —
 // a curated, customer-understandable list, not a raw dump of
-// entitlements.booleans/limits. "Planned" marks a key that exists as
-// commercial data (mykhaya.entitlements.PLAN_DEFINITIONS) but has no
-// released module or live enforcement behind it yet — see "Deferred
-// enforcement" in docs/architecture/commercial-entitlements.md. Never
-// implies the capability is actually usable today.
-const PLANNED_KEYS = new Set([
-  "notes.enabled",
-  "events.shared.enabled",
-  "lists.enabled",
-  "chores.enabled",
-  "wishlists.enabled",
-  "members.external_invites.enabled",
-  "family_plans.enabled",
-  "support.priority.enabled",
-]);
+// entitlements.booleans/limits. Two distinct badges cover the keys that
+// aren't a normal, live "Included"/"Not included" row — see "Free plan
+// enforcement pass, part 2" in docs/architecture/commercial-entitlements.md:
+//
+// "Planned" — the entitlement is real commercial data, but the module
+// behind it is still globally hidden (Feature Management), so it isn't a
+// usable feature for anyone yet, on any plan.
+//
+// "Contract only" — there is no module, route, or component of any kind
+// for this capability, released or hidden. It exists purely as a pinned
+// entitlement key (PLAN_DEFINITIONS + a capability-matrix test) so that
+// whenever the feature is eventually built, it has to be wired through the
+// central entitlement service from day one rather than inventing its own
+// plan check. This is a stronger, more explicit statement than "planned" —
+// there's nothing to release yet, by design.
+const PLANNED_KEYS = new Set(["notes.enabled", "lists.enabled", "chores.enabled", "wishlists.enabled"]);
+const CONTRACT_ONLY_KEYS = new Set(["family_plans.enabled", "support.priority.enabled"]);
 
-type CapabilityRow = { key: string; label: string; value: string; planned: boolean };
+type CapabilityRow = {
+  key: string;
+  label: string;
+  value: string;
+  planned: boolean;
+  contractOnly: boolean;
+};
 
 function peopleDisplay(maxMembers: number | null | undefined): string {
   return maxMembers === 1 ? "1 person" : "Whole household";
@@ -67,38 +75,42 @@ function buildCapabilityRows(entitlements: Entitlements): CapabilityRow[] {
     label,
     value: includedDisplay(booleans[key]),
     planned: PLANNED_KEYS.has(key),
+    contractOnly: CONTRACT_ONLY_KEYS.has(key),
+  });
+  const liveRow = (key: string, label: string, value: string): CapabilityRow => ({
+    key,
+    label,
+    value,
+    planned: false,
+    contractOnly: false,
   });
   return [
-    { key: "people", label: "People", value: peopleDisplay(maxMembers), planned: false },
-    { key: "calendar", label: "Calendar", value: "Included", planned: false },
-    {
-      key: "calendar.max_categories",
-      label: "Event categories",
-      value: maxCategories === null || maxCategories === undefined ? "Unlimited" : String(maxCategories),
-      planned: false,
-    },
-    { key: "events", label: "Events", value: "Included", planned: false },
+    liveRow("people", "People", peopleDisplay(maxMembers)),
+    liveRow("calendar", "Calendar", "Included"),
+    liveRow(
+      "calendar.max_categories",
+      "Event categories",
+      maxCategories === null || maxCategories === undefined ? "Unlimited" : String(maxCategories),
+    ),
+    liveRow("events", "Events", "Included"),
     boolRow("notes.enabled", "Notes"),
-    {
-      key: "routines.personal.max_active",
-      label: "Personal routines",
-      value:
-        maxPersonalRoutines === null || maxPersonalRoutines === undefined
-          ? "Unlimited"
-          : `Up to ${maxPersonalRoutines}`,
-      planned: false,
-    },
+    liveRow(
+      "routines.personal.max_active",
+      "Personal routines",
+      maxPersonalRoutines === null || maxPersonalRoutines === undefined
+        ? "Unlimited"
+        : `Up to ${maxPersonalRoutines}`,
+    ),
     boolRow("routines.household.enabled", "Household routines"),
     boolRow("events.shared.enabled", "Shared family events"),
     boolRow("lists.enabled", "Lists"),
     boolRow("chores.enabled", "Chores"),
     boolRow("wishlists.enabled", "Gift Wishlists"),
-    {
-      key: "invite_household_members",
-      label: "Invite household members",
-      value: includedDisplay(maxMembers === null || maxMembers === undefined || maxMembers > 1),
-      planned: false,
-    },
+    liveRow(
+      "invite_household_members",
+      "Invite household members",
+      includedDisplay(maxMembers === null || maxMembers === undefined || maxMembers > 1),
+    ),
     boolRow("members.external_invites.enabled", "Invite external members"),
     boolRow("family_plans.enabled", "Family Plans"),
     boolRow("support.priority.enabled", "Priority Support"),
@@ -211,6 +223,12 @@ export default function SubscriptionDetailPage({
             <>
               {" "}
               <CcBadge tone="neutral">Planned</CcBadge>
+            </>
+          )}
+          {row.contractOnly && (
+            <>
+              {" "}
+              <CcBadge tone="neutral">Contract only</CcBadge>
             </>
           )}
         </>
@@ -436,7 +454,7 @@ export default function SubscriptionDetailPage({
 
               <CcSection
                 title={`Plan capabilities (${planLabel(data.entitlements.plan)})`}
-                description="What this Home's current plan includes. 'Planned' marks a capability that's commercially defined but not yet a released, working feature."
+                description="What this Home's current plan includes. 'Planned' marks a capability behind a still-hidden module. 'Contract only' marks a capability with no feature surface at all yet — a pinned entitlement key ready for whenever it's built."
               >
                 <CcTable
                   columns={capabilityColumns}

@@ -99,6 +99,17 @@ class BillingStatusResponse(BaseModel):
     # effective_plan) so the Routines UI can disable the Household scope
     # option before submission, not just handle the resulting 403.
     household_routines_enabled: bool
+    # Whether this Home's plan currently includes shared/assigned events —
+    # lets the Calendar event form lock the "assign to another member"
+    # checkboxes before submission rather than only after a 403. See
+    # routers.calendar's events.shared.enabled enforcement.
+    shared_events_enabled: bool
+    # Whether this Home's plan currently includes inviting an Extended
+    # Family/Friend (explicit-sharing) member — lets the People page hide
+    # those relationship options before submission. See
+    # routers.invitations/routers.groups's members.external_invites.enabled
+    # enforcement.
+    external_invites_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):

@@ -88,6 +88,7 @@ function EventForm({
   initialDay,
   busy,
   submitLabel,
+  sharedEventsEnabled,
   onSubmit,
   onCancel,
   onDelete,
@@ -98,6 +99,7 @@ function EventForm({
   initialDay: Date;
   busy: boolean;
   submitLabel: string;
+  sharedEventsEnabled: boolean;
   onSubmit: (payload: EventPayload) => Promise<void>;
   onCancel: () => void;
   onDelete?: () => Promise<void>;
@@ -194,18 +196,40 @@ function EventForm({
         <fieldset className="form-wide">
           <legend>Household members</legend>
           <div className="member-checks">
-            {members.map((member) => (
-              <label className="check-row" key={member.user_id}>
-                <input
-                  name="members"
-                  type="checkbox"
-                  value={member.user_id}
-                  defaultChecked={initial?.member_ids.includes(member.user_id)}
-                />
-                {member.display_name}
-              </label>
-            ))}
+            {members.map((member) => {
+              // Assigning a *new* member is the Family-only "shared event"
+              // capability (events.shared.enabled) — a member already on this
+              // event stays freely toggleable (so removing one, or simply
+              // re-saving other fields, always works) even on Free; only
+              // checking a box for someone not already assigned is locked.
+              // Disabling (rather than hiding) an already-checked box would
+              // drop it from the submitted form data entirely, so this only
+              // ever disables boxes that are unchecked to begin with.
+              const alreadyIncluded = initial?.member_ids.includes(member.user_id) ?? false;
+              const locked = !sharedEventsEnabled && !alreadyIncluded;
+              return (
+                <label
+                  className={`check-row${locked ? " check-row-locked" : ""}`}
+                  key={member.user_id}
+                >
+                  <input
+                    name="members"
+                    type="checkbox"
+                    value={member.user_id}
+                    defaultChecked={alreadyIncluded}
+                    disabled={locked}
+                  />
+                  {member.display_name}
+                  {locked && <span className="quiet-state"> · Family</span>}
+                </label>
+              );
+            })}
           </div>
+          {!sharedEventsEnabled && (
+            <p className="quiet-state">
+              Assigning this event to other household members is available with MyKhaya Family.
+            </p>
+          )}
         </fieldset>
       )}
       <label>
@@ -294,6 +318,7 @@ export default function CalendarPage() {
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [labels, setLabels] = useState<EventLabel[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [sharedEventsEnabled, setSharedEventsEnabled] = useState(false);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [editorDay, setEditorDay] = useState<Date | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<EventOccurrence | null>(
@@ -368,6 +393,14 @@ export default function CalendarPage() {
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
   }, [activeHomeId, featureEnabled, fetchRange.end, fetchRange.start]);
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setSharedEventsEnabled(billing.shared_events_enabled))
+      .catch(() => setSharedEventsEnabled(false));
+  }, [activeHomeId]);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -778,6 +811,7 @@ export default function CalendarPage() {
               initialDay={editorDay}
               busy={busy}
               submitLabel="Save event"
+              sharedEventsEnabled={sharedEventsEnabled}
               onSubmit={create}
               onCancel={() => setEditorDay(null)}
             />
@@ -797,6 +831,7 @@ export default function CalendarPage() {
               initialDay={new Date(selectedEvent.start_at)}
               busy={busy}
               submitLabel="Save changes"
+              sharedEventsEnabled={sharedEventsEnabled}
               onSubmit={update}
               onCancel={() => setSelectedEvent(null)}
               onDelete={remove}

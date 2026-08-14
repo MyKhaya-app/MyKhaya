@@ -645,4 +645,45 @@ The exact scenario reported (a Free Home with one member) is now covered directl
 
 ### Explicitly out of scope for this pass
 
-Unchanged from the Commercial Plan Cleanup task: no Stripe/billing changes, no live billing, no hard-coded prices, no enabling of Lists/Chores/Wishlists/Family Plans, no new commercial tier, no automatic deletion or suspension of over-limit data. `events.shared.enabled` and `members.external_invites.enabled` remain deferred, unchanged.
+Unchanged from the Commercial Plan Cleanup task: no Stripe/billing changes, no live billing, no hard-coded prices, no enabling of Lists/Chores/Wishlists/Family Plans, no new commercial tier, no automatic deletion or suspension of over-limit data. `events.shared.enabled` and `members.external_invites.enabled` were deferred as of this section — see "Free plan enforcement pass, part 2" below, where both gained real enforcement.
+
+## Free plan enforcement pass, part 2: shared events and the remaining declared gaps
+
+A follow-up to the section above, closing three things a review found still relied on indirect signals rather than their own entitlement: shared events were only ever prevented by `home.max_members` (a Free Home simply had no one to share with, rather than the capability itself being checked), and `members.external_invites.enabled`/`family_plans.enabled`/`support.priority.enabled` remained plan data with no enforcement architecture behind them at all.
+
+### `events.shared.enabled` — enforced directly, not derived from the member limit
+
+Previously, a Free Home couldn't create a multi-participant event only because it's capped at one member — there was nothing to actually check `events.shared.enabled` against. This meant a downgraded Family Home that *kept* several members (the member limit only blocks new growth, never evicts anyone) could still freely assign new participants to events, since nothing was checking the real entitlement.
+
+`routers.calendar.create_event` now requires `events.shared.enabled` whenever the final participant set exceeds one person. `update_event` applies the same "genuinely new participant" test already established for household routines and Extended Family conversion: it computes `genuinely_new_participants = requested_members - previous_member_ids` and only requires the entitlement when that set is non-empty **and** the result is still a multi-person event. This means:
+
+- Creating a new shared event on Free: blocked.
+- Converting a personal (single-participant) event to shared on Free: blocked (a special case of the above — `previous_member_ids` is just the creator).
+- Adding a participant to an already-shared historical event on Free: blocked — growing an existing shared event is still a *new* commitment.
+- Removing a participant from a shared event, or editing any other field while keeping the exact same participant set: always allowed, at any plan — this is what makes a historical shared event survive a downgrade with its participant set intact, exactly as the "preserve historical data, block new paid-feature usage" rule requires.
+
+There is no duplicate/copy-event endpoint in the codebase to separately audit — `create_event`/`update_event` are the only two places `CalendarEventMember` rows are ever written.
+
+Covered by `apps/api/tests/test_shared_event_entitlements.py` (8 tests): Family can create a shared event; a downgraded Home cannot create a new one; Free can still create an ordinary personal event; a downgraded Home's historical shared event survives with its participants intact; a downgraded Home cannot convert a personal event to shared, cannot add a participant to a historical shared event, but *can* remove one; and editing unrelated fields on a historical shared event never touches its participant set.
+
+**Frontend**: the Calendar event form's "Household members" checkboxes now disable any box that isn't already checked when `shared_events_enabled` (a new `GET /groups/{id}/billing` field) is false — an already-assigned participant's checkbox always stays interactive so removing them (or simply re-saving the event) never breaks, but no new name can be ticked. A disabled-but-unchecked checkbox is correctly omitted from the submitted form data (disabled checked boxes are not, which is why only never-checked boxes are ever disabled).
+
+### `members.external_invites.enabled` — a real, reachable capability, now enforced
+
+Investigation found Extended Family/Friend is not a stub: it's a fully working relationship type (`PermissionProfile.explicit_sharing` — zero default capabilities, selectively granted `shared_resources` like `"calendar"`), reachable both at invitation creation (`POST /invitations`) and by changing an existing member's relationship (`PATCH /groups/{id}/members/{user_id}`). Both now require `members.external_invites.enabled`, checked independently of `home.max_members` (today Free's member cap already blocks any invite regardless, but this entitlement is what actually governs *this relationship type specifically*, and must keep doing so if a future plan ever allows more than one Free member). The relationship-change endpoint uses the same "genuinely new transition" pattern as everywhere else: converting an ordinary member *into* Extended Family/Friend is blocked on Free, but a member who already holds that relationship keeps working normally (including editing their `shared_resources`) — transition-safe, non-destructive.
+
+Covered by `apps/api/tests/test_external_invite_entitlements.py` (5 tests). Frontend: the invite form and the per-member "Change relationship" selector both disable the Extended Family/Friend options (with a "(Family)" suffix and an upsell note) unless already reachable — mirroring the same transition-safe rule (an existing external member's own current option stays selectable).
+
+### `family_plans.enabled` and `support.priority.enabled` — contract only, no feature surface
+
+Re-confirmed by direct search: no router, service, background task, serializer, or frontend component anywhere in the codebase touches either capability, beyond the entitlement definition itself and its display in the Platform Control Centre. There is nothing to enforce and, per instruction, nothing was invented to enforce against. Both remain exactly as `test_entitlements.py`'s `test_free_resolves_the_full_agreed_capability_matrix` / `test_family_resolves_the_full_agreed_capability_matrix` / `test_every_family_provider_variant_resolves_identical_capabilities` already pin them (Free `False`, Family `True`, identical across every Family provider/status) — this is the "central capability contract" a future implementation must build against.
+
+**This is a different, stronger statement than "deferred enforcement":** deferred enforcement (as `events.shared.enabled`/`members.external_invites.enabled` briefly were) means a reachable feature exists but isn't yet gated. Contract-only means there is no feature at all yet — only a pinned entitlement key and a test that will fail the moment anyone builds something for it without wiring it through `mykhaya.entitlements` first. The Platform Control Centre's capability viewer now labels these two "Contract only" (distinct from "Planned", which still means a real, hidden module) so an operator never mistakes either state for "usable today" or confuses the two different kinds of not-yet-real.
+
+### Downgrade semantics — re-audited
+
+Every Family-only object already representable in the data model was re-checked against "preserve historical paid data, block new paid-feature usage while Free": household routines (existing ones keep working, only a new commitment into household scope is blocked — Commercial Plan Cleanup task), shared events (this section), event categories/calendars (Phase 6 — excess categories go read-only, never deleted), household members and Extended Family/Friend relationships (this section and the prior pass — never evicted, only new growth blocked). No code path in any of these deletes or silently mutates existing data as a side effect of a plan change.
+
+### Test result (this delta)
+
+`sh infrastructure/scripts/run-tests.sh`: **538 passed, 2 failed**. The 2 failures (`test_migration_integrity.py::test_alembic_revision_ids_fit_version_column_and_form_one_chain`, `test_worker.py::test_database_rejects_duplicate_scheduler_occurrence`) are unrelated to commercial entitlements — reproduced identically (same 2 failures) on the pre-existing baseline commit (`382c278`, before any of this pass's work) via an isolated `git worktree`, and their failure content (an Alembic-migrations-directory glob returning empty; a `MissingGreenlet` error from re-reading an ORM attribute after a rollback in a scheduler-occurrence test) has no connection to entitlements, plans, members, events, or routines.

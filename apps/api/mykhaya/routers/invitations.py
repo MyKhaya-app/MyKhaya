@@ -11,7 +11,7 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
-from mykhaya.entitlements import require_within_limit
+from mykhaya.entitlements import require_entitlement, require_within_limit
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
@@ -56,6 +56,16 @@ async def invite(
         )
     if body.relationship == HouseholdRelationship.review_required:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a relationship.")
+
+    # Extended Family / Friend is the real, reachable "invite an external
+    # member" capability (PermissionProfile.explicit_sharing — zero default
+    # capabilities, selectively granted via shared_resources). Checked
+    # independently of home.max_members below: today Free's member limit
+    # (1) already blocks any invite, but this entitlement is what actually
+    # governs *this specific relationship type* and must keep doing so even
+    # if a future plan ever allows more than one Free member.
+    if body.relationship in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}:
+        await require_entitlement(db, body.group_id, "members.external_invites.enabled")
 
     # Race-safe Free-Home member limit — same per-Home advisory-lock pattern
     # as routers.calendar's calendar-creation endpoint (see

@@ -9,7 +9,7 @@ from mykhaya.audit import audit
 from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
-from mykhaya.entitlements import ensure_home_subscription
+from mykhaya.entitlements import ensure_home_subscription, require_entitlement
 from mykhaya.household_permissions import (
     Capability,
     capabilities_for,
@@ -237,6 +237,22 @@ async def update_member(
             status.HTTP_409_CONFLICT,
             "Assign another Home Admin before changing the final Home Admin.",
         )
+    # Converting an ordinary member INTO Extended Family/Friend is a new
+    # grant of the explicit-sharing capability, not a re-save — mirrors
+    # events.shared.enabled's "genuinely new" test. An existing external
+    # member keeps working normally (transition-safe); this only blocks a
+    # fresh transition into that state on Free.
+    was_external = target.relationship in {
+        HouseholdRelationship.extended_family,
+        HouseholdRelationship.friend,
+    }
+    will_be_external = body.relationship in {
+        HouseholdRelationship.extended_family,
+        HouseholdRelationship.friend,
+    }
+    if will_be_external and not was_external:
+        await require_entitlement(db, group_id, "members.external_invites.enabled")
+
     previous = {
         "relationship": target.relationship.value,
         "permission_profile": target.permission_profile.value,

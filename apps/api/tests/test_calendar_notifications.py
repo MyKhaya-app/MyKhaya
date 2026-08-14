@@ -21,6 +21,7 @@ from test_calendar import (  # noqa: F401
 )
 
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     FeatureKey,
@@ -35,6 +36,7 @@ from mykhaya.models import (
     PermissionProfile,
     PushSubscription,
     Role,
+    SubscriptionPlan,
     User,
 )
 
@@ -53,6 +55,13 @@ async def _home_with_calendar(client: AsyncClient, name: str) -> str:
                 feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
             )
         )
+        # This file is about participant-notification delivery, not
+        # commercial gating — every test here assigns other members to
+        # events, which is the events.shared.enabled capability, so every
+        # Home created through this helper needs Family.
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 

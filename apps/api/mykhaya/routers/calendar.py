@@ -23,6 +23,7 @@ from mykhaya.entitlements import (
     classify_ordered_resources,
     commercial_restriction_error,
     get_limit,
+    require_entitlement,
     require_within_limit,
 )
 from mykhaya.features import require_feature
@@ -711,6 +712,15 @@ async def create_event(
                 "A selected member is invalid",
             )
 
+    # A "shared event" is one assigned to more than just its creator — see
+    # docs/architecture/commercial-entitlements.md#shared-family-events.
+    # Checked against events.shared.enabled directly, never derived from
+    # home.max_members: a Free Home that's already at its member limit could
+    # otherwise never even reach this check, which would make the two
+    # entitlements silently redundant rather than each meaning what they say.
+    if len(requested_members) > 1:
+        await require_entitlement(db, home_id, "events.shared.enabled")
+
     event = CalendarEvent(
         group_id=home_id,
         calendar_id=calendar_row.id,
@@ -874,6 +884,21 @@ async def update_event(
             )
         ).all()
     }
+
+    # Transition-safe shared-event enforcement (same philosophy as Calendar's
+    # own downgrade rule and household_routines' scope-transition check —
+    # preserve existing paid state, block only *new* growth into it): a
+    # historical shared event that already has multiple participants can
+    # still be edited (title, time, location, ...) and can still have
+    # members *removed* on Free, but introducing any participant that wasn't
+    # already on the event — whether that turns a personal event into a
+    # shared one, grows an already-shared event, or swaps one participant
+    # for another — requires events.shared.enabled. Retaining the exact same
+    # participant set is never blocked, however this edit reached the API.
+    genuinely_new_participants = set(requested_members) - previous_member_ids
+    if genuinely_new_participants and len(requested_members) > 1:
+        await require_entitlement(db, home_id, "events.shared.enabled")
+
     # Deliberately excludes title: a wording/typo fix to an event's title
     # shouldn't notify every assigned member the way a date/time/location
     # change (something that actually affects whether/where they show up)

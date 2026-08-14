@@ -407,6 +407,8 @@ export interface BillingStatus {
   calendar_usage: CalendarUsage;
   member_usage: CalendarUsage;
   household_routines_enabled: boolean;
+  shared_events_enabled: boolean;
+  external_invites_enabled: boolean;
 }
 
 export interface PricingOption {

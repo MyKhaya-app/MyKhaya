@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -28,6 +29,7 @@ from mykhaya.models import (
     OutboxEvent,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -107,6 +109,13 @@ async def create_home_with_calendar(client: AsyncClient) -> uuid.UUID:
         db.add(
             FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
         )
+        # test_deliver_reminder_notifies_all_event_members assigns a second
+        # member to an event (events.shared.enabled); Family here so that
+        # keeps working without affecting the other, single-member tests in
+        # this file.
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 

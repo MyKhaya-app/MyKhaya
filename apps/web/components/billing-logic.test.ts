@@ -67,6 +67,8 @@ function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
     calendar_usage: { count: 1, limit: 1, over_limit: false },
     member_usage: { count: 1, limit: 1, over_limit: false },
     household_routines_enabled: false,
+    shared_events_enabled: false,
+    external_invites_enabled: false,
     ...overrides,
   };
 }

@@ -273,6 +273,10 @@ async def billing_status(
         household_routines_enabled=await has_entitlement(
             db, group_id, "routines.household.enabled"
         ),
+        shared_events_enabled=await has_entitlement(db, group_id, "events.shared.enabled"),
+        external_invites_enabled=await has_entitlement(
+            db, group_id, "members.external_invites.enabled"
+        ),
     )
 
 
