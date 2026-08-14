@@ -65,7 +65,8 @@
       "Bash(curl -s -o /dev/null -w \"web status: %{http_code}\\\\n\" http://127.0.0.1:8089/)",
       "Bash(node scripts/diag-colour-system.mjs)",
       "Bash(rm -f scripts/diag-colour-system.mjs)",
-      "Bash(node scripts/diag-child-create.mjs)"
+      "Bash(node scripts/diag-child-create.mjs)",
+      "Bash(pnpm -v)"
     ]
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
@@ -18,6 +18,14 @@ import {
   statusBadgeClass,
   statusLabel,
 } from "@/components/subscriptions-logic";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcSection, CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcBadge, toneFromStateClass } from "@/components/control-centre/badge";
+import { CcNotice } from "@/components/control-centre/status-message";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
+import { CcConfirmDialog } from "@/components/control-centre/dialog";
 
 const ENTITLEMENT_LABELS: Record<string, string> = {
   "lists.enabled": "Lists",
@@ -29,6 +37,8 @@ const ENTITLEMENT_LABELS: Record<string, string> = {
 const LIMIT_LABELS: Record<string, string> = {
   "calendar.max_calendars": "Calendar maximum",
 };
+
+type EntitlementRow = { key: string; label: string; value: string; warning?: boolean };
 
 export default function SubscriptionDetailPage({
   params,
@@ -120,486 +130,394 @@ export default function SubscriptionDetailPage({
     }
   });
 
+  const entitlementRows: EntitlementRow[] = data
+    ? [
+        ...Object.entries(data.entitlements.limits).map(([key, value]) => ({
+          key,
+          label: LIMIT_LABELS[key] ?? key,
+          value: value === null ? "Unlimited" : String(value),
+        })),
+        ...Object.entries(data.entitlements.booleans).map(([key, value]) => ({
+          key,
+          label: ENTITLEMENT_LABELS[key] ?? key,
+          value: value ? "Enabled" : "Not available",
+        })),
+        {
+          key: "calendar_usage",
+          label: "Current calendars",
+          value: String(data.calendar_usage.count),
+          warning: data.calendar_usage.over_limit,
+        },
+      ]
+    : [];
+
+  const entitlementColumns: CcTableColumn<EntitlementRow>[] = [
+    { key: "entitlement", header: "Entitlement", render: (row) => row.label },
+    {
+      key: "value",
+      header: "Value",
+      render: (row) => (
+        <>
+          {row.value}
+          {row.warning && (
+            <>
+              {" "}
+              <CcBadge tone="warning">Over plan limit</CcBadge>
+            </>
+          )}
+        </>
+      ),
+    },
+  ];
+
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Commercial detail</p>
-            <h1>{data?.name ?? "Home"}</h1>
-          </div>
-          <div className="platform-modal-actions">
-            <Link href="/subscriptions" className="secondary">
-              Back to Subscriptions
-            </Link>
-            <button className="secondary" onClick={() => void load()}>
-              Refresh
-            </button>
-          </div>
-        </div>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
-        {message && (
-          <p className="notice" role="status">
-            {message}
-          </p>
-        )}
+      <CcPage>
+        <CcPageHeader
+          eyebrow="Commercial detail"
+          title={data?.name ?? "Home"}
+          meta={
+            data && (
+              <>
+                <span>
+                  Home ID <code>{data.id}</code>
+                </span>
+                <span>Created {readableDate(data.created_at)}</span>
+                <span>{data.member_count} members</span>
+              </>
+            )
+          }
+          secondaryActions={
+            <>
+              <Link href="/subscriptions" className="secondary">
+                Back to Subscriptions
+              </Link>
+              <button className="secondary" onClick={() => void load()}>
+                Refresh
+              </button>
+            </>
+          }
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        {message && <CcNotice tone="success">{message}</CcNotice>}
         {!data ? (
           <p role="status">Loading…</p>
         ) : (
-          <>
-            <section>
-              <h2>Home information</h2>
-              <dl>
-                <dt>Home ID</dt>
-                <dd>
-                  <code>{data.id}</code>
-                </dd>
-                <dt>Created</dt>
-                <dd>{readableDate(data.created_at)}</dd>
-                <dt>Members</dt>
-                <dd>{data.member_count}</dd>
-              </dl>
-              {data.administrators.length > 0 && (
-                <div className="record-list">
-                  {data.administrators.map((admin) => (
-                    <article key={admin.user_id}>
-                      <strong>{admin.display_name}</strong>
-                      <span>{admin.email}</span>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section>
-              <h2>Stored commercial state</h2>
-              <dl>
-                <dt>Plan</dt>
-                <dd>
-                  <strong className={`state-label ${planBadgeClass(data.subscription.plan)}`}>
-                    {planLabel(data.subscription.plan)}
-                  </strong>
-                </dd>
-                <dt>Provider</dt>
-                <dd>
-                  <strong
-                    className={`state-label ${providerBadgeClass(data.subscription.provider)}`}
-                  >
-                    {providerLabel(data.subscription.provider)}
-                  </strong>
-                </dd>
-                <dt>Status</dt>
-                <dd>
-                  <strong className={`state-label ${statusBadgeClass(data.subscription.status)}`}>
-                    {statusLabel(data.subscription.status)}
-                  </strong>
-                </dd>
-                {data.subscription.complimentary_reason && (
-                  <>
-                    <dt>Complimentary reason</dt>
-                    <dd>{data.subscription.complimentary_reason}</dd>
-                  </>
-                )}
-                {data.subscription.complimentary_note && (
-                  <>
-                    <dt>Internal note (Platform Admin only)</dt>
-                    <dd>{data.subscription.complimentary_note}</dd>
-                  </>
-                )}
-                {data.subscription.complimentary_granted_by_display_name && (
-                  <>
-                    <dt>Granted by</dt>
-                    <dd>{data.subscription.complimentary_granted_by_display_name}</dd>
-                  </>
-                )}
-                {data.subscription.complimentary_granted_at && (
-                  <>
-                    <dt>Granted</dt>
-                    <dd>{readableDate(data.subscription.complimentary_granted_at)}</dd>
-                  </>
-                )}
-                {data.subscription.complimentary_expires_at && (
-                  <>
-                    <dt>Complimentary expiry</dt>
-                    <dd>{readableDate(data.subscription.complimentary_expires_at)}</dd>
-                  </>
-                )}
-                {data.subscription.external_customer_id && (
-                  <>
-                    <dt>External customer ID</dt>
-                    <dd>
-                      <code>{data.subscription.external_customer_id}</code>
-                    </dd>
-                  </>
-                )}
-                {data.subscription.external_subscription_id && (
-                  <>
-                    <dt>External subscription ID</dt>
-                    <dd>
-                      <code>{data.subscription.external_subscription_id}</code>
-                    </dd>
-                  </>
-                )}
-                {data.subscription.billing_interval && (
-                  <>
-                    <dt>Billing interval</dt>
-                    <dd>{data.subscription.billing_interval === "month" ? "Monthly" : "Annual"}</dd>
-                  </>
-                )}
-                {data.stripe_price && (
-                  <>
-                    <dt>Current price</dt>
-                    <dd>
-                      {data.stripe_price.formatted_amount} / {data.subscription.billing_interval}{" "}
-                      <small>
-                        (<code>{data.subscription.external_price_id}</code>)
-                      </small>
-                    </dd>
-                  </>
-                )}
-              </dl>
-              {(data.stripe_dashboard_customer_url || data.stripe_dashboard_subscription_url) && (
-                <div className="platform-modal-actions">
-                  {data.stripe_dashboard_customer_url && (
-                    <a
-                      className="secondary"
-                      href={data.stripe_dashboard_customer_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open Customer in Stripe
-                    </a>
+          <CcColumns ratio="2-1">
+            <div>
+              <CcSection title="Home">
+                <CcCard>
+                  <CcMetadataGrid dense>
+                    <CcMetadataItem label="Home ID">
+                      <code>{data.id}</code>
+                    </CcMetadataItem>
+                    <CcMetadataItem label="Created">{readableDate(data.created_at)}</CcMetadataItem>
+                    <CcMetadataItem label="Members">{data.member_count}</CcMetadataItem>
+                  </CcMetadataGrid>
+                  {data.administrators.length > 0 && (
+                    <div className="record-list" style={{ marginTop: "0.9rem" }}>
+                      {data.administrators.map((admin) => (
+                        <article key={admin.user_id}>
+                          <strong>{admin.display_name}</strong>
+                          <span>{admin.email}</span>
+                        </article>
+                      ))}
+                    </div>
                   )}
-                  {data.stripe_dashboard_subscription_url && (
-                    <a
-                      className="secondary"
-                      href={data.stripe_dashboard_subscription_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open Subscription in Stripe
-                    </a>
-                  )}
-                </div>
-              )}
-            </section>
+                </CcCard>
+              </CcSection>
 
-            <section>
-              <h2>Effective commercial state</h2>
-              <dl>
-                <dt>Effective plan</dt>
-                <dd>
-                  <strong
-                    className={`state-label ${planBadgeClass(data.subscription.effective_plan)}`}
-                  >
-                    {planLabel(data.subscription.effective_plan)}
-                  </strong>
-                </dd>
-                {hasEffectiveDivergence(
-                  data.subscription.plan,
-                  data.subscription.effective_plan,
-                ) && (
-                  <>
-                    <dt>Reason</dt>
-                    <dd>{data.subscription.effective_status_reason}</dd>
-                  </>
-                )}
-              </dl>
-            </section>
-
-            {data.subscription.provider === "stripe" && (
-              <section className="action-panel">
-                <h2>Stripe</h2>
-                <p>
-                  This Home&rsquo;s commercial state is driven by Stripe. Provider, plan and
-                  status cannot be edited directly here — reconciliation re-fetches Stripe&rsquo;s
-                  own current subscription state and re-applies it through the same logic
-                  webhooks use.
-                </p>
-                <button className="secondary" onClick={() => setShowReconcileForm(true)}>
-                  Reconcile with Stripe
-                </button>
-              </section>
-            )}
-
-            <section className="action-panel">
-              <h2>Complimentary access</h2>
-              {data.subscription.provider === "stripe" &&
-              data.subscription.status !== "cancelled" ? (
-                <p className="notice error" role="alert">
-                  This Home has an active Stripe subscription. Complimentary access cannot be
-                  granted while it is still billing — the Stripe subscription must be cancelled
-                  first (via the Customer Portal or Stripe directly).
-                </p>
-              ) : data.subscription.provider === "complimentary" ? (
-                <>
-                  <p>This Home currently has complimentary Family access.</p>
-                  <div className="platform-modal-actions">
-                    <button className="secondary" onClick={() => setShowGrantForm(true)}>
-                      Extend / update complimentary access
-                    </button>
-                    <button className="danger" onClick={() => setShowRevokeForm(true)}>
-                      Remove complimentary access
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p>This Home does not currently have complimentary access.</p>
-                  <button onClick={() => setShowGrantForm(true)}>
-                    Grant complimentary Family access
-                  </button>
-                </>
-              )}
-            </section>
-
-            <section>
-              <h2>Entitlements ({planLabel(data.entitlements.plan)})</h2>
-              <dl>
-                {Object.entries(data.entitlements.limits).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{LIMIT_LABELS[key] ?? key}</dt>
-                    <dd>{value === null ? "Unlimited" : value}</dd>
-                  </div>
-                ))}
-                {Object.entries(data.entitlements.booleans).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{ENTITLEMENT_LABELS[key] ?? key}</dt>
-                    <dd>{value ? "Enabled" : "Not available"}</dd>
-                  </div>
-                ))}
-                <div>
-                  <dt>Current calendars</dt>
-                  <dd>
-                    {data.calendar_usage.count}
-                    {data.calendar_usage.over_limit && (
-                      <>
-                        {" "}
-                        <strong className="state-label state-warning">Over plan limit</strong>
-                      </>
+              <CcSection title="Commercial state">
+                <CcCard>
+                  <CcMetadataGrid>
+                    <CcMetadataItem label="Stored plan">
+                      <CcBadge tone={toneFromStateClass(planBadgeClass(data.subscription.plan))}>
+                        {planLabel(data.subscription.plan)}
+                      </CcBadge>
+                    </CcMetadataItem>
+                    <CcMetadataItem label="Effective plan">
+                      <CcBadge
+                        tone={toneFromStateClass(planBadgeClass(data.subscription.effective_plan))}
+                      >
+                        {planLabel(data.subscription.effective_plan)}
+                      </CcBadge>
+                    </CcMetadataItem>
+                    <CcMetadataItem label="Provider">
+                      <CcBadge tone={toneFromStateClass(providerBadgeClass(data.subscription.provider))}>
+                        {providerLabel(data.subscription.provider)}
+                      </CcBadge>
+                    </CcMetadataItem>
+                    <CcMetadataItem label="Status">
+                      <CcBadge tone={toneFromStateClass(statusBadgeClass(data.subscription.status))}>
+                        {statusLabel(data.subscription.status)}
+                      </CcBadge>
+                    </CcMetadataItem>
+                    {data.subscription.complimentary_reason && (
+                      <CcMetadataItem label="Complimentary reason">
+                        {data.subscription.complimentary_reason}
+                      </CcMetadataItem>
                     )}
-                  </dd>
-                </div>
-              </dl>
-            </section>
+                    {data.subscription.complimentary_granted_by_display_name && (
+                      <CcMetadataItem label="Granted by">
+                        {data.subscription.complimentary_granted_by_display_name}
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.complimentary_granted_at && (
+                      <CcMetadataItem label="Granted">
+                        {readableDate(data.subscription.complimentary_granted_at)}
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.complimentary_expires_at && (
+                      <CcMetadataItem label="Complimentary expiry">
+                        {readableDate(data.subscription.complimentary_expires_at)}
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.billing_interval && (
+                      <CcMetadataItem label="Billing interval">
+                        {data.subscription.billing_interval === "month" ? "Monthly" : "Annual"}
+                      </CcMetadataItem>
+                    )}
+                    {data.stripe_price && (
+                      <CcMetadataItem label="Current price">
+                        {data.stripe_price.formatted_amount} / {data.subscription.billing_interval}
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.external_customer_id && (
+                      <CcMetadataItem label="External customer ID">
+                        <code>{data.subscription.external_customer_id}</code>
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.external_subscription_id && (
+                      <CcMetadataItem label="External subscription ID">
+                        <code>{data.subscription.external_subscription_id}</code>
+                      </CcMetadataItem>
+                    )}
+                    {data.stripe_price && (
+                      <CcMetadataItem label="Stripe price ID">
+                        <code>{data.subscription.external_price_id}</code>
+                      </CcMetadataItem>
+                    )}
+                    {data.subscription.complimentary_note && (
+                      <CcMetadataItem label="Internal note (Platform Admin only)" span>
+                        {data.subscription.complimentary_note}
+                      </CcMetadataItem>
+                    )}
+                    {hasEffectiveDivergence(data.subscription.plan, data.subscription.effective_plan) && (
+                      <CcMetadataItem label="Why effective differs from stored" span>
+                        {data.subscription.effective_status_reason}
+                      </CcMetadataItem>
+                    )}
+                  </CcMetadataGrid>
+                  {(data.stripe_dashboard_customer_url || data.stripe_dashboard_subscription_url) && (
+                    <div className="platform-modal-actions" style={{ justifyContent: "flex-start" }}>
+                      {data.stripe_dashboard_customer_url && (
+                        <a
+                          className="secondary"
+                          href={data.stripe_dashboard_customer_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open Customer in Stripe
+                        </a>
+                      )}
+                      {data.stripe_dashboard_subscription_url && (
+                        <a
+                          className="secondary"
+                          href={data.stripe_dashboard_subscription_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open Subscription in Stripe
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </CcCard>
+              </CcSection>
 
-            <section>
-              <h2>Commercial event history</h2>
-              {data.history.length === 0 ? (
-                <p className="quiet-state">No commercial events recorded yet.</p>
-              ) : (
-                <div className="record-list">
-                  {data.history.map((event) => (
-                    <article key={event.id}>
-                      <strong>{eventTypeLabel(event.event_type)}</strong>
-                      <time dateTime={event.created_at}>{readableDate(event.created_at)}</time>
-                      {event.reason && <p>Reason: {event.reason}</p>}
-                      {event.actor_display_name && <p>By: {event.actor_display_name}</p>}
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
+              <CcSection title={`Entitlements (${planLabel(data.entitlements.plan)})`}>
+                <CcTable
+                  columns={entitlementColumns}
+                  rows={entitlementRows}
+                  rowKey={(row) => row.key}
+                  caption="Entitlements"
+                />
+              </CcSection>
 
-            {data.subscription.provider === "stripe" && (
-              <section>
-                <h2>Recent Stripe webhook events</h2>
-                <p className="quiet-state">
-                  Support diagnostics for "I paid but I'm still on Free" — did Stripe's webhook
-                  actually arrive for this Home.
-                </p>
-                {data.recent_webhook_events.length === 0 ? (
-                  <p className="quiet-state">No webhook events recorded yet for this Home.</p>
+              <CcSection title="Commercial event history">
+                {data.history.length === 0 ? (
+                  <p className="quiet-state">No commercial events recorded yet.</p>
                 ) : (
                   <div className="record-list">
-                    {data.recent_webhook_events.map((event) => (
+                    {data.history.map((event) => (
                       <article key={event.id}>
-                        <strong>{event.event_type}</strong>{" "}
-                        <span className={`state-label state-${event.outcome === "processed" ? "healthy" : "not-applicable"}`}>
-                          {event.outcome}
-                        </span>
-                        <time dateTime={event.received_at}>{readableDate(event.received_at)}</time>
+                        <strong>{eventTypeLabel(event.event_type)}</strong>
+                        <time dateTime={event.created_at}>{readableDate(event.created_at)}</time>
+                        {event.reason && <p>Reason: {event.reason}</p>}
+                        {event.actor_display_name && <p>By: {event.actor_display_name}</p>}
                       </article>
                     ))}
                   </div>
                 )}
-              </section>
-            )}
-          </>
-        )}
-      </main>
+              </CcSection>
 
-      {showGrantForm && (
-        <div
-          className="platform-modal-backdrop"
-          role="presentation"
-          onClick={() => setShowGrantForm(false)}
-        >
-          <div
-            className="platform-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="grant-complimentary-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="grant-complimentary-title">Grant complimentary Family access</h2>
-            <p>
-              This gives the Home Family-plan entitlements without payment — for beta testers,
-              friends and family, or internal use. It never touches Stripe.
-            </p>
-            <form
-              onSubmit={(event: FormEvent<HTMLFormElement>) => {
-                event.preventDefault();
-                void grantComplimentary(new FormData(event.currentTarget));
-              }}
-            >
-              <label>
-                Reason
-                <select name="reason_preset" defaultValue="">
-                  <option value="">Choose a reason…</option>
-                  {complimentaryReasonPresets().map((preset) => (
-                    <option key={preset} value={preset}>
-                      {preset}
-                    </option>
-                  ))}
-                  <option value="Other">Other (specify below)</option>
-                </select>
-              </label>
-              <label>
-                Custom reason (used if &ldquo;Other&rdquo; is selected, or on its own)
-                <input name="reason_custom" type="text" maxLength={200} />
-              </label>
-              <label>
-                Internal note (optional, visible only to Platform Administrators)
-                <textarea name="note" maxLength={1000} />
-              </label>
-              <fieldset>
-                <legend>Expiry</legend>
-                <label>
-                  <input type="radio" name="expiry_choice" value="never" defaultChecked />
-                  Never
-                </label>
-                <label>
-                  <input type="radio" name="expiry_choice" value="specific" />
-                  Specific date/time
-                </label>
-                <label>
-                  <input type="datetime-local" name="expiry_date" />
-                </label>
-              </fieldset>
-              <label>
-                Reason for this administrative action (at least 10 characters)
-                <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
-              </label>
-              <div className="platform-modal-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setShowGrantForm(false)}
+              {data.subscription.provider === "stripe" && (
+                <CcSection
+                  title="Recent Stripe webhook events"
+                  description={
+                    'Support diagnostics for "I paid but I\'m still on Free" — did Stripe\'s webhook actually arrive for this Home.'
+                  }
                 >
-                  Cancel
-                </button>
-                <button type="submit">Grant complimentary access</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      {showRevokeForm && (
-        <div
-          className="platform-modal-backdrop"
-          role="presentation"
-          onClick={() => setShowRevokeForm(false)}
-        >
-          <div
-            className="platform-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="revoke-complimentary-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="revoke-complimentary-title">Remove complimentary access</h2>
-            <p>
-              This Home will return to its Free plan entitlements.
-              <br />
-              Existing Home data will not be deleted.
-              <br />
-              Features or resources above Free-plan limits may become restricted in a later
-              phase.
-            </p>
-            <form
-              onSubmit={(event: FormEvent<HTMLFormElement>) => {
-                event.preventDefault();
-                void revokeComplimentary(new FormData(event.currentTarget));
-              }}
-            >
+                  {data.recent_webhook_events.length === 0 ? (
+                    <p className="quiet-state">No webhook events recorded yet for this Home.</p>
+                  ) : (
+                    <div className="record-list">
+                      {data.recent_webhook_events.map((event) => (
+                        <article key={event.id}>
+                          <strong>{event.event_type}</strong>{" "}
+                          <CcBadge tone={event.outcome === "processed" ? "success" : "neutral"}>
+                            {event.outcome}
+                          </CcBadge>
+                          <time dateTime={event.received_at}>{readableDate(event.received_at)}</time>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </CcSection>
+              )}
+            </div>
+
+            <div>
+              <CcSection title="Complimentary access">
+                <CcCard>
+                  {data.subscription.provider === "stripe" && data.subscription.status !== "cancelled" ? (
+                    <CcNotice tone="error">
+                      This Home has an active Stripe subscription. Complimentary access cannot be
+                      granted while it is still billing — the Stripe subscription must be cancelled
+                      first (via the Customer Portal or Stripe directly).
+                    </CcNotice>
+                  ) : data.subscription.provider === "complimentary" ? (
+                    <>
+                      <p>This Home currently has complimentary Family access.</p>
+                      <div className="platform-modal-actions" style={{ justifyContent: "flex-start" }}>
+                        <button className="secondary" onClick={() => setShowGrantForm(true)}>
+                          Extend / update
+                        </button>
+                      </div>
+                      <div className="cc-section-danger" style={{ marginTop: "1rem" }}>
+                        <p style={{ marginTop: 0 }}>
+                          Removing complimentary access returns this Home to Free immediately.
+                        </p>
+                        <button className="danger" onClick={() => setShowRevokeForm(true)}>
+                          Remove complimentary access
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p>This Home does not currently have complimentary access.</p>
+                      <button onClick={() => setShowGrantForm(true)}>
+                        Grant complimentary Family access
+                      </button>
+                    </>
+                  )}
+                </CcCard>
+              </CcSection>
+
+              {data.subscription.provider === "stripe" && (
+                <CcSection title="Stripe">
+                  <CcCard>
+                    <p>
+                      This Home&rsquo;s commercial state is driven by Stripe. Provider, plan and
+                      status cannot be edited directly here — reconciliation re-fetches Stripe&rsquo;s
+                      own current subscription state and re-applies it through the same logic
+                      webhooks use.
+                    </p>
+                    <button className="secondary" onClick={() => setShowReconcileForm(true)}>
+                      Reconcile with Stripe
+                    </button>
+                  </CcCard>
+                </CcSection>
+              )}
+            </div>
+          </CcColumns>
+        )}
+      </CcPage>
+
+      <CcConfirmDialog
+        open={showGrantForm}
+        onClose={() => setShowGrantForm(false)}
+        title="Grant complimentary Family access"
+        description="This gives the Home Family-plan entitlements without payment — for beta testers, friends and family, or internal use. It never touches Stripe."
+        confirmLabel="Grant complimentary access"
+        onConfirm={grantComplimentary}
+        extraFields={
+          <>
+            <label>
+              Reason
+              <select name="reason_preset" defaultValue="">
+                <option value="">Choose a reason…</option>
+                {complimentaryReasonPresets().map((preset) => (
+                  <option key={preset} value={preset}>
+                    {preset}
+                  </option>
+                ))}
+                <option value="Other">Other (specify below)</option>
+              </select>
+            </label>
+            <label>
+              Custom reason (used if &ldquo;Other&rdquo; is selected, or on its own)
+              <input name="reason_custom" type="text" maxLength={200} />
+            </label>
+            <label>
+              Internal note (optional, visible only to Platform Administrators)
+              <textarea name="note" maxLength={1000} />
+            </label>
+            <fieldset>
+              <legend>Expiry</legend>
               <label>
-                Reason for this administrative action (at least 10 characters)
-                <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+                <input type="radio" name="expiry_choice" value="never" defaultChecked />
+                Never
               </label>
-              <div className="platform-modal-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setShowRevokeForm(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="danger">
-                  Remove complimentary access
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      {showReconcileForm && (
-        <div
-          className="platform-modal-backdrop"
-          role="presentation"
-          onClick={() => setShowReconcileForm(false)}
-        >
-          <div
-            className="platform-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="reconcile-stripe-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="reconcile-stripe-title">Reconcile with Stripe</h2>
-            <p>
-              Re-fetches this Home&rsquo;s subscription directly from Stripe and re-applies it
-              through the same logic webhooks use. Use this if the Home&rsquo;s state here looks
-              out of date compared to Stripe.
-            </p>
-            <form
-              onSubmit={(event: FormEvent<HTMLFormElement>) => {
-                event.preventDefault();
-                void reconcileStripe(new FormData(event.currentTarget));
-              }}
-            >
               <label>
-                Reason for this administrative action (at least 10 characters)
-                <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+                <input type="radio" name="expiry_choice" value="specific" />
+                Specific date/time
               </label>
-              <div className="platform-modal-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setShowReconcileForm(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit">Reconcile</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              <label>
+                <input type="datetime-local" name="expiry_date" />
+              </label>
+            </fieldset>
+          </>
+        }
+      />
+
+      <CcConfirmDialog
+        open={showRevokeForm}
+        onClose={() => setShowRevokeForm(false)}
+        title="Remove complimentary access"
+        description={
+          <>
+            This Home will return to its Free plan entitlements.
+            <br />
+            Existing Home data will not be deleted.
+            <br />
+            Features or resources above Free-plan limits may become restricted in a later phase.
+          </>
+        }
+        confirmLabel="Remove complimentary access"
+        variant="destructive"
+        onConfirm={revokeComplimentary}
+      />
+
+      <CcConfirmDialog
+        open={showReconcileForm}
+        onClose={() => setShowReconcileForm(false)}
+        title="Reconcile with Stripe"
+        description="Re-fetches this Home's subscription directly from Stripe and re-applies it through the same logic webhooks use. Use this if the Home's state here looks out of date compared to Stripe."
+        confirmLabel="Reconcile"
+        onConfirm={reconcileStripe}
+      />
+
       {modal}
     </PlatformShell>
   );

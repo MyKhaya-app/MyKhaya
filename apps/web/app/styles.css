@@ -3057,3 +3057,270 @@ button.danger,
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------------------------------------------------------------------- */
+/* Control Centre UI foundation (Phase 1 sweep) — shared primitives used   */
+/* by apps/web/components/control-centre/*. Extends the existing          */
+/* --platform-* palette (defined above on .platform-shell/.platform-login) */
+/* rather than introducing a new one.                                     */
+/* ---------------------------------------------------------------------- */
+.platform-shell,
+.platform-login {
+  --platform-success-bg: #e6f1ed;
+  --platform-success-ink: #276149;
+  --platform-warning-bg: #fff0cd;
+  --platform-warning-ink: #805507;
+  --platform-danger-bg: #f8dfdd;
+  --platform-danger-ink: #8d342d;
+  --platform-neutral-bg: #eef1f2;
+  --platform-neutral-ink: #53666e;
+  --platform-info-bg: #e7eef1;
+  --platform-info-ink: var(--platform-blue);
+}
+
+.cc-page-wide {
+  max-width: 1680px;
+}
+
+.cc-page-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1.5rem;
+  justify-content: space-between;
+  margin-bottom: 1.8rem;
+}
+.cc-page-header-main {
+  min-width: 0;
+}
+.cc-eyebrow {
+  color: var(--platform-blue);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.cc-page-header h1 {
+  font-size: 1.9rem;
+  margin: 0.2rem 0 0;
+}
+.cc-page-description {
+  color: #5b6c74;
+  margin: 0.35rem 0 0;
+  max-width: 62ch;
+}
+.cc-page-meta {
+  color: #687981;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  gap: 0.3rem 1rem;
+  margin-top: 0.6rem;
+}
+.cc-page-header-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.75rem;
+}
+.cc-page-header-secondary {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+.cc-page-header-secondary a,
+.cc-page-header-secondary button {
+  background: transparent;
+  border-color: transparent;
+  color: var(--platform-blue);
+  font-weight: 650;
+  padding-inline: 0.4rem;
+}
+.cc-page-header-secondary a:hover,
+.cc-page-header-secondary button:hover {
+  text-decoration: underline;
+}
+
+.cc-section {
+  margin-bottom: 1.6rem;
+}
+.cc-section-danger {
+  background: #fdf3f2;
+  border: 1px solid #e3a29b;
+  border-radius: 0.5rem;
+  padding: 1.1rem;
+}
+.cc-section-danger h2 {
+  color: #8c3d35;
+}
+.cc-section-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+.cc-section-description {
+  color: #5b6c74;
+  font-size: 0.82rem;
+  margin: 0.15rem 0 0;
+}
+.cc-section-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.cc-card {
+  background: white;
+  border: 1px solid var(--platform-line);
+  border-radius: 0.5rem;
+  padding: 1.1rem;
+}
+
+.cc-columns {
+  align-items: start;
+  display: grid;
+  gap: 1.25rem;
+}
+.cc-columns-2-1 {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+.cc-columns-1-1 {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.cc-metadata-grid {
+  display: grid;
+  gap: 0.9rem 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  margin: 0;
+}
+.cc-metadata-grid-dense {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.cc-metadata-grid > div {
+  border-top: 1px solid #e4eaec;
+  padding-top: 0.7rem;
+}
+.cc-metadata-grid dt {
+  color: #5b6c74;
+  font-size: 0.76rem;
+  margin: 0 0 0.2rem;
+}
+.cc-metadata-grid dd {
+  font-weight: 700;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cc-metadata-item-span {
+  grid-column: 1 / -1;
+}
+
+.cc-badge {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 650;
+  padding: 0.28rem 0.55rem;
+  white-space: nowrap;
+}
+.cc-badge-success {
+  background: var(--platform-success-bg);
+  color: var(--platform-success-ink);
+}
+.cc-badge-warning {
+  background: var(--platform-warning-bg);
+  color: var(--platform-warning-ink);
+}
+.cc-badge-danger {
+  background: var(--platform-danger-bg);
+  color: var(--platform-danger-ink);
+}
+.cc-badge-neutral {
+  background: var(--platform-neutral-bg);
+  color: var(--platform-neutral-ink);
+}
+.cc-badge-info {
+  background: var(--platform-info-bg);
+  color: var(--platform-info-ink);
+}
+
+.cc-notice {
+  margin: 0 0 1.2rem;
+}
+
+.cc-table-scroll table {
+  font-size: 0.8rem;
+}
+.cc-table-row:hover {
+  background: #f7f9fa;
+}
+
+.cc-dialog {
+  max-width: 460px;
+}
+.cc-dialog form label {
+  display: block;
+  margin-bottom: 0.9rem;
+}
+
+.cc-toolbar {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0;
+}
+.cc-toolbar label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.cc-toolbar button {
+  flex: 0 0 auto;
+}
+
+.cc-field {
+  margin-bottom: 0.9rem;
+}
+.cc-field-help {
+  color: #687981;
+  font-size: 0.76rem;
+  margin: 0.15rem 0 0.4rem;
+}
+.cc-field-error {
+  color: #8d342d;
+  font-size: 0.78rem;
+  margin: 0.3rem 0 0;
+}
+
+.cc-visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+}
+
+@media (max-width: 1024px) {
+  .cc-columns-2-1,
+  .cc-columns-1-1 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .cc-page-header {
+    flex-direction: column;
+  }
+  .cc-page-header-actions {
+    flex-wrap: wrap;
+  }
+  .cc-metadata-grid {
+    grid-template-columns: 1fr;
+  }
+}

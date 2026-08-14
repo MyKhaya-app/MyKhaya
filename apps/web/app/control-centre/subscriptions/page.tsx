@@ -21,6 +21,12 @@ import {
   statusBadgeClass,
   statusLabel,
 } from "@/components/subscriptions-logic";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcNotice } from "@/components/control-centre/status-message";
+import { CcBadge, toneFromStateClass } from "@/components/control-centre/badge";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
+import { CcSection } from "@/components/control-centre/section";
 
 const PAGE_SIZE = 25;
 
@@ -68,34 +74,88 @@ export default function SubscriptionsPage() {
 
   const totalPages = listing ? Math.max(1, Math.ceil(listing.total / listing.page_size)) : 1;
 
+  const columns: CcTableColumn<SubscriptionListResponse["items"][number]>[] = [
+    {
+      key: "home",
+      header: "Home",
+      render: (item) => <Link href={`/subscriptions/${item.id}`}>{item.name}</Link>,
+    },
+    {
+      key: "effective",
+      header: "Effective plan",
+      render: (item) => (
+        <>
+          <CcBadge tone={toneFromStateClass(planBadgeClass(item.effective_plan))}>
+            {planLabel(item.effective_plan)}
+          </CcBadge>
+          {hasEffectiveDivergence(item.stored_plan, item.effective_plan) && (
+            <div>
+              <small>{item.effective_status_reason}</small>
+            </div>
+          )}
+        </>
+      ),
+    },
+    { key: "stored", header: "Stored plan", render: (item) => planLabel(item.stored_plan) },
+    {
+      key: "provider",
+      header: "Provider",
+      render: (item) => (
+        <CcBadge tone={toneFromStateClass(providerBadgeClass(item.provider))}>
+          {providerLabel(item.provider)}
+        </CcBadge>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (item) => (
+        <CcBadge tone={toneFromStateClass(statusBadgeClass(item.status))}>
+          {statusLabel(item.status)}
+        </CcBadge>
+      ),
+    },
+    {
+      key: "expiry",
+      header: "Complimentary expiry",
+      render: (item) =>
+        item.complimentary_expires_at ? (
+          <span>
+            {readableDate(item.complimentary_expires_at)}
+            {isExpired(item.complimentary_expires_at) && " (expired)"}
+            {isExpiringSoon(item.complimentary_expires_at) && " (expiring soon)"}
+          </span>
+        ) : (
+          "—"
+        ),
+    },
+    { key: "members", header: "Members", render: (item) => item.member_count },
+    {
+      key: "change",
+      header: "Last commercial change",
+      render: (item) => (item.last_commercial_change ? readableDate(item.last_commercial_change) : "—"),
+    },
+  ];
+
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Commercial state</p>
-            <h1>Subscriptions</h1>
-          </div>
-          <button className="secondary" onClick={() => void load()}>
-            Refresh
-          </button>
-        </div>
-        <p className="scope-note">
-          Every Home&rsquo;s stored commercial state and its currently resolved (effective) plan —
-          these can differ, for example once complimentary access expires. Stripe integration is
-          not part of this phase; the only administrator actions here are granting and revoking
-          complimentary Family access.
-        </p>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
+      <CcPage wide>
+        <CcPageHeader
+          eyebrow="Commercial state"
+          title="Subscriptions"
+          description="Every Home's stored commercial state and its currently resolved (effective) plan — these can differ, for example once complimentary access expires. Stripe integration is not part of this phase; the only administrator actions here are granting and revoking complimentary Family access."
+          secondaryActions={
+            <button className="secondary" onClick={() => void load()}>
+              Refresh
+            </button>
+          }
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
 
         {!summary ? (
           <p role="status">Loading summary…</p>
         ) : (
-          <div className="overview-grid">
+          <div className="overview-grid compact-metrics">
             <section className="overview-panel">
               <h2>Total Homes</h2>
               <p className="stat-number">{summary.total_homes}</p>
@@ -154,24 +214,22 @@ export default function SubscriptionsPage() {
               <section className="overview-panel">
                 <h2>Stripe webhooks</h2>
                 <p>
-                  <strong className={`state-label state-${webhookHealth.state}`}>
+                  <CcBadge tone={toneFromStateClass(`state-${webhookHealth.state}`)}>
                     {webhookHealth.state}
-                  </strong>
+                  </CcBadge>
                 </p>
                 <small>
                   {webhookHealth.recent_failure_count} failure
                   {webhookHealth.recent_failure_count === 1 ? "" : "s"} in the last 24h
-                  {webhookHealth.last_event_at &&
-                    ` · last event ${readableDate(webhookHealth.last_event_at)}`}
+                  {webhookHealth.last_event_at && ` · last event ${readableDate(webhookHealth.last_event_at)}`}
                 </small>
               </section>
             )}
           </div>
         )}
 
-        <section className="action-panel">
-          <h2>Search and filter</h2>
-          <form onSubmit={applyFilters}>
+        <CcSection title="Search and filter">
+          <form onSubmit={applyFilters} className="cc-toolbar">
             <label>
               Home name
               <input
@@ -201,10 +259,7 @@ export default function SubscriptionsPage() {
             </label>
             <label>
               Status
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-              >
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 <option value="">Any</option>
                 <option value="active">Active</option>
                 <option value="trialing">Trialing</option>
@@ -215,101 +270,39 @@ export default function SubscriptionsPage() {
             </label>
             <button type="submit">Apply filters</button>
           </form>
-        </section>
+        </CcSection>
 
-        {!listing ? (
-          <p role="status">Loading subscriptions…</p>
-        ) : listing.items.length === 0 ? (
-          <p className="quiet-state">No Homes match these filters.</p>
-        ) : (
-          <>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Home</th>
-                    <th>Effective plan</th>
-                    <th>Stored plan</th>
-                    <th>Provider</th>
-                    <th>Status</th>
-                    <th>Complimentary expiry</th>
-                    <th>Members</th>
-                    <th>Last commercial change</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {listing.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <Link href={`/subscriptions/${item.id}`}>{item.name}</Link>
-                      </td>
-                      <td>
-                        <strong className={`state-label ${planBadgeClass(item.effective_plan)}`}>
-                          {planLabel(item.effective_plan)}
-                        </strong>
-                        {hasEffectiveDivergence(item.stored_plan, item.effective_plan) && (
-                          <div>
-                            <small>{item.effective_status_reason}</small>
-                          </div>
-                        )}
-                      </td>
-                      <td>{planLabel(item.stored_plan)}</td>
-                      <td>
-                        <strong className={`state-label ${providerBadgeClass(item.provider)}`}>
-                          {providerLabel(item.provider)}
-                        </strong>
-                      </td>
-                      <td>
-                        <strong className={`state-label ${statusBadgeClass(item.status)}`}>
-                          {statusLabel(item.status)}
-                        </strong>
-                      </td>
-                      <td>
-                        {item.complimentary_expires_at ? (
-                          <span>
-                            {readableDate(item.complimentary_expires_at)}
-                            {isExpired(item.complimentary_expires_at) && " (expired)"}
-                            {isExpiringSoon(item.complimentary_expires_at) && " (expiring soon)"}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td>{item.member_count}</td>
-                      <td>
-                        {item.last_commercial_change
-                          ? readableDate(item.last_commercial_change)
-                          : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="platform-modal-actions">
-              <button
-                type="button"
-                className="secondary"
-                disabled={page <= 1}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-              >
-                Previous
-              </button>
-              <span>
-                Page {listing.page} of {totalPages} ({listing.total} Homes)
-              </span>
-              <button
-                type="button"
-                className="secondary"
-                disabled={page >= totalPages}
-                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </>
+        <CcTable
+          columns={columns}
+          rows={listing?.items ?? null}
+          rowKey={(item) => item.id}
+          emptyMessage="No Homes match these filters."
+          caption="Subscriptions"
+        />
+        {listing && listing.items.length > 0 && (
+          <div className="platform-modal-actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              Previous
+            </button>
+            <span>
+              Page {listing.page} of {totalPages} ({listing.total} Homes)
+            </span>
+            <button
+              type="button"
+              className="secondary"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Next
+            </button>
+          </div>
         )}
-      </main>
+      </CcPage>
     </PlatformShell>
   );
 }
