@@ -4,7 +4,6 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { UserPlus } from "lucide-react";
 import type {
-  CalendarUsage,
   HouseholdRelationship,
   InvitationListItem,
   Member,
@@ -14,9 +13,7 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
-import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
-import { canAddMember, memberLimitMessage } from "@/components/member-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
 
 type FamilyFilter = "all" | "adults" | "children" | "extended";
