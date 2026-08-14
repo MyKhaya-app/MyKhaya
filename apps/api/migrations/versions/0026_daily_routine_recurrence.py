@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0026_daily_routine_recurrence"
-down_revision: str | None = "0025_scheduler_occurrence_backfill"
+down_revision: str | None = "0025_occurrence_backfill"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
