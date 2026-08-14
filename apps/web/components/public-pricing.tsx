@@ -13,7 +13,12 @@ import { useRouter } from "next/navigation";
 import type { FamilyPricing, PlanComparison } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { intervalSuffix } from "./billing-logic";
-import { isBestValueInterval, pricingOptionFor, savingLabelFor } from "./family-pricing-logic";
+import {
+  canStartFamilyCheckout,
+  isBestValueInterval,
+  pricingOptionFor,
+  savingLabelFor,
+} from "./family-pricing-logic";
 import { resolveCtaDestination } from "./cta-destination";
 import type { BillingIntervalChoice, OnboardingIntent } from "./onboarding-intent";
 
@@ -144,15 +149,21 @@ export function PublicPricing() {
             </>
           )}
 
-          <button
-            type="button"
-            disabled={busy !== null || pricingError || !selected}
-            onClick={() => choosePlan({ plan: "family", interval: billingInterval })}
-          >
-            {busy === "family"
-              ? "One moment…"
-              : `Choose Family${selected ? ` — ${selected.formatted_amount}/${intervalSuffix(billingInterval)}` : ""}`}
-          </button>
+          {pricing && !canStartFamilyCheckout(pricing) ? (
+            <p className="notice" role="status">
+              New Family sign-ups are temporarily paused. You can still create a Free account.
+            </p>
+          ) : (
+            <button
+              type="button"
+              disabled={busy !== null || pricingError || !selected}
+              onClick={() => choosePlan({ plan: "family", interval: billingInterval })}
+            >
+              {busy === "family"
+                ? "One moment…"
+                : `Choose Family${selected ? ` — ${selected.formatted_amount}/${intervalSuffix(billingInterval)}` : ""}`}
+            </button>
+          )}
         </article>
       </div>
 

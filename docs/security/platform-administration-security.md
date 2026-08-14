@@ -165,3 +165,59 @@ Every entitlement check in the calendar-enforcement path (`get_limit`, `require_
 ### No persisted commercial-lock state to drift
 
 `commercial_access` is computed on every read from current entitlement + current calendar ordering — there is no `is_paid_locked`-style column anywhere in the schema for Calendar. This removes an entire class of bug (a stale lock flag surviving a plan change) by construction rather than by careful invalidation logic.
+
+## Commercial entitlements — production billing readiness (Phase 7)
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Phase 7" section.
+
+### Billing launch control is deployment configuration, not a web toggle
+
+`MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED` is an environment variable, restart-required, defaulting `false` everywhere including production — the same trust boundary as the Stripe secrets themselves, deliberately not a Platform Control Centre switch. This means the single most consequential commercial action available to this system (allowing real customers to be charged) requires infrastructure-level deployment access, not a web session — immune to CSRF, session hijack, or an accidental click inside the admin UI. `Settings.validate_stripe_configuration` refuses to start with acquisition enabled but Stripe not fully configured, so the flag can never be "on" in a half-configured state.
+
+### Checkout enforces the gate server-side; nothing trusts frontend hiding
+
+`routers.billing.checkout_session` checks `StripeConfig.acquisition_enabled` itself, after the capability check and before any Stripe call — a direct `POST /groups/{id}/billing/checkout-session` with acquisition disabled is refused with `503` regardless of what the frontend would have shown. `test_checkout_is_refused_while_acquisition_is_disabled` asserts this at the HTTP layer, not by inspecting frontend state.
+
+### Webhook processing is never coupled to the acquisition gate
+
+`POST /billing/stripe/webhook` has no acquisition check at all — verified directly (`test_webhook_processing_unaffected_by_acquisition_disabled`) by disabling acquisition, sending a real `customer.subscription.updated` event for an existing Stripe-backed Home, and confirming it still processes and mutates state. This is a deliberate, tested guarantee: disabling new acquisition must never risk existing subscribers' state going stale.
+
+### Reconciliation authority
+
+`mykhaya.billing.state.apply_stripe_subscription_state` validates a Stripe Subscription object's own `metadata.mykhaya_group_id` against the `group_id` it's being applied to, raising `SubscriptionOwnershipMismatchError` (→ `409`, logged, transaction rolled back) on a mismatch — defence-in-depth against ever attaching one Home's Stripe object to another Home's `HomeSubscription` row, whether from a future code path, a data-integrity bug, or an operator pasting the wrong reference. `test_apply_stripe_state_rejects_a_subscription_whose_metadata_points_elsewhere` / `test_apply_stripe_state_allows_matching_metadata` cover both outcomes directly against the shared function both the webhook handler and manual reconciliation call.
+
+### Provider-ID integrity
+
+`HomeSubscription.external_customer_id`/`external_subscription_id` remain DB-level `UNIQUE` (Phase 3) — a Stripe Customer or Subscription can never resolve to two Homes at the database layer, not merely by application-level convention. `test_a_stripe_customer_id_cannot_resolve_to_two_homes` / `test_a_stripe_subscription_id_cannot_resolve_to_two_homes` assert the constraint fires.
+
+### Checkout/Portal IDOR
+
+Both `checkout_session` and `portal_session` resolve the caller's membership via `membership_for`/`require_capability` exactly like every other Home-scoped endpoint — a non-member gets `404`, matching the app-wide "don't confirm or deny a Home's existence to someone who doesn't belong to it" convention. `test_cannot_start_checkout_for_a_home_you_do_not_belong_to` / `test_cannot_open_portal_for_a_home_you_do_not_belong_to` prove this specifically for the billing endpoints.
+
+### Webhook trust and replay (reaffirmed, not weakened)
+
+Unchanged from Phase 3: `stripe.Webhook.construct_event` verifies the `Stripe-Signature` header against the raw request body using the SDK's default timestamp-tolerance behaviour — never loosened for development convenience, and no code path exists to bypass it. `StripeWebhookEvent.stripe_event_id`'s `UNIQUE` constraint remains the actual dedup mechanism for a successful/ignored event. Phase 7 adds `stripe_webhook_failures` alongside this, not instead of it — a failure is observable but, critically, still never dedupes (see "Webhook observability" in the architecture doc) so Stripe's genuine retry of a previously-failed event is neither silently dropped nor treated as an attacker-replayable bypass: reprocessing only ever happens through `apply_stripe_subscription_state`'s own out-of-order-event guards, never by trusting a bare event ID as proof of anything.
+
+### No card data, no unnecessary payload retention
+
+Unchanged: no card number, CVV, or bank credential ever reaches MyKhaya. `stripe_webhook_events`/`stripe_webhook_failures` both store only enough to dedupe/troubleshoot (event ID, type, timestamps, outcome, a short sanitised error string) — never the raw webhook payload.
+
+### Billing support diagnostics without database access
+
+`SubscriptionDetailResponse.recent_webhook_events` (per-Home, last 10) and `GET /platform/subscriptions/webhook-health` (deployment-wide, last 20 events/failures) exist specifically so a support operator can answer "did Stripe's webhook actually arrive for this Home" without `psql` access — both are `SUPPORT`-role-gated like the rest of the subscriptions area, and neither exposes a raw Stripe payload, a secret, or anything beyond `event_type`/`outcome`/timestamps.
+
+### Security review (this phase)
+
+A targeted review attempted the following against the full public pricing → signup → Checkout → webhook → entitlement → Calendar → Portal → cancellation chain; all held:
+
+- Injecting `plan`/`provider`/`status` via registration or Home-creation payloads — rejected (`StrictModel`, Phase 5).
+- Injecting an arbitrary Stripe Price ID or amount into Checkout — rejected (`CheckoutSessionRequest` only ever accepts `interval`, Phase 3).
+- Starting Checkout or opening the Portal for a Home the caller doesn't belong to — `404` (this phase, see above).
+- Replaying a captured webhook payload without a valid signature — `400`, rejected before any DB work (Phase 3, reaffirmed).
+- Replaying a validly-signed, already-processed webhook event — idempotent no-op (Phase 3, reaffirmed).
+- Reusing a Stripe Customer/Subscription ID across two Homes — rejected at the database layer (this phase).
+- Attaching a Stripe Subscription object to the wrong Home via a metadata mismatch — rejected (this phase, `SubscriptionOwnershipMismatchError`).
+- Bypassing the Free calendar limit via concurrent requests — prevented by the per-Home advisory lock (Phase 6, reaffirmed).
+- Regaining Family after a genuine Stripe cancellation by relying on stale browser/redirect state — impossible; the browser return is never authoritative, only the webhook-driven `HomeSubscription` row is (Phase 3/4, reaffirmed).
+
+No new bypass was found. No existing protection was weakened to make this review pass.

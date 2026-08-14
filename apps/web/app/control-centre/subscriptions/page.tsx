@@ -5,7 +5,11 @@ import Link from "next/link";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { readableDate } from "@/components/platform-format";
-import type { SubscriptionListResponse, SubscriptionSummary } from "@/components/platform-types";
+import type {
+  StripeWebhookHealth,
+  SubscriptionListResponse,
+  SubscriptionSummary,
+} from "@/components/platform-types";
 import {
   hasEffectiveDivergence,
   isExpired,
@@ -22,6 +26,7 @@ const PAGE_SIZE = 25;
 
 export default function SubscriptionsPage() {
   const [summary, setSummary] = useState<SubscriptionSummary | null>(null);
+  const [webhookHealth, setWebhookHealth] = useState<StripeWebhookHealth | null>(null);
   const [listing, setListing] = useState<SubscriptionListResponse | null>(null);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
@@ -38,12 +43,14 @@ export default function SubscriptionsPage() {
     if (provider) params.set("provider", provider);
     if (statusFilter) params.set("status", statusFilter);
     try {
-      const [summaryResult, listResult] = await Promise.all([
+      const [summaryResult, listResult, webhookResult] = await Promise.all([
         platformApi.get<SubscriptionSummary>("/subscriptions/summary"),
         platformApi.get<SubscriptionListResponse>(`/subscriptions?${params.toString()}`),
+        platformApi.get<StripeWebhookHealth>("/subscriptions/webhook-health"),
       ]);
       setSummary(summaryResult);
       setListing(listResult);
+      setWebhookHealth(webhookResult);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load subscriptions.");
     }
@@ -143,6 +150,22 @@ export default function SubscriptionsPage() {
               <p className="stat-number">{summary.stripe_cancelling}</p>
               <small>Cancels at period end</small>
             </section>
+            {webhookHealth?.configured && (
+              <section className="overview-panel">
+                <h2>Stripe webhooks</h2>
+                <p>
+                  <strong className={`state-label state-${webhookHealth.state}`}>
+                    {webhookHealth.state}
+                  </strong>
+                </p>
+                <small>
+                  {webhookHealth.recent_failure_count} failure
+                  {webhookHealth.recent_failure_count === 1 ? "" : "s"} in the last 24h
+                  {webhookHealth.last_event_at &&
+                    ` · last event ${readableDate(webhookHealth.last_event_at)}`}
+                </small>
+              </section>
+            )}
           </div>
         )}
 

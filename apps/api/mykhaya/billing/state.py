@@ -51,6 +51,20 @@ from mykhaya.models import (
     SubscriptionStatus,
 )
 
+
+class SubscriptionOwnershipMismatchError(RuntimeError):
+    """The Stripe Subscription object's own mykhaya_group_id metadata (set at
+    Checkout time — see mykhaya.billing.checkout.create_checkout_session)
+    disagrees with the group_id the caller is applying it to. This should be
+    unreachable in the webhook path (group_id there is *derived from* this
+    same metadata, or from a HomeSubscription row already scoped to the
+    right Home) and in today's reconciliation path (which only ever
+    re-fetches a Subscription ID already on file for that Home) — it exists
+    as defence-in-depth against a future code path, data-integrity bug, or
+    operator error attaching the wrong Stripe object to a Home. See
+    "Reconciliation authority" in docs/security/platform-administration-security.md."""
+
+
 _STRIPE_STATUS_MAP: dict[str, SubscriptionStatus] = {
     "active": SubscriptionStatus.active,
     "trialing": SubscriptionStatus.trialing,
@@ -165,6 +179,17 @@ async def apply_stripe_subscription_state(
     mapped_status = map_stripe_subscription_status(stripe_subscription)
     if mapped_status is None:
         return None
+
+    metadata_group_id_raw = (stripe_subscription.get("metadata") or {}).get("mykhaya_group_id")
+    if metadata_group_id_raw:
+        try:
+            metadata_group_id = uuid.UUID(str(metadata_group_id_raw))
+        except ValueError:
+            metadata_group_id = None
+        if metadata_group_id is not None and metadata_group_id != group_id:
+            raise SubscriptionOwnershipMismatchError(
+                f"Stripe subscription metadata belongs to Home {metadata_group_id}, not {group_id}."
+            )
 
     subscription = await get_home_subscription(db, group_id)
     if subscription is None:

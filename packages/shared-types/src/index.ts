@@ -414,6 +414,11 @@ export interface FamilyPricing {
   // True only when the current provider prices make annual mathematically
   // cheaper than 12 monthly periods — never a hard-coded assumption.
   annual_is_best_value: boolean;
+  // The Phase 7 billing kill switch. Pricing stays visible/informational
+  // even when false — only Checkout creation is actually blocked
+  // (server-side) — so use this to swap "Choose Family" for a "temporarily
+  // paused" notice rather than hiding the price.
+  acquisition_enabled: boolean;
 }
 
 export interface PlanComparisonRow {

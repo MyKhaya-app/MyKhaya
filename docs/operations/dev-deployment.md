@@ -318,10 +318,12 @@ app starts a real test-mode Checkout Session; Stripe's documented test card
 Do not assume every deployment runs the Stripe CLI — it's a local-development
 convenience only; production uses a registered webhook endpoint as above.
 
-### Going live (not performed in Phase 3)
+### Going live
 
-Phase 3 is test-mode only; do not switch to live mode as part of this phase. When a
-later phase does:
+Phase 3 was test-mode only. Phase 7 (`docs/operations/billing-production-readiness.md`)
+is the full go-live checklist, readiness command, price/key/webhook-secret rotation
+runbooks, outage behaviour, reconciliation, and billing disable/rollback procedure —
+this section stays as a short summary; treat that document as authoritative.
 
 1. Create the equivalent live-mode Product/Prices in the Stripe Dashboard (live and
    test mode have entirely separate catalogues — a test Price ID is never valid in
@@ -333,13 +335,17 @@ later phase does:
    committed. `Settings.validate_stripe_configuration` requires a live key when
    `MYKHAYA_ENVIRONMENT=production` and rejects a test key there, so a stale test key
    left in production configuration fails startup rather than silently taking no
-   payments.
+   payments. Leave `MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED=false` until every
+   item in the Phase 7 go-live checklist is genuinely complete — this is the
+   separate, deliberate flag that actually allows new paid signups; being
+   "configured" is not the same as being "live."
 4. Rotate the webhook secret by registering a second endpoint alongside the first,
    confirming events arrive successfully, then removing the old endpoint — Stripe
    supports multiple simultaneous webhook endpoints for exactly this overlap.
 5. Verify the full lifecycle (Checkout → activation → renewal → cancellation) against
-   a real card in live mode before announcing billing is live — none of Phase 3's
-   verification substitutes for this.
+   Stripe test mode using the procedure in `billing-production-readiness.md` before
+   ever touching live mode — none of the mocked automated test coverage substitutes
+   for this.
 
 ### Public pricing (Phase 5)
 

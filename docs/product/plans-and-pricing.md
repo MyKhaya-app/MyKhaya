@@ -101,3 +101,20 @@ Free and Family calendars now genuinely behave differently — this was previous
 **Upgrading back to Family restores everything immediately** — every previously-read-only calendar becomes fully usable again the moment the upgrade takes effect, automatically, with nothing to request or wait for.
 
 **None of this ever affects signing in, viewing your Home, managing your account, or security settings** — a Home over its Free calendar limit is never locked out of anything except adding to or editing the calendars beyond its plan.
+
+## Phase 7: getting ready for real payment
+
+Phase 7 doesn't change what Free or Family mean — it makes sure the system is genuinely ready to accept real payment safely before that switch is ever flipped.
+
+**A missed payment never surprises anyone.** Stripe automatically retries a failed renewal on its own schedule. The whole time, the Home keeps full Family access — nothing is paused or downgraded while a payment is being retried. Settings → Plan & Billing shows "Payment needs attention" with a direct way to update the payment method; there's no separate countdown running in MyKhaya alongside Stripe's own retries. A Home only ever returns to Free once Stripe itself reports the subscription has genuinely ended.
+
+**Cancelling always keeps access until the date already paid for**, then returns cleanly to Free with nothing deleted — exactly as already described above for calendars, and true for the whole Home.
+
+**If new sign-ups are ever paused** (for maintenance, an incident, or ahead of a deliberate launch step), existing paying Homes are completely unaffected — their subscription, renewals, and ability to manage billing all keep working normally. Only starting a brand-new subscription is paused, and Free sign-up is never affected either way.
+
+**Two things remain open business decisions, not yet resolved, and MyKhaya will not accept real payment until they are:**
+
+- **Tax/VAT treatment** — whether prices shown to customers are tax-inclusive, whether Stripe Tax is used, and what a UK/wider launch requires. Nothing in the product guesses at this; no "VAT included" wording appears anywhere until it's actually true.
+- **Terms of Service / Privacy Policy covering billing** — MyKhaya does not yet have a published Terms or Privacy page covering the recurring-subscription relationship. This needs proper review, not invented wording.
+
+Refunds and payment disputes are handled directly through Stripe by MyKhaya's support team — MyKhaya itself has no refund button; Stripe remains the single place money actually moves.

@@ -427,3 +427,87 @@ Lists, Chores, Notes and Wish Lists remain `ReleaseState.hidden` in `mykhaya.mod
 ### Explicitly out of scope for Phase 6
 
 No Apple/Google billing. No live Stripe activation (still Phase 7). No promotional codes. No MRR/ARR. No new commercial tiers. No enabling of Lists/Chores/Notes/Wish Lists. No destructive data cleanup of any kind. No per-Home entitlement overrides outside the existing Complimentary mechanism. No calendar rename/move-events/participant-management UI beyond what already existed on events themselves.
+
+## Phase 7: production billing readiness
+
+Phase 7 introduces no new commercial feature — it hardens and operationalises the system Phases 1–6 already built, so it can eventually accept real payment safely. **It does not itself enable live billing.**
+
+### The billing acquisition gate
+
+Two previously-conflated ideas are now separate flags:
+
+```
+Stripe configured (MYKHAYA_STRIPE_BILLING_CONFIGURED)
+        ≠
+New paid acquisition enabled (MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED)
+```
+
+`mykhaya.billing.config.StripeConfig.acquisition_enabled` is the one flag `routers.billing.checkout_session` checks (after capability and configuration checks, before ever calling Stripe) — disabled, it returns `503 "New Family sign-ups are temporarily unavailable."` and does nothing else. Nothing else is gated by it:
+
+- **Free signup and Home creation** — unaffected; never touch Stripe config at all.
+- **Existing Stripe-backed Homes** — unaffected; `HomeSubscription` rows and entitlement resolution don't consult this flag.
+- **Webhook processing** — unaffected; `POST /billing/stripe/webhook` has no acquisition check, so renewals, cancellations, and payment-failure events for existing subscribers keep processing regardless (Phase 7's explicit "don't couple `billing_enabled` to `accept_webhooks`" requirement).
+- **Customer Portal** — unaffected; a billing manager can always open the Portal for an existing Stripe Customer.
+- **Reconciliation** — unaffected.
+- **Public pricing (`GET /billing/pricing`)** — stays informational: the real provider-derived price is still returned, plus a new `acquisition_enabled` field the frontend uses to swap "Choose Family" for a "New Family sign-ups are temporarily paused" notice. The price is never hidden or replaced with a stale figure.
+- **Household `stripe_billing_available`** (`GET /groups/{id}/billing`) now means "Stripe is configured AND acquisition is enabled" — `canShowUpgradeOptions` on Settings → Plan & Billing already read this field from Phase 4, so the kill switch correctly hides the upgrade section there with zero frontend logic change.
+
+`Settings.validate_stripe_configuration` rejects `MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED=true` with `MYKHAYA_STRIPE_BILLING_CONFIGURED=false` at startup — acquisition can never be "on" while Stripe itself is half- or un-configured. Both default to `false` everywhere, including production, so **deploying code never itself enables paid acquisition** — a human sets the environment variable as a distinct, deliberate step. See "Deliberate go-live approval" below for why this is deployment configuration, not a Platform Control Centre toggle.
+
+### Reconciliation authority: never trust a mismatched Stripe object
+
+`mykhaya.billing.state.apply_stripe_subscription_state` — the single function both the webhook handler and manual reconciliation funnel through — now validates that a Stripe Subscription object's own `metadata.mykhaya_group_id` (set at Checkout time) agrees with the `group_id` it's being applied to, raising `SubscriptionOwnershipMismatchError` (mapped to `409` in the Platform Control Centre reconciliation endpoint) if they disagree. In practice this should be unreachable today — the webhook path derives `group_id` *from* this same metadata (or from a `HomeSubscription` row already uniquely scoped to the right Home), and reconciliation only ever re-fetches a Subscription ID already on file for that Home — but it's defence-in-depth against a future code path, a data-integrity bug, or an operator error, per "Reconciliation authority" in the security doc.
+
+### Provider-ID uniqueness
+
+`HomeSubscription.external_customer_id` and `external_subscription_id` are both DB-level `unique` columns (established in Phase 3) — a Stripe Customer or Subscription can never resolve to two Homes. `test_a_stripe_customer_id_cannot_resolve_to_two_homes` / `test_a_stripe_subscription_id_cannot_resolve_to_two_homes` (`test_billing_production_readiness.py`) added as regression coverage proving the constraint, not new enforcement.
+
+### Webhook observability
+
+A new `stripe_webhook_failures` table (migration `0023_billing_readiness`) is an **append-only observability log**, deliberately separate from `stripe_webhook_events`: a processing failure is recorded here for operator visibility, while `stripe_webhook_events` — the actual dedup mechanism — still commits nothing for a failed attempt, so Stripe's own retry of that event is never silently swallowed. A retried event that succeeds writes a normal `processed` row to `stripe_webhook_events`, same as if it had succeeded first try. `test_a_processing_failure_is_recorded_without_blocking_retry` proves both halves of this with a genuinely failing payload (a malformed `current_period_end`), not a mocked exception.
+
+`mykhaya.platform_health.current_platform_health` gained a `stripe_webhook` signal (`configured` / `state: not_configured|healthy|warning` / `recent_failure_count` in a trailing 24-hour window / `last_event_at`) alongside the existing SMTP/queue signals, using the exact same pull-based pattern (computed on page load, no push alerting — see "Webhook failure alerting" below for why). Surfaced on the Platform Control Centre overview (a "Stripe webhooks" service-state row, plus an actionable item when degraded) and on a new `GET /platform/subscriptions/webhook-health` endpoint (recent events, recent failures, never the raw Stripe payload). `SubscriptionDetailResponse` also gained `recent_webhook_events` scoped to that one Home, for the "I paid but I'm still on Free" support diagnostic (see "Billing support diagnostics" below).
+
+### Webhook failure alerting
+
+No push/email alerting exists for this, deliberately: `mykhaya.platform_health`'s existing signals (SMTP, queue depth, worker/scheduler heartbeats) are all pull-based — visible when an operator opens Platform Control Centre, never proactively pushed — and Stripe webhook health now follows the identical convention rather than inventing a new mechanism. Building outbound alerting (e.g. emailing Platform Administrators on sustained failure) is a real, reasonable future enhancement, but was out of proportion to add here per "do not build an external monitoring platform solely for Phase 7" — it's noted as a documented gap in the operations runbook, not silently skipped.
+
+### Stale webhook detection
+
+Considered and deliberately rejected: "no webhook received in N days" is not a reliable health signal, because long gaps between real Stripe lifecycle events (a renewal every month or year) are completely normal and would produce constant false alarms. The chosen signal is **failure count** (`recent_failure_count` in the health snapshot above), which only reacts to an actual processing problem, never to the mere absence of activity.
+
+### Failed-event repair
+
+Recovery is Stripe's own retry (automatic, and this is why `stripe_webhook_failures` deliberately never blocks it) plus the existing manual reconciliation action for a specific Home. No generic "replay an arbitrary captured payload" endpoint was built — that would bypass Stripe's own signature trust and was explicitly out of scope. If a specific event needs manual intervention beyond what reconciliation covers, the documented path (see the operations runbook) is inspecting the Stripe Dashboard's own event log and, if needed, having Stripe resend the event.
+
+### Bulk reconciliation
+
+Not built. At current scale a single-Home reconciliation action (already existing since Phase 3) covers the realistic recovery case; a bulk "reconcile every Stripe-backed Home" endpoint would need its own rate-limiting/batching design to avoid a Stripe API storm, and there's no evidence yet that scale requires it. Documented instead as a safe, scripted `psql`-plus-loop-over-the-existing-per-Home-endpoint operational procedure in the operations runbook, so outage recovery is possible without a database write.
+
+### Stripe outage behaviour
+
+Tested directly (`test_existing_family_entitlement_survives_stripe_being_unreachable`, `test_checkout_fails_safely_when_stripe_is_unreachable`):
+
+- **Existing entitlement resolution never calls Stripe.** `mykhaya.entitlements` reads only the local `HomeSubscription` row — proven by monkeypatching every Stripe SDK call MyKhaya makes to raise `AssertionError`, then confirming a Family-only action (creating a second calendar) still succeeds for a Stripe-backed Family Home.
+- **New Checkout fails safely.** A Stripe outage during `create_checkout_session` surfaces as `503`, and the Home's stored plan remains exactly what it was (Free stays Free) — never a partial or corrupted state.
+- **Never fails open into Family, never fails closed by stripping existing access** — both directions were explicit non-negotiables; the architecture already satisfied both by construction (entitlement resolution is 100% local; Stripe failures only ever block a *new* provider-dependent action).
+
+### Pricing cache and outage
+
+Unchanged from Phase 3's design, reconfirmed here: `mykhaya.billing.pricing`'s in-process cache (5-minute TTL) means a transient Stripe blip within the cache window is invisible to the customer; total unavailability surfaces as the existing `503` with the existing "temporarily unavailable, you can still create a Free account" copy — never a hard-coded fallback amount, never a block on Free registration.
+
+### Least-privilege Stripe credentials
+
+MyKhaya's Stripe usage is narrow: Customers (create/retrieve), Checkout Sessions (create), Customer Portal Sessions (create), Subscriptions (retrieve), Prices (retrieve). All of this is satisfiable by a Stripe **restricted key** scoped to exactly those resources at the permission level actually used (write for Customers/Checkout Sessions/Portal Sessions, read for Subscriptions/Prices) rather than an unrestricted secret key — see the operations runbook's key-rotation section for the recommended restricted-key permission set. This is a recommendation for the live credential, not a code change; MyKhaya makes no assumption about key scope today.
+
+### Deliberate go-live approval
+
+Per Phase 7's explicit instruction not to build a casual remote toggle: `MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED` is deployment configuration (an environment variable, restart-required), the same trust model as `MYKHAYA_STRIPE_BILLING_CONFIGURED` and the Stripe secrets themselves — not a Platform Control Centre switch. Platform Control Centre only ever shows the *current* state read-only (via the readiness check — see below); it cannot change it. This keeps the single most consequential commercial action (starting to actually charge real customers) behind the same infrastructure-level access control as rotating a secret, not behind a web session that could be phished, CSRF'd, or misclicked.
+
+### The readiness command
+
+`mykhaya.billing_readiness` (run via `infrastructure/scripts/billing-readiness.sh`) answers "is this deployment correctly configured to enable Stripe billing" without taking payment: configuration completeness, Stripe/environment mode consistency, the acquisition-gate state, and — opt-in via `--check-stripe` — a live (test-mode only; refuses a live key) call confirming the configured Price IDs actually resolve. Prints `PASS`/`WARN`/`BLOCKER` lines, never a secret value, and explicitly does not claim readiness equals "go-live approved" — real Stripe sandbox lifecycle verification and the business/legal decisions (tax/VAT, Terms wording) remain separate, human judgement calls documented in the operations runbook's go-live checklist.
+
+### Explicitly out of scope for Phase 7
+
+No live Stripe activation (this phase prepares for it; a human still flips the switch later, outside this engagement). No Apple/Google billing. No promotional codes. No MRR/ARR. No new commercial tiers. No refund button inside MyKhaya (Stripe Dashboard remains the operational workflow — see the operations runbook). No dispute/chargeback webhook processing (Stripe Dashboard remains authoritative; disputes are not automated). No bulk reconciliation UI (documented scripted procedure instead). No outbound webhook-failure alerting (documented as a future enhancement).

@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     stripe_family_monthly_price_id: str | None = None
     stripe_family_annual_price_id: str | None = None
     stripe_billing_configured: bool = False
+    # Phase 7's deliberate go-live gate — deployment configuration, not a
+    # Platform Control Centre toggle (see "Do not implement a remote live
+    # toggle casually" in docs/architecture/commercial-entitlements.md). A
+    # conscious operator action, separate from Stripe merely being
+    # configured: existing Stripe-backed Homes, webhooks, renewals,
+    # cancellations, the Customer Portal and reconciliation all keep working
+    # regardless of this flag — it only gates *new* Checkout Session
+    # creation. Defaults false everywhere, including production, so
+    # deploying code never itself enables paid acquisition.
+    stripe_billing_acquisition_enabled: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
     avatar_max_upload_bytes: int = Field(default=5_242_880, ge=1024, le=10_485_760)
@@ -237,6 +247,12 @@ class Settings(BaseSettings):
         Free and Complimentary Homes work with no Stripe setup at all.
         """
         if not self.stripe_billing_configured:
+            if self.stripe_billing_acquisition_enabled:
+                raise ValueError(
+                    "MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED is true but "
+                    "MYKHAYA_STRIPE_BILLING_CONFIGURED is false — billing must be fully "
+                    "configured before new paid acquisition can be enabled."
+                )
             return self
         missing = [
             name

@@ -61,7 +61,12 @@ from mykhaya.entitlements import (
     resolve_effective_state,
 )
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
-from mykhaya.models import SubscriptionPlan, SubscriptionProvider, SubscriptionStatus
+from mykhaya.models import (
+    StripeWebhookFailure,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
+)
 from mykhaya.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -74,6 +79,13 @@ async def pricing(
     request: Request, settings: Settings = Depends(get_settings)
 ) -> FamilyPricingResponse:
     await enforce_rate_limit(request, settings, "billing-pricing", 60, 60)
+    # Pricing stays informational even while new acquisition is disabled
+    # (the billing kill switch) — a visitor can still see what Family
+    # costs; only actually starting Checkout is blocked (see
+    # checkout_session below). The frontend uses acquisition_enabled to
+    # decide whether to show "Choose Family" or a "temporarily paused"
+    # notice, never by treating a pricing-fetch failure as the signal.
+    acquisition_enabled = resolve_stripe_config(settings).acquisition_enabled
     try:
         family_pricing = await get_family_pricing(settings)
     except StripeNotConfiguredError as exc:
@@ -113,6 +125,7 @@ async def pricing(
         ],
         annual_saving_formatted=saving,
         annual_is_best_value=is_best_value,
+        acquisition_enabled=acquisition_enabled,
     )
 
 
@@ -164,6 +177,7 @@ async def billing_status(
     resolved_plan = await effective_plan(db, group_id)
     resolution = resolve_effective_state(subscription)
     capabilities = await capabilities_for(db, membership)
+    config = resolve_stripe_config(settings)
 
     price: SubscriptionPriceResponse | None = None
     if (
@@ -171,7 +185,6 @@ async def billing_status(
         and subscription.provider == SubscriptionProvider.stripe
         and subscription.external_price_id
     ):
-        config = resolve_stripe_config(settings)
         if config.configured and config.secret_key:
             price_option = await fetch_price_amount(
                 config.secret_key, subscription.external_price_id
@@ -202,7 +215,13 @@ async def billing_status(
         else None,
         can_manage_billing=Capability.billing_manage in capabilities,
         has_stripe_customer=bool(subscription and subscription.external_customer_id),
-        stripe_billing_available=resolve_stripe_config(settings).configured,
+        # Whether *starting a new Checkout* is actually possible right now —
+        # Stripe configured AND new acquisition enabled (Phase 7's kill
+        # switch). Deliberately not just "configured": Settings -> Plan &
+        # Billing's upgrade section (canShowUpgradeOptions) reads this to
+        # decide whether to show Checkout at all, so a disabled kill switch
+        # correctly hides it there too, not only at the API layer.
+        stripe_billing_available=config.configured and config.acquisition_enabled,
         calendar_usage=await calendar_usage(db, group_id),
     )
 
@@ -221,6 +240,16 @@ async def checkout_session(
     config = resolve_stripe_config(settings)
     if not config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    if not config.acquisition_enabled:
+        # The Phase 7 kill switch — deliberately separate from "configured".
+        # Existing Stripe-backed Homes, webhooks, renewals, cancellations,
+        # the Portal, and reconciliation are all unaffected by this; only a
+        # *new* Checkout Session is refused. See
+        # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "New Family sign-ups are temporarily unavailable. Please try again later.",
+        )
 
     # Serialises concurrent checkout attempts for the same Home (double-click,
     # multiple tabs, monthly+annual submitted together) — see
@@ -303,7 +332,7 @@ async def stripe_webhook(
 
     try:
         outcome = await process_webhook_event(db, event, config)
-    except Exception:
+    except Exception as exc:
         await db.rollback()
         # Deliberately generic — Stripe retries on a non-2xx, and no detail
         # about *why* processing failed should be observable from the
@@ -313,6 +342,18 @@ async def stripe_webhook(
             event_id=event.get("id"),
             event_type=event.get("type"),
         )
+        # Observability only — never a dedup mechanism (see
+        # StripeWebhookFailure's docstring). Recorded *after* the rollback
+        # above, in a fresh transaction on the same session, so it survives
+        # even though the failed processing attempt itself was discarded.
+        db.add(
+            StripeWebhookFailure(
+                stripe_event_id=event.get("id"),
+                event_type=event.get("type"),
+                error_message=f"{type(exc).__name__}: {exc}"[:500],
+            )
+        )
+        await db.commit()
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not process this event."
         ) from None

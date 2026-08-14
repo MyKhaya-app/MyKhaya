@@ -50,6 +50,11 @@ def _stripe_configured() -> AsyncIterator[None]:
     configured = get_settings().model_copy(
         update={
             "stripe_billing_configured": True,
+            # Phase 7's separate go-live gate — this file tests Checkout
+            # creation itself, so acquisition must be on; the gate's own
+            # behaviour (disabled blocks Checkout) is covered by
+            # test_billing_acquisition_gate.py.
+            "stripe_billing_acquisition_enabled": True,
             "stripe_secret_key": SecretStr("sk_test_abc123"),
             "stripe_webhook_secret": SecretStr("whsec_test_abc123"),
             "stripe_family_monthly_price_id": "price_month123",

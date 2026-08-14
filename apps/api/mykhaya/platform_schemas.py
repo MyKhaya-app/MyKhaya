@@ -565,6 +565,37 @@ class HomeAdministratorSummary(BaseModel):
     email: str
 
 
+class WebhookEventSummary(BaseModel):
+    """A single recorded Stripe webhook delivery — never the raw payload,
+    only enough for an operator to answer "did this Home's payment webhook
+    arrive, and what happened." See
+    docs/architecture/commercial-entitlements.md#webhook-observability."""
+
+    id: uuid.UUID
+    stripe_event_id: str
+    event_type: str
+    received_at: datetime
+    outcome: str
+
+
+class WebhookFailureSummary(BaseModel):
+    id: uuid.UUID
+    stripe_event_id: str | None
+    event_type: str | None
+    error_message: str
+    occurred_at: datetime
+
+
+class StripeWebhookHealthResponse(BaseModel):
+    configured: bool
+    state: str
+    reason: str | None
+    last_event_at: datetime | None
+    recent_failure_count: int
+    recent_events: list[WebhookEventSummary]
+    recent_failures: list[WebhookFailureSummary]
+
+
 class StripePriceInfo(BaseModel):
     """The actual amount this specific subscription is billed, resolved live
     from Stripe — never a hard-coded figure. None when the Home has no
@@ -588,6 +619,11 @@ class SubscriptionDetailResponse(BaseModel):
     # is no unlock action here, only the existing Complimentary grant or a
     # real Stripe upgrade change what a Home is entitled to.
     calendar_usage: CalendarUsageResponse
+    # Support diagnostics for "I paid but I'm still on Free" (Phase 7) — the
+    # most recent webhook deliveries MyKhaya recorded for this specific
+    # Home, so an operator can see whether Stripe's webhook actually arrived
+    # without database access.
+    recent_webhook_events: list[WebhookEventSummary]
     history: list[SubscriptionEventResponse]
     stripe_price: StripePriceInfo | None = None
     # Built from validated Stripe object IDs already stored on this Home —

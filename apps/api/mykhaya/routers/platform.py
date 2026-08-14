@@ -21,6 +21,7 @@ from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
+from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
@@ -73,6 +74,8 @@ from mykhaya.models import (
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    StripeWebhookEvent,
+    StripeWebhookFailure,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -152,6 +155,7 @@ from mykhaya.platform_schemas import (
     SettingUpdate,
     SmtpSettingsUpdate,
     StripePriceInfo,
+    StripeWebhookHealthResponse,
     SubscriptionDetailResponse,
     SubscriptionEventResponse,
     SubscriptionListItem,
@@ -167,6 +171,8 @@ from mykhaya.platform_schemas import (
     WebAuthnCredentialResponse,
     WebAuthnRegistrationOptionsResponse,
     WebAuthnRegistrationVerifyRequest,
+    WebhookEventSummary,
+    WebhookFailureSummary,
 )
 from mykhaya.platform_security import (
     MFA_POLICY_SETTING_KEY,
@@ -1809,6 +1815,18 @@ async def overview(
                 "href": "/mail",
             }
         )
+    stripe_webhook = current_health.stripe_webhook
+    if stripe_webhook.configured:
+        service_states.append({"service": "Stripe webhooks", "state": stripe_webhook.state.title()})
+        if stripe_webhook.reason:
+            actions.append(
+                {
+                    "severity": "warning",
+                    "title": "Stripe webhook processing is degraded",
+                    "detail": stripe_webhook.reason,
+                    "href": "/subscriptions",
+                }
+            )
 
     metadata_candidates = {
         "version": settings.version,
@@ -2626,6 +2644,57 @@ async def revoke_complimentary(
     return await _subscription_response(db, subscription)
 
 
+@router.get("/subscriptions/webhook-health", response_model=StripeWebhookHealthResponse)
+async def subscriptions_webhook_health(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookHealthResponse:
+    """Operational visibility into Stripe webhook processing (Phase 7) —
+    never the raw payload, only enough for an operator to answer "are
+    webhooks flowing, and what's failed recently." See
+    docs/architecture/commercial-entitlements.md#webhook-observability."""
+    snapshot = await current_platform_health(db, settings)
+    webhook = snapshot.stripe_webhook
+    recent_events = (
+        await db.scalars(
+            select(StripeWebhookEvent).order_by(StripeWebhookEvent.received_at.desc()).limit(20)
+        )
+    ).all()
+    recent_failures = (
+        await db.scalars(
+            select(StripeWebhookFailure).order_by(StripeWebhookFailure.occurred_at.desc()).limit(20)
+        )
+    ).all()
+    return StripeWebhookHealthResponse(
+        configured=webhook.configured,
+        state=webhook.state,
+        reason=webhook.reason,
+        last_event_at=webhook.last_event_at,
+        recent_failure_count=webhook.recent_failure_count,
+        recent_events=[
+            WebhookEventSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                received_at=row.received_at,
+                outcome=row.outcome,
+            )
+            for row in recent_events
+        ],
+        recent_failures=[
+            WebhookFailureSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                error_message=row.error_message,
+                occurred_at=row.occurred_at,
+            )
+            for row in recent_failures
+        ],
+    )
+
+
 @router.get("/subscriptions/summary", response_model=SubscriptionSummaryResponse)
 async def subscriptions_summary(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -2829,6 +2898,14 @@ async def subscription_detail(
         ).all()
         actor_names = {actor.id: actor.display_name for actor in actors}
     definition = plan_definition_for(resolve_effective_plan(subscription))
+    webhook_rows = (
+        await db.scalars(
+            select(StripeWebhookEvent)
+            .where(StripeWebhookEvent.group_id == group_id)
+            .order_by(StripeWebhookEvent.received_at.desc())
+            .limit(10)
+        )
+    ).all()
 
     stripe_price: StripePriceInfo | None = None
     dashboard_customer_url: str | None = None
@@ -2874,6 +2951,16 @@ async def subscription_detail(
             plan=definition.plan, booleans=definition.booleans, limits=definition.limits
         ),
         calendar_usage=await calendar_usage(db, group_id),
+        recent_webhook_events=[
+            WebhookEventSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                received_at=row.received_at,
+                outcome=row.outcome,
+            )
+            for row in webhook_rows
+        ],
         history=[
             SubscriptionEventResponse(
                 id=event.id,
@@ -2936,6 +3023,19 @@ async def reconcile_stripe_subscription(
         )
     except NoStripeSubscriptionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except SubscriptionOwnershipMismatchError as exc:
+        # Never silently attach another Home's Stripe object — surface this
+        # as a support/security exception for an operator to investigate,
+        # not a normal reconciliation outcome.
+        await db.rollback()
+        await log.aerror(
+            "stripe_reconciliation_ownership_mismatch", group_id=str(group_id), detail=str(exc)
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Home's Stripe subscription reference does not match Stripe's own record. "
+            "Contact engineering before retrying.",
+        ) from exc
     except (StripeUnavailableError, StripeRequestError) as exc:
         await log.aerror("stripe_reconciliation_error", group_id=str(group_id), detail=str(exc))
         raise HTTPException(

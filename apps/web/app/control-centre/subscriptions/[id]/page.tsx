@@ -404,6 +404,31 @@ export default function SubscriptionDetailPage({
                 </div>
               )}
             </section>
+
+            {data.subscription.provider === "stripe" && (
+              <section>
+                <h2>Recent Stripe webhook events</h2>
+                <p className="quiet-state">
+                  Support diagnostics for "I paid but I'm still on Free" — did Stripe's webhook
+                  actually arrive for this Home.
+                </p>
+                {data.recent_webhook_events.length === 0 ? (
+                  <p className="quiet-state">No webhook events recorded yet for this Home.</p>
+                ) : (
+                  <div className="record-list">
+                    {data.recent_webhook_events.map((event) => (
+                      <article key={event.id}>
+                        <strong>{event.event_type}</strong>{" "}
+                        <span className={`state-label state-${event.outcome === "processed" ? "healthy" : "not-applicable"}`}>
+                          {event.outcome}
+                        </span>
+                        <time dateTime={event.received_at}>{readableDate(event.received_at)}</time>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
           </>
         )}
       </main>

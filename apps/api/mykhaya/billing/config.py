@@ -19,6 +19,14 @@ StripeSource = Literal["environment", "unconfigured"]
 class StripeConfig:
     source: StripeSource
     configured: bool
+    # Phase 7's deliberate go-live gate — separate from `configured`. Stripe
+    # being fully set up is necessary but not sufficient to accept a *new*
+    # paid signup; this is the one flag routers.billing.checkout_session
+    # checks before ever creating a Checkout Session. Existing Stripe-backed
+    # Homes, webhooks, renewals, cancellations, the Customer Portal, and
+    # reconciliation are never gated by this — only new acquisition is. See
+    # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
+    acquisition_enabled: bool = False
     secret_key: str | None = field(default=None, repr=False)
     webhook_secret: str | None = field(default=None, repr=False)
     publishable_key: str | None = None
@@ -35,6 +43,7 @@ def resolve_stripe_config(settings: Settings) -> StripeConfig:
     return StripeConfig(
         source="environment",
         configured=True,
+        acquisition_enabled=settings.stripe_billing_acquisition_enabled,
         secret_key=settings.stripe_secret_key.get_secret_value()
         if settings.stripe_secret_key
         else None,

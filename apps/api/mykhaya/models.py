@@ -1264,9 +1264,37 @@ class StripeWebhookEvent(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # "processed" | "ignored" (valid event, no handler / no material change) |
-    # "failed" (see error_message).
+    # "processed" | "ignored" (valid event, no handler / no material change).
+    # A processing failure never reaches this table at all — see
+    # StripeWebhookFailure below and the module docstring on
+    # mykhaya.billing.webhooks for why (a committed row here would
+    # permanently deduplicate away Stripe's retry of a failed attempt).
     outcome: Mapped[str] = mapped_column(String(20))
-    # Sanitised troubleshooting context only — never a raw Stripe exception
-    # string or any part of the webhook payload.
+    # Unused by any current writer — retained only so an already-deployed
+    # database column isn't dropped and recreated without cause. See
+    # StripeWebhookFailure.error_message for where failure detail actually
+    # lives (Phase 7).
     error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+class StripeWebhookFailure(Base):
+    """Append-only observability log for a webhook processing *failure*
+    (Phase 7) — deliberately separate from StripeWebhookEvent, which must
+    stay reserved for successful dedup so a failed attempt keeps being
+    retried by Stripe rather than being permanently swallowed (see
+    mykhaya.billing.webhooks's module docstring). This table is never
+    consulted for dedup/authorization — only for Platform Control Centre
+    diagnostics (docs/architecture/commercial-entitlements.md#webhook-observability).
+    The same stripe_event_id may appear here more than once if Stripe
+    retries and it fails again each time — that repetition is itself a
+    useful signal, not a bug."""
+
+    __tablename__ = "stripe_webhook_failures"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    stripe_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    event_type: Mapped[str | None] = mapped_column(String(100))
+    # Sanitised troubleshooting context only — never a raw Stripe payload.
+    error_message: Mapped[str] = mapped_column(String(500))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

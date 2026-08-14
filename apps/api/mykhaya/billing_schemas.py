@@ -29,6 +29,11 @@ class FamilyPricingResponse(BaseModel):
     # cheaper than 12 monthly periods — never a hard-coded assumption. See
     # mykhaya.billing.pricing.get_family_pricing.
     annual_is_best_value: bool
+    # Phase 7's billing kill switch. Pricing stays informational even when
+    # false — only Checkout creation is actually blocked (server-side, in
+    # checkout_session) — so the frontend can show real prices with a
+    # "temporarily paused" notice instead of hiding them.
+    acquisition_enabled: bool
 
 
 class CheckoutSessionRequest(StrictModel):

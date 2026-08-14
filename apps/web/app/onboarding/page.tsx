@@ -6,7 +6,12 @@ import { api, ApiError } from "@mykhaya/api-client";
 import { Logo } from "@/components/logo";
 import { FormStatus } from "@/components/form-status";
 import { intervalSuffix } from "@/components/billing-logic";
-import { isBestValueInterval, pricingOptionFor, savingLabelFor } from "@/components/family-pricing-logic";
+import {
+  canStartFamilyCheckout,
+  isBestValueInterval,
+  pricingOptionFor,
+  savingLabelFor,
+} from "@/components/family-pricing-logic";
 import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
 
@@ -152,9 +157,20 @@ export default function Onboarding() {
                 </>
               )}
               <FormStatus error={error} />
-              <button type="button" disabled={busy || pricingError || !selected} onClick={upgradeToFamily}>
-                {busy ? "One moment…" : "Upgrade to Family"}
-              </button>
+              {pricing && !canStartFamilyCheckout(pricing) ? (
+                <p className="notice" role="status">
+                  New Family sign-ups are temporarily paused. Continue on Free — you can upgrade
+                  later from Settings.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy || pricingError || !selected}
+                  onClick={upgradeToFamily}
+                >
+                  {busy ? "One moment…" : "Upgrade to Family"}
+                </button>
+              )}
             </article>
           </div>
         </section>

@@ -198,6 +198,32 @@ export type CalendarUsage = {
   over_limit: boolean;
 };
 
+export type WebhookEventSummary = {
+  id: string;
+  stripe_event_id: string;
+  event_type: string;
+  received_at: string;
+  outcome: string;
+};
+
+export type WebhookFailureSummary = {
+  id: string;
+  stripe_event_id: string | null;
+  event_type: string | null;
+  error_message: string;
+  occurred_at: string;
+};
+
+export type StripeWebhookHealth = {
+  configured: boolean;
+  state: string;
+  reason: string | null;
+  last_event_at: string | null;
+  recent_failure_count: number;
+  recent_events: WebhookEventSummary[];
+  recent_failures: WebhookFailureSummary[];
+};
+
 export type SubscriptionDetail = {
   id: string;
   name: string;
@@ -207,6 +233,7 @@ export type SubscriptionDetail = {
   subscription: HomeSubscription;
   entitlements: Entitlements;
   calendar_usage: CalendarUsage;
+  recent_webhook_events: WebhookEventSummary[];
   history: SubscriptionEvent[];
   stripe_price: StripePriceInfo | null;
   stripe_dashboard_customer_url: string | null;

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { FamilyPricing } from "@mykhaya/shared-types";
-import { isBestValueInterval, pricingOptionFor, savingLabelFor } from "./family-pricing-logic";
+import {
+  canStartFamilyCheckout,
+  isBestValueInterval,
+  pricingOptionFor,
+  savingLabelFor,
+} from "./family-pricing-logic";
 
 function pricing(overrides: Partial<FamilyPricing> = {}): FamilyPricing {
   return {
@@ -11,6 +16,7 @@ function pricing(overrides: Partial<FamilyPricing> = {}): FamilyPricing {
     ],
     annual_saving_formatted: "£8.88",
     annual_is_best_value: true,
+    acquisition_enabled: true,
     ...overrides,
   };
 }
@@ -51,5 +57,15 @@ describe("savingLabelFor", () => {
 
   it("is null when the backend has no saving figure to show", () => {
     expect(savingLabelFor(pricing({ annual_saving_formatted: null }), "year")).toBeNull();
+  });
+});
+
+describe("canStartFamilyCheckout", () => {
+  it("is true when the billing kill switch is enabled", () => {
+    expect(canStartFamilyCheckout(pricing({ acquisition_enabled: true }))).toBe(true);
+  });
+
+  it("is false when new acquisition is paused, even though pricing itself still loaded", () => {
+    expect(canStartFamilyCheckout(pricing({ acquisition_enabled: false }))).toBe(false);
   });
 });

@@ -25,3 +25,11 @@ export function savingLabelFor(pricing: FamilyPricing, interval: BillingInterval
   if (interval !== "year" || !pricing.annual_saving_formatted) return null;
   return `Save ${pricing.annual_saving_formatted} per year`;
 }
+
+/** Phase 7's billing kill switch (mykhaya.billing.config.StripeConfig's
+ * acquisition_enabled). Pricing stays visible either way — this only
+ * decides whether the "Choose Family" / "Upgrade to Family" action is
+ * offered or replaced with a paused notice. Never hides the price itself. */
+export function canStartFamilyCheckout(pricing: FamilyPricing): boolean {
+  return pricing.acquisition_enabled;
+}
