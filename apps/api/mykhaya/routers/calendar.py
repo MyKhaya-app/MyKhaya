@@ -57,7 +57,12 @@ from mykhaya.schemas import (
     HomeSummaryResponse,
 )
 
-CALENDAR_LIMIT_KEY = "calendar.max_calendars"
+# Commercial-plan cleanup: renamed from "calendar.max_calendars" — a
+# HomeCalendar is presented to customers as an "event category", not a
+# separate calendar (both Free and Family always include the Calendar
+# itself; the limit is on how many categories/groupings of events a Home
+# can have). See docs/architecture/commercial-entitlements.md#event-categories.
+CALENDAR_LIMIT_KEY = "calendar.max_categories"
 
 
 async def require_calendar_feature(
@@ -136,7 +141,7 @@ async def _ordered_calendars(db: AsyncSession, group_id: uuid.UUID) -> list[Home
 
 
 async def _calendar_access(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, bool]:
-    """True = normal (within the Home's current calendar.max_calendars
+    """True = normal (within the Home's current calendar.max_categories
     entitlement), False = read_only_due_to_plan. Computed fresh from current
     usage + entitlement on every call — never a persisted flag, so it can
     never drift when the Home's plan changes (upgrade/downgrade/re-upgrade

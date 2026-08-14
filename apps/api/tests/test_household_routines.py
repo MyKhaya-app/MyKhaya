@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -31,6 +32,7 @@ from mykhaya.models import (
     Role,
     RoutineReminderTiming,
     RoutineScope,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -110,6 +112,14 @@ async def create_home_with_notifications(client: AsyncClient) -> uuid.UUID:
         db.add(
             FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
         )
+        # Commercial plan cleanup: household routines require Family
+        # (routines.household.enabled) and this file's tests are about
+        # routine CRUD/scheduling mechanics, not commercial gating — see
+        # test_commercial_plan_cleanup.py for the Free-vs-Family enforcement
+        # coverage itself.
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 

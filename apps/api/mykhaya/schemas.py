@@ -397,10 +397,13 @@ class CalendarListResponse(BaseModel):
 
 
 class CalendarUsageResponse(BaseModel):
-    """How many calendars a Home currently has vs. its plan's
-    calendar.max_calendars — used by both the Platform Control Centre's
-    commercial-detail diagnostics and the household Plan & Billing page's
-    over-limit messaging, so the two never compute this independently."""
+    """Generic current-usage-vs-plan-limit shape (count / limit / over_limit)
+    — originally built for calendar.max_categories, now reused as-is for any
+    numeric-limited resource (see mykhaya.entitlements.member_usage,
+    personal_routine_usage) rather than declaring a near-identical class per
+    resource. Used by both the Platform Control Centre's commercial-detail
+    diagnostics and the household Plan & Billing page's over-limit
+    messaging, so every surface computes usage the same way."""
 
     count: int
     limit: int | None

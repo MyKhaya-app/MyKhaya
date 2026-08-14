@@ -233,6 +233,8 @@ export type SubscriptionDetail = {
   subscription: HomeSubscription;
   entitlements: Entitlements;
   calendar_usage: CalendarUsage;
+  member_usage: CalendarUsage;
+  personal_routines_total: number;
   recent_webhook_events: WebhookEventSummary[];
   history: SubscriptionEvent[];
   stripe_price: StripePriceInfo | null;

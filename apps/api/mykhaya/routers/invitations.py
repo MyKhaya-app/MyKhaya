@@ -4,13 +4,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.entitlements import require_within_limit
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
@@ -55,6 +56,27 @@ async def invite(
         )
     if body.relationship == HouseholdRelationship.review_required:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a relationship.")
+
+    # Race-safe Free-Home member limit — same per-Home advisory-lock pattern
+    # as routers.calendar's calendar-creation endpoint (see
+    # mykhaya.entitlements.require_within_limit's docstring). A Free Home's
+    # limit (1) is already met by its creator at Home-creation time, so
+    # there is no realistic race window today, but the lock keeps this
+    # endpoint correct if a future plan ever allows more than one but not
+    # unlimited members.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"members:{body.group_id}"}
+    )
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == body.group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(db, body.group_id, "home.max_members", member_count)
+
     active = await db.scalar(
         select(Invitation).where(
             Invitation.group_id == body.group_id,

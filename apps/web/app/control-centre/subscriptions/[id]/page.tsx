@@ -6,7 +6,7 @@ import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { readableDate } from "@/components/platform-format";
-import type { SubscriptionDetail } from "@/components/platform-types";
+import type { Entitlements, SubscriptionDetail } from "@/components/platform-types";
 import {
   complimentaryReasonPresets,
   eventTypeLabel,
@@ -27,18 +27,85 @@ import { CcNotice } from "@/components/control-centre/status-message";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 
-const ENTITLEMENT_LABELS: Record<string, string> = {
-  "lists.enabled": "Lists",
-  "chores.enabled": "Chores",
-  "notes.enabled": "Notes",
-  "wishlists.enabled": "Wishlists",
-};
+// The agreed Free-vs-Family capability matrix (see
+// docs/product/plans-and-pricing.md "Commercial plan cleanup"), rendered in
+// this fixed order regardless of key iteration order in the API response —
+// a curated, customer-understandable list, not a raw dump of
+// entitlements.booleans/limits. "Planned" marks a key that exists as
+// commercial data (mykhaya.entitlements.PLAN_DEFINITIONS) but has no
+// released module or live enforcement behind it yet — see "Deferred
+// enforcement" in docs/architecture/commercial-entitlements.md. Never
+// implies the capability is actually usable today.
+const PLANNED_KEYS = new Set([
+  "notes.enabled",
+  "events.shared.enabled",
+  "lists.enabled",
+  "chores.enabled",
+  "wishlists.enabled",
+  "members.external_invites.enabled",
+  "family_plans.enabled",
+  "support.priority.enabled",
+]);
 
-const LIMIT_LABELS: Record<string, string> = {
-  "calendar.max_calendars": "Calendar maximum",
-};
+type CapabilityRow = { key: string; label: string; value: string; planned: boolean };
 
-type EntitlementRow = { key: string; label: string; value: string; warning?: boolean };
+function peopleDisplay(maxMembers: number | null | undefined): string {
+  return maxMembers === 1 ? "1 person" : "Whole household";
+}
+
+function includedDisplay(enabled: boolean | undefined): string {
+  return enabled ? "Included" : "Not included";
+}
+
+function buildCapabilityRows(entitlements: Entitlements): CapabilityRow[] {
+  const { booleans, limits } = entitlements;
+  const maxMembers = limits["home.max_members"];
+  const maxCategories = limits["calendar.max_categories"];
+  const maxPersonalRoutines = limits["routines.personal.max_active"];
+  const boolRow = (key: string, label: string): CapabilityRow => ({
+    key,
+    label,
+    value: includedDisplay(booleans[key]),
+    planned: PLANNED_KEYS.has(key),
+  });
+  return [
+    { key: "people", label: "People", value: peopleDisplay(maxMembers), planned: false },
+    { key: "calendar", label: "Calendar", value: "Included", planned: false },
+    {
+      key: "calendar.max_categories",
+      label: "Event categories",
+      value: maxCategories === null || maxCategories === undefined ? "Unlimited" : String(maxCategories),
+      planned: false,
+    },
+    { key: "events", label: "Events", value: "Included", planned: false },
+    boolRow("notes.enabled", "Notes"),
+    {
+      key: "routines.personal.max_active",
+      label: "Personal routines",
+      value:
+        maxPersonalRoutines === null || maxPersonalRoutines === undefined
+          ? "Unlimited"
+          : `Up to ${maxPersonalRoutines}`,
+      planned: false,
+    },
+    boolRow("routines.household.enabled", "Household routines"),
+    boolRow("events.shared.enabled", "Shared family events"),
+    boolRow("lists.enabled", "Lists"),
+    boolRow("chores.enabled", "Chores"),
+    boolRow("wishlists.enabled", "Gift Wishlists"),
+    {
+      key: "invite_household_members",
+      label: "Invite household members",
+      value: includedDisplay(maxMembers === null || maxMembers === undefined || maxMembers > 1),
+      planned: false,
+    },
+    boolRow("members.external_invites.enabled", "Invite external members"),
+    boolRow("family_plans.enabled", "Family Plans"),
+    boolRow("support.priority.enabled", "Priority Support"),
+  ];
+}
+
+type UsageRow = { key: string; label: string; value: string; warning: boolean };
 
 export default function SubscriptionDetailPage({
   params,
@@ -130,32 +197,64 @@ export default function SubscriptionDetailPage({
     }
   });
 
-  const entitlementRows: EntitlementRow[] = data
+  const capabilityRows: CapabilityRow[] = data ? buildCapabilityRows(data.entitlements) : [];
+
+  const capabilityColumns: CcTableColumn<CapabilityRow>[] = [
+    { key: "capability", header: "Capability", render: (row) => row.label },
+    {
+      key: "value",
+      header: data ? planLabel(data.entitlements.plan) : "",
+      render: (row) => (
+        <>
+          {row.value}
+          {row.planned && (
+            <>
+              {" "}
+              <CcBadge tone="neutral">Planned</CcBadge>
+            </>
+          )}
+        </>
+      ),
+    },
+  ];
+
+  const usageRows: UsageRow[] = data
     ? [
-        ...Object.entries(data.entitlements.limits).map(([key, value]) => ({
-          key,
-          label: LIMIT_LABELS[key] ?? key,
-          value: value === null ? "Unlimited" : String(value),
-        })),
-        ...Object.entries(data.entitlements.booleans).map(([key, value]) => ({
-          key,
-          label: ENTITLEMENT_LABELS[key] ?? key,
-          value: value ? "Enabled" : "Not available",
-        })),
         {
-          key: "calendar_usage",
-          label: "Current calendars",
-          value: String(data.calendar_usage.count),
+          key: "members",
+          label: "Household members",
+          value:
+            data.member_usage.limit === null
+              ? `${data.member_usage.count} / Unlimited`
+              : `${data.member_usage.count} / ${data.member_usage.limit}`,
+          warning: data.member_usage.over_limit,
+        },
+        {
+          key: "event_categories",
+          label: "Event categories",
+          value:
+            data.calendar_usage.limit === null
+              ? `${data.calendar_usage.count} / Unlimited`
+              : `${data.calendar_usage.count} / ${data.calendar_usage.limit}`,
           warning: data.calendar_usage.over_limit,
+        },
+        {
+          key: "personal_routines",
+          label: "Personal routines in use",
+          // Aggregate across every member — the plan limit itself is per
+          // person (mykhaya.entitlements.personal_routine_usage), so this
+          // is informational only, never a strict ratio/warning.
+          value: `${data.personal_routines_total} total (Free limit is 3 per person)`,
+          warning: false,
         },
       ]
     : [];
 
-  const entitlementColumns: CcTableColumn<EntitlementRow>[] = [
-    { key: "entitlement", header: "Entitlement", render: (row) => row.label },
+  const usageColumns: CcTableColumn<UsageRow>[] = [
+    { key: "resource", header: "Resource", render: (row) => row.label },
     {
       key: "value",
-      header: "Value",
+      header: "Current usage",
       render: (row) => (
         <>
           {row.value}
@@ -335,12 +434,24 @@ export default function SubscriptionDetailPage({
                 </CcCard>
               </CcSection>
 
-              <CcSection title={`Entitlements (${planLabel(data.entitlements.plan)})`}>
+              <CcSection
+                title={`Plan capabilities (${planLabel(data.entitlements.plan)})`}
+                description="What this Home's current plan includes. 'Planned' marks a capability that's commercially defined but not yet a released, working feature."
+              >
                 <CcTable
-                  columns={entitlementColumns}
-                  rows={entitlementRows}
+                  columns={capabilityColumns}
+                  rows={capabilityRows}
                   rowKey={(row) => row.key}
-                  caption="Entitlements"
+                  caption="Plan capabilities"
+                />
+              </CcSection>
+
+              <CcSection title="Current usage">
+                <CcTable
+                  columns={usageColumns}
+                  rows={usageRows}
+                  rowKey={(row) => row.key}
+                  caption="Current usage"
                 />
               </CcSection>
 

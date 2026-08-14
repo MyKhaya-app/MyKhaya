@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -19,6 +20,7 @@ from mykhaya.models import (
     Membership,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -214,6 +216,14 @@ async def test_invitation_only_registration_mode_requires_valid_invitation(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Invitation Home"})
     assert group.status_code == 201
     home_id = group.json()["id"]
+    # home.max_members restricts Free to a single person — this test is
+    # about registration-mode validation, not commercial gating, so upgrade
+    # to Family to be able to invite at all.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     invitation = await unsafe(
         client,

@@ -20,24 +20,27 @@ export function calendarIsWritable(calendar: HomeCalendar): boolean {
   return calendar.commercial_access === "normal";
 }
 
-/** The banner shown next to a disabled/blocked "add calendar" action once a
+/** The banner shown next to a disabled/blocked "add category" action once a
  * Free Home is at its limit. Never mentions a price — Plan & Billing owns
- * pricing. */
+ * pricing. Customer-facing wording says "event category", never "calendar"
+ * — both Free and Family always include the Calendar itself; the limit is
+ * on how many categories a Home's calendar is split into. See
+ * docs/architecture/commercial-entitlements.md#event-categories. */
 export function atLimitMessage(usage: CalendarUsage): string | null {
   if (canCreateCalendar(usage)) return null;
   const count = usage.limit ?? usage.count;
-  return `You've reached the Free plan limit of ${count} calendar${count === 1 ? "" : "s"}.`;
+  return `You've reached the Free plan limit of ${count} event categor${count === 1 ? "y" : "ies"}.`;
 }
 
 /** The Settings -> Plan & Billing explanation for a Home that currently has
- * more calendars than its plan allows (almost always the result of a
- * downgrade — see docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture).
+ * more event categories than its plan allows (almost always the result of a
+ * downgrade — see docs/architecture/commercial-entitlements.md#event-categories).
  * Never shown for a Home within its limit. */
 export function overLimitExplanation(usage: CalendarUsage): string | null {
   if (!usage.over_limit) return null;
-  const planWord = usage.limit === 1 ? "calendar" : "calendars";
+  const planWord = usage.limit === 1 ? "category" : "categories";
   return (
-    `Your Home has ${usage.count} calendars. The Free plan includes ${usage.limit} ${planWord}. ` +
-    "Your calendars and events are safe. Upgrade to Family to restore full access to all calendars."
+    `Your Home has ${usage.count} event categories. The Free plan includes ${usage.limit} ${planWord}. ` +
+    "Your calendars and events are safe. Upgrade to Family to restore full access to all categories."
   );
 }

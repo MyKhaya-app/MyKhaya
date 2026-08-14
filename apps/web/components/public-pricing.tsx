@@ -76,10 +76,11 @@ export function PublicPricing() {
           <div className="feature-card-heading">
             <h3>Free</h3>
           </div>
-          <p className="muted">A simple way to get your Home organised.</p>
+          <p className="muted">A useful personal organiser for one person.</p>
           <ul className="plan-points">
-            <li>1 calendar</li>
-            <li>Core MyKhaya experience</li>
+            <li>Calendar, events and notes</li>
+            <li>1 event category</li>
+            <li>Up to 3 personal routines</li>
             <li>No payment details required</li>
           </ul>
           <p className="pricing-amount">
@@ -100,10 +101,11 @@ export function PublicPricing() {
             <h3>Family</h3>
             {bestValue && <span className="release-badge core">Best value</span>}
           </div>
-          <p className="muted">The complete MyKhaya experience for your whole household.</p>
+          <p className="muted">The complete household coordination experience.</p>
           <ul className="plan-points">
-            <li>Monthly or annual billing</li>
-            <li>Full Family-plan access</li>
+            <li>Unlimited event categories</li>
+            <li>Unlimited personal routines</li>
+            <li>Household routines</li>
             <li>For everyone in your Home</li>
           </ul>
 

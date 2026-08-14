@@ -4,11 +4,11 @@ MyKhaya's commercial model (see `docs/architecture/commercial-entitlements.md` f
 
 ## Free — £0
 
-The default for every new Home. One Home, one calendar. Fully and indefinitely useful — Free is not a time-limited trial and is not deliberately crippled to pressure an upgrade. A family that never upgrades should still find MyKhaya worth using every day.
+A genuinely useful **personal organiser for one person** — not a crippled trial. Every new Home starts here. Calendar, events, notes, and up to 3 personal routines are all fully included; the only limits are 1 person and 1 event category. Free is not a time-limited trial and is not deliberately crippled to pressure an upgrade — someone who never upgrades should still find MyKhaya worth using every day.
 
 ## Family — £3.99/month or £39/year
 
-Full household access: unlimited calendars per Home — a real, usable feature as of Phase 6 (see below) — and every module gated behind the `family` plan as those modules ship (Lists, Chores, Notes, Wish Lists are defined as Family-gated capabilities already, ready for when those modules exist). Billed per Home, not per person — everyone in the Home benefits once the Home is on Family, regardless of who pays. As of Phase 3 this is a real, configured Stripe Price (in Stripe test mode) rather than only a documented intention — see below. The *actual* amount charged always comes from Stripe at runtime (`mykhaya.billing.pricing`), never from this document or any code constant, so a future price change is a Stripe Dashboard + two environment variables change, not a code change.
+The **complete household coordination experience**. Everything in Free, plus: the whole household (not just one person), unlimited event categories, unlimited personal routines, household routines, and every module gated behind the `family` plan as those modules ship (Lists, Chores, Gift Wishlists are defined as Family-gated capabilities already, ready for when those modules exist — see "Commercial plan cleanup" below for the full agreed table and which of these are actually live today). Billed per Home, not per person — everyone in the Home benefits once the Home is on Family, regardless of who pays. As of Phase 3 this is a real, configured Stripe Price (in Stripe test mode) rather than only a documented intention — see below. The *actual* amount charged always comes from Stripe at runtime (`mykhaya.billing.pricing`), never from this document or any code constant, so a future price change is a Stripe Dashboard + two environment variables change, not a code change.
 
 ## Complimentary Family access
 
@@ -88,19 +88,19 @@ MyKhaya's public homepage now has a pricing section, and a new visitor gets to c
 
 ## Phase 6: what Free and Family actually mean for Calendar
 
-Free and Family calendars now genuinely behave differently — this was previously just a number on a pricing page.
+Free and Family calendars now genuinely behave differently — this was previously just a number on a pricing page. **Terminology note (corrected by the Commercial plan cleanup below): "calendar" here originally meant a grouping of events within your one always-included Calendar — the product term for that grouping is an "event category," and the section below uses that corrected wording.**
 
-**Free — one calendar, fully usable.** A Free Home has exactly one calendar and can use it completely normally: create, edit, delete events, invite members, set reminders — nothing about it feels limited or trial-like. Free was never meant to feel broken, and it doesn't.
+**Free — 1 event category, fully usable.** A Free Home has exactly one event category and can use it completely normally: create, edit, delete events, invite members, set reminders — nothing about it feels limited or trial-like. Free was never meant to feel broken, and it doesn't. The Calendar itself is never limited on Free — only how many categories you can group events into.
 
-**Family — add calendars as you need them.** A Family Home can create as many calendars as it wants — one for the household, one for work, one for the kids' activities, whatever suits. Every calendar behaves identically; there's no "main" calendar that's more capable than the others.
+**Family — add event categories as you need them.** A Family Home can create as many event categories as it wants — one for the household, one for work, one for the kids' activities, whatever suits. Every category behaves identically; there's no "main" category that's more capable than the others.
 
-**Trying to add a second calendar on Free** shows a plain explanation — "Multiple calendars are included with MyKhaya Family" — with a link to see the Family plan. No price is shown there; that lives on Plan & Billing, where it's always current.
+**Trying to add a second event category on Free** shows a plain explanation — "Multiple event categories are included with MyKhaya Family" — with a link to see the Family plan. No price is shown there; that lives on Plan & Billing, where it's always current.
 
-**If a Home downgrades from Family to Free while it has more than one calendar** (a subscription ending, complimentary access expiring), nothing is deleted. Every calendar and every event stays exactly where it was. One calendar — the household's original one — keeps working normally. The others become read-only: still fully visible, still showing all their events, but new events can't be added to them and existing ones can't be changed or removed individually, until either the Home upgrades back to Family or the calendars are removed outright (which the Home can always choose to do). Settings → Plan & Billing explains this plainly if it applies: "Your Home has 3 calendars. The Free plan includes 1. Your calendars and events are safe. Upgrade to Family to restore full access to all calendars."
+**If a Home downgrades from Family to Free while it has more than one event category** (a subscription ending, complimentary access expiring), nothing is deleted. Every category and every event stays exactly where it was. One category — the household's original one — keeps working normally. The others become read-only: still fully visible, still showing all their events, but new events can't be added to them and existing ones can't be changed or removed individually, until either the Home upgrades back to Family or the categories are removed outright (which the Home can always choose to do). Settings → Plan & Billing explains this plainly if it applies: "Your Home has 3 event categories. The Free plan includes 1. Your calendars and events are safe. Upgrade to Family to restore full access to all categories."
 
-**Upgrading back to Family restores everything immediately** — every previously-read-only calendar becomes fully usable again the moment the upgrade takes effect, automatically, with nothing to request or wait for.
+**Upgrading back to Family restores everything immediately** — every previously-read-only category becomes fully usable again the moment the upgrade takes effect, automatically, with nothing to request or wait for.
 
-**None of this ever affects signing in, viewing your Home, managing your account, or security settings** — a Home over its Free calendar limit is never locked out of anything except adding to or editing the calendars beyond its plan.
+**None of this ever affects signing in, viewing your Home, managing your account, or security settings** — a Home over its Free event-category limit is never locked out of anything except adding to or editing the categories beyond its plan.
 
 ## Phase 7: getting ready for real payment
 
@@ -118,3 +118,35 @@ Phase 7 doesn't change what Free or Family mean — it makes sure the system is 
 - **Terms of Service / Privacy Policy covering billing** — MyKhaya does not yet have a published Terms or Privacy page covering the recurring-subscription relationship. This needs proper review, not invented wording.
 
 Refunds and payment disputes are handled directly through Stripe by MyKhaya's support team — MyKhaya itself has no refund button; Stripe remains the single place money actually moves.
+
+## Commercial plan cleanup: the authoritative Free vs Family table
+
+A correction pass, done before further Stripe sandbox testing, to make sure Free and Family are described accurately everywhere: Free as a genuinely useful **personal organiser for one person**, Family as the **complete household coordination experience**. This is the authoritative table — every other mention of plan contents in this document (and in the app itself) should agree with it:
+
+| Capability | Free | Family |
+|---|---|---|
+| People | 1 person | Whole household |
+| Calendar | Included | Included |
+| Event categories | 1 category | Unlimited |
+| Events | Included | Included |
+| Notes | Included | Included |
+| Personal routines | Up to 3 | Unlimited |
+| Household routines | Not included | Included |
+| Shared family events | Not included | Included |
+| Lists | Not included | Included |
+| Chores | Not included | Included |
+| Gift Wishlists | Not included | Included |
+| Invite household members | Not included | Included |
+| Invite external members | Not included | Included |
+| Family Plans | Not included | Included |
+| Priority Support | Not included | Included |
+
+**Live and enforced today**: People, Calendar, Event categories, Events, Notes, Personal routines, Household routines — these are real, working limits and features a Home will actually experience right now, and are the only rows shown in the public pricing page and Settings → Plan & Billing comparison.
+
+**Defined but not yet released or enforced**: Shared family events, Lists, Chores, Gift Wishlists, Invite household members *(the underlying `home.max_members` limit is enforced; "external" invites beyond the household are not)*, Invite external members, Family Plans, and Priority Support. These describe MyKhaya's intended commercial shape and appear only in the Platform Control Centre's internal capability viewer (marked "Planned"), never on any customer-facing page, until the corresponding module or capability actually ships. Nothing here is a promise of a specific release date.
+
+**Notes is included on both plans** — it was previously, incorrectly, described as Family-only. It remains hidden from customers until the Notes module itself ships (an unrelated, separate piece of work); this table only fixes which plan it will belong to once it does.
+
+**People**: a Free Home is limited to its one creator; inviting a second person requires Family. No existing member of an already-larger Home is ever removed if that Home later moves to Free — only *adding* another person is blocked until it upgrades again.
+
+**Personal routines**: each person can keep up to 3 of their own personal routines on Free (unlimited on Family) — this is per person, not per Home, though on a Free Home (capped at one person) the two amount to the same thing in practice.

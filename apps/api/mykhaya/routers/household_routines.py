@@ -4,12 +4,13 @@ import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.entitlements import require_entitlement, require_within_limit
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
@@ -154,6 +155,32 @@ async def create_routine(
     await require_capability(home_id, Capability.household_manage_routines, auth, db)
     if body.end_date is not None and body.end_date < body.start_date:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be on or after start")
+
+    if body.scope == RoutineScope.household:
+        await require_entitlement(db, home_id, "routines.household.enabled")
+    else:
+        # Race-safe per-person limit — same pg_advisory_xact_lock pattern as
+        # routers.calendar's calendar-creation endpoint, keyed per person
+        # (not just per Home) since routines.personal.max_active is a
+        # per-person entitlement — see
+        # mykhaya.entitlements.personal_routine_usage.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"personal-routines:{home_id}:{auth.user.id}"},
+        )
+        current_count = (
+            await db.scalar(
+                select(func.count(HouseholdRoutine.id)).where(
+                    HouseholdRoutine.group_id == home_id,
+                    HouseholdRoutine.scope == RoutineScope.personal,
+                    HouseholdRoutine.owner_user_id == auth.user.id,
+                    HouseholdRoutine.enabled.is_(True),
+                )
+            )
+            or 0
+        )
+        await require_within_limit(db, home_id, "routines.personal.max_active", current_count)
+
     member_ids = await _validate_members(db, home_id, body.member_ids)
 
     # owner_user_id is never accepted from client input (RoutineCreate has no such
@@ -207,6 +234,40 @@ async def update_routine(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
     if routine.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This routine changed. Reload and try again.")
+
+    # Entitlement checks only apply to a genuine *transition* into a
+    # restricted state — never to saving an unrelated edit on a routine that
+    # already existed in that state (e.g. a downgraded Home's existing
+    # household routines stay editable, matching Calendar's downgrade
+    # philosophy: preserve/allow existing, block only new commitment).
+    was_household = routine.scope == RoutineScope.household
+    will_be_household = body.scope == RoutineScope.household
+    if will_be_household and not was_household:
+        await require_entitlement(db, home_id, "routines.household.enabled")
+
+    was_counted_personal = routine.scope == RoutineScope.personal and routine.enabled
+    will_be_counted_personal = body.scope == RoutineScope.personal and body.enabled
+    if will_be_counted_personal and not was_counted_personal:
+        effective_owner_id = (
+            routine.owner_user_id if routine.scope == RoutineScope.personal else auth.user.id
+        )
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"personal-routines:{home_id}:{effective_owner_id}"},
+        )
+        current_count = (
+            await db.scalar(
+                select(func.count(HouseholdRoutine.id)).where(
+                    HouseholdRoutine.group_id == home_id,
+                    HouseholdRoutine.scope == RoutineScope.personal,
+                    HouseholdRoutine.owner_user_id == effective_owner_id,
+                    HouseholdRoutine.enabled.is_(True),
+                    HouseholdRoutine.id != routine.id,
+                )
+            )
+            or 0
+        )
+        await require_within_limit(db, home_id, "routines.personal.max_active", current_count)
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
     await db.execute(

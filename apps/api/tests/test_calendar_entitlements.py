@@ -1,4 +1,4 @@
-"""Phase 6: calendar.max_calendars enforced against a real endpoint for the
+"""Phase 6: calendar.max_categories enforced against a real endpoint for the
 first time — see docs/architecture/commercial-entitlements.md
 "Calendar as proof of architecture". Covers: Free's one-calendar limit,
 Family's unlimited calendars, race-safe creation, safe downgrade (no data
@@ -173,9 +173,7 @@ async def test_free_home_has_exactly_one_calendar_and_it_is_fully_usable(
     assert body["items"][0]["is_primary"] is True
     assert body["items"][0]["commercial_access"] == "normal"
 
-    event = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body()
-    )
+    event = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body())
     assert event.status_code == 201
 
 
@@ -196,7 +194,7 @@ async def test_free_home_second_calendar_is_blocked_with_a_structured_error(
     assert response.status_code == 403
     detail = response.json()["detail"]
     assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "calendar.max_calendars"
+    assert detail["entitlement"] == "calendar.max_categories"
     assert detail["limit"] == 1
     # Never leaks provider/subscription internals.
     assert "stripe" not in str(detail).lower()
@@ -254,9 +252,7 @@ async def test_downgrade_preserves_all_calendars_and_restricts_the_excess_ones(
     assert len(rows_before) == 3
 
     # Subscription ends -> effective plan resolves Free.
-    await _set_subscription(
-        home_id, plan=SubscriptionPlan.free, provider=SubscriptionProvider.free
-    )
+    await _set_subscription(home_id, plan=SubscriptionPlan.free, provider=SubscriptionProvider.free)
 
     rows_after = await _calendar_rows(home_id)
     assert {row.id for row in rows_after} == {row.id for row in rows_before}, (
@@ -321,9 +317,7 @@ async def test_reupgrade_restores_full_access_to_preserved_calendars(
         await unsafe(client, "POST", f"/api/v1/homes/{home_id}/calendars", json={"name": "B"})
     ).json()
 
-    await _set_subscription(
-        home_id, plan=SubscriptionPlan.free, provider=SubscriptionProvider.free
-    )
+    await _set_subscription(home_id, plan=SubscriptionPlan.free, provider=SubscriptionProvider.free)
     still_blocked = await unsafe(
         client,
         "POST",
@@ -550,7 +544,7 @@ async def test_concurrent_calendar_creation_cannot_exceed_the_limit(
         PLAN_DEFINITIONS[SubscriptionPlan.free].__class__(
             plan=SubscriptionPlan.free,
             booleans=PLAN_DEFINITIONS[SubscriptionPlan.free].booleans,
-            limits={**original_limits, "calendar.max_calendars": 3},
+            limits={**original_limits, "calendar.max_categories": 3},
         ),
     )
 

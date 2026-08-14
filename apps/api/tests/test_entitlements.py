@@ -115,7 +115,7 @@ async def test_free_resolves_free_entitlements_and_calendar_limit_of_one() -> No
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.free
         assert await has_entitlement(db, home_id, "lists.enabled") is False
-        assert await get_limit(db, home_id, "calendar.max_calendars") == 1
+        assert await get_limit(db, home_id, "calendar.max_categories") == 1
 
 
 @pytest.mark.asyncio
@@ -133,7 +133,116 @@ async def test_family_resolves_family_entitlements_and_unlimited_calendars() -> 
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.family
         assert await has_entitlement(db, home_id, "lists.enabled") is True
-        assert await get_limit(db, home_id, "calendar.max_calendars") is None
+        assert await get_limit(db, home_id, "calendar.max_categories") is None
+
+
+# ---------------------------------------------------------------------------
+# Commercial plan cleanup: the full Free vs Family capability matrix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_free_resolves_the_full_agreed_capability_matrix() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    async with SessionFactory() as db:
+        assert await get_limit(db, home_id, "home.max_members") == 1
+        assert await get_limit(db, home_id, "calendar.max_categories") == 1
+        assert await get_limit(db, home_id, "routines.personal.max_active") == 3
+        # Included on both plans — not a Family differentiator.
+        assert await has_entitlement(db, home_id, "notes.enabled") is True
+        assert await has_entitlement(db, home_id, "routines.household.enabled") is False
+        assert await has_entitlement(db, home_id, "events.shared.enabled") is False
+        assert await has_entitlement(db, home_id, "lists.enabled") is False
+        assert await has_entitlement(db, home_id, "chores.enabled") is False
+        assert await has_entitlement(db, home_id, "wishlists.enabled") is False
+        assert await has_entitlement(db, home_id, "members.external_invites.enabled") is False
+        assert await has_entitlement(db, home_id, "family_plans.enabled") is False
+        assert await has_entitlement(db, home_id, "support.priority.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_family_resolves_the_full_agreed_capability_matrix() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
+    async with SessionFactory() as db:
+        assert await get_limit(db, home_id, "home.max_members") is None
+        assert await get_limit(db, home_id, "calendar.max_categories") is None
+        assert await get_limit(db, home_id, "routines.personal.max_active") is None
+        assert await has_entitlement(db, home_id, "notes.enabled") is True
+        assert await has_entitlement(db, home_id, "routines.household.enabled") is True
+        assert await has_entitlement(db, home_id, "events.shared.enabled") is True
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
+        assert await has_entitlement(db, home_id, "chores.enabled") is True
+        assert await has_entitlement(db, home_id, "wishlists.enabled") is True
+        assert await has_entitlement(db, home_id, "members.external_invites.enabled") is True
+        assert await has_entitlement(db, home_id, "family_plans.enabled") is True
+        assert await has_entitlement(db, home_id, "support.priority.enabled") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configure",
+    [
+        pytest.param(
+            lambda home_id: _set_subscription(
+                home_id,
+                plan=SubscriptionPlan.family,
+                provider=SubscriptionProvider.complimentary,
+                status=SubscriptionStatus.active,
+                complimentary_expires_at=None,
+            ),
+            id="complimentary",
+        ),
+        pytest.param(
+            lambda home_id: _set_subscription(
+                home_id,
+                plan=SubscriptionPlan.family,
+                provider=SubscriptionProvider.stripe,
+                status=SubscriptionStatus.active,
+            ),
+            id="stripe_active",
+        ),
+        pytest.param(
+            lambda home_id: _set_subscription(
+                home_id,
+                plan=SubscriptionPlan.family,
+                provider=SubscriptionProvider.stripe,
+                status=SubscriptionStatus.past_due,
+            ),
+            id="stripe_past_due",
+        ),
+        pytest.param(
+            lambda home_id: _set_subscription(
+                home_id,
+                plan=SubscriptionPlan.family,
+                provider=SubscriptionProvider.stripe,
+                status=SubscriptionStatus.cancel_at_period_end,
+            ),
+            id="stripe_cancel_at_period_end",
+        ),
+    ],
+)
+async def test_every_family_provider_variant_resolves_identical_capabilities(configure) -> None:
+    """Complimentary Family and every honoured Stripe status must resolve
+    the exact same Family capability set — provider is never a second,
+    reduced Family model."""
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    await configure(home_id)
+    async with SessionFactory() as db:
+        assert await get_limit(db, home_id, "home.max_members") is None
+        assert await get_limit(db, home_id, "calendar.max_categories") is None
+        assert await get_limit(db, home_id, "routines.personal.max_active") is None
+        assert await has_entitlement(db, home_id, "routines.household.enabled") is True
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +314,7 @@ async def test_numeric_limit_resolution() -> None:
         await ensure_home_subscription(db, home_id)
         await db.commit()
     async with SessionFactory() as db:
-        assert await get_limit(db, home_id, "calendar.max_calendars") == 1
+        assert await get_limit(db, home_id, "calendar.max_categories") == 1
 
 
 @pytest.mark.asyncio
@@ -216,7 +325,7 @@ async def test_unlimited_entitlement_resolution() -> None:
         await db.commit()
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
     async with SessionFactory() as db:
-        assert await get_limit(db, home_id, "calendar.max_calendars") is None
+        assert await get_limit(db, home_id, "calendar.max_categories") is None
 
 
 @pytest.mark.asyncio
@@ -240,9 +349,9 @@ async def test_require_within_limit_raises_at_the_limit_and_allows_below_it() ->
         await ensure_home_subscription(db, home_id)
         await db.commit()
     async with SessionFactory() as db:
-        await require_within_limit(db, home_id, "calendar.max_calendars", current_count=0)
+        await require_within_limit(db, home_id, "calendar.max_categories", current_count=0)
         with pytest.raises(Exception):  # noqa: B017
-            await require_within_limit(db, home_id, "calendar.max_calendars", current_count=1)
+            await require_within_limit(db, home_id, "calendar.max_categories", current_count=1)
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +370,7 @@ async def test_entitlement_resolution_is_independent_of_feature_flags() -> None:
         await db.commit()
     async with SessionFactory() as db:
         # Free Home, calendar feature flag state is irrelevant here — the
-        # commercial layer only knows about calendar.max_calendars, not
+        # commercial layer only knows about calendar.max_categories, not
         # about FeatureKey.calendar at all.
         assert await has_entitlement(db, home_id, "lists.enabled") is False
 

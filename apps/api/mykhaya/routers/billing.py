@@ -129,34 +129,78 @@ async def pricing(
     )
 
 
+def _people_display(max_members: int | None) -> str:
+    return "1 person" if max_members == 1 else "Whole household"
+
+
+def _categories_display(max_categories: int | None) -> str:
+    return f"{max_categories} category" if max_categories is not None else "Unlimited"
+
+
+def _personal_routines_display(max_active: int | None) -> str:
+    return f"Up to {max_active}" if max_active is not None else "Unlimited"
+
+
+def _included_display(enabled: bool) -> str:
+    return "Included" if enabled else "Not included"
+
+
 @router.get("/plans", response_model=PlanComparisonResponse)
 async def plan_comparison(
     request: Request, settings: Settings = Depends(get_settings)
 ) -> PlanComparisonResponse:
     """Free vs Family, sourced from mykhaya.entitlements.PLAN_DEFINITIONS —
-    never duplicated by hand in the frontend. Deliberately shows only
-    calendar.max_calendars: PLAN_DEFINITIONS also carries lists/chores/notes/
-    wishlists boolean entitlements, but none of those correspond to a
-    currently-released module (see mykhaya.module_registry — those modules
-    are all "hidden"), so surfacing them here would market features that
-    don't exist yet. Preserves Platform Feature Flag -> Commercial
-    Entitlement -> Home/User Permission: an entitlement being technically
-    "on" for Family is not enough to advertise it."""
+    never duplicated by hand in the frontend. Deliberately limited to
+    dimensions that are both (a) genuinely enforced today and (b) backed by
+    a released/reachable module — PLAN_DEFINITIONS carries several other
+    keys (lists/chores/wishlists/notes, shared family events, external
+    invites, Family Plans, priority support) that are either unreleased
+    modules or intentionally-unenforced commercial data pending a focused
+    follow-up (see "Deferred enforcement" in
+    docs/architecture/commercial-entitlements.md) — surfacing any of those
+    here would market something that doesn't actually exist/work yet.
+    Preserves Platform Feature Flag -> Commercial Entitlement -> Home/User
+    Permission: an entitlement being technically "on" for Family is not
+    enough to advertise it."""
     await enforce_rate_limit(request, settings, "billing-plans", 60, 60)
     free = plan_definition_for(SubscriptionPlan.free)
     family = plan_definition_for(SubscriptionPlan.family)
-    free_calendars = free.limits.get("calendar.max_calendars")
-    family_calendars = family.limits.get("calendar.max_calendars")
+    free_members = free.limits.get("home.max_members")
+    family_members = family.limits.get("home.max_members")
+    free_categories = free.limits.get("calendar.max_categories")
+    family_categories = family.limits.get("calendar.max_categories")
+    free_personal_routines = free.limits.get("routines.personal.max_active")
+    family_personal_routines = family.limits.get("routines.personal.max_active")
     return PlanComparisonResponse(
         rows=[
             PlanComparisonRow(
-                key="calendar.max_calendars",
-                label="Calendars",
-                free_display=f"{free_calendars} calendar"
-                if free_calendars is not None
-                else "Unlimited",
-                family_display="Unlimited" if family_calendars is None else str(family_calendars),
-            )
+                key="home.max_members",
+                label="People",
+                free_display=_people_display(free_members),
+                family_display=_people_display(family_members),
+            ),
+            PlanComparisonRow(
+                key="calendar.max_categories",
+                label="Event categories",
+                free_display=_categories_display(free_categories),
+                family_display=_categories_display(family_categories),
+            ),
+            PlanComparisonRow(
+                key="routines.personal.max_active",
+                label="Personal routines",
+                free_display=_personal_routines_display(free_personal_routines),
+                family_display=_personal_routines_display(family_personal_routines),
+            ),
+            PlanComparisonRow(
+                key="routines.household.enabled",
+                label="Household routines",
+                free_display=_included_display(
+                    free.booleans.get("routines.household.enabled", False)
+                ),
+                family_display=_included_display(
+                    family.booleans.get("routines.household.enabled", False)
+                ),
+            ),
         ]
     )
 

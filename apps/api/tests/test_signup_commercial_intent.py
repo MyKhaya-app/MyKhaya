@@ -207,6 +207,14 @@ async def test_invited_member_joins_existing_home_without_a_new_home_or_plan_cho
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Existing Home"})
     assert created.status_code == 201
     group_id = created.json()["id"]
+    # home.max_members restricts Free to a single person — this test is
+    # about invite/plan-choice separation, not commercial gating, so
+    # upgrade to Family to invite at all.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(group_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     invitee_email = f"invitee-{suffix}@example.com"
     invitation = await unsafe(

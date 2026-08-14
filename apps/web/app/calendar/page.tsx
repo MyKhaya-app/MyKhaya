@@ -568,8 +568,8 @@ export default function CalendarPage() {
               <Link
                 className="icon-button secondary"
                 href="/calendar/calendars"
-                aria-label="Manage calendars"
-                title="Calendars"
+                aria-label="Manage event categories"
+                title="Event categories"
               >
                 <Layers size={16} aria-hidden="true" />
               </Link>

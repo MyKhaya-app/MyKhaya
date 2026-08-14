@@ -511,3 +511,92 @@ Per Phase 7's explicit instruction not to build a casual remote toggle: `MYKHAYA
 ### Explicitly out of scope for Phase 7
 
 No live Stripe activation (this phase prepares for it; a human still flips the switch later, outside this engagement). No Apple/Google billing. No promotional codes. No MRR/ARR. No new commercial tiers. No refund button inside MyKhaya (Stripe Dashboard remains the operational workflow — see the operations runbook). No dispute/chargeback webhook processing (Stripe Dashboard remains authoritative; disputes are not automated). No bulk reconciliation UI (documented scripted procedure instead). No outbound webhook-failure alerting (documented as a future enhancement).
+
+## Commercial plan cleanup
+
+A focused correction pass over `PLAN_DEFINITIONS` and its presentation, done before further Stripe sandbox testing so the commercial model being tested matches the product actually intended for sale. Introduces no new commercial feature layer, no Stripe changes, and no new plan.
+
+### The agreed Free vs Family model
+
+| Capability | Free | Family |
+|---|---|---|
+| People | 1 person | Whole household |
+| Calendar | Included | Included |
+| Event categories | 1 category | Unlimited |
+| Events | Included | Included |
+| Notes | Included | Included |
+| Personal routines | Up to 3 | Unlimited |
+| Household routines | Not included | Included |
+| Shared family events | Not included | Included |
+| Lists | Not included | Included |
+| Chores | Not included | Included |
+| Gift Wishlists | Not included | Included |
+| Invite household members | Not included | Included |
+| Invite external members | Not included | Included |
+| Family Plans | Not included | Included |
+| Priority Support | Not included | Included |
+
+This is the authoritative representation — `PLAN_DEFINITIONS` in `mykhaya/entitlements.py`. Product framing: Free is a genuinely useful **single-person personal organiser**; Family is the full **household coordination experience**. See `docs/product/plans-and-pricing.md` for the customer-facing version.
+
+### No redundant duplicate state
+
+"People" and "Invite household members" are the *same* underlying rule (`home.max_members`), presented as two customer-facing rows rather than two entitlement keys — the Platform Control Centre and product docs derive both display strings from the one limit. "Calendar" and "Event categories" are similarly related but genuinely distinct: Calendar is always included on both plans (never entitlement-gated — there's nothing to restrict), while `calendar.max_categories` is the actual numeric differentiator. Neither pairing introduces a second, conflicting source of truth.
+
+### Event categories — renaming `calendar.max_calendars`
+
+The persisted `HomeCalendar` model (Phase 1/6) is used, in practice, as the user-facing grouping for events — an "event category" in product terms, not a second personal calendar. Advertising Free's limit as "1 calendar" was actively misleading (both plans always include the Calendar itself). The commercial entitlement key was renamed:
+
+```
+calendar.max_calendars  →  calendar.max_categories
+```
+
+every backend caller (`routers/calendar.py`'s `CALENDAR_LIMIT_KEY`, `routers/billing.py`'s plan comparison, `entitlements.calendar_usage`), every test (`test_calendar_entitlements.py`, `test_entitlements.py`, `test_platform_subscriptions_management.py`, `test_billing_plan_page.py`), and every customer/operator-facing label ("Calendar Maximum"/"Current Calendars" → "Event categories"/"Current usage → Event categories") was updated in the same change — a repo-wide search confirmed no stale reference to the old key remains, which matters because `get_limit`'s fail-safe (`unknown key → 0`) means a missed caller would have silently zeroed out Family's calendar entitlement rather than erroring loudly.
+
+**The underlying `HomeCalendar` database model, table name, API routes (`/homes/{id}/calendars`), and frontend route/component/file names (`/calendar/calendars`, `calendar-entitlement-logic.ts`) were deliberately left unchanged** — this is a commercial/domain terminology correction, not a data-model refactor. Only customer-facing copy (badges, error messages, page headings) and the internal commercial key were corrected. Blast radius was assessed as manageable (a small, well-understood set of callers, all already covered by Phase 6's test suite) before proceeding with the rename rather than keeping the misleading key.
+
+### People — `home.max_members`
+
+New numeric entitlement, `1` for Free / `None` (unlimited) for Family. Enforced at the one place a Home's member count actually grows: `POST /invitations` (`routers/invitations.py`) counts active `Membership` rows and calls `require_within_limit`, wrapped in the same per-Home `pg_advisory_xact_lock` pattern Calendar established in Phase 6 (kept for consistency and future-proofing even though today's two-tier limit values — 1 or unlimited — don't create a real race window, since a Free Home's creator already saturates the limit at Home-creation time). **Never evicts an existing member** — a Family Home that invited several people and then downgraded keeps every existing member; only a *new* invitation is refused once the Home is at or over its limit, mirroring Calendar's "preserve existing, block only new commitment" downgrade philosophy exactly.
+
+Direct member-add flows beyond invitations were inspected and none exist — invitations are the only way a Home's member count grows beyond its creator, so this is complete enforcement, not partial.
+
+### Personal and household routines
+
+The Personal/Household routine split (`RoutineScope.personal` / `RoutineScope.household`, a real, DB-constrained distinction — `ck_routine_scope_owner`) already existed in the codebase before this task; this task only added commercial gating on top of it:
+
+- `routines.personal.max_active` — `3` for Free, unlimited for Family. Enforced per-*person* (not per-Home) in `POST /homes/{id}/routines` and `PATCH .../routines/{id}` — counts a specific user's own enabled personal routines, under a per-`(home, user)` advisory lock. Disabling a routine (or deleting it) frees a slot immediately, since the count is always computed fresh from current `enabled=True` rows, never a persisted counter.
+- `routines.household.enabled` — `False` for Free, `True` for Family. Enforced only on a genuine *transition into* household scope (creating a new household routine, or converting an existing personal routine to household) — exactly like Calendar's downgrade rule, an already-existing household routine on a since-downgraded Free Home remains fully editable for ordinary edits (title, timing, etc.); only a *new* commitment into the restricted state is blocked.
+
+Both checks live in `routers/household_routines.py`, reusing `require_entitlement`/`require_within_limit` from `mykhaya.entitlements` — no bespoke enforcement logic was invented.
+
+### Notes — corrected to Included on both plans
+
+`notes.enabled` was previously (incorrectly) `False` for Free — the agreed model has Notes included on both plans, since it's a core-organiser feature, not a household-coordination one. Fixed to `True` for both. The underlying module remains unreleased (`mykhaya.module_registry` has no `notes` entry) — this is a correction to commercial *data*, not an early launch of the feature; nothing enforces or exposes it publicly until a real Notes module ships.
+
+### Deferred enforcement (defined as data, not yet live)
+
+Four keys exist in `PLAN_DEFINITIONS` as commercial data only, with **no** live enforcement, matching the precedent Phase 1 already established for `lists.enabled`/`chores.enabled`/`wishlists.enabled` (all still `hidden` modules, unchanged by this task):
+
+- **`events.shared.enabled`** — "Shared family events" is not enforced. Investigation found ordinary multi-member events (`CalendarEventMember`) already work unrestricted on Free today; naively gating "any event with more than one participant" would be a breaking behaviour change to existing Free functionality with no clear product definition of what "shared" actually restricts. **Follow-up required**: a focused design task must define precisely what this differentiates (e.g. inviting members outside the Home? a dedicated "family event" type?) before any enforcement is added.
+- **`members.external_invites.enabled`** — "Invite external members" has no backend capability behind it at all (`FeatureKey.external_sharing` is `hidden`, unimplemented scaffolding). Nothing to enforce yet.
+- **`family_plans.enabled`** — "Family Plans" has no corresponding domain concept anywhere in the codebase. Declared as data only, per the existing "ready for whenever this exists" pattern — no placeholder module, route, or UI was created for it.
+- **`support.priority.enabled`** — "Priority Support" is a support-policy property, not a software feature; MyKhaya has no support-ticket system to make this operationally real yet. Declared as data only.
+
+None of these four appear in `GET /billing/plans` (public/household pricing comparison) — only in the Platform Control Centre's internal capability viewer, marked with a "Planned" badge, so an operator can see the intended model without it ever being advertised to a customer as something that works today.
+
+### Platform Control Centre: plan capabilities vs current usage
+
+The subscription detail page's entitlement viewer was split into two tables:
+
+- **Plan capabilities** — every key from the agreed matrix above, in a fixed, curated order (never raw `Object.entries()` iteration over the API response), human-readable values ("Included"/"Not included"/"Unlimited"/"Up to 3"/"1 person"/"Whole household" — never `true`/`false`/`null`), with a "Planned" badge on the four deferred-enforcement keys.
+- **Current usage** — household members, event categories (both with an "Over plan limit" badge when applicable, from the shared `member_usage`/`calendar_usage` helpers), and total personal routines in use across the Home (informational only — the limit itself is per person, so this aggregate is never compared against the limit directly, avoiding a misleading precision it can't actually deliver).
+
+Both `member_usage` and `calendar_usage` reuse the same `CalendarUsageResponse` (`count`/`limit`/`over_limit`) shape rather than declaring a near-identical class per resource — the class name is a Phase 6 leftover, documented as intentionally generic rather than renamed, to avoid unnecessary churn across both backend and frontend call sites for a purely cosmetic improvement.
+
+### Public and household pricing comparison
+
+`GET /billing/plans` now returns four rows — People, Event categories, Personal routines, Household routines — all genuinely enforced and backed by reachable functionality today (routines are gated by the `notifications` feature flag, currently `beta`, not `hidden`, so they're real and working, unlike Lists/Chores/Wishlists). Still excludes every deferred-enforcement and unreleased-module key, unchanged from Phase 4/5's rule: an entitlement being technically defined is not sufficient reason to advertise it. No monetary figure was added anywhere — pricing continues to come exclusively from the Stripe-backed pricing service established in Phase 3.
+
+### Explicitly out of scope for this cleanup
+
+No Stripe billing/architecture change of any kind. No live billing enablement. No hard-coded prices. No enabling of Lists/Chores/Wishlists/Notes/Family Plans. No new commercial tier. No automatic deletion of over-limit data (a Home already exceeding the new Free member/routine limits keeps everything — only *new* growth is blocked, exactly like Calendar's existing downgrade model). No automatic member suspension or eviction. No enforcement of `events.shared.enabled` or `members.external_invites.enabled` (explicitly deferred, documented above as follow-up work).

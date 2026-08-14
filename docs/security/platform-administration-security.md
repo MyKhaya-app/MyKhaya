@@ -221,3 +221,23 @@ A targeted review attempted the following against the full public pricing → si
 - Regaining Family after a genuine Stripe cancellation by relying on stale browser/redirect state — impossible; the browser return is never authoritative, only the webhook-driven `HomeSubscription` row is (Phase 3/4, reaffirmed).
 
 No new bypass was found. No existing protection was weakened to make this review pass.
+
+## Commercial plan cleanup: new member and routine enforcement
+
+Full architecture in `docs/architecture/commercial-entitlements.md`'s "Commercial plan cleanup" section. Two new resource limits were added to the existing, already-reviewed entitlement pattern; no new enforcement mechanism was invented.
+
+### `home.max_members` — race-safe, non-destructive
+
+`POST /invitations` acquires the same per-Home `pg_advisory_xact_lock` pattern Calendar established in Phase 6 (`SELECT pg_advisory_xact_lock(hashtext(:key))`, keyed `f"members:{group_id}"`) before counting active `Membership` rows and calling `require_within_limit` — a Free Home cannot be pushed past 1 member by concurrent invitation requests. `test_concurrent_personal_routine_creation_cannot_exceed_the_limit` (routines) and the invitation-limit tests in `test_commercial_plan_cleanup.py` cover the numeric-limit path directly; no equivalent concurrency test was needed for members specifically, since Free's `limit=1` is already saturated by the Home's creator at Home-creation time — there is no unsaturated window to race. Downgrading a Family Home with several members never removes anyone — `test_downgrade_preserves_existing_members_but_blocks_new_invites` asserts existing members are untouched and only a *new* invitation is refused.
+
+### `routines.personal.max_active` and `routines.household.enabled`
+
+Both enforced in `routers/household_routines.py` using the same `require_entitlement`/`require_within_limit` calls as every other entitlement in the system — no bespoke check was written. The personal-routine limit is genuinely racy on Free (starts at count 0, unlike the members case), so `test_concurrent_personal_routine_creation_cannot_exceed_the_limit` drives real concurrent `asyncio.gather` requests against a live 0→3 limit window under the same per-`(home, user)` advisory-lock pattern, and asserts the final row count is exactly 3 — no over-admission under contention.
+
+### Downgrade safety: "transition-only" enforcement extended to routines
+
+`update_routine` only evaluates an entitlement/limit check when the edit is a genuine *new* commitment into a restricted state (`will_be_X and not was_X`) — never on an ordinary re-save of a routine that already exists in a now-over-plan state. This is the same non-destructive philosophy Phase 6 established for Calendar (existing over-limit resources stay fully usable; only new growth is blocked) applied to a second resource type, and is proven directly by `test_downgrade_preserves_existing_household_routine_and_allows_ordinary_edits`. As with Calendar, there is no code path anywhere in this change that deletes, disables, or evicts a resource or a person as a side effect of a plan change.
+
+### No new attack surface
+
+Both new checks reuse `commercial_restriction_error`/`CommercialRestrictionCode` (Phase 6) for their error shape — provider-neutral, no Stripe-specific branching, no information disclosure beyond the entitlement key and limit already exposed by every other entitlement error in the system. Neither check touches authentication, session handling, or existing capability/permission checks — a request is still refused as `404` before it ever reaches the entitlement check if the caller isn't a member of the Home in question, matching the existing IDOR-prevention convention audited in Phase 7 above.

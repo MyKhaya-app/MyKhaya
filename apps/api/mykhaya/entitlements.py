@@ -31,6 +31,9 @@ from mykhaya.models import (
     HomeCalendar,
     HomeSubscription,
     HomeSubscriptionEvent,
+    HouseholdRoutine,
+    Membership,
+    RoutineScope,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -64,35 +67,67 @@ class PlanDefinition:
     plan: SubscriptionPlan
     # Boolean feature entitlements, e.g. "lists.enabled".
     booleans: dict[str, bool]
-    # Numeric limits, e.g. "calendar.max_calendars". None means unlimited.
+    # Numeric limits, e.g. "calendar.max_categories". None means unlimited.
     limits: dict[str, int | None]
 
 
 # The one place plan capabilities are defined. Adding an entitlement later is
 # "add a key here" — never `if home.plan == "family"` scattered through
-# routers. Modules not yet ready for commercial enforcement (lists/chores/
-# notes/wishlists don't exist as real features yet) are declared here as data
-# only; nothing currently calls require_entitlement() against them.
+# routers.
+#
+# Enforced today (a real endpoint calls require_entitlement/require_within_limit
+# against it): calendar.max_categories, home.max_members,
+# routines.personal.max_active, routines.household.enabled.
+#
+# Declared as commercial data only — no live enforcement, because either the
+# underlying module doesn't exist/isn't released yet (lists/chores/wishlists/
+# notes — see mykhaya.module_registry), or the correct enforcement design is
+# a deliberate follow-up task rather than something to improvise here
+# (events.shared.enabled, members.external_invites.enabled,
+# family_plans.enabled, support.priority.enabled — see "Deferred enforcement"
+# in docs/architecture/commercial-entitlements.md):
 PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
     SubscriptionPlan.free: PlanDefinition(
         plan=SubscriptionPlan.free,
         booleans={
+            # Notes is included on both plans (it's a core-organiser feature,
+            # not a household-coordination one) — the module itself is still
+            # unreleased (mykhaya.module_registry), so this is data only
+            # until it ships.
+            "notes.enabled": True,
             "lists.enabled": False,
             "chores.enabled": False,
-            "notes.enabled": False,
             "wishlists.enabled": False,
+            "routines.household.enabled": False,
+            "events.shared.enabled": False,
+            "members.external_invites.enabled": False,
+            "family_plans.enabled": False,
+            "support.priority.enabled": False,
         },
-        limits={"calendar.max_calendars": 1},
+        limits={
+            "calendar.max_categories": 1,
+            "home.max_members": 1,
+            "routines.personal.max_active": 3,
+        },
     ),
     SubscriptionPlan.family: PlanDefinition(
         plan=SubscriptionPlan.family,
         booleans={
+            "notes.enabled": True,
             "lists.enabled": True,
             "chores.enabled": True,
-            "notes.enabled": True,
             "wishlists.enabled": True,
+            "routines.household.enabled": True,
+            "events.shared.enabled": True,
+            "members.external_invites.enabled": True,
+            "family_plans.enabled": True,
+            "support.priority.enabled": True,
         },
-        limits={"calendar.max_calendars": None},
+        limits={
+            "calendar.max_categories": None,
+            "home.max_members": None,
+            "routines.personal.max_active": None,
+        },
     ),
 }
 
@@ -376,18 +411,82 @@ async def require_within_limit(
 
 
 async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
-    """How many calendars a Home currently has vs. its plan's
-    calendar.max_calendars — shared by the Platform Control Centre's
-    commercial-detail diagnostics (routers.platform) and the household Plan
-    & Billing over-limit messaging (routers.billing), so the two can never
-    compute this differently."""
+    """How many event categories (HomeCalendar rows — see
+    docs/architecture/commercial-entitlements.md#event-categories for why
+    the customer-facing name differs from the internal model name) a Home
+    currently has vs. its plan's calendar.max_categories — shared by the
+    Platform Control Centre's commercial-detail diagnostics
+    (routers.platform) and the household Plan & Billing over-limit
+    messaging (routers.billing), so the two can never compute this
+    differently."""
     count = (
         await db.scalar(
             select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
         )
         or 0
     )
-    limit = await get_limit(db, home_id, "calendar.max_calendars")
+    limit = await get_limit(db, home_id, "calendar.max_categories")
     return CalendarUsageResponse(
         count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def member_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many active members a Home currently has vs. its plan's
+    home.max_members. Same shared-diagnostic role as calendar_usage — see
+    its docstring."""
+    count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == home_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "home.max_members")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def personal_routine_usage(
+    db: AsyncSession, home_id: uuid.UUID, user_id: uuid.UUID
+) -> CalendarUsageResponse:
+    """How many *enabled* personal routines a specific member currently owns
+    vs. the Home's plan limit for routines.personal.max_active — the limit
+    is per person (see mykhaya.routers.household_routines.create_routine),
+    not per Home, so this always takes a user_id rather than aggregating
+    across the whole Home."""
+    count = (
+        await db.scalar(
+            select(func.count(HouseholdRoutine.id)).where(
+                HouseholdRoutine.group_id == home_id,
+                HouseholdRoutine.scope == RoutineScope.personal,
+                HouseholdRoutine.owner_user_id == user_id,
+                HouseholdRoutine.enabled.is_(True),
+            )
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "routines.personal.max_active")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def personal_routines_total(db: AsyncSession, home_id: uuid.UUID) -> int:
+    """Total enabled personal routines across every member of a Home — an
+    informational aggregate for Platform Control Centre display only (the
+    limit itself is per person, so this number is never compared directly
+    against the limit — see personal_routine_usage for the per-person
+    check that's actually enforced)."""
+    return (
+        await db.scalar(
+            select(func.count(HouseholdRoutine.id)).where(
+                HouseholdRoutine.group_id == home_id,
+                HouseholdRoutine.scope == RoutineScope.personal,
+                HouseholdRoutine.enabled.is_(True),
+            )
+        )
+        or 0
     )

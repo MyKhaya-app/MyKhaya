@@ -35,7 +35,7 @@ export default function CalendarsPage() {
       setItems(result.items);
       setLimit(result.limit);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not load calendars.");
+      setError(cause instanceof ApiError ? cause.message : "Could not load event categories.");
     } finally {
       setLoaded(true);
     }
@@ -58,7 +58,7 @@ export default function CalendarsPage() {
       setNewName("");
       await load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not create that calendar.");
+      setError(cause instanceof ApiError ? cause.message : "Could not create that category.");
     } finally {
       setBusy(false);
     }
@@ -66,7 +66,9 @@ export default function CalendarsPage() {
 
   async function deleteCalendar(calendarId: string) {
     if (!activeHomeId || busy) return;
-    if (!window.confirm("Delete this calendar? Its events are deleted too — this can't be undone.")) {
+    if (
+      !window.confirm("Delete this category? Its events are deleted too — this can't be undone.")
+    ) {
       return;
     }
     setBusy(true);
@@ -75,7 +77,7 @@ export default function CalendarsPage() {
       await api.deleteCalendar(activeHomeId, calendarId, { confirmed: true });
       await load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not delete that calendar.");
+      setError(cause instanceof ApiError ? cause.message : "Could not delete that category.");
     } finally {
       setBusy(false);
     }
@@ -87,14 +89,14 @@ export default function CalendarsPage() {
         <div className="page-heading">
           <div>
             <p className="eyebrow">Calendar</p>
-            <h1>Calendars</h1>
+            <h1>Event categories</h1>
           </div>
         </div>
 
         <FormStatus error={error} />
 
         {!loaded || homeLoading ? (
-          <p role="status">Loading calendars…</p>
+          <p role="status">Loading event categories…</p>
         ) : (
           <>
             <div className="settings-list">
@@ -129,11 +131,11 @@ export default function CalendarsPage() {
             </div>
 
             <section className="card details">
-              <h2>Add a calendar</h2>
+              <h2>Add a category</h2>
               {canCreateCalendar(usage) ? (
                 <form onSubmit={createCalendar}>
                   <label>
-                    Calendar name
+                    Category name
                     <input
                       value={newName}
                       onChange={(event) => setNewName(event.target.value)}
@@ -141,11 +143,11 @@ export default function CalendarsPage() {
                       required
                     />
                   </label>
-                  <button disabled={busy}>{busy ? "Adding…" : "Add calendar"}</button>
+                  <button disabled={busy}>{busy ? "Adding…" : "Add category"}</button>
                 </form>
               ) : (
                 <>
-                  <p>Multiple calendars are included with MyKhaya Family.</p>
+                  <p>Multiple event categories are included with MyKhaya Family.</p>
                   {atLimit && <p className="quiet-state">{atLimit}</p>}
                   <Link className="button secondary" href="/settings/billing">
                     Upgrade to Family

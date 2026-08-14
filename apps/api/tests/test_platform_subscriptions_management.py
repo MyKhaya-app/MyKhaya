@@ -354,7 +354,7 @@ async def test_detail_resolves_free_entitlements_correctly(
     assert response.status_code == 200
     payload = response.json()
     assert payload["entitlements"]["plan"] == "free"
-    assert payload["entitlements"]["limits"]["calendar.max_calendars"] == 1
+    assert payload["entitlements"]["limits"]["calendar.max_categories"] == 1
     assert payload["entitlements"]["booleans"]["lists.enabled"] is False
     assert payload["subscription"]["effective_plan"] == "free"
     assert payload["member_count"] >= 1
@@ -373,7 +373,7 @@ async def test_detail_resolves_family_entitlements_correctly(
     response = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
     payload = response.json()
     assert payload["entitlements"]["plan"] == "family"
-    assert payload["entitlements"]["limits"]["calendar.max_calendars"] is None
+    assert payload["entitlements"]["limits"]["calendar.max_categories"] is None
     assert payload["entitlements"]["booleans"]["lists.enabled"] is True
     assert payload["subscription"]["complimentary_granted_by_display_name"] == "Test Operator"
 

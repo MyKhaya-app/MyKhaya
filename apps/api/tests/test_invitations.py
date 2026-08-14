@@ -17,9 +17,30 @@ from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import HouseholdRelationship, Membership, PermissionProfile, Role, User
+from mykhaya.models import (
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
+    SubscriptionPlan,
+    User,
+)
 from mykhaya.security import derived_token
+
+
+async def _upgrade_to_family(group_id: str) -> None:
+    """This file tests invitation list/resend/revoke/accept mechanics, not
+    commercial gating — home.max_members restricts Free to a single person,
+    so every Home here needs Family to be able to invite anyone at all. See
+    test_commercial_plan_cleanup.py for the Free-vs-Family enforcement
+    coverage itself."""
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(group_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
 
 @pytest.fixture
@@ -61,6 +82,7 @@ async def test_accepted_invitation_no_longer_appears_in_pending_list(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Hales Home"})
     assert group.status_code == 201
     group_id = group.json()["id"]
+    await _upgrade_to_family(group_id)
 
     invitation_id, raw = await _invite(client, group_id, invitee_email)
 
@@ -104,6 +126,7 @@ async def test_resend_and_revoke_are_rejected_for_an_accepted_invitation(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Second Home"})
     assert group.status_code == 201
     group_id = group.json()["id"]
+    await _upgrade_to_family(group_id)
 
     invitation_id, raw = await _invite(client, group_id, invitee_email)
 
@@ -136,6 +159,7 @@ async def test_revoked_invitation_still_excluded_from_default_pending_list(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Third Home"})
     assert group.status_code == 201
     group_id = group.json()["id"]
+    await _upgrade_to_family(group_id)
 
     invitation_id, _raw = await _invite(client, group_id, invitee_email)
 
@@ -163,6 +187,7 @@ async def test_pending_invite_suppressed_when_active_membership_already_exists(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Fourth Home"})
     assert group.status_code == 201
     group_id = group.json()["id"]
+    await _upgrade_to_family(group_id)
 
     invitation_id, _raw = await _invite(client, group_id, invitee_email)
 

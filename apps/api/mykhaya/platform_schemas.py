@@ -614,11 +614,16 @@ class SubscriptionDetailResponse(BaseModel):
     administrators: list[HomeAdministratorSummary]
     subscription: HomeSubscriptionResponse
     entitlements: EntitlementsResponse
-    # Diagnostic only: lets an operator see "this Home has more calendars
-    # than its plan allows" without a manual query. Never a control — there
-    # is no unlock action here, only the existing Complimentary grant or a
-    # real Stripe upgrade change what a Home is entitled to.
+    # Diagnostic only: lets an operator see "this Home has more event
+    # categories than its plan allows" without a manual query. Never a
+    # control — there is no unlock action here, only the existing
+    # Complimentary grant or a real Stripe upgrade change what a Home is
+    # entitled to.
     calendar_usage: CalendarUsageResponse
+    member_usage: CalendarUsageResponse
+    # Informational aggregate only (personal routines are a per-person
+    # limit) — see mykhaya.entitlements.personal_routines_total.
+    personal_routines_total: int
     # Support diagnostics for "I paid but I'm still on Free" (Phase 7) — the
     # most recent webhook deliveries MyKhaya recorded for this specific
     # Home, so an operator can see whether Stripe's webhook actually arrived

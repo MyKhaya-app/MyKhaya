@@ -29,6 +29,8 @@ from mykhaya.entitlements import (
     complimentary_expired_sql_filter,
     effective_plan_sql_filter,
     get_home_subscription,
+    member_usage,
+    personal_routines_total,
     plan_definition_for,
     record_subscription_event,
     resolve_effective_plan,
@@ -2951,6 +2953,8 @@ async def subscription_detail(
             plan=definition.plan, booleans=definition.booleans, limits=definition.limits
         ),
         calendar_usage=await calendar_usage(db, group_id),
+        member_usage=await member_usage(db, group_id),
+        personal_routines_total=await personal_routines_total(db, group_id),
         recent_webhook_events=[
             WebhookEventSummary(
                 id=row.id,

@@ -5,6 +5,7 @@ delivered by exactly one worker handler (notification.email), never a module cal
 mykhaya.mailer.send_email directly. See docs/architecture/notification-engine.md.
 """
 
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 
@@ -14,6 +15,7 @@ from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -23,6 +25,7 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
+    SubscriptionPlan,
     TokenPurpose,
     User,
     WorkerJobRecord,
@@ -227,6 +230,14 @@ async def test_invitation_email_sent_with_no_account(client: AsyncClient) -> Non
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Invite Test Home"})
     assert group.status_code == 201
     home_id = group.json()["id"]
+    # home.max_members restricts Free to a single person — upgrade to Family
+    # to invite at all; this test is about email delivery, not commercial
+    # gating.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     invitee_email = unique_email("invitee")
     invited = await unsafe(

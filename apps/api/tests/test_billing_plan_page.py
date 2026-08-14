@@ -137,22 +137,40 @@ async def test_plan_comparison_reflects_backend_plan_definitions(client: AsyncCl
     response = await client.get("/api/v1/billing/plans")
     assert response.status_code == 200
     rows = response.json()["rows"]
-    calendars = next(row for row in rows if row["key"] == "calendar.max_calendars")
-    assert calendars["free_display"] == "1 calendar"
-    assert calendars["family_display"] == "Unlimited"
+    categories = next(row for row in rows if row["key"] == "calendar.max_categories")
+    assert categories["free_display"] == "1 category"
+    assert categories["family_display"] == "Unlimited"
+
+    people = next(row for row in rows if row["key"] == "home.max_members")
+    assert people["free_display"] == "1 person"
+    assert people["family_display"] == "Whole household"
+
+    personal_routines = next(row for row in rows if row["key"] == "routines.personal.max_active")
+    assert personal_routines["free_display"] == "Up to 3"
+    assert personal_routines["family_display"] == "Unlimited"
+
+    household_routines = next(row for row in rows if row["key"] == "routines.household.enabled")
+    assert household_routines["free_display"] == "Not included"
+    assert household_routines["family_display"] == "Included"
 
 
 @pytest.mark.asyncio
 async def test_plan_comparison_never_advertises_unreleased_modules(client: AsyncClient) -> None:
-    """lists/chores/notes/wishlists exist in PLAN_DEFINITIONS but have no
-    released module behind them (mykhaya.module_registry) — they must never
-    be marketed as a Family benefit."""
+    """lists/chores/notes/wishlists — and the intentionally-unenforced
+    events.shared/members.external_invites/family_plans/support.priority
+    keys — exist in PLAN_DEFINITIONS but have no released module or live
+    enforcement behind them; they must never be marketed as a Family
+    benefit."""
     response = await client.get("/api/v1/billing/plans")
     keys = {row["key"] for row in response.json()["rows"]}
     assert "lists.enabled" not in keys
     assert "chores.enabled" not in keys
     assert "notes.enabled" not in keys
     assert "wishlists.enabled" not in keys
+    assert "events.shared.enabled" not in keys
+    assert "members.external_invites.enabled" not in keys
+    assert "family_plans.enabled" not in keys
+    assert "support.priority.enabled" not in keys
 
 
 # ---------------------------------------------------------------------------
