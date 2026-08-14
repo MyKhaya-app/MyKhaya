@@ -14,6 +14,7 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
@@ -44,26 +45,16 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
     window_end_utc = now_utc + LOOKAHEAD
 
-    pending = (
-        await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.topic == BIRTHDAY_TOPIC, OutboxEvent.processed_at.is_(None)
-            )
-        )
-    ).all()
-    already_queued = {
-        (row.payload["owner_type"], row.payload["owner_id"], row.payload["year"]) for row in pending
-    }
-
-    def maybe_enqueue(owner_type: str, owner_id: uuid.UUID, today_local: date) -> None:
+    async def maybe_enqueue(owner_type: str, owner_id: uuid.UUID, today_local: date) -> None:
         key = (owner_type, str(owner_id), today_local.year)
-        if key in already_queued:
-            return
-        db.add(
-            OutboxEvent(
+        await db.execute(
+            pg_insert(OutboxEvent)
+            .values(
                 topic=BIRTHDAY_TOPIC,
                 payload={"owner_type": key[0], "owner_id": key[1], "year": key[2]},
+                dedupe_key=f"birthday:{key[0]}:{key[1]}:{key[2]}",
             )
+            .on_conflict_do_nothing(index_elements=["dedupe_key"])
         )
 
     users = (
@@ -88,7 +79,7 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
         scheduled_local = datetime.combine(now_local.date(), SEND_TIME, tzinfo=tz)
         window_end_local = window_end_utc.astimezone(tz)
         if scheduled_local <= now_local < window_end_local:
-            maybe_enqueue("user", user.id, now_local.date())
+            await maybe_enqueue("user", user.id, now_local.date())
 
     children = (
         await db.scalars(
@@ -113,7 +104,7 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
         scheduled_local = datetime.combine(now_local.date(), SEND_TIME, tzinfo=tz)
         window_end_local = window_end_utc.astimezone(tz)
         if scheduled_local <= now_local < window_end_local:
-            maybe_enqueue("child", child.id, now_local.date())
+            await maybe_enqueue("child", child.id, now_local.date())
 
     await db.commit()
 

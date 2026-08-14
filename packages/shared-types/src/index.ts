@@ -402,6 +402,8 @@ export interface BillingStatus {
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;
   calendar_usage: CalendarUsage;
+  member_usage: CalendarUsage;
+  household_routines_enabled: boolean;
 }
 
 export interface PricingOption {

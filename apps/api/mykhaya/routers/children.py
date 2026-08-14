@@ -2,13 +2,14 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.entitlements import require_within_limit
 from mykhaya.household_permissions import (
     SAFE_CHILD_DEFAULTS,
     Capability,
@@ -163,6 +164,23 @@ async def create_child(
 ) -> ChildResponse:
     await require_capability(group_id, Capability.child_manage, auth, db)
     guardians = await _validate_guardians(db, group_id, body.guardian_membership_ids)
+    # A child gets a full Membership row like any other household member (see
+    # below), so this is a genuine member-add path and must respect
+    # home.max_members exactly like routers.invitations' invite()/accept() —
+    # same advisory-lock pattern, same lock key, so both paths serialise
+    # against each other for the same Home.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"members:{group_id}"}
+    )
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(db, group_id, "home.max_members", member_count)
     user_id = uuid.uuid4()
     user = User(
         id=user_id,

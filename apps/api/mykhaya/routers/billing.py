@@ -57,6 +57,8 @@ from mykhaya.entitlements import (
     effective_plan,
     ensure_home_subscription,
     get_home_subscription,
+    has_entitlement,
+    member_usage,
     plan_definition_for,
     resolve_effective_state,
 )
@@ -267,6 +269,8 @@ async def billing_status(
         # correctly hides it there too, not only at the API layer.
         stripe_billing_available=config.configured and config.acquisition_enabled,
         calendar_usage=await calendar_usage(db, group_id),
+        member_usage=await member_usage(db, group_id),
+        household_routines_enabled=await has_entitlement(db, group_id, "routines.household.enabled"),
     )
 
 

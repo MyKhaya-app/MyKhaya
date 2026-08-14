@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_occurrences import expand_occurrences
@@ -56,18 +57,6 @@ async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
     now = datetime.now(UTC)
     window_end = now + LOOKAHEAD
 
-    pending = (
-        await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.topic == REMINDER_TOPIC, OutboxEvent.processed_at.is_(None)
-            )
-        )
-    ).all()
-    already_queued = {
-        (row.payload["event_id"], row.payload["occurrence_start"], row.payload["reminder_minutes"])
-        for row in pending
-    }
-
     events = (
         await db.scalars(
             select(CalendarEvent).where(
@@ -88,17 +77,18 @@ async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
             if not (now <= due_at < window_end):
                 continue
             key = (str(event.id), occurrence_start.isoformat(), event.reminder_minutes)
-            if key in already_queued:
-                continue
-            db.add(
-                OutboxEvent(
+            await db.execute(
+                pg_insert(OutboxEvent)
+                .values(
                     topic=REMINDER_TOPIC,
                     payload={
                         "event_id": key[0],
                         "occurrence_start": key[1],
                         "reminder_minutes": key[2],
                     },
+                    dedupe_key=f"reminder:{key[0]}:{key[1]}:{key[2]}",
                 )
+                .on_conflict_do_nothing(index_elements=["dedupe_key"])
             )
     await db.commit()
 

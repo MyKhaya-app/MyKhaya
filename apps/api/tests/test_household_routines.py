@@ -477,6 +477,11 @@ async def test_scan_enqueues_same_day_reminder_and_is_idempotent(client: AsyncCl
         rows_after = await routine_rows(db, routine_id)
         assert len(rows_after) == len(rows)
         assert len(rows) <= 1
+        if rows:
+            rows[0].processed_at = datetime.now(UTC)
+            await db.commit()
+            await scan_due_routines(db, get_settings())
+            assert len(await routine_rows(db, routine_id)) == 1
 
 
 @pytest.mark.asyncio

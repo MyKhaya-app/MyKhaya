@@ -155,6 +155,10 @@ async def test_scan_enqueues_a_due_reminder_and_is_idempotent(client: AsyncClien
         await scan_due_reminders(db, get_settings())
         rows_after = await reminder_rows_for_event(db, event_id)
         assert len(rows_after) == 1
+        rows_after[0].processed_at = datetime.now(UTC)
+        await db.commit()
+        await scan_due_reminders(db, get_settings())
+        assert len(await reminder_rows_for_event(db, event_id)) == 1
 
 
 @pytest.mark.asyncio

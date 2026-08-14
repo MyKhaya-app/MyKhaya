@@ -369,6 +369,28 @@ async def accept(
         .where(Membership.group_id == row.group_id, Membership.user_id == auth.user.id)
         .with_for_update()
     )
+    # A Home's effective plan can change between an invitation being sent
+    # (checked against the limit at the time, in invite() above) and it
+    # being accepted — e.g. a Family Home invites several people then
+    # downgrades before they respond. Re-check here, under the same
+    # advisory lock invite() uses, so acceptance can never grow membership
+    # past the Home's current plan limit; a no-op re-accept of an already
+    # active membership is exempt since it doesn't increase the count.
+    will_increase_membership = existing is None or existing.removed_at is not None
+    if will_increase_membership:
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"members:{row.group_id}"},
+        )
+        member_count = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == row.group_id, Membership.removed_at.is_(None)
+                )
+            )
+            or 0
+        )
+        await require_within_limit(db, row.group_id, "home.max_members", member_count)
     if existing is None:
         db.add(
             Membership(

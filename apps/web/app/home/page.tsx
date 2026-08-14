@@ -14,6 +14,7 @@ import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { isStandalone } from "@/components/install-prompt";
+import { canAddMember } from "@/components/member-entitlement-logic";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -128,6 +129,7 @@ export default function HomePage() {
   const [calendarEnabled, setCalendarEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
+  const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
   const { activeHomeId, activeHome } = useActiveHome();
@@ -147,6 +149,10 @@ export default function HomePage() {
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setCanInviteMore(canAddMember(billing.member_usage)))
+      .catch(() => setCanInviteMore(false));
     Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
       .then(async ([matrix, memberRows]) => {
         setMembers(memberRows);
@@ -346,10 +352,12 @@ export default function HomePage() {
                 Add event
               </Link>
             )}
-            <Link className="quick-action" href="/people">
-              <UserPlus size={20} aria-hidden="true" />
-              Invite family
-            </Link>
+            {canInviteMore && (
+              <Link className="quick-action" href="/people">
+                <UserPlus size={20} aria-hidden="true" />
+                Invite family
+              </Link>
+            )}
           </div>
         </section>
 

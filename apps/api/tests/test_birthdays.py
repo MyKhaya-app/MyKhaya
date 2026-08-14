@@ -341,6 +341,11 @@ async def test_scan_is_idempotent_for_a_due_birthday(client: AsyncClient) -> Non
         rows_after = await birthday_rows("user", str(user_id))
         assert len(rows_after) == len(rows)
         assert len(rows) <= 1
+        if rows:
+            rows[0].processed_at = datetime.now(UTC)
+            await db.commit()
+            await scan_due_birthdays(db, get_settings())
+            assert len(await birthday_rows("user", str(user_id))) == 1
 
 
 @pytest.mark.asyncio

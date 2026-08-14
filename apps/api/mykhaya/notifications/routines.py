@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
@@ -55,18 +56,6 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
     window_end_utc = now_utc + LOOKAHEAD
 
-    pending = (
-        await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.topic == ROUTINE_TOPIC, OutboxEvent.processed_at.is_(None)
-            )
-        )
-    ).all()
-    already_queued = {
-        (row.payload["routine_id"], row.payload["occurrence_date"], row.payload["timing"])
-        for row in pending
-    }
-
     routines = (
         await db.scalars(select(HouseholdRoutine).where(HouseholdRoutine.enabled.is_(True)))
     ).all()
@@ -88,17 +77,18 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
             if not (scheduled_local <= now_local < window_end_local):
                 continue
             key = (str(routine.id), occurrence_date.isoformat(), timing)
-            if key in already_queued:
-                continue
-            db.add(
-                OutboxEvent(
+            await db.execute(
+                pg_insert(OutboxEvent)
+                .values(
                     topic=ROUTINE_TOPIC,
                     payload={
                         "routine_id": key[0],
                         "occurrence_date": key[1],
                         "timing": key[2],
                     },
+                    dedupe_key=f"routine:{key[0]}:{key[1]}:{key[2]}",
                 )
+                .on_conflict_do_nothing(index_elements=["dedupe_key"])
             )
     await db.commit()
 

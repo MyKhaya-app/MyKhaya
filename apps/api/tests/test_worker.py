@@ -11,10 +11,28 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from mykhaya.db import SessionFactory
 from mykhaya.models import OutboxEvent, WorkerJobRecord
 from mykhaya.worker import MAX_ATTEMPTS, _backoff_seconds, process
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_duplicate_scheduler_occurrence() -> None:
+    key = "synthetic-scheduler-occurrence:2026-08-13T23:59:00Z"
+    async with SessionFactory() as db:
+        first = OutboxEvent(topic="notification.test", payload={}, dedupe_key=key)
+        db.add(first)
+        await db.commit()
+        try:
+            db.add(OutboxEvent(topic="notification.test", payload={}, dedupe_key=key))
+            with pytest.raises(IntegrityError):
+                await db.commit()
+        finally:
+            await db.rollback()
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == first.id))
+            await db.commit()
 
 
 def test_backoff_grows_and_is_capped() -> None:

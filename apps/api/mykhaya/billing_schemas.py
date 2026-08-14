@@ -90,6 +90,15 @@ class BillingStatusResponse(BaseModel):
     # page can show "1 of 1" on a normal Free Home too; see "Household Plan
     # & Billing messaging" in docs/architecture/commercial-entitlements.md.
     calendar_usage: CalendarUsageResponse
+    # Same shape/purpose as calendar_usage, for household member count vs.
+    # home.max_members — lets People/Home surfaces gate "Add member"/"Invite
+    # family" without duplicating the entitlement lookup themselves.
+    member_usage: CalendarUsageResponse
+    # Whether this Home's plan currently includes household routines —
+    # exposed directly (rather than making the frontend infer it from
+    # effective_plan) so the Routines UI can disable the Household scope
+    # option before submission, not just handle the resulting 403.
+    household_routines_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):
