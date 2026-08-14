@@ -23,7 +23,7 @@ def upgrade() -> None:
         """
         WITH candidates AS (
             SELECT id,
-                   CASE topic
+                   COALESCE(CASE topic
                        WHEN 'notification.daily_briefing' THEN
                            'daily-briefing:' || (payload->>'user_id') || ':' || (payload->>'date')
                        WHEN 'notification.household_routine' THEN
@@ -36,9 +36,14 @@ def upgrade() -> None:
                            'birthday:' || (payload->>'owner_type') || ':' ||
                            (payload->>'owner_id') || ':' || (payload->>'year')
                        ELSE NULL
-                   END AS occurrence_key
+                   END, dedupe_key) AS occurrence_key
             FROM outbox_events
-            WHERE dedupe_key IS NULL
+            WHERE topic IN (
+                'notification.daily_briefing',
+                'notification.household_routine',
+                'notification.event_reminder',
+                'notification.birthday'
+            )
         ), ranked AS (
             SELECT id, occurrence_key,
                    row_number() OVER (
