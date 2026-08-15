@@ -1080,6 +1080,50 @@ class PlatformPushSettings(UuidTimeMixin, Base):
     )
 
 
+class StripeMode(StrEnum):
+    test = "test"
+    live = "live"
+
+
+class PlatformStripeSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed Stripe configuration. Single row; app logic enforces
+    that. Unlike PlatformSmtpSettings/PlatformPushSettings, this row — once
+    `enabled` — takes precedence *over* the MYKHAYA_STRIPE_* environment
+    variables, not the other way round; see mykhaya.billing.config.resolve_stripe_config
+    and docs/architecture/platform-control-centre.md#stripe-configuration-precedence.
+
+    Test and Live credentials are stored in entirely separate columns so switching
+    `mode` can never mix them, and each mode's secret/webhook columns are encrypted
+    independently (mykhaya.secrets_crypto.encrypt_stripe_secret) — this migration
+    only creates the ciphertext columns, it never writes a plaintext value.
+    """
+
+    __tablename__ = "platform_stripe_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    mode: Mapped[StripeMode] = mapped_column(
+        Enum(
+            StripeMode,
+            name="stripe_mode",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=StripeMode.test,
+        server_default=StripeMode.test.value,
+    )
+    test_publishable_key: Mapped[str | None] = mapped_column(String(200))
+    encrypted_test_secret_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_test_webhook_secret: Mapped[str | None] = mapped_column(Text)
+    test_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_publishable_key: Mapped[str | None] = mapped_column(String(200))
+    encrypted_live_secret_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_live_webhook_secret: Mapped[str | None] = mapped_column(Text)
+    live_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
 class NotificationTemplate(UuidTimeMixin, Base):
     """Override-only: trusted default copy lives in code
     (mykhaya/notifications/default_templates.py). A row here exists only once a Platform

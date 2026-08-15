@@ -74,3 +74,43 @@ currently registered device** — there is no way to re-derive a subscription's 
 against a new key pair, so every device must re-subscribe (a fresh `enableNotifications()`
 call on the household side). The admin UI requires explicit rotation confirmation and
 states this consequence before proceeding; it is not a silent operation.
+
+## Stripe configuration precedence
+
+Configured through the Platform Control Centre's Payments page
+(`GET/PUT /platform/payments/stripe...`). Structurally similar to SMTP/push
+(`PlatformStripeSettings`, single row, secrets encrypted at rest via
+`mykhaya.secrets_crypto`, never returned by any API response) but with two
+deliberate differences:
+
+1. **Test and Live credentials are stored in entirely separate columns**, since a
+   payment provider must never let one mode's key be mistaken for the other's — see
+   `mykhaya.models.PlatformStripeSettings` and `mykhaya.billing.config.StripeConfig`.
+2. **The stored row, once `enabled`, takes precedence *over* the
+   `MYKHAYA_STRIPE_*` environment variables** — the reverse of SMTP/push's
+   environment-wins precedence. Precedence order:
+   1. **Platform Admin stored configuration** (`platform_stripe_settings`, `enabled=true`)
+      — authoritative once enabled. If the active mode's stored configuration is
+      incomplete (a required field missing, or a key that doesn't match the selected
+      mode's `sk_test_`/`sk_live_` prefix), `resolve_stripe_config` returns
+      `configured=False` with an `incomplete_reason` and does **not** fall through to
+      the environment or to the other mode — mixing sources, or silently running Live
+      on Test credentials, is exactly what this precedence exists to prevent.
+   2. **Environment variables** (`MYKHAYA_STRIPE_BILLING_CONFIGURED=true`) — the
+      original bootstrap/fallback path, unchanged in behaviour, used only when the
+      stored row is absent or disabled. The Payments page shows these fields
+      read-only ("managed by deployment environment") and rejects writes with `409`.
+   3. **Unconfigured** — no stored row and no environment configuration. Billing
+      operations fail cleanly (`StripeNotConfiguredError` → `503`); MyKhaya still
+      boots and the Control Centre remains reachable to repair the configuration.
+
+Every consumer of Stripe configuration (checkout/portal session creation, webhook
+verification, price resolution, billing health, reconciliation, the readiness CLI)
+calls `mykhaya.billing.config.resolve_stripe_config(settings, db)` — there is exactly
+one resolution path; nothing reads `Settings.stripe_*` directly outside that function.
+A **Test Stripe connection** action (`POST /platform/payments/stripe/test-connection`)
+makes one safe, read-only Stripe API call (account retrieval) against the currently
+active mode — never a charge, customer, or subscription — and is rate-limited,
+audited, and requires recent re-authentication, matching the SMTP test-email action's
+security posture. Every settings change, secret replacement/removal, mode change, and
+connection test is written to the platform audit log without secret values.

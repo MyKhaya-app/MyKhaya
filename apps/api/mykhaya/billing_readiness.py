@@ -15,6 +15,10 @@ not "has the real Stripe sandbox lifecycle actually been verified" — the
 latter is a manual/documented procedure (see
 docs/operations/billing-production-readiness.md#real-sandbox-verification)
 that this script cannot substitute for.
+
+Reads the Platform Control Centre database (via its own short-lived session) since
+Stripe configuration may now be Platform-Admin-managed rather than environment-only —
+see mykhaya.billing.config.resolve_stripe_config.
 """
 
 from __future__ import annotations
@@ -25,10 +29,13 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
 from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError, resolve_stripe_config
 from mykhaya.billing.pricing import StripePriceConfigurationError, get_family_pricing
 from mykhaya.config import Settings, get_settings
+from mykhaya.db import SessionFactory
 
 
 class ReadinessLevel(StrEnum):
@@ -50,12 +57,21 @@ def _config_checks(settings: Settings, config: StripeConfig) -> list[ReadinessCh
             ReadinessCheck(
                 "Stripe configuration",
                 ReadinessLevel.blocker,
-                "MYKHAYA_STRIPE_BILLING_CONFIGURED is false — Free/Complimentary Homes only.",
+                config.incomplete_reason
+                or "Not configured — MYKHAYA_STRIPE_BILLING_CONFIGURED is false and no "
+                "Platform Control Centre Stripe configuration is enabled. "
+                "Free/Complimentary Homes only.",
             )
         ]
-    checks = [ReadinessCheck("Stripe configuration", ReadinessLevel.passed, "Configured.")]
+    checks = [
+        ReadinessCheck(
+            "Stripe configuration",
+            ReadinessLevel.passed,
+            f"Configured (source={config.source}).",
+        )
+    ]
 
-    is_live = bool(config.secret_key and config.secret_key.startswith("sk_live_"))
+    is_live = config.mode == "live"
     checks.append(
         ReadinessCheck(
             "Stripe mode",
@@ -65,8 +81,10 @@ def _config_checks(settings: Settings, config: StripeConfig) -> list[ReadinessCh
         )
     )
     # Settings.validate_stripe_configuration already refuses to start with a
-    # mismatched mode/environment — this line is defensive restating, not
-    # the actual enforcement point.
+    # mismatched mode/environment when Stripe is environment-managed; for a
+    # Platform Control Centre-managed row, resolve_stripe_config's own
+    # mode/key-prefix check plays the same role — this line is defensive
+    # restating, not the actual enforcement point either way.
     if is_live and settings.environment != "production":
         checks.append(
             ReadinessCheck(
@@ -128,7 +146,7 @@ def _config_checks(settings: Settings, config: StripeConfig) -> list[ReadinessCh
 
 
 async def _stripe_connectivity_check(
-    settings: Settings, config: StripeConfig, *, check_stripe: bool
+    settings: Settings, config: StripeConfig, db: AsyncSession, *, check_stripe: bool
 ) -> ReadinessCheck:
     if not check_stripe:
         return ReadinessCheck(
@@ -149,7 +167,7 @@ async def _stripe_connectivity_check(
             "command — verify live Prices manually in the Stripe Dashboard instead.",
         )
     try:
-        pricing = await get_family_pricing(settings, use_cache=False)
+        pricing = await get_family_pricing(settings, db, use_cache=False)
     except StripeNotConfiguredError:
         return ReadinessCheck(
             "Live Stripe connectivity", ReadinessLevel.blocker, "Stripe not configured."
@@ -174,9 +192,12 @@ async def _stripe_connectivity_check(
 
 async def run_readiness_checks(*, check_stripe: bool = False) -> list[ReadinessCheck]:
     settings = get_settings()
-    config = resolve_stripe_config(settings)
-    checks = _config_checks(settings, config)
-    checks.append(await _stripe_connectivity_check(settings, config, check_stripe=check_stripe))
+    async with SessionFactory() as db:
+        config = await resolve_stripe_config(settings, db)
+        checks = _config_checks(settings, config)
+        checks.append(
+            await _stripe_connectivity_check(settings, config, db, check_stripe=check_stripe)
+        )
     return checks
 
 

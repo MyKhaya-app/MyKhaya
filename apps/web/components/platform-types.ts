@@ -222,6 +222,59 @@ export type StripeWebhookHealth = {
   recent_failure_count: number;
   recent_events: WebhookEventSummary[];
   recent_failures: WebhookFailureSummary[];
+  mode: string;
+  source: string;
+  paid_homes: number;
+};
+
+// Platform Control Centre "Payments" area — mirrors
+// mykhaya.platform_schemas' StripeConfigurationResponse /
+// StripeModeSettingsResponse / StripeTestConnectionResponse. See
+// docs/architecture/platform-control-centre.md#stripe-configuration-precedence.
+
+export type StripeModeSettings = {
+  publishable_key: string | null;
+  secret_key_configured: boolean;
+  secret_key_last4: string | null;
+  webhook_secret_configured: boolean;
+  webhook_secret_last4: string | null;
+  family_monthly_price_id: string | null;
+  family_annual_price_id: string | null;
+};
+
+export type StripeWebhookSummary = {
+  configured: boolean;
+  state: string;
+  reason: string | null;
+  last_event_at: string | null;
+  recent_failure_count: number;
+  endpoint_url: string | null;
+};
+
+export type StripeConfiguration = {
+  configured: boolean;
+  enabled: boolean;
+  mode: "test" | "live";
+  source: "database" | "environment" | "unconfigured";
+  incomplete_reason: string | null;
+  editable: boolean;
+  updated_at: string | null;
+  test: StripeModeSettings;
+  live: StripeModeSettings;
+  webhook: StripeWebhookSummary;
+};
+
+export type StripeTestConnectionResult =
+  | "connected"
+  | "authentication_failed"
+  | "stripe_unavailable"
+  | "configuration_incomplete"
+  | "network_failure";
+
+export type StripeTestConnectionResponse = {
+  result: StripeTestConnectionResult;
+  detail: string;
+  mode: "test" | "live";
 };
 
 export type SubscriptionDetail = {

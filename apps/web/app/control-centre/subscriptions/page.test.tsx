@@ -70,6 +70,9 @@ const webhookHealth = {
   recent_failure_count: 0,
   recent_events: [],
   recent_failures: [],
+  mode: "test",
+  source: "unconfigured",
+  paid_homes: 0,
 };
 
 function mockRoutes() {

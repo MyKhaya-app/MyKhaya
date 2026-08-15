@@ -253,6 +253,25 @@ clean up after itself. Do not point `MYKHAYA_DATABASE_URL`/`MYKHAYA_REDIS_URL` f
 `test` service back at `postgres`/`redis`, and do not add application-code cleanup
 (e.g. deleting `@example.com` users) as a substitute for this isolation.
 
+**The test stack is also its own Compose project** — `compose.test.yml` declares
+`name: mykhaya-test`, distinct from `compose.yml`'s `name: mykhaya` (Compose uses the
+last `name:` seen across `-f` files, and `run-tests.sh` always passes `compose.test.yml`
+last). This means every test-stack container, network *and volume* lives in a
+Compose project entirely separate from the persistent dev stack's — an unscoped
+`docker compose -f compose.yml -f compose.test.yml down -v` can only ever remove
+`mykhaya-test` project resources (which hold nothing persistent: `postgres-test`/
+`redis-test` are tmpfs-backed) and is structurally incapable of reaching `mykhaya`'s
+`postgres_data`/`redis_data`/`caddy_data`/`avatar_data` volumes, regardless of which
+service names are (or aren't) passed on the command line. `run-tests.sh`'s own
+`cleanup()` additionally names exact services as a second, defence-in-depth layer, but
+the project-name separation is what makes this safe even without that. If a previous
+`make test`/`lint`/`typecheck`/`format` run was interrupted and left
+`postgres-test`/`redis-test` containers behind, run `make test-clean` — it is scoped to
+the `mykhaya-test` project the same way and cannot affect the dev stack. Never run a
+bare `docker compose down -v` (no `-f compose.test.yml`, or no service names) against
+the dev stack itself — that targets the real `mykhaya` project and its persistent
+volumes.
+
 The automated suite's own login/register volume grew with Phase 3's Stripe billing
 tests (each does a full register/verify/login/create-Home round trip); `MYKHAYA_RATE_LIMIT_LOGIN`/
 `MYKHAYA_RATE_LIMIT_REGISTER` for the `test` service were raised from 100/300 to

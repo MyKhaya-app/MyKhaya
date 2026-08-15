@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import stripe
 import structlog
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
@@ -17,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
-from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
+from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
@@ -71,11 +72,13 @@ from mykhaya.models import (
     PlatformSessionStatus,
     PlatformSetting,
     PlatformSmtpSettings,
+    PlatformStripeSettings,
     PublicIncident,
     PushSubscription,
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    StripeMode,
     StripeWebhookEvent,
     StripeWebhookFailure,
     SubscriptionPlan,
@@ -156,8 +159,15 @@ from mykhaya.platform_schemas import (
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
+    StripeConfigurationResponse,
+    StripeModeSettingsResponse,
     StripePriceInfo,
+    StripeSecretClearRequest,
+    StripeSettingsUpdate,
+    StripeTestConnectionRequest,
+    StripeTestConnectionResponse,
     StripeWebhookHealthResponse,
+    StripeWebhookSummary,
     SubscriptionDetailResponse,
     SubscriptionEventResponse,
     SubscriptionListItem,
@@ -192,7 +202,13 @@ from mykhaya.platform_security import (
     set_admin_cookies,
 )
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.secrets_crypto import SecretDecryptionError, decrypt_secret, encrypt_secret
+from mykhaya.secrets_crypto import (
+    SecretDecryptionError,
+    decrypt_secret,
+    decrypt_stripe_secret,
+    encrypt_secret,
+    encrypt_stripe_secret,
+)
 from mykhaya.security import (
     DUMMY_HASH,
     create_action_token,
@@ -2668,12 +2684,26 @@ async def subscriptions_webhook_health(
             select(StripeWebhookFailure).order_by(StripeWebhookFailure.occurred_at.desc()).limit(20)
         )
     ).all()
+    paid_homes = int(
+        await db.scalar(
+            select(func.count(HomeSubscription.id)).where(
+                HomeSubscription.provider == SubscriptionProvider.stripe,
+                HomeSubscription.status.in_(
+                    (SubscriptionStatus.active, SubscriptionStatus.cancel_at_period_end)
+                ),
+            )
+        )
+        or 0
+    )
     return StripeWebhookHealthResponse(
         configured=webhook.configured,
         state=webhook.state,
         reason=webhook.reason,
         last_event_at=webhook.last_event_at,
         recent_failure_count=webhook.recent_failure_count,
+        mode=webhook.mode,
+        source=webhook.source,
+        paid_homes=paid_homes,
         recent_events=[
             WebhookEventSummary(
                 id=row.id,
@@ -2913,7 +2943,7 @@ async def subscription_detail(
     dashboard_customer_url: str | None = None
     dashboard_subscription_url: str | None = None
     if subscription is not None and subscription.provider == SubscriptionProvider.stripe:
-        stripe_config = resolve_stripe_config(settings)
+        stripe_config = await resolve_stripe_config(settings, db)
         is_test_mode = bool(
             stripe_config.secret_key and stripe_config.secret_key.startswith("sk_test_")
         )
@@ -3008,7 +3038,7 @@ async def reconcile_stripe_subscription(
     require_recent_auth(context, settings)
     if await db.get(Group, group_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
-    stripe_config = resolve_stripe_config(settings)
+    stripe_config = await resolve_stripe_config(settings, db)
     if not stripe_config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
     subscription_before = await get_home_subscription(db, group_id)
@@ -4461,6 +4491,325 @@ async def send_test_push(
     )
     await db.commit()
     return {"results": results}
+
+
+async def _get_stripe_settings_row(db: AsyncSession) -> PlatformStripeSettings | None:
+    row: PlatformStripeSettings | None = await db.scalar(select(PlatformStripeSettings).limit(1))
+    return row
+
+
+def _last4(secret: str | None) -> str | None:
+    return secret[-4:] if secret and len(secret) >= 4 else None
+
+
+def _stripe_mode_settings_response(
+    row: PlatformStripeSettings | None, settings: Settings, mode: Literal["test", "live"]
+) -> StripeModeSettingsResponse:
+    """Metadata only — configured/last4, never the decrypted secret value.
+    See docs/security/platform-administration-security.md#stripe-settings."""
+    if row is None:
+        return StripeModeSettingsResponse(
+            publishable_key=None,
+            secret_key_configured=False,
+            secret_key_last4=None,
+            webhook_secret_configured=False,
+            webhook_secret_last4=None,
+            family_monthly_price_id=None,
+            family_annual_price_id=None,
+        )
+    if mode == "test":
+        publishable_key = row.test_publishable_key
+        encrypted_secret_key = row.encrypted_test_secret_key
+        encrypted_webhook_secret = row.encrypted_test_webhook_secret
+        monthly_price_id = row.test_family_monthly_price_id
+        annual_price_id = row.test_family_annual_price_id
+    else:
+        publishable_key = row.live_publishable_key
+        encrypted_secret_key = row.encrypted_live_secret_key
+        encrypted_webhook_secret = row.encrypted_live_webhook_secret
+        monthly_price_id = row.live_family_monthly_price_id
+        annual_price_id = row.live_family_annual_price_id
+
+    def _decrypted_last4(ciphertext: str | None) -> str | None:
+        if not ciphertext:
+            return None
+        try:
+            return _last4(decrypt_stripe_secret(settings, ciphertext))
+        except SecretDecryptionError:
+            return None
+
+    return StripeModeSettingsResponse(
+        publishable_key=publishable_key,
+        secret_key_configured=bool(encrypted_secret_key),
+        secret_key_last4=_decrypted_last4(encrypted_secret_key),
+        webhook_secret_configured=bool(encrypted_webhook_secret),
+        webhook_secret_last4=_decrypted_last4(encrypted_webhook_secret),
+        family_monthly_price_id=monthly_price_id,
+        family_annual_price_id=annual_price_id,
+    )
+
+
+@router.get("/payments/stripe", response_model=StripeConfigurationResponse)
+async def stripe_configuration(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeConfigurationResponse:
+    """Read-only Stripe configuration + webhook health for the Payments settings
+    page. Never returns a decrypted secret — only *_configured/*_last4 metadata,
+    the same convention as the Email/Push settings endpoints. See
+    docs/architecture/platform-control-centre.md#stripe-configuration-precedence."""
+    config = await resolve_stripe_config(settings, db)
+    row = await _get_stripe_settings_row(db)
+    webhook = (await current_platform_health(db, settings)).stripe_webhook
+    return StripeConfigurationResponse(
+        configured=config.configured,
+        enabled=row.enabled if row else False,
+        mode=row.mode.value if row else config.mode,
+        source=config.source,
+        incomplete_reason=config.incomplete_reason,
+        editable=not settings.stripe_billing_configured,
+        updated_at=row.updated_at if row else None,
+        test=_stripe_mode_settings_response(row, settings, "test"),
+        live=_stripe_mode_settings_response(row, settings, "live"),
+        webhook=StripeWebhookSummary(
+            configured=webhook.configured,
+            state=webhook.state,
+            reason=webhook.reason,
+            last_event_at=webhook.last_event_at,
+            recent_failure_count=webhook.recent_failure_count,
+            # No canonical public API base URL setting exists yet — this is the
+            # fixed route path an operator combines with their API hostname when
+            # registering the endpoint in the Stripe Dashboard.
+            endpoint_url="/billing/stripe/webhook",
+        ),
+    )
+
+
+@router.put("/payments/stripe/settings")
+async def update_stripe_settings(
+    body: StripeSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if settings.stripe_billing_configured:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Stripe is managed by the deployment environment and cannot be changed here.",
+        )
+    row = await _get_stripe_settings_row(db)
+    previous_mode = row.mode.value if row else None
+    was_enabled = row.enabled if row else False
+    if row is None:
+        row = PlatformStripeSettings()
+        db.add(row)
+
+    new_mode = StripeMode(body.mode)
+    if body.enabled:
+        active_publishable = (
+            body.test_publishable_key if body.mode == "test" else body.live_publishable_key
+        )
+        active_monthly = (
+            body.test_family_monthly_price_id
+            if body.mode == "test"
+            else body.live_family_monthly_price_id
+        )
+        active_annual = (
+            body.test_family_annual_price_id
+            if body.mode == "test"
+            else body.live_family_annual_price_id
+        )
+        active_secret_provided = bool(
+            body.test_secret_key if body.mode == "test" else body.live_secret_key
+        )
+        active_secret_exists = bool(
+            row.encrypted_test_secret_key if body.mode == "test" else row.encrypted_live_secret_key
+        )
+        active_webhook_provided = bool(
+            body.test_webhook_secret if body.mode == "test" else body.live_webhook_secret
+        )
+        active_webhook_exists = bool(
+            row.encrypted_test_webhook_secret
+            if body.mode == "test"
+            else row.encrypted_live_webhook_secret
+        )
+        missing = []
+        if not active_publishable:
+            missing.append("publishable key")
+        if not (active_secret_provided or active_secret_exists):
+            missing.append("secret key")
+        if not (active_webhook_provided or active_webhook_exists):
+            missing.append("webhook signing secret")
+        if not active_monthly:
+            missing.append("monthly Price ID")
+        if not active_annual:
+            missing.append("annual Price ID")
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{body.mode.capitalize()} mode is missing: {', '.join(missing)}.",
+            )
+
+    row.enabled = body.enabled
+    row.mode = new_mode
+    row.test_publishable_key = body.test_publishable_key
+    row.test_family_monthly_price_id = body.test_family_monthly_price_id
+    row.test_family_annual_price_id = body.test_family_annual_price_id
+    row.live_publishable_key = body.live_publishable_key
+    row.live_family_monthly_price_id = body.live_family_monthly_price_id
+    row.live_family_annual_price_id = body.live_family_annual_price_id
+    row.updated_by_administrator_id = context.administrator.id
+
+    secrets_replaced: list[str] = []
+    if body.test_secret_key:
+        row.encrypted_test_secret_key = encrypt_stripe_secret(settings, body.test_secret_key)
+        secrets_replaced.append("stripe.test_secret_key_replaced")
+    if body.test_webhook_secret:
+        row.encrypted_test_webhook_secret = encrypt_stripe_secret(
+            settings, body.test_webhook_secret
+        )
+        secrets_replaced.append("stripe.test_webhook_secret_replaced")
+    if body.live_secret_key:
+        row.encrypted_live_secret_key = encrypt_stripe_secret(settings, body.live_secret_key)
+        secrets_replaced.append("stripe.live_secret_key_replaced")
+    if body.live_webhook_secret:
+        row.encrypted_live_webhook_secret = encrypt_stripe_secret(
+            settings, body.live_webhook_secret
+        )
+        secrets_replaced.append("stripe.live_webhook_secret_replaced")
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.settings_changed",
+        "stripe_settings",
+        reason=body.reason,
+        new={
+            "enabled": row.enabled,
+            "mode": row.mode.value,
+            "test_publishable_key": row.test_publishable_key,
+            "test_family_monthly_price_id": row.test_family_monthly_price_id,
+            "test_family_annual_price_id": row.test_family_annual_price_id,
+            "live_publishable_key": row.live_publishable_key,
+            "live_family_monthly_price_id": row.live_family_monthly_price_id,
+            "live_family_annual_price_id": row.live_family_annual_price_id,
+        },
+    )
+    if previous_mode is not None and previous_mode != row.mode.value:
+        platform_audit(
+            db,
+            request,
+            context,
+            "stripe.mode_changed",
+            "stripe_settings",
+            reason=body.reason,
+            previous={"mode": previous_mode},
+            new={"mode": row.mode.value},
+        )
+    for action in secrets_replaced:
+        # Action only — never the secret value itself, per
+        # docs/security/logging-and-monitoring.md.
+        platform_audit(db, request, context, action, "stripe_settings", reason=body.reason)
+    if was_enabled != row.enabled:
+        platform_audit(
+            db,
+            request,
+            context,
+            "stripe.enabled" if row.enabled else "stripe.disabled",
+            "stripe_settings",
+            reason=body.reason,
+        )
+
+    await db.commit()
+    return {"message": "Stripe settings saved."}
+
+
+@router.post("/payments/stripe/settings/clear-secret")
+async def clear_stripe_secret(
+    body: StripeSecretClearRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    row = await _get_stripe_settings_row(db)
+    column = {
+        "test_secret_key": "encrypted_test_secret_key",
+        "test_webhook_secret": "encrypted_test_webhook_secret",
+        "live_secret_key": "encrypted_live_secret_key",
+        "live_webhook_secret": "encrypted_live_webhook_secret",
+    }[body.field]
+    if row is None or not getattr(row, column):
+        raise HTTPException(status.HTTP_409_CONFLICT, "No stored value to clear.")
+    setattr(row, column, None)
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db, request, context, f"stripe.{body.field}_removed", "stripe_settings", reason=body.reason
+    )
+    await db.commit()
+    return {"message": "Stored Stripe credential cleared."}
+
+
+@router.post("/payments/stripe/test-connection", response_model=StripeTestConnectionResponse)
+async def test_stripe_connection(
+    body: StripeTestConnectionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeTestConnectionResponse:
+    """A single safe, read-only Stripe API call (account retrieval) against the
+    currently effective configuration — never creates a charge, customer or
+    subscription. See docs/security/platform-administration-security.md#stripe-settings."""
+    require_recent_auth(context, settings)
+    await enforce_rate_limit(request, settings, "platform-stripe-test-connection", 3, 300)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured or not config.secret_key:
+        result, detail = (
+            "configuration_incomplete",
+            config.incomplete_reason or "Stripe is not configured.",
+        )
+    else:
+        try:
+            await call_stripe(lambda: stripe.Account.retrieve(api_key=config.secret_key))
+        except StripeUnavailableError as exc:
+            # call_stripe already classifies stripe.AuthenticationError as
+            # StripeUnavailableError (a configuration problem, not a per-request
+            # one) — re-derive the more specific "authentication_failed" result
+            # here so the admin gets a useful diagnostic rather than a generic
+            # "unavailable", without ever inspecting/logging exc's raw detail.
+            is_auth_failure = isinstance(exc.__cause__, stripe.AuthenticationError)
+            result = "authentication_failed" if is_auth_failure else "stripe_unavailable"
+            detail = (
+                "Stripe rejected the secret key for this mode."
+                if is_auth_failure
+                else "Stripe could not be reached. Try again shortly."
+            )
+        except StripeRequestError:
+            result, detail = "stripe_unavailable", "Stripe returned an unexpected error."
+        except Exception:
+            result, detail = "network_failure", "A network error prevented reaching Stripe."
+        else:
+            result, detail = "connected", "Stripe connection succeeded."
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.connection_test",
+        "stripe_settings",
+        reason=body.reason,
+        new={"result": result, "mode": config.mode},
+        outcome="succeeded" if result == "connected" else "failure",
+        failure_category=result if result != "connected" else None,
+    )
+    await db.commit()
+    return StripeTestConnectionResponse(result=result, detail=detail, mode=config.mode)
 
 
 def _template_response(

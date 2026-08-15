@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -25,6 +25,14 @@ migrate:
 test:
 	pnpm test
 	sh infrastructure/scripts/run-tests.sh
+# Tears down the disposable test stack only (compose.test.yml's own Compose
+# project, "mykhaya-test") — never the persistent dev stack. Safe to run any
+# time, e.g. if a previous `make test`/`make lint` was interrupted and left
+# postgres-test/redis-test containers behind. Structurally cannot touch the
+# "mykhaya" project's postgres_data/redis_data/caddy_data/avatar_data volumes,
+# since they live in a different Compose project entirely.
+test-clean:
+	docker compose -f compose.yml -f compose.test.yml --profile tools down -v --remove-orphans
 lint:
 	pnpm lint
 	sh infrastructure/scripts/run-tests.sh ruff check mykhaya tests

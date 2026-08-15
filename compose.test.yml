@@ -1,10 +1,21 @@
-name: mykhaya
+name: mykhaya-test
 # Isolated, disposable test stack: dedicated postgres-test/redis-test services on
 # tmpfs, never the persistent postgres/redis used by api/worker/scheduler. Always
 # run through infrastructure/scripts/run-tests.sh (or `make test`/`lint`/`typecheck`/
 # `format`), which starts these with --no-deps so the base `migrate`/`redis`
 # dependencies declared on the `test` service in compose.yml are never triggered.
 # See docs/operations/dev-deployment.md#automated-tests-use-an-isolated-database.
+#
+# `name: mykhaya-test` (distinct from compose.yml's `name: mykhaya`) is deliberate,
+# not cosmetic: it puts every test-stack container, network and volume into its own
+# Compose project, entirely separate from the persistent development stack's. Since
+# `-f compose.test.yml` is always layered on top of `-f compose.yml` and Compose uses
+# the last `name:` seen, the merged project is "mykhaya-test" — so even an
+# unscoped `docker compose ... down -v` run against this file pair can only ever
+# remove test-project resources (postgres-test/redis-test's tmpfs mounts hold nothing
+# persistent anyway) and structurally cannot reach `mykhaya`'s postgres_data/
+# redis_data/caddy_data/avatar_data volumes, regardless of which services are named
+# on the command line. See `make test-clean`.
 services:
   postgres-test:
     image: postgres:17.5-alpine3.22

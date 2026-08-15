@@ -16,6 +16,7 @@ from mykhaya.billing.pricing import (
     get_family_pricing,
 )
 from mykhaya.config import Settings
+from mykhaya.db import SessionFactory
 from mykhaya.models import BillingInterval
 
 SECRET_KEY = "a" * 40
@@ -84,8 +85,9 @@ async def test_unconfigured_stripe_raises() -> None:
         stripe_family_monthly_price_id=None,
         stripe_family_annual_price_id=None,
     )
-    with pytest.raises(StripeNotConfiguredError):
-        await get_family_pricing(settings)
+    async with SessionFactory() as db:
+        with pytest.raises(StripeNotConfiguredError):
+            await get_family_pricing(settings, db)
 
 
 @pytest.mark.asyncio
@@ -99,7 +101,8 @@ async def test_resolves_monthly_and_annual_pricing_from_stripe(
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
     settings = _settings()
-    result = await get_family_pricing(settings)
+    async with SessionFactory() as db:
+        result = await get_family_pricing(settings, db)
     monthly, annual = result.options
     assert monthly.interval == BillingInterval.month
     assert monthly.unit_amount == 399
@@ -121,7 +124,8 @@ async def test_amount_is_never_hard_coded_it_reflects_whatever_stripe_returns(
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
     settings = _settings()
-    result = await get_family_pricing(settings)
+    async with SessionFactory() as db:
+        result = await get_family_pricing(settings, db)
     assert all(option.unit_amount == 999 for option in result.options)
     assert all(option.formatted_amount == "£9.99" for option in result.options)
 
@@ -132,8 +136,9 @@ async def test_inactive_price_raises_configuration_error(monkeypatch: pytest.Mon
         return _fake_price(price_id, active=False)
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
-    with pytest.raises(StripePriceConfigurationError, match="not active"):
-        await get_family_pricing(_settings())
+    async with SessionFactory() as db:
+        with pytest.raises(StripePriceConfigurationError, match="not active"):
+            await get_family_pricing(_settings(), db)
 
 
 @pytest.mark.asyncio
@@ -144,8 +149,9 @@ async def test_non_recurring_price_raises_configuration_error(
         return _fake_price(price_id, interval=None)
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
-    with pytest.raises(StripePriceConfigurationError, match="not recurring"):
-        await get_family_pricing(_settings())
+    async with SessionFactory() as db:
+        with pytest.raises(StripePriceConfigurationError, match="not recurring"):
+            await get_family_pricing(_settings(), db)
 
 
 @pytest.mark.asyncio
@@ -155,8 +161,9 @@ async def test_wrong_interval_raises_configuration_error(monkeypatch: pytest.Mon
         return _fake_price(price_id, interval="month")
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
-    with pytest.raises(StripePriceConfigurationError, match="expected 'year'"):
-        await get_family_pricing(_settings())
+    async with SessionFactory() as db:
+        with pytest.raises(StripePriceConfigurationError, match="expected 'year'"):
+            await get_family_pricing(_settings(), db)
 
 
 @pytest.mark.asyncio
@@ -167,8 +174,9 @@ async def test_missing_unit_amount_raises_configuration_error(
         return _fake_price(price_id, unit_amount=None)
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
-    with pytest.raises(StripePriceConfigurationError, match="no fixed unit amount"):
-        await get_family_pricing(_settings())
+    async with SessionFactory() as db:
+        with pytest.raises(StripePriceConfigurationError, match="no fixed unit amount"):
+            await get_family_pricing(_settings(), db)
 
 
 @pytest.mark.asyncio
@@ -184,8 +192,9 @@ async def test_result_is_cached_and_does_not_call_stripe_again(
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
     settings = _settings()
-    await get_family_pricing(settings)
-    await get_family_pricing(settings)
+    async with SessionFactory() as db:
+        await get_family_pricing(settings, db)
+        await get_family_pricing(settings, db)
     assert calls["count"] == 2  # one per price, not four
 
 
@@ -200,8 +209,9 @@ async def test_use_cache_false_bypasses_the_cache(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(stripe.Price, "retrieve", fake_retrieve)
     settings = _settings()
-    await get_family_pricing(settings)
-    await get_family_pricing(settings, use_cache=False)
+    async with SessionFactory() as db:
+        await get_family_pricing(settings, db)
+        await get_family_pricing(settings, db, use_cache=False)
     assert calls["count"] == 4
 
 

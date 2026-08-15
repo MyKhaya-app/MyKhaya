@@ -2,8 +2,9 @@
 either fully unconfigured (the default, all Free/Complimentary features
 work) or fully and consistently configured; it must never boot in a
 half-configured or test/live-mismatched state. Also covers
-mykhaya.billing.config.resolve_stripe_config's fail-safe unconfigured
-result.
+mykhaya.billing.config.resolve_stripe_config's environment fallback and
+fail-safe unconfigured result — Platform Control Centre-managed
+(database-sourced) precedence is covered in test_platform_stripe_settings.py.
 """
 
 import pytest
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.config import Settings
+from mykhaya.db import SessionFactory
 
 SECRET_KEY = "a" * 40
 
@@ -45,21 +47,26 @@ def _stripe_test_kwargs(**overrides: object) -> dict[str, object]:
     return kwargs
 
 
-def test_stripe_disabled_by_default_and_needs_no_other_setting() -> None:
+@pytest.mark.asyncio
+async def test_stripe_disabled_by_default_and_needs_no_other_setting() -> None:
     settings = _settings()
     assert settings.stripe_billing_configured is False
-    config = resolve_stripe_config(settings)
+    async with SessionFactory() as db:
+        config = await resolve_stripe_config(settings, db)
     assert config.configured is False
     assert config.source == "unconfigured"
     assert config.secret_key is None
 
 
-def test_fully_configured_test_mode_is_accepted_in_development() -> None:
+@pytest.mark.asyncio
+async def test_fully_configured_test_mode_is_accepted_in_development() -> None:
     settings = _settings(**_stripe_test_kwargs())
     assert settings.stripe_billing_configured is True
-    config = resolve_stripe_config(settings)
+    async with SessionFactory() as db:
+        config = await resolve_stripe_config(settings, db)
     assert config.configured is True
     assert config.source == "environment"
+    assert config.mode == "test"
     assert config.secret_key == "sk_test_abc123"
     assert config.family_monthly_price_id == "price_month123"
     assert config.family_annual_price_id == "price_year123"

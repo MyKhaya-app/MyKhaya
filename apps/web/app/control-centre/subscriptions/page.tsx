@@ -143,7 +143,7 @@ export default function SubscriptionsPage() {
         <CcPageHeader
           eyebrow="Commercial state"
           title="Subscriptions"
-          description="Every Home's stored commercial state and its currently resolved (effective) plan — these can differ, for example once complimentary access expires. Stripe integration is not part of this phase; the only administrator actions here are granting and revoking complimentary Family access."
+          description="Every Home's stored commercial state and its currently resolved (effective) plan — these can differ, for example once complimentary access expires. Stripe integration is configured on the Payments page; the administrator actions here are granting and revoking complimentary Family access."
           secondaryActions={
             <button className="secondary" onClick={() => void load()}>
               Refresh
@@ -210,22 +210,51 @@ export default function SubscriptionsPage() {
               <p className="stat-number">{summary.stripe_cancelling}</p>
               <small>Cancels at period end</small>
             </section>
-            {webhookHealth?.configured && (
-              <section className="overview-panel">
-                <h2>Stripe webhooks</h2>
-                <p>
-                  <CcBadge tone={toneFromStateClass(`state-${webhookHealth.state}`)}>
-                    {webhookHealth.state}
-                  </CcBadge>
-                </p>
-                <small>
-                  {webhookHealth.recent_failure_count} failure
-                  {webhookHealth.recent_failure_count === 1 ? "" : "s"} in the last 24h
-                  {webhookHealth.last_event_at && ` · last event ${readableDate(webhookHealth.last_event_at)}`}
-                </small>
-              </section>
-            )}
           </div>
+        )}
+
+        {webhookHealth && (
+          <CcSection
+            title="Stripe"
+            actions={
+              <Link href="/payments" className="secondary">
+                Manage Stripe settings
+              </Link>
+            }
+          >
+            <dl className="overview-grid compact-metrics">
+              <div>
+                <dt>Mode</dt>
+                <dd>
+                  <CcBadge tone={webhookHealth.mode === "live" ? "danger" : "info"}>
+                    {webhookHealth.mode === "live" ? "Live" : "Test"}
+                  </CcBadge>
+                </dd>
+              </div>
+              <div>
+                <dt>Configuration source</dt>
+                <dd>{webhookHealth.source}</dd>
+              </div>
+              <div>
+                <dt>Webhooks</dt>
+                <dd>
+                  <CcBadge tone={toneFromStateClass(`state-${webhookHealth.state}`)}>
+                    {webhookHealth.configured ? webhookHealth.state : "not configured"}
+                  </CcBadge>
+                </dd>
+              </div>
+              <div>
+                <dt>Last webhook</dt>
+                <dd>
+                  {webhookHealth.last_event_at ? readableDate(webhookHealth.last_event_at) : "None received"}
+                </dd>
+              </div>
+              <div>
+                <dt>Paid Homes</dt>
+                <dd>{webhookHealth.paid_homes}</dd>
+              </div>
+            </dl>
+          </CcSection>
         )}
 
         <CcSection title="Search and filter">

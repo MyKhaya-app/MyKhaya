@@ -79,7 +79,9 @@ log = structlog.get_logger()
 
 @router.get("/pricing", response_model=FamilyPricingResponse)
 async def pricing(
-    request: Request, settings: Settings = Depends(get_settings)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> FamilyPricingResponse:
     await enforce_rate_limit(request, settings, "billing-pricing", 60, 60)
     # Pricing stays informational even while new acquisition is disabled
@@ -88,9 +90,9 @@ async def pricing(
     # checkout_session below). The frontend uses acquisition_enabled to
     # decide whether to show "Choose Family" or a "temporarily paused"
     # notice, never by treating a pricing-fetch failure as the signal.
-    acquisition_enabled = resolve_stripe_config(settings).acquisition_enabled
+    acquisition_enabled = (await resolve_stripe_config(settings, db)).acquisition_enabled
     try:
-        family_pricing = await get_family_pricing(settings)
+        family_pricing = await get_family_pricing(settings, db)
     except StripeNotConfiguredError as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
@@ -224,7 +226,7 @@ async def billing_status(
     resolved_plan = await effective_plan(db, group_id)
     resolution = resolve_effective_state(subscription)
     capabilities = await capabilities_for(db, membership)
-    config = resolve_stripe_config(settings)
+    config = await resolve_stripe_config(settings, db)
 
     price: SubscriptionPriceResponse | None = None
     if (
@@ -293,7 +295,7 @@ async def checkout_session(
 ) -> CheckoutSessionResponse:
     await enforce_rate_limit(request, settings, "billing-checkout", 10, 300)
     membership = await require_capability(group_id, Capability.billing_manage, auth, db)
-    config = resolve_stripe_config(settings)
+    config = await resolve_stripe_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
     if not config.acquisition_enabled:
@@ -347,7 +349,7 @@ async def portal_session(
 ) -> PortalSessionResponse:
     await enforce_rate_limit(request, settings, "billing-portal", 20, 300)
     await require_capability(group_id, Capability.billing_manage, auth, db)
-    config = resolve_stripe_config(settings)
+    config = await resolve_stripe_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
     subscription = await get_home_subscription(db, group_id)
@@ -371,7 +373,7 @@ async def stripe_webhook(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
-    config = resolve_stripe_config(settings)
+    config = await resolve_stripe_config(settings, db)
     if not config.configured or not config.webhook_secret:
         # Not "not found" (which would confirm/deny the route's existence to
         # a prober) — a clear, static 503 either way, no signature-dependent

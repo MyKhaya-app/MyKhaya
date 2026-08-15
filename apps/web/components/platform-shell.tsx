@@ -11,6 +11,7 @@ const navigation = [
   ["Overview", "/"], ["Users", "/users"], ["Homes", "/homes"],
   ["Subscriptions", "/subscriptions"],
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
+  ["Payments", "/payments"],
   ["Templates", "/notification-templates"], ["Communications", "/communications"],
   ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
   ["Settings", "/settings"], ["Modules & Features", "/modules"],

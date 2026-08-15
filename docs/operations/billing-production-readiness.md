@@ -152,39 +152,64 @@ already-completed evidence.
 
 ## Price rotation (a future price increase)
 
+Prices are normally rotated through the Platform Control Centre's Payments page
+(**Settings → Payments → Stripe**) rather than by editing environment configuration —
+the steps below apply either way; only step 3 differs by path.
+
 1. Create the new Stripe Price in the Dashboard (test or live). Never edit an
    existing Price's amount — Stripe Prices are immutable; create a new one.
 2. Verify it (readiness command with `--check-stripe`, or a manual test Checkout).
-3. Update `MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID` / `..._ANNUAL_PRICE_ID` in
-   deployment configuration. Never edit a price figure in source — there isn't one.
-4. Restart/redeploy so the new environment value takes effect.
-5. Confirm `GET /billing/pricing` reflects the new Price (cache TTL is 5 minutes —
-   restart clears it immediately if needed sooner).
-6. Confirm a **new** Checkout uses the new Price.
-7. Confirm existing subscribers remain on their old Price (`external_price_id`
+3. Update the Monthly/Annual Price ID for the active mode:
+   - **Control Centre path (primary)**: Payments page → the active mode's section →
+     update the Price ID field → Save changes. Takes effect immediately, no restart,
+     and is written to the platform audit log (`stripe.settings_changed`).
+   - **Environment fallback path**: update `MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID` /
+     `..._ANNUAL_PRICE_ID` in deployment configuration and restart/redeploy — only
+     takes effect if no Platform-Admin-managed Stripe configuration is enabled (see
+     `docs/architecture/platform-control-centre.md#stripe-configuration-precedence`).
+   Never edit a price figure in source — there isn't one, either way.
+4. Confirm `GET /billing/pricing` reflects the new Price (cache TTL is 5 minutes —
+   a restart, or another settings save, clears it immediately if needed sooner).
+5. Confirm a **new** Checkout uses the new Price.
+6. Confirm existing subscribers remain on their old Price (`external_price_id`
    unchanged) — see "Grandfathered pricing verification" above.
-8. Archive the old Price in the Stripe Dashboard for *new* sales once confident
+7. Archive the old Price in the Stripe Dashboard for *new* sales once confident
    (this doesn't affect existing subscriptions) — optional, operator judgement.
 
 ## Stripe secret API key rotation
 
+Secret keys are normally rotated through the Payments page's **Replace** action
+(**Settings → Payments → Stripe → Secret key → Replace**), which requires recent
+re-authentication and a reason, and is written to the platform audit log as
+`stripe.test_secret_key_replaced` / `stripe.live_secret_key_replaced` — the action
+only, never the key value. The environment variable remains a supported
+bootstrap/fallback path for deployments that haven't enabled Control Centre-managed
+Stripe configuration.
+
 1. In the Stripe Dashboard, create a new restricted (see "Least-privilege
    credentials" below) or standard secret key — do **not** reuse or edit the
    existing one; Stripe keys aren't editable in place.
-2. Deploy the new key as `MYKHAYA_STRIPE_SECRET_KEY` alongside the still-valid old
-   one is not supported (MyKhaya only reads one key) — plan for a short window: set
-   the new key, restart, verify (`billing-readiness.sh --check-stripe`), then revoke
-   the old key in the Stripe Dashboard.
+2. **Control Centre path (primary)**: paste the new key into the active mode's
+   Secret key field and Save changes. Takes effect immediately for the next
+   request — no restart, no window where two keys are simultaneously in use.
+   **Environment fallback path**: deploying the new key as `MYKHAYA_STRIPE_SECRET_KEY`
+   alongside the still-valid old one is not supported (only one environment key is
+   read) — plan for a short window: set the new key, restart, verify
+   (`billing-readiness.sh --check-stripe`), then revoke the old key.
 3. Verify: pricing loads, a test Checkout can be created, Portal session creation
-   works.
+   works, and (Control Centre path) the **Test Stripe connection** action reports
+   "Connected".
 4. Revoke the old key in the Dashboard only after the new key is confirmed working.
-5. **Rollback**: if the new key doesn't work, revert the environment variable to
-   the old key (still valid until you revoke it) and redeploy — do not revoke the
-   old key until the new one is proven.
-6. Record who rotated it and why (change-management/audit responsibility — MyKhaya
-   itself has no application-level audit trail for environment-variable changes,
-   since Stripe secrets deliberately never touch the database or the platform-audit
-   log).
+5. **Rollback**: if the new key doesn't work, restore the previous value (via the
+   Payments page's Replace action, or by reverting the environment variable and
+   redeploying) — do not revoke the old key in the Stripe Dashboard until the new
+   one is proven.
+6. Record who rotated it and why. On the Control Centre path this is already
+   captured by the platform audit log (administrator identity, timestamp, action);
+   on the environment fallback path, MyKhaya has no application-level audit trail
+   for environment-variable changes, since Stripe secrets there never touch the
+   database or the platform-audit log — record it via your usual
+   change-management process instead.
 
 ## Webhook signing secret rotation
 
@@ -193,21 +218,24 @@ use this for zero-downtime rotation rather than a single cutover that risks a ga
 
 1. Register a **second** webhook endpoint in the Stripe Dashboard pointing at the
    same MyKhaya URL, and note its own signing secret.
-2. MyKhaya currently supports exactly **one** configured
-   `MYKHAYA_STRIPE_WEBHOOK_SECRET` — there is no multi-secret support built. This
-   means true zero-downtime *application-level* rotation isn't available today;
-   treat this as a documented gap. The safe sequence with a single-secret
-   application is: register the new endpoint, confirm it delivers successfully
-   (Stripe will send to both endpoints simultaneously during the overlap), update
-   `MYKHAYA_STRIPE_WEBHOOK_SECRET` to the new endpoint's secret, restart, confirm
-   new deliveries verify successfully, then delete the *old* endpoint in the
-   Dashboard. The overlap window (both endpoints registered, old secret still
-   configured) is short and Stripe's own retry behaviour means a missed event in
-   that window is redelivered automatically.
+2. MyKhaya currently supports exactly **one** configured webhook signing secret per
+   mode (`platform_stripe_settings.encrypted_test_webhook_secret` /
+   `encrypted_live_webhook_secret` on the Control Centre path, or
+   `MYKHAYA_STRIPE_WEBHOOK_SECRET` on the environment fallback path) — there is no
+   multi-secret support built. This means true zero-downtime *application-level*
+   rotation isn't available today; treat this as a documented gap. The safe sequence
+   with a single-secret application is: register the new endpoint, confirm it
+   delivers successfully (Stripe will send to both endpoints simultaneously during
+   the overlap), update the webhook secret to the new endpoint's secret (Payments
+   page's Replace action, primary path — or `MYKHAYA_STRIPE_WEBHOOK_SECRET` plus a
+   restart, fallback path), confirm new deliveries verify successfully, then delete
+   the *old* endpoint in the Dashboard. The overlap window (both endpoints
+   registered, old secret still configured) is short and Stripe's own retry
+   behaviour means a missed event in that window is redelivered automatically.
 3. If sub-second webhook availability during rotation becomes a real requirement,
-   the fix is adding support for a second, overlapping
-   `MYKHAYA_STRIPE_WEBHOOK_SECRET_NEXT`-style setting — not built in Phase 7;
-   documented here as the identified follow-up rather than built speculatively.
+   the fix is adding support for a second, overlapping webhook secret setting per
+   mode — not built; documented here as the identified follow-up rather than built
+   speculatively.
 
 ## Webhook failure recovery
 

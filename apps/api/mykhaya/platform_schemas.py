@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -279,6 +280,141 @@ class SmtpSettingsUpdate(SensitiveActionRequest):
             if self.auth_enabled and not (self.username and self.username.strip()):
                 raise ValueError("Username is required when authentication is enabled")
         return self
+
+
+_STRIPE_PUBLISHABLE_KEY_PATTERN = r"^pk_(test|live)_\w+$"
+_STRIPE_SECRET_KEY_PATTERN = r"^sk_(test|live)_\w+$"  # noqa: S105 — a shape pattern, not a secret
+_STRIPE_WEBHOOK_SECRET_PATTERN = r"^whsec_\w+$"  # noqa: S105 — a shape pattern, not a secret
+_STRIPE_PRICE_ID_PATTERN = r"^price_\w+$"
+
+
+class StripeSettingsUpdate(SensitiveActionRequest):
+    """Non-secret fields are saved as sent. The four secret fields
+    (test/live secret key, test/live webhook secret) are "replace-only": None/omitted
+    means "keep the existing stored value", matching SmtpSettingsUpdate's password
+    field — a blank password input is never treated as "clear the password" (there is
+    a separate clear-secret action for that). Never pre-populated with the real
+    stored value by the frontend."""
+
+    enabled: bool
+    mode: Literal["test", "live"]
+    test_publishable_key: str | None = Field(default=None, max_length=200)
+    test_secret_key: str | None = Field(default=None, max_length=500)
+    test_webhook_secret: str | None = Field(default=None, max_length=500)
+    test_family_monthly_price_id: str | None = Field(default=None, max_length=200)
+    test_family_annual_price_id: str | None = Field(default=None, max_length=200)
+    live_publishable_key: str | None = Field(default=None, max_length=200)
+    live_secret_key: str | None = Field(default=None, max_length=500)
+    live_webhook_secret: str | None = Field(default=None, max_length=500)
+    live_family_monthly_price_id: str | None = Field(default=None, max_length=200)
+    live_family_annual_price_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("test_publishable_key", "live_publishable_key")
+    @classmethod
+    def validate_publishable_key(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_PUBLISHABLE_KEY_PATTERN, value):
+            raise ValueError("Does not look like a Stripe publishable key (pk_test_/pk_live_...)")
+        return value
+
+    @field_validator("test_secret_key", "live_secret_key")
+    @classmethod
+    def validate_secret_key(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_SECRET_KEY_PATTERN, value):
+            raise ValueError("Does not look like a Stripe secret key (sk_test_/sk_live_...)")
+        return value
+
+    @field_validator("test_webhook_secret", "live_webhook_secret")
+    @classmethod
+    def validate_webhook_secret(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_WEBHOOK_SECRET_PATTERN, value):
+            raise ValueError("Does not look like a Stripe webhook signing secret (whsec_...)")
+        return value
+
+    @field_validator(
+        "test_family_monthly_price_id",
+        "test_family_annual_price_id",
+        "live_family_monthly_price_id",
+        "live_family_annual_price_id",
+    )
+    @classmethod
+    def validate_price_id(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_PRICE_ID_PATTERN, value):
+            raise ValueError("Does not look like a Stripe Price ID (price_...)")
+        return value
+
+    @field_validator(
+        "test_publishable_key",
+        "test_secret_key",
+        "test_webhook_secret",
+        "test_family_monthly_price_id",
+        "test_family_annual_price_id",
+        "live_publishable_key",
+        "live_secret_key",
+        "live_webhook_secret",
+        "live_family_monthly_price_id",
+        "live_family_annual_price_id",
+        mode="before",
+    )
+    @classmethod
+    def blank_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value.strip() if isinstance(value, str) else value
+
+
+class StripeSecretClearRequest(SensitiveActionRequest):
+    field: Literal[
+        "test_secret_key", "test_webhook_secret", "live_secret_key", "live_webhook_secret"
+    ]
+
+
+class StripeTestConnectionRequest(SensitiveActionRequest):
+    pass
+
+
+class StripeModeSettingsResponse(BaseModel):
+    publishable_key: str | None
+    secret_key_configured: bool
+    secret_key_last4: str | None
+    webhook_secret_configured: bool
+    webhook_secret_last4: str | None
+    family_monthly_price_id: str | None
+    family_annual_price_id: str | None
+
+
+class StripeWebhookSummary(BaseModel):
+    """Compact webhook status embedded in the Payments settings page response —
+    the full drill-down list of recent events/failures lives on the Subscriptions
+    page's dedicated webhook-health endpoint, not duplicated here."""
+
+    configured: bool
+    state: str
+    reason: str | None
+    last_event_at: datetime | None
+    recent_failure_count: int
+    endpoint_url: str | None
+
+
+class StripeConfigurationResponse(BaseModel):
+    configured: bool
+    enabled: bool
+    mode: Literal["test", "live"]
+    # "database" | "environment" | "unconfigured"
+    source: str
+    incomplete_reason: str | None
+    editable: bool
+    updated_at: datetime | None
+    test: StripeModeSettingsResponse
+    live: StripeModeSettingsResponse
+    webhook: StripeWebhookSummary
+
+
+class StripeTestConnectionResponse(BaseModel):
+    # "connected" | "authentication_failed" | "stripe_unavailable" |
+    # "configuration_incomplete" | "network_failure"
+    result: str
+    detail: str
+    mode: Literal["test", "live"]
 
 
 class PushVapidSettingsUpdate(SensitiveActionRequest):
@@ -594,6 +730,12 @@ class StripeWebhookHealthResponse(BaseModel):
     recent_failure_count: int
     recent_events: list[WebhookEventSummary]
     recent_failures: list[WebhookFailureSummary]
+    # Surfaced so the Subscriptions page's compact Stripe status card and the
+    # Payments settings page agree on the active mode/source without a second
+    # round trip — never a secret value.
+    mode: str
+    source: str
+    paid_homes: int
 
 
 class StripePriceInfo(BaseModel):

@@ -33,6 +33,8 @@ class StripeWebhookHealth:
     # for why failure count, not staleness, is the chosen health signal).
     last_event_at: datetime | None
     recent_failure_count: int
+    mode: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -96,13 +98,16 @@ async def current_platform_health(
 async def _stripe_webhook_health(
     db: AsyncSession, settings: Settings, checked_at: datetime
 ) -> StripeWebhookHealth:
-    if not resolve_stripe_config(settings).configured:
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured:
         return StripeWebhookHealth(
             configured=False,
             state="not_configured",
-            reason=None,
+            reason=config.incomplete_reason,
             last_event_at=None,
             recent_failure_count=0,
+            mode=config.mode,
+            source=config.source,
         )
     last_event_at = await db.scalar(select(func.max(StripeWebhookEvent.received_at)))
     recent_failure_count = int(
@@ -124,4 +129,6 @@ async def _stripe_webhook_health(
         ),
         last_event_at=last_event_at,
         recent_failure_count=recent_failure_count,
+        mode=config.mode,
+        source=config.source,
     )

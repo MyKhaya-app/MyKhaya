@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 
 import stripe
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import StripeNotConfiguredError, resolve_stripe_config
@@ -98,13 +99,17 @@ async def _fetch_and_validate_price(
 _cache: dict[str, tuple[float, FamilyPricing]] = {}
 
 
-async def get_family_pricing(settings: Settings, *, use_cache: bool = True) -> FamilyPricing:
-    config = resolve_stripe_config(settings)
+async def get_family_pricing(
+    settings: Settings, db: AsyncSession, *, use_cache: bool = True
+) -> FamilyPricing:
+    config = await resolve_stripe_config(settings, db)
     if not config.configured or not config.secret_key:
         raise StripeNotConfiguredError("Stripe billing is not configured.")
     assert config.family_monthly_price_id and config.family_annual_price_id  # noqa: S101 — guaranteed by Settings validation
 
-    cache_key = f"{config.family_monthly_price_id}:{config.family_annual_price_id}"
+    # Mode is part of the cache key so switching Test<->Live in the Platform
+    # Control Centre never serves a stale price fetched under the other mode.
+    cache_key = f"{config.mode}:{config.family_monthly_price_id}:{config.family_annual_price_id}"
     now = time.monotonic()
     if use_cache:
         cached = _cache.get(cache_key)
