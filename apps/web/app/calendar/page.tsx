@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -29,16 +29,27 @@ import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
 import {
   agendaRange,
+  applyAllDayToggle,
+  computeInitialWhen,
+  DEFAULT_EVENT_DURATION_MINUTES,
   dateKey,
   dayRange,
   emptyStateMessage,
+  eventDateBounds,
   eventsForDay,
+  FALLBACK_TIMEZONE,
   filterVisibleEvents,
   groupEventsByDay,
   monthCells,
   monthRange,
+  parseLocalInputValue,
   resolveMemberFilter,
+  shiftEndWithStart,
+  splitZoned,
   weekRange,
+  zonedDateKey,
+  zonedTimeToUtc,
+  zonedToday,
 } from "./calendar-utils";
 
 type ViewMode = "month" | "week" | "day" | "agenda";
@@ -54,38 +65,57 @@ function formText(data: FormData, name: string) {
   return typeof value === "string" ? value : "";
 }
 
+// `timeZone` must always be passed explicitly — the calendar grid's active
+// timezone (the Home's primary calendar timezone) for headers/day labels, or
+// an individual event's own governing timezone (event.timezone) when
+// formatting that event's time. Never the browser's local zone, never a
+// hardcoded UTC default: the server/browser timezone must never leak into
+// what a user sees.
 function displayDate(
   value: Date | string,
   options: Intl.DateTimeFormatOptions,
+  timeZone: string,
 ) {
   return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "UTC",
+    timeZone,
     ...options,
   }).format(typeof value === "string" ? new Date(value) : value);
 }
 
-function eventTime(event: EventOccurrence) {
+function eventTime(event: EventOccurrence, timeZone: string) {
   if (event.is_all_day) return "All day";
-  return displayDate(event.start_at, { hour: "2-digit", minute: "2-digit" });
+  return displayDate(
+    event.start_at,
+    { hour: "2-digit", minute: "2-digit" },
+    event.timezone || timeZone,
+  );
 }
 
-function relativeDayHeading(key: string) {
-  const today = dateKey(new Date());
-  const tomorrow = new Date();
+function relativeDayHeading(key: string, timeZone: string) {
+  const now = new Date();
+  const tomorrow = new Date(now);
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  if (key === today) return "Today";
-  if (key === dateKey(tomorrow)) return "Tomorrow";
-  return displayDate(`${key}T00:00:00Z`, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+  if (key === zonedDateKey(now, timeZone)) return "Today";
+  if (key === zonedDateKey(tomorrow, timeZone)) return "Tomorrow";
+  return displayDate(
+    `${key}T00:00:00Z`,
+    { weekday: "long", day: "numeric", month: "long" },
+    "UTC",
+  );
 }
 
-function localInput(value: string | Date) {
-  return (typeof value === "string" ? new Date(value) : value)
-    .toISOString()
-    .slice(0, 16);
+function combineZoned(date: string, time: string, timeZone: string): Date {
+  const { year, month, day } = parseLocalInputValue(date);
+  const [hour, minute] = time.split(":").map(Number);
+  return zonedTimeToUtc(year, month, day, hour ?? 0, minute ?? 0, timeZone);
+}
+
+// A pure UTC-midnight calendar date, independent of any timezone — see
+// `_all_day_midnight` on the backend for why all-day boundaries deliberately
+// never go through zone conversion.
+function utcMidnightOf(dateInput: string): Date {
+  const { year, month, day } = parseLocalInputValue(dateInput);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 function EventForm({
@@ -93,6 +123,7 @@ function EventForm({
   members,
   initial,
   initialDay,
+  timeZone,
   busy,
   submitLabel,
   sharedEventsEnabled,
@@ -104,6 +135,11 @@ function EventForm({
   members: Member[];
   initial?: EventOccurrence;
   initialDay: Date;
+  /** The IANA timezone new Start/End wall-clock values are interpreted in —
+   *  the calendar's active (Home) timezone for a new event, or the event's
+   *  own governing timezone when editing one that already has a different
+   *  one set. Never the browser's local zone, never a hardcoded literal. */
+  timeZone: string;
   busy: boolean;
   submitLabel: string;
   sharedEventsEnabled: boolean;
@@ -111,43 +147,136 @@ function EventForm({
   onCancel: () => void;
   onDelete?: () => Promise<void>;
 }) {
-  const startDefault = initial
-    ? localInput(initial.start_at)
-    : localInput(
-        new Date(
-          Date.UTC(
-            initialDay.getUTCFullYear(),
-            initialDay.getUTCMonth(),
-            initialDay.getUTCDate(),
-            9,
-          ),
-        ),
-      );
-  const endDefault = initial
-    ? localInput(initial.end_at)
-    : localInput(
-        new Date(
-          Date.UTC(
-            initialDay.getUTCFullYear(),
-            initialDay.getUTCMonth(),
-            initialDay.getUTCDate(),
-            10,
-          ),
-        ),
-      );
+  const eventTimeZone = initial?.timezone || timeZone;
+  const [initialWhen] = useState(() =>
+    computeInitialWhen(initial, initialDay, eventTimeZone),
+  );
+  const [allDay, setAllDay] = useState(initialWhen.allDay);
+  const [startDate, setStartDate] = useState(initialWhen.startDate);
+  const [startTime, setStartTime] = useState(initialWhen.startTime);
+  const [endDate, setEndDate] = useState(initialWhen.endDate);
+  const [endTime, setEndTime] = useState(initialWhen.endTime);
+  const [multiDay, setMultiDay] = useState(initialWhen.multiDay);
+  const [rangeNotice, setRangeNotice] = useState("");
+  // See WhenState.hasTimedValues — a ref, not state, because flipping it
+  // must never itself trigger a render; it only gates what onToggleAllDay
+  // does the next time the user actually turns All day off.
+  const hasTimedValues = useRef(initialWhen.hasTimedValues);
+
+  function zonedInstant(date: string, time: string): Date {
+    return combineZoned(date, time, eventTimeZone);
+  }
+
+  // See applyAllDayToggle (calendar-utils.ts) for the rule this applies —
+  // toggling All day off must never derive a clock value from the all-day
+  // UTC-midnight boundary; it establishes a sensible default only once per
+  // session, preserving whatever meaningful timed value already exists
+  // otherwise (startDate/endDate — the intended calendar date(s) — are
+  // untouched either way).
+  function onToggleAllDay(nextAllDay: boolean) {
+    const next = applyAllDayToggle(
+      {
+        allDay,
+        startDate,
+        startTime,
+        endDate,
+        endTime,
+        multiDay,
+        hasTimedValues: hasTimedValues.current,
+      },
+      nextAllDay,
+    );
+    setAllDay(next.allDay);
+    setStartTime(next.startTime);
+    setEndTime(next.endTime);
+    hasTimedValues.current = next.hasTimedValues;
+  }
+
+  // Duration-aware: moving Start carries End along by the same duration
+  // (defaulting new events to 1 hour, preserving whatever duration the user
+  // has already established otherwise) — see shiftEndWithStart.
+  function applyNewStart(nextStart: Date) {
+    const previousStart = zonedInstant(startDate, startTime);
+    const previousEnd = zonedInstant(endDate, endTime);
+    const nextEnd = shiftEndWithStart(previousStart, previousEnd, nextStart);
+    const next = splitZoned(nextEnd, eventTimeZone);
+    setEndDate(next.date);
+    setEndTime(next.time);
+    setRangeNotice("");
+  }
+
+  function onStartDateChange(value: string) {
+    setStartDate(value);
+    if (!multiDay) setEndDate(value);
+    applyNewStart(zonedInstant(value, startTime));
+  }
+  function onStartTimeChange(value: string) {
+    setStartTime(value);
+    applyNewStart(zonedInstant(startDate, value));
+  }
+  // End is user-editable directly too, but must never be allowed to precede
+  // Start for a same-day event — corrected in place (kept to a sensible
+  // minimum duration) rather than silently accepted and only rejected later
+  // by the backend.
+  function onEndDateChange(value: string) {
+    const candidate = zonedInstant(value, endTime);
+    const start = zonedInstant(startDate, startTime);
+    if (candidate <= start) {
+      setRangeNotice("End adjusted to stay after Start.");
+      const corrected = new Date(start.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60_000);
+      const next = splitZoned(corrected, eventTimeZone);
+      setEndDate(next.date);
+      setEndTime(next.time);
+      return;
+    }
+    setRangeNotice("");
+    setEndDate(value);
+  }
+  function onEndTimeChange(value: string) {
+    const candidate = zonedInstant(endDate, value);
+    const start = zonedInstant(startDate, startTime);
+    if (!multiDay && candidate <= start) {
+      setRangeNotice("End adjusted to stay after Start.");
+      const corrected = new Date(start.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60_000);
+      const next = splitZoned(corrected, eventTimeZone);
+      setEndDate(next.date);
+      setEndTime(next.time);
+      return;
+    }
+    setRangeNotice("");
+    setEndTime(value);
+  }
+  function onToggleMultiDay(next: boolean) {
+    setMultiDay(next);
+    if (!next) setEndDate(startDate);
+    setRangeNotice("");
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const title = formText(data, "title").trim();
-    const start = new Date(formText(data, "start"));
-    const end = new Date(formText(data, "end"));
+
+    let start_at: string;
+    let end_at: string;
+    if (allDay) {
+      const start = utcMidnightOf(startDate);
+      const lastCoveredDay = utcMidnightOf(multiDay ? endDate : startDate);
+      const end = new Date(lastCoveredDay);
+      end.setUTCDate(end.getUTCDate() + 1); // exclusive end, matching backend semantics
+      start_at = start.toISOString();
+      end_at = end.toISOString();
+    } else {
+      start_at = zonedInstant(startDate, startTime).toISOString();
+      end_at = zonedInstant(multiDay ? endDate : startDate, endTime).toISOString();
+    }
+
     await onSubmit({
       title,
-      start_at: start.toISOString(),
-      end_at: end.toISOString(),
-      timezone: initial?.timezone ?? "Europe/London",
-      is_all_day: data.get("allDay") === "on",
+      start_at,
+      end_at,
+      timezone: eventTimeZone,
+      is_all_day: allDay,
       member_ids: data.getAll("members").map(String),
       label_id: formText(data, "label") || null,
       location_text: formText(data, "location") || null,
@@ -173,32 +302,82 @@ function EventForm({
           maxLength={180}
         />
       </label>
-      <label>
-        Starts
-        <input
-          name="start"
-          type="datetime-local"
-          defaultValue={startDefault}
-          required
-        />
-      </label>
-      <label>
-        Ends
-        <input
-          name="end"
-          type="datetime-local"
-          defaultValue={endDefault}
-          required
-        />
-      </label>
-      <label className="check-row form-wide">
-        <input
-          name="allDay"
-          type="checkbox"
-          defaultChecked={initial?.is_all_day}
-        />
-        All-day event
-      </label>
+      <fieldset className="form-wide event-when">
+        <legend>When</legend>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={allDay}
+            onChange={(event) => onToggleAllDay(event.target.checked)}
+          />
+          All day
+        </label>
+        <div className="event-when-grid">
+          <label>
+            {multiDay ? "Starts" : "Date"}
+            <input
+              type="date"
+              value={startDate}
+              onChange={(event) => onStartDateChange(event.target.value)}
+              required
+            />
+          </label>
+          {!allDay && (
+            <label>
+              Start
+              <input
+                type="time"
+                value={startTime}
+                onChange={(event) => onStartTimeChange(event.target.value)}
+                required
+              />
+            </label>
+          )}
+          {!allDay && !multiDay && (
+            <label>
+              End
+              <input
+                type="time"
+                value={endTime}
+                onChange={(event) => onEndTimeChange(event.target.value)}
+                required
+              />
+            </label>
+          )}
+        </div>
+        {multiDay && (
+          <div className="event-when-grid">
+            <label>
+              Ends
+              <input
+                type="date"
+                value={endDate}
+                onChange={(event) => onEndDateChange(event.target.value)}
+                required
+              />
+            </label>
+            {!allDay && (
+              <label>
+                End time
+                <input
+                  type="time"
+                  value={endTime}
+                  onChange={(event) => onEndTimeChange(event.target.value)}
+                  required
+                />
+              </label>
+            )}
+          </div>
+        )}
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => onToggleMultiDay(!multiDay)}
+        >
+          {multiDay ? "Same day event" : "Ends on a different day"}
+        </button>
+        {rangeNotice && <p className="quiet-state">{rangeNotice}</p>}
+      </fieldset>
       {members.length > 0 && (
         <fieldset className="form-wide">
           <legend>Household members</legend>
@@ -330,7 +509,13 @@ export default function CalendarPage() {
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [featureChecked, setFeatureChecked] = useState(false);
   const [view, setView] = useState<ViewMode>("month");
-  const [focusDate, setFocusDate] = useState(new Date());
+  const [focusDate, setFocusDate] = useState(() => zonedToday(FALLBACK_TIMEZONE));
+  // True once the user has actually navigated (prev/next, tapping a day, or
+  // jumping to today) — until then, focusDate keeps re-anchoring to "today"
+  // as soon as the real calendarTimezone loads, so the initial render (which
+  // only has FALLBACK_TIMEZONE to go on) doesn't strand the user looking at
+  // the wrong calendar date for their Home's actual timezone.
+  const hasNavigated = useRef(false);
   const [events, setEvents] = useState<EventOccurrence[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [labels, setLabels] = useState<EventLabel[]>([]);
@@ -347,6 +532,11 @@ export default function CalendarPage() {
   const [query, setQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [memberFilter, setMemberFilter] = useState("");
+  // The Home's primary calendar's IANA timezone — the default/shared
+  // timezone for household calendar events (never the server's or the
+  // browser's own timezone). FALLBACK_TIMEZONE only covers the brief window
+  // before the first successful load.
+  const [calendarTimezone, setCalendarTimezone] = useState(FALLBACK_TIMEZONE);
 
   useEffect(() => {
     setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
@@ -423,7 +613,7 @@ export default function CalendarPage() {
 
   const load = useCallback(async () => {
     if (!activeHomeId || !featureEnabled) return;
-    const [labelRows, eventRows, memberRows] = await Promise.all([
+    const [labelRows, eventRows, memberRows, calendarRows] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
         start_at: fetchRange.start.toISOString(),
@@ -431,10 +621,13 @@ export default function CalendarPage() {
         page_size: 300,
       }),
       api.members(activeHomeId).catch(() => []),
+      api.listCalendars(activeHomeId).catch(() => null),
     ]);
     setLabels(labelRows);
     setEvents(eventRows.items);
     setMembers(memberRows);
+    const primaryCalendar = calendarRows?.items.find((row) => row.is_primary);
+    if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
     api
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
@@ -489,7 +682,10 @@ export default function CalendarPage() {
     () => filterVisibleEvents(events, memberFilter, labelFilter, query),
     [events, memberFilter, labelFilter, query],
   );
-  const byDay = useMemo(() => groupEventsByDay(visibleEvents), [visibleEvents]);
+  const byDay = useMemo(
+    () => groupEventsByDay(visibleEvents, calendarTimezone),
+    [visibleEvents, calendarTimezone],
+  );
   const memberNames = useMemo(
     () =>
       new Map(members.map((member) => [member.user_id, member.display_name])),
@@ -506,7 +702,14 @@ export default function CalendarPage() {
     selectedLabelName,
   );
 
+  // Re-anchor to "today" (in the Home calendar's real timezone) once it's
+  // known — but only until the user actually navigates; see hasNavigated.
+  useEffect(() => {
+    if (!hasNavigated.current) setFocusDate(zonedToday(calendarTimezone));
+  }, [calendarTimezone]);
+
   function move(direction: -1 | 1) {
+    hasNavigated.current = true;
     const next = new Date(focusDate);
     if (view === "month") next.setUTCMonth(next.getUTCMonth() + direction);
     else if (view === "week")
@@ -586,6 +789,7 @@ export default function CalendarPage() {
   }
 
   function openDay(day: Date) {
+    hasNavigated.current = true;
     setFocusDate(day);
     setSelectedDay(day);
   }
@@ -600,7 +804,7 @@ export default function CalendarPage() {
     );
   }
 
-  const focusedEvents = eventsForDay(visibleEvents, focusDate);
+  const focusedEvents = eventsForDay(visibleEvents, focusDate, calendarTimezone);
   const birthdaysInRange = birthdays.filter((entry) => {
     const occurrence = new Date(entry.next_occurrence_date);
     return occurrence >= range.start && occurrence < range.end;
@@ -621,8 +825,8 @@ export default function CalendarPage() {
             </button>
             <h1 className="calendar-month-label">
               {view === "day"
-                ? displayDate(focusDate, { weekday: "short", day: "numeric", month: "short" })
-                : displayDate(focusDate, { month: "long", year: "numeric" })}
+                ? displayDate(focusDate, { weekday: "short", day: "numeric", month: "short" }, "UTC")
+                : displayDate(focusDate, { month: "long", year: "numeric" }, "UTC")}
             </h1>
             <button
               className="icon-button secondary"
@@ -636,7 +840,7 @@ export default function CalendarPage() {
               <button
                 className="icon-button secondary"
                 type="button"
-                onClick={() => setFocusDate(new Date())}
+                onClick={() => setFocusDate(zonedToday(calendarTimezone))}
                 aria-label="Jump to today"
                 title="Today"
               >
@@ -763,7 +967,14 @@ export default function CalendarPage() {
         )}
 
         {view === "month" && (
-          <MonthView cells={cells} events={visibleEvents} focusDate={focusDate} onDay={openDay} onEvent={setSelectedEvent} />
+          <MonthView
+            cells={cells}
+            events={visibleEvents}
+            focusDate={focusDate}
+            timeZone={calendarTimezone}
+            onDay={openDay}
+            onEvent={setSelectedEvent}
+          />
         )}
 
         {view === "week" && (
@@ -771,11 +982,13 @@ export default function CalendarPage() {
             {Array.from({ length: 7 }, (_, index) => {
               const day = new Date(range.start);
               day.setUTCDate(day.getUTCDate() + index);
-              const dayEvents = eventsForDay(visibleEvents, day);
+              const dayEvents = eventsForDay(visibleEvents, day, calendarTimezone);
               return (
                 <article
                   className={
-                    dateKey(day) === dateKey(new Date()) ? "today" : ""
+                    dateKey(day) === zonedDateKey(new Date(), calendarTimezone)
+                      ? "today"
+                      : ""
                   }
                   key={dateKey(day)}
                 >
@@ -784,13 +997,14 @@ export default function CalendarPage() {
                     type="button"
                     onClick={() => openDay(day)}
                   >
-                    <span>{displayDate(day, { weekday: "short" })}</span>
+                    <span>{displayDate(day, { weekday: "short" }, "UTC")}</span>
                     <strong>{day.getUTCDate()}</strong>
                   </button>
                   <EventList
                     events={dayEvents}
                     members={members}
                     memberNames={memberNames}
+                    timeZone={calendarTimezone}
                     onSelect={setSelectedEvent}
                     compact
                   />
@@ -806,7 +1020,8 @@ export default function CalendarPage() {
               events={focusedEvents}
               members={members}
               memberNames={memberNames}
-              onSelect={setSelectedEvent}
+              timeZone={calendarTimezone}
+                    onSelect={setSelectedEvent}
             />
           </section>
         )}
@@ -820,12 +1035,13 @@ export default function CalendarPage() {
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([key, rows]) => (
                   <article className="agenda-day" key={key}>
-                    <h2>{relativeDayHeading(key)}</h2>
+                    <h2>{relativeDayHeading(key, calendarTimezone)}</h2>
                     <EventList
                       events={rows}
                       members={members}
                       memberNames={memberNames}
-                      onSelect={setSelectedEvent}
+                      timeZone={calendarTimezone}
+                    onSelect={setSelectedEvent}
                     />
                   </article>
                 ))
@@ -844,18 +1060,19 @@ export default function CalendarPage() {
 
         {selectedDay && (
           <BottomSheet
-            title={displayDate(selectedDay, {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-            })}
+            title={displayDate(
+              selectedDay,
+              { weekday: "long", day: "numeric", month: "long" },
+              "UTC",
+            )}
             onDismiss={() => setSelectedDay(null)}
           >
             <EventList
-              events={eventsForDay(visibleEvents, selectedDay)}
+              events={eventsForDay(visibleEvents, selectedDay, calendarTimezone)}
               members={members}
               memberNames={memberNames}
-              onSelect={(event) => {
+              timeZone={calendarTimezone}
+                    onSelect={(event) => {
                 setSelectedDay(null);
                 setSelectedEvent(event);
               }}
@@ -883,6 +1100,7 @@ export default function CalendarPage() {
               labels={labels}
               members={members}
               initialDay={editorDay}
+              timeZone={calendarTimezone}
               busy={busy}
               submitLabel="Save event"
               sharedEventsEnabled={sharedEventsEnabled}
@@ -903,6 +1121,7 @@ export default function CalendarPage() {
               members={members}
               initial={selectedEvent}
               initialDay={new Date(selectedEvent.start_at)}
+              timeZone={calendarTimezone}
               busy={busy}
               submitLabel="Save changes"
               sharedEventsEnabled={sharedEventsEnabled}
@@ -917,12 +1136,6 @@ export default function CalendarPage() {
   );
 }
 
-function eventEndKey(event: EventOccurrence) {
-  const end = new Date(event.end_at);
-  if (event.is_all_day && event.end_at.includes("T00:00:00")) end.setUTCDate(end.getUTCDate() - 1);
-  return dateKey(end);
-}
-
 // Show at most this many event bars per week before collapsing the rest into a
 // "+N more" indicator — a week with nothing more than this stays compact instead of
 // reserving space for events it doesn't have.
@@ -932,16 +1145,22 @@ function MonthView({
   cells,
   events,
   focusDate,
+  timeZone,
   onDay,
   onEvent,
 }: {
   cells: Date[];
   events: EventOccurrence[];
   focusDate: Date;
+  timeZone: string;
   onDay: (day: Date) => void;
   onEvent: (event: EventOccurrence) => void;
 }) {
-  const todayKey = dateKey(new Date());
+  const todayKey = zonedDateKey(new Date(), timeZone);
+  const bounds = useMemo(
+    () => new Map(events.map((event) => [event.occurrence_id, eventDateBounds(event, timeZone)])),
+    [events, timeZone],
+  );
   return (
     <section className="calendar-month" aria-label="Month view">
       <div className="calendar-weekdays" aria-hidden="true">
@@ -955,11 +1174,15 @@ function MonthView({
           const rows: { event: EventOccurrence; start: number; end: number; row: number }[] = [];
           const rowIntervals: { start: number; end: number }[][] = [];
           events
-            .filter((event) => eventEndKey(event) >= weekStart && dateKey(event.start_at) <= weekEnd)
-            .sort((a, b) => dateKey(a.start_at).localeCompare(dateKey(b.start_at)) || a.title.localeCompare(b.title))
+            .filter((event) => {
+              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+              return endKey >= weekStart && startKey <= weekEnd;
+            })
+            .sort((a, b) => bounds.get(a.occurrence_id)!.startKey.localeCompare(bounds.get(b.occurrence_id)!.startKey) || a.title.localeCompare(b.title))
             .forEach((event) => {
-              const start = Math.max(0, days.findIndex((day) => dateKey(day) >= dateKey(event.start_at)));
-              const end = Math.min(6, days.reduce((last, day, index) => dateKey(day) <= eventEndKey(event) ? index : last, -1));
+              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+              const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
+              const end = Math.min(6, days.reduce((last, day, index) => dateKey(day) <= endKey ? index : last, -1));
               if (end < start) return;
               let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
               if (row === -1) row = rowIntervals.length;
@@ -978,7 +1201,10 @@ function MonthView({
             >
               {days.map((day, index) => {
                 const key = dateKey(day);
-                const count = events.filter((event) => dateKey(event.start_at) <= key && eventEndKey(event) >= key).length;
+                const count = events.filter((event) => {
+                  const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+                  return startKey <= key && endKey >= key;
+                }).length;
                 const hidden = hiddenByDay[index] ?? 0;
                 return (
                   <article
@@ -986,7 +1212,7 @@ function MonthView({
                     key={key}
                     style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
                   >
-                    <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, ${count} events`}>
+                    <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events`}>
                       <span>{day.getUTCDate()}</span>
                     </button>
                     {hidden > 0 && <button className="overflow-events" type="button" onClick={() => onDay(day)}>+{hidden} more</button>}
@@ -1000,9 +1226,10 @@ function MonthView({
                 // off the event's own duration, not how much of it happens to fall in
                 // this particular week, or a continuation segment would silently revert
                 // to the lighter single-day chip look and read as a different event.
-                const isMultiDay = eventEndKey(event) !== dateKey(event.start_at);
+                const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+                const isMultiDay = endKey !== startKey;
                 const segmentDays = end - start + 1;
-                const isContinuation = dateKey(event.start_at) < weekStart;
+                const isContinuation = startKey < weekStart;
                 // A segment too narrow for its title to read as anything but a
                 // meaningless fragment ("Te…", "0…") shows no text at all — a blank
                 // coloured bar still communicates "this event continues here," which a
@@ -1015,7 +1242,7 @@ function MonthView({
                     className={`month-event${isMultiDay ? " month-event-span" : ""}`}
                     style={{ "--event-color": resolveColour(event.label?.color ?? "teal"), gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
                     onClick={() => onEvent(event)}
-                    aria-label={`${eventTime(event)} ${event.title}`}
+                    aria-label={`${eventTime(event, timeZone)} ${event.title}`}
                     title={event.title}
                   >
                     {!isMultiDay && <span aria-hidden="true" />}
@@ -1035,12 +1262,14 @@ function EventList({
   events,
   members,
   memberNames,
+  timeZone,
   onSelect,
   compact = false,
 }: {
   events: EventOccurrence[];
   members: Member[];
   memberNames: Map<string, string>;
+  timeZone: string;
   onSelect: (event: EventOccurrence) => void;
   compact?: boolean;
 }) {
@@ -1066,7 +1295,7 @@ function EventList({
               style={{ background: resolveColour(event.label?.color ?? "teal") }}
               aria-label={event.label?.name ?? "Family event"}
             />
-            <span className="event-time">{eventTime(event)}</span>
+            <span className="event-time">{eventTime(event, timeZone)}</span>
             <span className="event-copy">
               <strong>{event.title}</strong>
               <small>

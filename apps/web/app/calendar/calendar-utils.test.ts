@@ -2,13 +2,25 @@ import { describe, expect, it } from "vitest";
 import type { EventOccurrence, Member } from "@mykhaya/shared-types";
 import {
   agendaRange,
+  applyAllDayToggle,
+  computeInitialWhen,
+  DEFAULT_EVENT_DURATION_MINUTES,
+  DEFAULT_EVENT_END_TIME,
+  DEFAULT_EVENT_START_TIME,
   emptyStateMessage,
+  eventDateBounds,
   eventsForDay,
   filterVisibleEvents,
   groupEventsByDay,
   monthCells,
   monthRange,
+  parseLocalInputValue,
   resolveMemberFilter,
+  shiftEndWithStart,
+  utcToZonedInputValue,
+  zonedDateKey,
+  zonedTimeToUtc,
+  zonedToday,
 } from "./calendar-utils";
 
 function event(overrides: Partial<EventOccurrence>): EventOccurrence {
@@ -73,6 +85,7 @@ describe("Calendar presentation", () => {
         event({ title: "Earlier", start_at: "2026-07-31T09:00:00+00:00" }),
       ],
       "2026-07-31",
+      "Europe/London",
     );
     expect(rows.map((row) => row.title)).toEqual([
       "All day",
@@ -86,7 +99,7 @@ describe("Calendar presentation", () => {
       start_at: "2026-07-30T12:00:00+00:00",
       end_at: "2026-08-01T12:00:00+00:00",
     });
-    expect(eventsForDay([multi], "2026-07-31")).toEqual([multi]);
+    expect(eventsForDay([multi], "2026-07-31", "Europe/London")).toEqual([multi]);
   });
 });
 
@@ -129,7 +142,7 @@ describe("Schedule (agenda) view date range", () => {
     expect(inMonth).toBe(true);
     expect(inSchedule).toBe(true);
 
-    const byDay = groupEventsByDay([eyeAppointment]);
+    const byDay = groupEventsByDay([eyeAppointment], "Europe/London");
     expect(byDay.get("2026-08-15")?.map((row) => row.title)).toEqual([
       "Eye Appointment",
     ]);
@@ -158,7 +171,7 @@ describe("Schedule (agenda) view date range", () => {
       created_by: "member-a-id",
       member_ids: ["member-b-id"],
     });
-    const rows = eventsForDay([megansEvent], "2026-08-15");
+    const rows = eventsForDay([megansEvent], "2026-08-15", "Europe/London");
     expect(rows).toEqual([megansEvent]);
     expect(rows[0]?.member_ids).toContain("member-b-id");
   });
@@ -169,7 +182,7 @@ describe("Schedule (agenda) view date range", () => {
       end_at: "2026-08-20T09:30:00+00:00",
       member_ids: ["member-b-id"],
     });
-    expect(eventsForDay([notAssignedToday], "2026-08-15")).toEqual([]);
+    expect(eventsForDay([notAssignedToday], "2026-08-15", "Europe/London")).toEqual([]);
   });
 });
 
@@ -215,10 +228,10 @@ describe("Category (label) filter", () => {
     expect(visible).toEqual([eyeAppointment]);
 
     // Month view derives its per-day list via eventsForDay(visibleEvents, day);
-    // Schedule derives byDay via groupEventsByDay(visibleEvents). Both must be
+    // Schedule derives byDay via groupEventsByDay(visibleEvents, "Europe/London"). Both must be
     // built from the same filtered set and agree on which events appear.
-    const monthDayList = eventsForDay(visible, "2026-08-15");
-    const scheduleByDay = groupEventsByDay(visible);
+    const monthDayList = eventsForDay(visible, "2026-08-15", "Europe/London");
+    const scheduleByDay = groupEventsByDay(visible, "Europe/London");
 
     expect(monthDayList.map((row) => row.title)).toEqual(["Eye Appointment"]);
     expect(scheduleByDay.get("2026-08-15")?.map((row) => row.title)).toEqual([
@@ -374,8 +387,8 @@ describe("Household member filter", () => {
 
   it("8. Month and Schedule consume the same filtered set for a given member/date", () => {
     const visible = filterVisibleEvents(allEvents, megan.user_id, "", "");
-    const monthDayList = eventsForDay(visible, "2026-08-15");
-    const scheduleByDay = groupEventsByDay(visible);
+    const monthDayList = eventsForDay(visible, "2026-08-15", "Europe/London");
+    const scheduleByDay = groupEventsByDay(visible, "Europe/London");
     expect(monthDayList.map((row) => row.title)).toEqual(["Eye Appointment"]);
     expect(scheduleByDay.get("2026-08-15")?.map((row) => row.title)).toEqual([
       "Eye Appointment",
@@ -453,5 +466,433 @@ describe("emptyStateMessage", () => {
     expect(emptyStateMessage("Megan", "Appointment")).toBe(
       "No upcoming events for Megan in Appointment.",
     );
+  });
+});
+
+describe("Timezone-correct instant <-> wall-clock conversion", () => {
+  // Regression coverage for the root cause of the 1-hour bug: the app must
+  // interpret/display event times in the relevant Home/event timezone, never
+  // the server's or browser's own timezone. `zonedTimeToUtc` and
+  // `utcToZonedInputValue` are the only two functions in the app that do
+  // this conversion — every other display/picker function goes through them.
+
+  it("basic round trip: 14 Aug 2026 09:30 Europe/London (BST, UTC+1) stores as 08:30Z", () => {
+    const instant = zonedTimeToUtc(2026, 8, 14, 9, 30, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-08-14T08:30:00.000Z");
+  });
+
+  it("displays that same instant back as 09:30, never 08:30", () => {
+    const instant = new Date("2026-08-14T08:30:00.000Z");
+    expect(utcToZonedInputValue(instant, "Europe/London")).toBe(
+      "2026-08-14T09:30",
+    );
+  });
+
+  it("is correct regardless of which server/process timezone is assumed", () => {
+    // These functions never call `new Date(string)` (browser/process-local
+    // parsing) or read any ambient/process timezone — every conversion goes
+    // through Intl.DateTimeFormat with an explicit `timeZone`, so the same
+    // instant produces the same local wall-clock digits no matter what
+    // timezone the Node process (or CI runner) happens to be started in.
+    // Exercise a spread of unrelated timezones against the same instant to
+    // prove the result depends only on the explicit `timeZone` argument.
+    const instant = new Date("2026-08-14T08:30:00.000Z");
+    expect(utcToZonedInputValue(instant, "Europe/London")).toBe(
+      "2026-08-14T09:30",
+    );
+    expect(utcToZonedInputValue(instant, "UTC")).toBe("2026-08-14T08:30");
+    expect(utcToZonedInputValue(instant, "America/New_York")).toBe(
+      "2026-08-14T04:30",
+    );
+    expect(utcToZonedInputValue(instant, "Pacific/Auckland")).toBe(
+      "2026-08-14T20:30",
+    );
+  });
+
+  it("round-trips through parseLocalInputValue the same way the picker does", () => {
+    const value = utcToZonedInputValue(
+      new Date("2026-08-14T08:30:00.000Z"),
+      "Europe/London",
+    );
+    const parts = parseLocalInputValue(value);
+    const restored = zonedTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      "Europe/London",
+    );
+    expect(restored.toISOString()).toBe("2026-08-14T08:30:00.000Z");
+  });
+
+  it("winter (GMT, UTC+0): 14 Feb 2026 09:30 Europe/London stores as 09:30Z", () => {
+    const instant = zonedTimeToUtc(2026, 2, 14, 9, 30, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-02-14T09:30:00.000Z");
+  });
+});
+
+describe("DST correctness (Europe/London)", () => {
+  // UK 2026 transitions: clocks go forward 01:00 -> 02:00 on Sun 29 Mar
+  // 2026 (GMT -> BST), and back 02:00 -> 01:00 on Sun 25 Oct 2026 (BST ->
+  // GMT). Real IANA data via the platform's Intl implementation, not
+  // hand-rolled offset math.
+
+  it("just before the spring-forward transition is still GMT (UTC+0)", () => {
+    const instant = zonedTimeToUtc(2026, 3, 29, 0, 30, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-03-29T00:30:00.000Z");
+  });
+
+  it("just after the spring-forward transition is BST (UTC+1)", () => {
+    const instant = zonedTimeToUtc(2026, 3, 29, 3, 0, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-03-29T02:00:00.000Z");
+    expect(utcToZonedInputValue(instant, "Europe/London")).toBe(
+      "2026-03-29T03:00",
+    );
+  });
+
+  it("the nonexistent 01:30 spring-forward local time resolves deterministically, not corrupted", () => {
+    // 01:00-02:00 local doesn't exist on 29 Mar 2026 (clocks skip straight
+    // from 01:00 to 02:00) — the platform's Intl data resolves this
+    // consistently rather than throwing or producing NaN.
+    const instant = zonedTimeToUtc(2026, 3, 29, 1, 30, "Europe/London");
+    expect(Number.isNaN(instant.getTime())).toBe(false);
+  });
+
+  it("just before the autumn-back transition is still BST (UTC+1)", () => {
+    const instant = zonedTimeToUtc(2026, 10, 25, 0, 30, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-10-24T23:30:00.000Z");
+  });
+
+  it("just after the autumn-back transition is GMT (UTC+0)", () => {
+    const instant = zonedTimeToUtc(2026, 10, 25, 3, 0, "Europe/London");
+    expect(instant.toISOString()).toBe("2026-10-25T03:00:00.000Z");
+    expect(utcToZonedInputValue(instant, "Europe/London")).toBe(
+      "2026-10-25T03:00",
+    );
+  });
+
+  it("the ambiguous repeated 01:30 autumn-back local time resolves deterministically, not corrupted", () => {
+    const instant = zonedTimeToUtc(2026, 10, 25, 1, 30, "Europe/London");
+    expect(Number.isNaN(instant.getTime())).toBe(false);
+  });
+
+  it("a 09:30-local recurring event's wall-clock time reads back as 09:30 on both sides of a DST transition", () => {
+    // Same intended local time, two different UTC instants either side of
+    // the spring transition — the *server-side* occurrence expansion
+    // (calendar_occurrences.py, tested separately in
+    // test_weekly_recurrence_survives_dst_transition) is what keeps the
+    // stored UTC instant correct per-occurrence; this proves the
+    // *frontend display* layer reads whatever correct instant it's given
+    // back out as the same local wall-clock time, regardless of DST.
+    const beforeTransition = zonedTimeToUtc(2026, 3, 22, 9, 30, "Europe/London");
+    const afterTransition = zonedTimeToUtc(2026, 4, 5, 9, 30, "Europe/London");
+    expect(utcToZonedInputValue(beforeTransition, "Europe/London").endsWith("09:30")).toBe(true);
+    expect(utcToZonedInputValue(afterTransition, "Europe/London").endsWith("09:30")).toBe(true);
+    // The underlying UTC instants genuinely differ by exactly one hour less
+    // than 14 raw days, because of the offset change — proving this isn't
+    // passing by coincidence (e.g. both accidentally landing on the same
+    // offset).
+    const rawDiffMs = afterTransition.getTime() - beforeTransition.getTime();
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+    expect(rawDiffMs).toBe(fourteenDaysMs - 60 * 60 * 1000);
+  });
+});
+
+describe("Start/End picker duration behaviour", () => {
+  it("defaults a new event to a 1-hour duration", () => {
+    expect(DEFAULT_EVENT_DURATION_MINUTES).toBe(60);
+  });
+
+  it("preserves the default 1-hour duration when Start moves", () => {
+    const previousStart = new Date("2026-08-14T07:30:00.000Z"); // 08:30 BST
+    const previousEnd = new Date("2026-08-14T08:30:00.000Z"); // 09:30 BST
+    const nextStart = new Date("2026-08-14T09:00:00.000Z"); // 10:00 BST
+    const nextEnd = shiftEndWithStart(previousStart, previousEnd, nextStart);
+    expect(nextEnd.toISOString()).toBe("2026-08-14T10:00:00.000Z"); // 11:00 BST
+  });
+
+  it("preserves a custom (non-default) duration when Start moves", () => {
+    const previousStart = new Date("2026-08-14T07:30:00.000Z"); // 08:30 BST
+    const previousEnd = new Date("2026-08-14T08:00:00.000Z"); // 09:00 BST (30 min)
+    const nextStart = new Date("2026-08-14T09:00:00.000Z"); // 10:00 BST
+    const nextEnd = shiftEndWithStart(previousStart, previousEnd, nextStart);
+    expect(nextEnd.toISOString()).toBe("2026-08-14T09:30:00.000Z"); // 10:30 BST
+  });
+
+  it("never produces an End at or before the new Start, even from a corrupt zero/negative previous duration", () => {
+    const previousStart = new Date("2026-08-14T08:00:00.000Z");
+    const previousEnd = new Date("2026-08-14T08:00:00.000Z"); // zero duration
+    const nextStart = new Date("2026-08-14T09:00:00.000Z");
+    const nextEnd = shiftEndWithStart(previousStart, previousEnd, nextStart);
+    expect(nextEnd.getTime()).toBeGreaterThan(nextStart.getTime());
+    expect(nextEnd.getTime() - nextStart.getTime()).toBe(
+      DEFAULT_EVENT_DURATION_MINUTES * 60_000,
+    );
+  });
+});
+
+describe("All-day events are pure calendar dates, immune to timezone conversion", () => {
+  function allDayEvent(overrides: Partial<EventOccurrence> = {}): EventOccurrence {
+    return {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: crypto.randomUUID(),
+      title: "Sports Day",
+      is_all_day: true,
+      start_at: "2026-08-14T00:00:00+00:00",
+      end_at: "2026-08-15T00:00:00+00:00", // exclusive end, per backend contract
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: crypto.randomUUID(),
+      updated_at: "2026-07-01T00:00:00+00:00",
+      ...overrides,
+    };
+  }
+
+  it("stays on 14 Aug regardless of which timezone the calendar is viewed in", () => {
+    for (const timeZone of ["UTC", "Europe/London", "America/New_York", "Pacific/Auckland"]) {
+      const { startKey, endKey } = eventDateBounds(allDayEvent(), timeZone);
+      expect(startKey).toBe("2026-08-14");
+      expect(endKey).toBe("2026-08-14");
+    }
+  });
+
+  it("a multi-day all-day event covers every date in between, in any timezone", () => {
+    const multiDay = allDayEvent({ end_at: "2026-08-17T00:00:00+00:00" }); // 14-16 Aug inclusive
+    for (const timeZone of ["UTC", "America/New_York"]) {
+      const { startKey, endKey } = eventDateBounds(multiDay, timeZone);
+      expect(startKey).toBe("2026-08-14");
+      expect(endKey).toBe("2026-08-16");
+    }
+  });
+});
+
+describe("Overnight / multi-day timed events", () => {
+  it("an overnight event (23:00 -> 01:00 next day) is a valid range spanning two calendar dates", () => {
+    const start = zonedTimeToUtc(2026, 8, 14, 23, 0, "Europe/London");
+    const end = zonedTimeToUtc(2026, 8, 15, 1, 0, "Europe/London");
+    expect(end.getTime()).toBeGreaterThan(start.getTime());
+    const overnight: EventOccurrence = {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: crypto.randomUUID(),
+      title: "Overnight flight",
+      is_all_day: false,
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: crypto.randomUUID(),
+      updated_at: "2026-07-01T00:00:00+00:00",
+    };
+    const { startKey, endKey } = eventDateBounds(overnight, "Europe/London");
+    expect(startKey).toBe("2026-08-14");
+    expect(endKey).toBe("2026-08-15");
+  });
+});
+
+describe("zonedToday / zonedDateKey — timezone-correct 'today', never the server's", () => {
+  it("zonedDateKey reads the calendar date an instant falls on in a given timezone", () => {
+    // 23:30 on 14 Aug UTC is already 15 Aug in a positive-offset timezone
+    // ahead of UTC at that moment, and still 14 Aug for one behind it.
+    const instant = new Date("2026-08-14T23:30:00.000Z");
+    expect(zonedDateKey(instant, "UTC")).toBe("2026-08-14");
+    expect(zonedDateKey(instant, "Pacific/Auckland")).toBe("2026-08-15");
+    expect(zonedDateKey(instant, "America/New_York")).toBe("2026-08-14");
+  });
+
+  it("zonedToday returns a UTC-midnight-anchored placeholder for the given timezone's current date", () => {
+    const today = zonedToday("Europe/London");
+    expect(today.getUTCHours()).toBe(0);
+    expect(today.getUTCMinutes()).toBe(0);
+    expect(zonedDateKey(new Date(), "Europe/London")).toBe(
+      today.toISOString().slice(0, 10),
+    );
+  });
+});
+
+describe("All day -> timed conversion never derives a clock value from the all-day boundary", () => {
+  // Regression coverage for: an all-day event's UTC-midnight boundary,
+  // reinterpreted through a real IANA timezone, produces a technically-
+  // explicable but meaningless clock value (00:00Z -> "01:00" during BST).
+  // Timed events represent instants with timezone semantics; all-day events
+  // represent calendar-date ranges. Converting from all-day to timed must
+  // establish/restore a meaningful wall-clock time, never reinterpret the
+  // all-day boundary as one.
+  function persistedAllDayEvent(
+    overrides: Partial<EventOccurrence> = {},
+  ): EventOccurrence {
+    return {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: crypto.randomUUID(),
+      title: "Sports Day",
+      is_all_day: true,
+      start_at: "2026-08-20T00:00:00+00:00",
+      end_at: "2026-08-21T00:00:00+00:00", // exclusive end
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: crypto.randomUUID(),
+      updated_at: "2026-07-01T00:00:00+00:00",
+      ...overrides,
+    };
+  }
+
+  it("persisted all-day -> timed during BST: date preserved, Start is never 01:00 or otherwise boundary-derived", () => {
+    const initial = persistedAllDayEvent(); // 20 Aug 2026, BST (UTC+1)
+    const when = computeInitialWhen(initial, new Date(), "Europe/London");
+    expect(when.hasTimedValues).toBe(false);
+    expect(when.startDate).toBe("2026-08-20");
+    expect(when.endDate).toBe("2026-08-20");
+
+    const timed = applyAllDayToggle(when, false);
+    expect(timed.allDay).toBe(false);
+    expect(timed.hasTimedValues).toBe(true);
+    // The date must remain 20 August — only the clock portion changes.
+    expect(timed.startDate).toBe("2026-08-20");
+    expect(timed.endDate).toBe("2026-08-20");
+    // Never the localized-UTC-midnight artifact.
+    expect(timed.startTime).not.toBe("01:00");
+    expect(timed.startTime).toBe(DEFAULT_EVENT_START_TIME);
+    expect(timed.endTime).toBe(DEFAULT_EVENT_END_TIME);
+    // Established default duration/rule: End > Start on the same date.
+    const startInstant = zonedTimeToUtc(2026, 8, 20, 9, 0, "Europe/London");
+    const endInstant = zonedTimeToUtc(2026, 8, 20, 10, 0, "Europe/London");
+    expect(endInstant.getTime()).toBeGreaterThan(startInstant.getTime());
+    expect(
+      (endInstant.getTime() - startInstant.getTime()) / 60_000,
+    ).toBe(DEFAULT_EVENT_DURATION_MINUTES);
+  });
+
+  it("persisted all-day -> timed during GMT: same behaviour, offset-independent", () => {
+    const initial = persistedAllDayEvent({
+      title: "Winter Fair",
+      start_at: "2026-02-14T00:00:00+00:00", // GMT, UTC+0
+      end_at: "2026-02-15T00:00:00+00:00",
+    });
+    const when = computeInitialWhen(initial, new Date(), "Europe/London");
+    expect(when.hasTimedValues).toBe(false);
+    expect(when.startDate).toBe("2026-02-14");
+
+    const timed = applyAllDayToggle(when, false);
+    expect(timed.startDate).toBe("2026-02-14");
+    expect(timed.endDate).toBe("2026-02-14");
+    expect(timed.startTime).toBe(DEFAULT_EVENT_START_TIME);
+    expect(timed.endTime).toBe(DEFAULT_EVENT_END_TIME);
+    // GMT is UTC+0, so even the naive (buggy) localized-midnight value would
+    // coincidentally be "00:00" here — assert the *correct* mechanism was
+    // used (the deterministic default), not a coincidentally-matching one.
+    expect(timed.startTime).toBe("09:00");
+  });
+
+  it("timed -> all-day -> timed in the same edit session restores the original values exactly", () => {
+    const timedEvent: EventOccurrence = {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: crypto.randomUUID(),
+      title: "Dentist",
+      is_all_day: false,
+      start_at: zonedTimeToUtc(2026, 8, 20, 14, 30, "Europe/London").toISOString(),
+      end_at: zonedTimeToUtc(2026, 8, 20, 15, 15, "Europe/London").toISOString(),
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: crypto.randomUUID(),
+      updated_at: "2026-07-01T00:00:00+00:00",
+    };
+    const initialWhen = computeInitialWhen(timedEvent, new Date(), "Europe/London");
+    expect(initialWhen.hasTimedValues).toBe(true);
+    expect(initialWhen.startTime).toBe("14:30");
+    expect(initialWhen.endTime).toBe("15:15");
+
+    const allDayOn = applyAllDayToggle(initialWhen, true);
+    expect(allDayOn.allDay).toBe(true);
+    // Hidden, not discarded.
+    expect(allDayOn.startTime).toBe("14:30");
+    expect(allDayOn.endTime).toBe("15:15");
+
+    const allDayOffAgain = applyAllDayToggle(allDayOn, false);
+    expect(allDayOffAgain.allDay).toBe(false);
+    expect(allDayOffAgain.startTime).toBe("14:30");
+    expect(allDayOffAgain.endTime).toBe("15:15");
+  });
+
+  it("a user-edited timed value survives a second All-day round trip without being re-synthesized", () => {
+    // Persisted all-day -> user turns All day off (gets the 09:00-10:00
+    // default) -> user edits to a custom time -> toggles All day on and off
+    // again: the custom edit must not be discarded and replaced with the
+    // default a second time.
+    const initial = persistedAllDayEvent();
+    const afterFirstToggleOff = applyAllDayToggle(
+      computeInitialWhen(initial, new Date(), "Europe/London"),
+      false,
+    );
+    const userEdited: typeof afterFirstToggleOff = {
+      ...afterFirstToggleOff,
+      startTime: "16:00",
+      endTime: "17:00",
+    };
+    const toggledOnAgain = applyAllDayToggle(userEdited, true);
+    const toggledOffAgain = applyAllDayToggle(toggledOnAgain, false);
+    expect(toggledOffAgain.startTime).toBe("16:00");
+    expect(toggledOffAgain.endTime).toBe("17:00");
+  });
+
+  it("does not shift to the previous or next day in BST or GMT", () => {
+    for (const [tz, startAt, endAt, expectedDate] of [
+      ["Europe/London", "2026-08-20T00:00:00+00:00", "2026-08-21T00:00:00+00:00", "2026-08-20"],
+      ["Europe/London", "2026-02-14T00:00:00+00:00", "2026-02-15T00:00:00+00:00", "2026-02-14"],
+    ] as const) {
+      const when = computeInitialWhen(
+        persistedAllDayEvent({ start_at: startAt, end_at: endAt }),
+        new Date(),
+        tz,
+      );
+      const timed = applyAllDayToggle(when, false);
+      expect(timed.startDate).toBe(expectedDate);
+      expect(timed.endDate).toBe(expectedDate);
+    }
+  });
+
+  it("a multi-day all-day event (20-22 Aug) preserves its date range and produces End > Start when converted to timed", () => {
+    const initial = persistedAllDayEvent({
+      title: "Camping Trip",
+      start_at: "2026-08-20T00:00:00+00:00",
+      end_at: "2026-08-23T00:00:00+00:00", // exclusive end -> 20, 21, 22 Aug inclusive
+    });
+    const when = computeInitialWhen(initial, new Date(), "Europe/London");
+    expect(when.multiDay).toBe(true);
+    expect(when.startDate).toBe("2026-08-20");
+    expect(when.endDate).toBe("2026-08-22");
+
+    const timed = applyAllDayToggle(when, false);
+    expect(timed.multiDay).toBe(true);
+    // The date range must not collapse to a single day.
+    expect(timed.startDate).toBe("2026-08-20");
+    expect(timed.endDate).toBe("2026-08-22");
+
+    const startInstant = zonedTimeToUtc(2026, 8, 20, 9, 0, "Europe/London");
+    const endInstant = zonedTimeToUtc(2026, 8, 22, 10, 0, "Europe/London");
+    expect(endInstant.getTime()).toBeGreaterThan(startInstant.getTime());
   });
 });

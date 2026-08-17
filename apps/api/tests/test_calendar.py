@@ -546,3 +546,122 @@ async def test_recurring_event_occurrences_keep_consistent_label_colour(
     assert len(items) >= 4, "expected multiple weekly occurrences in a 5-week window"
     assert all(item["label"]["color"] == "violet" for item in items)
     assert all(item["label"]["id"] == label_id for item in items)
+
+
+@pytest.mark.asyncio
+async def test_create_event_rejects_naive_datetime(client: AsyncClient) -> None:
+    """A start_at/end_at with no UTC offset is ambiguous about which instant
+    it names — the API must reject it (422) rather than silently guessing
+    server-local or UTC intent. Regression test for the calendar timezone
+    architecture fix: every timed boundary must be an explicit instant."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"naive-{suffix}@example.com", "Naive Owner")
+    home_id = await _home_with_calendar(client, "Naive Home")
+
+    naive_start = (datetime.now(UTC) + timedelta(hours=2)).replace(tzinfo=None)
+    naive_end = (datetime.now(UTC) + timedelta(hours=3)).replace(tzinfo=None)
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Ambiguous event",
+            "start_at": naive_start.isoformat(),
+            "end_at": naive_end.isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_all_day_event_normalized_to_utc_midnight_on_create(client: AsyncClient) -> None:
+    """An all-day event names calendar dates, not a wall-clock instant — even
+    if a client submits a non-midnight start/end (e.g. a stray time-of-day
+    left over from a timed picker), the stored instant must be normalized to
+    literal UTC midnight so the exclusive-end-date contract every calendar
+    view relies on always holds. Regression test for all-day events silently
+    landing on the wrong day when converted through a non-UTC timezone."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"allday-{suffix}@example.com", "All Day Owner")
+    home_id = await _home_with_calendar(client, "All Day Home")
+
+    # Deliberately submit a non-midnight time-of-day and a same-day end (as
+    # the old frontend picker used to for a "same day" all-day event) to
+    # prove the backend normalizes regardless of what was sent.
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Sports Day",
+            "start_at": "2026-08-14T09:00:00+01:00",
+            "end_at": "2026-08-14T10:00:00+01:00",
+            "timezone": "Europe/London",
+            "is_all_day": True,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+    event = created.json()
+    assert event["start_at"] in ("2026-08-14T00:00:00Z", "2026-08-14T00:00:00+00:00")
+    # Exclusive end: the day *after* the single covered calendar date.
+    assert event["end_at"] in ("2026-08-15T00:00:00Z", "2026-08-15T00:00:00+00:00")
+
+
+@pytest.mark.asyncio
+async def test_all_day_event_normalized_to_utc_midnight_on_update(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"alldayedit-{suffix}@example.com", "All Day Editor")
+    home_id = await _home_with_calendar(client, "All Day Edit Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Bank Holiday",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+    event = created.json()
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json={
+            "title": "Bank Holiday",
+            # A three-day all-day event (28-30 Aug inclusive), submitted with
+            # a stray afternoon time-of-day on both ends. end_at is the
+            # exclusive boundary (the day after the last covered date, per
+            # the existing convention), same as Month/Schedule already
+            # expect and the same as the frontend picker now constructs.
+            "start_at": "2026-08-28T14:30:00+01:00",
+            "end_at": "2026-08-31T14:30:00+01:00",
+            "timezone": "Europe/London",
+            "is_all_day": True,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "expected_updated_at": event["updated_at"],
+        },
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["start_at"] in ("2026-08-28T00:00:00Z", "2026-08-28T00:00:00+00:00")
+    # Exclusive end: the day after the last covered date (30 Aug).
+    assert body["end_at"] in ("2026-08-31T00:00:00Z", "2026-08-31T00:00:00+00:00")

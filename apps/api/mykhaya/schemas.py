@@ -454,6 +454,18 @@ class EventLabelResponse(BaseModel):
     commercial_access: Literal["normal", "read_only_due_to_plan"] | None = None
 
 
+def _require_tz_aware(value: datetime | None) -> datetime | None:
+    # A naive datetime (no UTC offset in the wire representation) is
+    # ambiguous about which instant it actually names — accepting one here
+    # would leave the caller's local-timezone assumption to be silently
+    # guessed by the DB driver rather than stated explicitly by the client.
+    # Every calendar timestamp boundary must be an unambiguous instant; reject
+    # naive values instead of guessing server/UTC intent.
+    if value is not None and value.tzinfo is None:
+        raise ValueError("must include a UTC offset (e.g. end in Z or +01:00)")
+    return value
+
+
 class EventCreate(StrictModel):
     title: str = Field(min_length=1, max_length=180)
     start_at: datetime
@@ -476,6 +488,11 @@ class EventCreate(StrictModel):
     recurrence_until: datetime | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
 
+    @field_validator("start_at", "end_at", "recurrence_until")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
+
 
 class EventUpdate(StrictModel):
     title: str = Field(min_length=1, max_length=180)
@@ -493,6 +510,11 @@ class EventUpdate(StrictModel):
     recurrence_until: datetime | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
     expected_updated_at: datetime
+
+    @field_validator("start_at", "end_at", "recurrence_until")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
 
 
 class EventOccurrence(BaseModel):

@@ -96,6 +96,31 @@ def _validate_timezone(value: str) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid timezone") from exc
 
 
+def _all_day_midnight(value: datetime) -> datetime:
+    # An all-day event names calendar dates, not a wall-clock instant in any
+    # particular timezone — anchoring it to literal UTC midnight (rather than
+    # midnight in the event's/Home's timezone) means its stored instant never
+    # depends on a timezone conversion that could push it into the previous
+    # or next UTC day. Every reader (this API, the frontend's UTC-based day
+    # bucketing) can therefore treat it as a pure date without reference to
+    # any timezone.
+    as_utc = value.astimezone(UTC)
+    return datetime(as_utc.year, as_utc.month, as_utc.day, tzinfo=UTC)
+
+
+def _normalize_all_day_bounds(start_at: datetime, end_at: datetime) -> tuple[datetime, datetime]:
+    # Defense-in-depth: normalize server-side regardless of what a client
+    # sent, so an all-day event can never be persisted with a non-midnight
+    # boundary that would break the exclusive-end-date contract every
+    # calendar view relies on. `end_at` is exclusive (the day after the last
+    # calendar date the event covers), matching the existing convention.
+    start = _all_day_midnight(start_at)
+    end = _all_day_midnight(end_at)
+    if end <= start:
+        end = start + timedelta(days=1)
+    return start, end
+
+
 async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCalendar:
     calendar = await db.scalar(
         select(HomeCalendar).where(
@@ -782,6 +807,9 @@ async def create_event(
     _validate_timezone(body.timezone)
     if body.end_at <= body.start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")
+    start_at, end_at = body.start_at, body.end_at
+    if body.is_all_day:
+        start_at, end_at = _normalize_all_day_bounds(start_at, end_at)
 
     calendar_row = await _ensure_home_calendar(db, home_id)
     if body.calendar_id is not None and body.calendar_id != calendar_row.id:
@@ -840,8 +868,8 @@ async def create_event(
         label_id=body.label_id,
         title=" ".join(body.title.strip().split()),
         description=body.description,
-        start_at=body.start_at,
-        end_at=body.end_at,
+        start_at=start_at,
+        end_at=end_at,
         is_all_day=body.is_all_day,
         timezone=body.timezone,
         location_text=body.location_text,
@@ -951,6 +979,9 @@ async def update_event(
     _validate_timezone(body.timezone)
     if body.end_at <= body.start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End must be after start")
+    start_at, end_at = body.start_at, body.end_at
+    if body.is_all_day:
+        start_at, end_at = _normalize_all_day_bounds(start_at, end_at)
 
     event = await db.scalar(
         select(CalendarEvent)
@@ -1034,16 +1065,16 @@ async def update_event(
     # change (something that actually affects whether/where they show up)
     # should.
     material_change = (
-        event.start_at != body.start_at
-        or event.end_at != body.end_at
+        event.start_at != start_at
+        or event.end_at != end_at
         or event.is_all_day != body.is_all_day
         or event.location_text != body.location_text
     )
 
     event.title = " ".join(body.title.strip().split())
     event.description = body.description
-    event.start_at = body.start_at
-    event.end_at = body.end_at
+    event.start_at = start_at
+    event.end_at = end_at
     event.is_all_day = body.is_all_day
     event.timezone = body.timezone
     event.location_text = body.location_text

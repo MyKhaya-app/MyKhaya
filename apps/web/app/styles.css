@@ -1788,6 +1788,15 @@ body.sheet-open {
 .form-wide {
   grid-column: 1 / -1;
 }
+.event-when {
+  display: grid;
+  gap: 0.65rem;
+}
+.event-when-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+}
 .check-row {
   align-items: center;
   display: flex;
