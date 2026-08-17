@@ -9,8 +9,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
+  MapPin,
   Plus,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import type {
@@ -30,6 +32,8 @@ import { useActiveHome } from "@/components/use-active-home";
 import {
   agendaRange,
   applyAllDayToggle,
+  canDeleteEvent,
+  canEditEvent,
   computeInitialWhen,
   DEFAULT_EVENT_DURATION_MINUTES,
   dateKey,
@@ -104,6 +108,71 @@ function relativeDayHeading(key: string, timeZone: string) {
   );
 }
 
+const REMINDER_LABELS: Record<number, string> = {
+  0: "At event time",
+  15: "15 minutes before",
+  60: "1 hour before",
+  1440: "1 day before",
+};
+function reminderLabel(minutes: number | null): string | null {
+  if (minutes === null) return null;
+  return REMINDER_LABELS[minutes] ?? `${minutes} minutes before`;
+}
+
+const RECURRENCE_LABELS: Record<RecurrencePattern, string | null> = {
+  none: null,
+  daily: "Every day",
+  weekly: "Every week",
+  monthly: "Every month",
+  yearly: "Every year",
+  weekdays: "Every weekday",
+};
+function recurrenceLabel(recurrence: RecurrencePattern): string | null {
+  return RECURRENCE_LABELS[recurrence];
+}
+
+// The read-only View mode's date/time line — reuses the exact same
+// timezone-correct display utilities as every other calendar view (never a
+// separate UTC/browser-local/naive formatting path). All-day boundaries are
+// read as plain UTC calendar dates (never re-localized); timed instants are
+// read in the event's own governing timezone.
+function eventWhenSummary(
+  event: EventOccurrence,
+  timeZone: string,
+): { dateLine: string; timeLine: string | null } {
+  const tz = event.timezone || timeZone;
+  const dateOptions: Intl.DateTimeFormatOptions = {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  };
+  if (event.is_all_day) {
+    const endInclusive = new Date(event.end_at);
+    endInclusive.setUTCDate(endInclusive.getUTCDate() - 1);
+    const startKey = dateKey(event.start_at);
+    const endKey = dateKey(endInclusive);
+    const dateLine =
+      startKey === endKey
+        ? displayDate(event.start_at, dateOptions, "UTC")
+        : `${displayDate(event.start_at, dateOptions, "UTC")} — ${displayDate(endInclusive, dateOptions, "UTC")}`;
+    return { dateLine, timeLine: "All day" };
+  }
+  const sameDay = zonedDateKey(event.start_at, tz) === zonedDateKey(event.end_at, tz);
+  const startTimeLabel = displayDate(event.start_at, { hour: "2-digit", minute: "2-digit" }, tz);
+  const endTimeLabel = displayDate(event.end_at, { hour: "2-digit", minute: "2-digit" }, tz);
+  if (sameDay) {
+    return {
+      dateLine: displayDate(event.start_at, dateOptions, tz),
+      timeLine: `${startTimeLabel} – ${endTimeLabel}`,
+    };
+  }
+  return {
+    dateLine: `${displayDate(event.start_at, dateOptions, tz)} ${startTimeLabel} → ${displayDate(event.end_at, dateOptions, tz)} ${endTimeLabel}`,
+    timeLine: null,
+  };
+}
+
 function combineZoned(date: string, time: string, timeZone: string): Date {
   const { year, month, day } = parseLocalInputValue(date);
   const [hour, minute] = time.split(":").map(Number);
@@ -151,6 +220,15 @@ function EventForm({
   const [initialWhen] = useState(() =>
     computeInitialWhen(initial, initialDay, eventTimeZone),
   );
+  // Moves focus into the form as soon as it mounts — i.e. every time the
+  // sheet unlocks from View into Edit (EventForm mounts fresh each time).
+  // Focuses the form itself (tabIndex=-1), never a text field directly: the
+  // same iOS Safari zoom-on-focus concern BottomSheet's own initial-focus
+  // logic already avoids.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    formRef.current?.focus();
+  }, []);
   const [allDay, setAllDay] = useState(initialWhen.allDay);
   const [startDate, setStartDate] = useState(initialWhen.startDate);
   const [startTime, setStartTime] = useState(initialWhen.startTime);
@@ -292,7 +370,7 @@ function EventForm({
   }
 
   return (
-    <form className="event-form" onSubmit={submit}>
+    <form className="event-form" onSubmit={submit} ref={formRef} tabIndex={-1}>
       <label className="form-wide">
         Title
         <input
@@ -302,18 +380,23 @@ function EventForm({
           maxLength={180}
         />
       </label>
-      <fieldset className="form-wide event-when">
-        <legend>When</legend>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={allDay}
-            onChange={(event) => onToggleAllDay(event.target.checked)}
-          />
-          All day
-        </label>
+      <div className="form-wide event-section">
+        <div className="event-section-heading">
+          <span className="eyebrow">When</span>
+          <label className="event-when-toggle">
+            All day
+            <input
+              className="switch"
+              type="checkbox"
+              role="switch"
+              aria-checked={allDay}
+              checked={allDay}
+              onChange={(event) => onToggleAllDay(event.target.checked)}
+            />
+          </label>
+        </div>
         <div className="event-when-grid">
-          <label>
+          <label className="form-wide">
             {multiDay ? "Starts" : "Date"}
             <input
               type="date"
@@ -347,7 +430,7 @@ function EventForm({
         </div>
         {multiDay && (
           <div className="event-when-grid">
-            <label>
+            <label className="form-wide">
               Ends
               <input
                 type="date"
@@ -374,14 +457,14 @@ function EventForm({
           className="link-button"
           onClick={() => onToggleMultiDay(!multiDay)}
         >
-          {multiDay ? "Same day event" : "Ends on a different day"}
+          {multiDay ? "− Same day event" : "+ Ends on another day"}
         </button>
         {rangeNotice && <p className="quiet-state">{rangeNotice}</p>}
-      </fieldset>
+      </div>
       {members.length > 0 && (
-        <fieldset className="form-wide">
-          <legend>Household members</legend>
-          <div className="member-checks">
+        <div className="form-wide event-section">
+          <span className="eyebrow">People</span>
+          <div className="member-list">
             {members.map((member) => {
               // Assigning a *new* member is the Family-only "shared event"
               // capability (events.shared.enabled) — a member already on this
@@ -395,18 +478,28 @@ function EventForm({
               const locked = !sharedEventsEnabled && !alreadyIncluded;
               return (
                 <label
-                  className={`check-row${locked ? " check-row-locked" : ""}`}
+                  className={`member-row${locked ? " member-row-locked" : ""}`}
                   key={member.user_id}
                 >
+                  <Avatar
+                    id={member.user_id}
+                    name={member.display_name}
+                    colour={member.colour}
+                    avatarVersion={member.avatar_version}
+                    size="sm"
+                  />
+                  <span className="member-row-name">
+                    {member.display_name}
+                    {locked && <span className="quiet-state"> · Family</span>}
+                  </span>
                   <input
                     name="members"
                     type="checkbox"
                     value={member.user_id}
                     defaultChecked={alreadyIncluded}
                     disabled={locked}
+                    aria-label={`Include ${member.display_name}`}
                   />
-                  {member.display_name}
-                  {locked && <span className="quiet-state"> · Family</span>}
                 </label>
               );
             })}
@@ -416,7 +509,7 @@ function EventForm({
               Assigning this event to other household members is available with MyKhaya Family.
             </p>
           )}
-        </fieldset>
+        </div>
       )}
       <label>
         Calendar or category
@@ -448,7 +541,10 @@ function EventForm({
         />
       </label>
       <details className="form-wide event-advanced">
-        <summary>Reminder, repeat and notes</summary>
+        <summary>
+          Reminder, repeat and notes
+          <ChevronRight className="chevron" size={18} aria-hidden="true" />
+        </summary>
         <div className="event-form advanced-fields">
           <label>
             Reminder
@@ -492,13 +588,123 @@ function EventForm({
         <button className="secondary" type="button" onClick={onCancel}>
           Cancel
         </button>
-        {onDelete && (
+      </div>
+      {onDelete && (
+        <button className="danger-link" type="button" onClick={onDelete}>
+          <Trash2 size={16} aria-hidden="true" />
+          Delete event
+        </button>
+      )}
+    </form>
+  );
+}
+
+// The read-only View state a tapped event opens into. Deliberately a
+// separate component from EventForm (rather than one form with every field
+// disabled) — presentation and editing are different user actions with
+// different visual languages (see the design brief: no input borders, no
+// disabled-looking controls, just information). Nothing here can mutate the
+// event; the only interactive elements are Edit/Delete, both gated by the
+// same permission rules the backend enforces.
+function EventDetails({
+  event,
+  members,
+  timeZone,
+  canDelete,
+  onDelete,
+}: {
+  event: EventOccurrence;
+  members: Member[];
+  timeZone: string;
+  canDelete: boolean;
+  onDelete: () => Promise<void>;
+}) {
+  const { dateLine, timeLine } = eventWhenSummary(event, timeZone);
+  const people = event.member_ids
+    .map((id) => members.find((member) => member.user_id === id))
+    .filter((member): member is Member => Boolean(member));
+  const reminder = reminderLabel(event.reminder_minutes);
+  const repeat = recurrenceLabel(event.recurrence);
+
+  return (
+    <div className="event-view">
+      <div className="event-view-when">
+        <strong>{dateLine}</strong>
+        {timeLine && <span>{timeLine}</span>}
+      </div>
+
+      {event.location_text && (
+        <div className="event-view-section">
+          <span className="eyebrow">Location</span>
+          <div className="event-view-value">
+            <MapPin size={16} aria-hidden="true" />
+            {event.location_text}
+          </div>
+        </div>
+      )}
+
+      {people.length > 0 && (
+        <div className="event-view-section">
+          <span className="eyebrow">People</span>
+          <div className="event-view-people">
+            {people.map((member) => (
+              <div className="event-view-person" key={member.user_id}>
+                <Avatar
+                  id={member.user_id}
+                  name={member.display_name}
+                  colour={member.colour}
+                  avatarVersion={member.avatar_version}
+                  size="sm"
+                />
+                {member.display_name}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="event-view-section">
+        <span className="eyebrow">Calendar</span>
+        <div className="event-view-value">
+          <span
+            className="colour-dot"
+            style={{ "--swatch-colour": resolveColour(event.label?.color ?? "teal") } as React.CSSProperties}
+            aria-hidden="true"
+          />
+          {event.label?.name ?? "Family calendar"}
+        </div>
+      </div>
+
+      {reminder && (
+        <div className="event-view-section">
+          <span className="eyebrow">Reminder</span>
+          <p>{reminder}</p>
+        </div>
+      )}
+
+      {repeat && (
+        <div className="event-view-section">
+          <span className="eyebrow">Repeat</span>
+          <p>{repeat}</p>
+        </div>
+      )}
+
+      {event.description && (
+        <div className="event-view-section">
+          <span className="eyebrow">Notes</span>
+          <p className="event-view-notes">{event.description}</p>
+        </div>
+      )}
+
+      {canDelete && (
+        <div className="event-view-actions">
           <button className="danger-link" type="button" onClick={onDelete}>
+            <Trash2 size={16} aria-hidden="true" />
             Delete event
           </button>
-        )}
-      </div>
-    </form>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -526,6 +732,12 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<EventOccurrence | null>(
     null,
   );
+  // Whether the currently open existing-event sheet is unlocked for editing.
+  // Always starts false — tapping an event opens it read-only (View); Edit
+  // is an explicit, separate action. Reset by openEvent/closeEventSheet so
+  // an event's draft state can never leak into the next event opened.
+  const [editingSelected, setEditingSelected] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -666,12 +878,37 @@ export default function CalendarPage() {
     if (!activeHomeId || !deepLinkedEventId) return;
     api
       .eventDetail(activeHomeId, deepLinkedEventId)
-      .then((detail) => setSelectedEvent(detail.event))
+      .then((detail) => openEvent(detail.event))
       .catch(() => {
         // The event may have been deleted since the reminder was sent — fail quietly,
         // the user just lands on the calendar with nothing pre-opened.
       });
   }, [activeHomeId, searchParams]);
+
+  // Needed to evaluate the same "edit your own event" rule the backend
+  // enforces (calendar.edit_own vs calendar.edit_all — see canEditEvent) —
+  // Home.capabilities alone can't tell created-by-me apart from
+  // created-by-someone-else.
+  useEffect(() => {
+    api
+      .me()
+      .then((user) => setCurrentUserId(user.id))
+      .catch(() => setCurrentUserId(null));
+  }, []);
+
+  // Opening an existing event always starts in read-only View mode — Edit is
+  // a separate, explicit action (see EventDetails/EventForm below). Routing
+  // every "select an event" call site through this (rather than calling
+  // setSelectedEvent directly) guarantees a freshly opened event can never
+  // inherit a previous event's edit-mode state.
+  function openEvent(event: EventOccurrence) {
+    setSelectedEvent(event);
+    setEditingSelected(false);
+  }
+  function closeEventSheet() {
+    setSelectedEvent(null);
+    setEditingSelected(false);
+  }
 
   useEffect(() => {
     setError("");
@@ -751,11 +988,15 @@ export default function CalendarPage() {
     setError("");
     setBusy(true);
     try {
-      await api.updateEvent(activeHomeId, selectedEvent.event_id, {
+      const updated = await api.updateEvent(activeHomeId, selectedEvent.event_id, {
         ...payload,
         expected_updated_at: selectedEvent.updated_at,
       });
-      setSelectedEvent(null);
+      // Return to View mode showing the newly persisted values, rather than
+      // closing the sheet — the freshly returned event (not a stale local
+      // copy) is what View then renders.
+      setSelectedEvent(updated);
+      setEditingSelected(false);
       await load();
     } catch (cause) {
       setError(
@@ -777,7 +1018,7 @@ export default function CalendarPage() {
       return;
     try {
       await api.deleteEvent(activeHomeId, selectedEvent.event_id);
-      setSelectedEvent(null);
+      closeEventSheet();
       await load();
     } catch (cause) {
       setError(
@@ -973,7 +1214,7 @@ export default function CalendarPage() {
             focusDate={focusDate}
             timeZone={calendarTimezone}
             onDay={openDay}
-            onEvent={setSelectedEvent}
+            onEvent={openEvent}
           />
         )}
 
@@ -1005,7 +1246,7 @@ export default function CalendarPage() {
                     members={members}
                     memberNames={memberNames}
                     timeZone={calendarTimezone}
-                    onSelect={setSelectedEvent}
+                    onSelect={openEvent}
                     compact
                   />
                 </article>
@@ -1021,7 +1262,7 @@ export default function CalendarPage() {
               members={members}
               memberNames={memberNames}
               timeZone={calendarTimezone}
-                    onSelect={setSelectedEvent}
+                    onSelect={openEvent}
             />
           </section>
         )}
@@ -1041,7 +1282,7 @@ export default function CalendarPage() {
                       members={members}
                       memberNames={memberNames}
                       timeZone={calendarTimezone}
-                    onSelect={setSelectedEvent}
+                    onSelect={openEvent}
                     />
                   </article>
                 ))
@@ -1072,9 +1313,9 @@ export default function CalendarPage() {
               members={members}
               memberNames={memberNames}
               timeZone={calendarTimezone}
-                    onSelect={(event) => {
+              onSelect={(event) => {
                 setSelectedDay(null);
-                setSelectedEvent(event);
+                openEvent(event);
               }}
             />
             <button
@@ -1110,27 +1351,56 @@ export default function CalendarPage() {
           </BottomSheet>
         )}
 
-        {selectedEvent && (
-          <BottomSheet
-            title="Event details"
-            onDismiss={() => setSelectedEvent(null)}
-            fullHeight
-          >
-            <EventForm
-              labels={labels}
-              members={members}
-              initial={selectedEvent}
-              initialDay={new Date(selectedEvent.start_at)}
-              timeZone={calendarTimezone}
-              busy={busy}
-              submitLabel="Save changes"
-              sharedEventsEnabled={sharedEventsEnabled}
-              onSubmit={update}
-              onCancel={() => setSelectedEvent(null)}
-              onDelete={remove}
-            />
-          </BottomSheet>
-        )}
+        {selectedEvent && (() => {
+          const canEdit = canEditEvent(
+            activeHome?.capabilities ?? [],
+            selectedEvent,
+            currentUserId,
+          );
+          const canDelete = canDeleteEvent(activeHome?.capabilities ?? []);
+          return (
+            <BottomSheet
+              title={editingSelected ? "Edit event" : selectedEvent.title}
+              onDismiss={closeEventSheet}
+              headerAction={
+                !editingSelected && canEdit ? (
+                  <button
+                    className="tertiary"
+                    type="button"
+                    onClick={() => setEditingSelected(true)}
+                  >
+                    Edit
+                  </button>
+                ) : undefined
+              }
+              fullHeight
+            >
+              {editingSelected ? (
+                <EventForm
+                  labels={labels}
+                  members={members}
+                  initial={selectedEvent}
+                  initialDay={new Date(selectedEvent.start_at)}
+                  timeZone={calendarTimezone}
+                  busy={busy}
+                  submitLabel="Save changes"
+                  sharedEventsEnabled={sharedEventsEnabled}
+                  onSubmit={update}
+                  onCancel={() => setEditingSelected(false)}
+                  onDelete={canDelete ? remove : undefined}
+                />
+              ) : (
+                <EventDetails
+                  event={selectedEvent}
+                  members={members}
+                  timeZone={calendarTimezone}
+                  canDelete={canDelete}
+                  onDelete={remove}
+                />
+              )}
+            </BottomSheet>
+          );
+        })()}
       </main>
     </AppShell>
   );

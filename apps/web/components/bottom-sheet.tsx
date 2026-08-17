@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { X } from "lucide-react";
 
 export function BottomSheet({
   title,
   onDismiss,
   children,
   fullHeight = false,
+  headerAction,
 }: {
   title: string;
   onDismiss: () => void;
   children: React.ReactNode;
   fullHeight?: boolean;
+  /** An optional action rendered between the title and the close button —
+   *  e.g. the "Edit" action on a read-only event detail sheet. Kept generic
+   *  (not calendar-specific) so any sheet can use it. */
+  headerAction?: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -82,14 +88,17 @@ export function BottomSheet({
         <div className="sheet-handle" aria-hidden="true" />
         <header>
           <h2 id="sheet-title">{title}</h2>
-          <button
-            className="icon-button secondary bottom-sheet-close"
-            type="button"
-            onClick={onDismiss}
-            aria-label="Close dialog"
-          >
-            ×
-          </button>
+          <div className="sheet-header-actions">
+            {headerAction}
+            <button
+              className="icon-button secondary bottom-sheet-close"
+              type="button"
+              onClick={onDismiss}
+              aria-label="Close dialog"
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
         </header>
         <div className="sheet-content">{children}</div>
       </div>

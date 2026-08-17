@@ -1756,12 +1756,29 @@ body.sheet-open {
   align-items: center;
   border-bottom: 1px solid #ebe4da;
   display: flex;
+  gap: 0.5rem;
   justify-content: space-between;
   padding: 0.5rem 1rem 0.8rem;
 }
 .bottom-sheet > header h2 {
+  flex: 1;
   font-size: 1.05rem;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-header-actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 0.3rem;
+}
+.bottom-sheet-close {
+  min-height: 36px;
+  min-width: 36px;
+  padding: 0;
 }
 .sheet-handle {
   background: #c9cbc7;
@@ -1788,14 +1805,37 @@ body.sheet-open {
 .form-wide {
   grid-column: 1 / -1;
 }
-.event-when {
+/* A plain content section — no fieldset border/legend chrome. Used for
+   When/People/advanced groupings in the event editor so the form reads as
+   normal content rather than a stack of bordered boxes. */
+.event-section {
   display: grid;
   gap: 0.65rem;
 }
+.event-section-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+/* Date/Start/End: at most 2 columns, so 3 fields never have to share a row
+   at narrow widths (that was the source of the End field overflowing on
+   mobile) — Start+End sit side by side, Date/Starts/Ends gets its own row. */
 .event-when-grid {
   display: grid;
   gap: 0.65rem;
-  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.event-when-grid .form-wide {
+  grid-column: 1 / -1;
+}
+.event-when-toggle {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  font-size: 0.85rem;
+  font-weight: 600;
+  gap: 0.5rem;
+  min-height: auto;
 }
 .check-row {
   align-items: center;
@@ -1808,9 +1848,80 @@ body.sheet-open {
   min-height: 24px;
   width: 24px;
 }
-.member-checks {
+/* Compact tappable member rows, replacing a bordered checkbox grid — the
+   whole row is the <label>, so the tap target is the full row, not just the
+   small checkbox. */
+.member-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.member-row {
+  align-items: center;
+  border-bottom: 1px solid #f1ece1;
+  display: flex;
+  gap: 0.65rem;
+  min-height: 52px;
+  padding: 0.35rem 0.1rem;
+}
+.member-list .member-row:last-child {
+  border-bottom: 0;
+}
+.member-row-name {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-row input[type="checkbox"] {
+  accent-color: var(--colour-sage-dark);
+  flex: none;
+  height: 22px;
+  margin-left: auto;
+  min-height: 0;
+  width: 22px;
+}
+.member-row-locked {
+  opacity: 0.6;
+}
+/* Compact switch, styled from a native checkbox so it keeps full checkbox
+   semantics/keyboard behaviour for free — no separate ARIA switch role to
+   maintain. */
+.switch {
+  appearance: none;
+  background: #d9d7d0;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 26px;
+  margin: 0;
+  min-height: 0;
+  position: relative;
+  transition: background 0.15s ease;
+  width: 46px;
+}
+.switch::before {
+  background: var(--colour-white);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  content: "";
+  height: 22px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 0.15s ease;
+  width: 22px;
+}
+.switch:checked {
+  background: var(--colour-sage-dark);
+}
+.switch:checked::before {
+  transform: translateX(20px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch::before {
+    transition: none;
+  }
 }
 .label-list {
   display: grid;
@@ -1886,12 +1997,78 @@ body.sheet-open {
   min-height: 44px;
   padding-block: 0.7rem;
 }
+.event-advanced summary {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+.event-advanced summary::-webkit-details-marker {
+  display: none;
+}
+.event-advanced summary .chevron {
+  color: var(--colour-muted);
+  flex: none;
+  transition: transform 0.15s ease;
+}
+.event-advanced[open] summary .chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .event-advanced summary .chevron {
+    transition: none;
+  }
+}
 .advanced-fields {
   margin-top: 1rem;
 }
 .danger-link {
   background: transparent;
   color: #9d332f;
+}
+
+/* Read-only event detail view — deliberately lighter than the editor: no
+   input borders, no boxed sections, whitespace and subtle dividers instead. */
+.event-view {
+  display: grid;
+  gap: 1.1rem;
+}
+.event-view-when strong {
+  display: block;
+  font-size: 1.1rem;
+}
+.event-view-when span {
+  color: var(--colour-muted);
+}
+.event-view-section {
+  border-top: 1px solid #f1ece1;
+  display: grid;
+  gap: 0.4rem;
+  padding-top: 0.9rem;
+}
+.event-view-value {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+.event-view-people {
+  display: grid;
+  gap: 0.6rem;
+}
+.event-view-person {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+}
+.event-view-notes {
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.event-view-actions {
+  border-top: 1px solid #f1ece1;
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 1rem;
 }
 .control-tabs {
   display: flex;
@@ -2028,8 +2205,7 @@ body.sheet-open {
   .event-list.compact .event-row {
     min-height: 44px;
   }
-  .event-form,
-  .member-checks {
+  .event-form {
     grid-template-columns: 1fr;
   }
   .control-tabs {

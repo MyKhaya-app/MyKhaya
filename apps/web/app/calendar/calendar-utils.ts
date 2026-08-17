@@ -528,3 +528,32 @@ export function applyAllDayToggle(when: WhenState, nextAllDay: boolean): WhenSta
   }
   return { ...when, allDay: nextAllDay };
 }
+
+// ---------------------------------------------------------------------------
+// Event View/Edit permissions — mirrors the backend's authorization rule
+// exactly (apps/api/mykhaya/routers/calendar.py update_event/delete_event)
+// so the Edit/Delete actions are only ever *shown* when the backend would
+// actually allow them. This is a UI convenience only: the backend remains
+// the sole source of truth and re-checks on every request regardless of
+// what the frontend decided to render.
+// ---------------------------------------------------------------------------
+
+/** An event is editable by the current user when they hold the household-
+ *  wide `calendar.edit_all` capability, or hold `calendar.edit_own` *and*
+ *  created the event themselves — the same two-tier rule `update_event`
+ *  enforces server-side. */
+export function canEditEvent(
+  capabilities: string[],
+  event: EventOccurrence,
+  currentUserId: string | null,
+): boolean {
+  if (capabilities.includes("calendar.edit_all")) return true;
+  if (!capabilities.includes("calendar.edit_own")) return false;
+  return currentUserId !== null && event.created_by === currentUserId;
+}
+
+/** Delete has no ownership tier server-side — any member holding
+ *  `calendar.delete` may delete any event in the Home (see delete_event). */
+export function canDeleteEvent(capabilities: string[]): boolean {
+  return capabilities.includes("calendar.delete");
+}

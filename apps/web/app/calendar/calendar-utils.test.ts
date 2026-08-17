@@ -3,6 +3,8 @@ import type { EventOccurrence, Member } from "@mykhaya/shared-types";
 import {
   agendaRange,
   applyAllDayToggle,
+  canDeleteEvent,
+  canEditEvent,
   computeInitialWhen,
   DEFAULT_EVENT_DURATION_MINUTES,
   DEFAULT_EVENT_END_TIME,
@@ -894,5 +896,75 @@ describe("All day -> timed conversion never derives a clock value from the all-d
     const startInstant = zonedTimeToUtc(2026, 8, 20, 9, 0, "Europe/London");
     const endInstant = zonedTimeToUtc(2026, 8, 22, 10, 0, "Europe/London");
     expect(endInstant.getTime()).toBeGreaterThan(startInstant.getTime());
+  });
+});
+
+describe("Event View/Edit permissions (mirrors update_event/delete_event)", () => {
+  // The frontend Edit/Delete affordances must only ever be shown when the
+  // backend would actually allow the action — these mirror
+  // apps/api/mykhaya/routers/calendar.py's update_event (edit_own vs
+  // edit_all) and delete_event (delete, no ownership tier) rules exactly.
+  // This is a UI convenience only; the backend re-checks on every request
+  // regardless of what the frontend decided to render.
+  function ownEvent(overrides: Partial<EventOccurrence> = {}): EventOccurrence {
+    return {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: crypto.randomUUID(),
+      title: "Event",
+      is_all_day: false,
+      start_at: "2026-08-20T08:00:00+00:00",
+      end_at: "2026-08-20T09:00:00+00:00",
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "me-user-id",
+      updated_at: "2026-07-01T00:00:00+00:00",
+      ...overrides,
+    };
+  }
+
+  describe("canEditEvent", () => {
+    it("edit_all grants edit access to any event, including someone else's", () => {
+      const someoneElsesEvent = ownEvent({ created_by: "other-user-id" });
+      expect(
+        canEditEvent(["calendar.edit_all"], someoneElsesEvent, "me-user-id"),
+      ).toBe(true);
+    });
+
+    it("edit_own alone grants edit access only to the current user's own event", () => {
+      const own = ownEvent({ created_by: "me-user-id" });
+      const someoneElses = ownEvent({ created_by: "other-user-id" });
+      expect(canEditEvent(["calendar.edit_own"], own, "me-user-id")).toBe(true);
+      expect(canEditEvent(["calendar.edit_own"], someoneElses, "me-user-id")).toBe(
+        false,
+      );
+    });
+
+    it("no relevant capability denies edit access even for the user's own event", () => {
+      const own = ownEvent({ created_by: "me-user-id" });
+      expect(canEditEvent([], own, "me-user-id")).toBe(false);
+      expect(canEditEvent(["calendar.view"], own, "me-user-id")).toBe(false);
+    });
+
+    it("an unknown current user (not yet loaded) never gets edit_own access", () => {
+      const own = ownEvent({ created_by: "me-user-id" });
+      expect(canEditEvent(["calendar.edit_own"], own, null)).toBe(false);
+    });
+  });
+
+  describe("canDeleteEvent", () => {
+    it("grants delete access with the delete capability, regardless of event ownership", () => {
+      expect(canDeleteEvent(["calendar.delete"])).toBe(true);
+    });
+
+    it("denies delete access without the delete capability, even with edit_all", () => {
+      expect(canDeleteEvent(["calendar.edit_all", "calendar.edit_own"])).toBe(false);
+      expect(canDeleteEvent([])).toBe(false);
+    });
   });
 });
