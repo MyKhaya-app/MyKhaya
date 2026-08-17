@@ -575,6 +575,8 @@ textarea {
 }
 .home-background {
   background: var(--colour-forest);
+  border-radius: 0 0 var(--radius-hero) var(--radius-hero);
+  box-shadow: var(--shadow-hero);
   height: calc(var(--home-fixed-header-height, 0px) + 72px);
   left: 0;
   pointer-events: none;
@@ -598,7 +600,7 @@ textarea {
   z-index: auto;
 }
 .app-main-layered {
-  padding-top: var(--home-fixed-header-height, 0px);
+  padding-top: calc(var(--home-fixed-header-height, 0px) + 72px);
   position: relative;
   z-index: 10;
 }
