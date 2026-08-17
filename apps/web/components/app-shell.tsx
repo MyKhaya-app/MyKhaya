@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -56,6 +56,8 @@ export function AppShell({
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "offline" | "signed_out">("loading");
+  const heroFrameRef = useRef<HTMLDivElement>(null);
+  const layered = Boolean(hero);
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
 
   const bootstrap = useCallback(async () => {
@@ -122,6 +124,25 @@ export function AppShell({
     void bootstrap();
   }, [bootstrap]);
 
+  useLayoutEffect(() => {
+    if (!hero || !heroFrameRef.current) return;
+    const frame = heroFrameRef.current;
+    const updateHeight = () => {
+      document.documentElement.style.setProperty(
+        "--home-hero-height",
+        `${frame.getBoundingClientRect().height}px`,
+      );
+    };
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(frame);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty("--home-hero-height");
+    };
+  }, [layered]);
+
   useEffect(() => {
     if (authState === "ready" && !homesError && !loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
@@ -143,10 +164,9 @@ export function AppShell({
   }
   if (authState === "signed_out") return null;
 
-  const layered = Boolean(hero);
   return (
     <div className={`app-shell${layered ? " app-shell-layered" : ""}`}>
-      <div className={layered ? "home-hero-frame" : undefined}>
+      <div ref={layered ? heroFrameRef : undefined} className={layered ? "home-hero-frame" : undefined}>
         <AppHeader
           user={user}
           homes={homes}
