@@ -1,4 +1,4 @@
-import type { EventOccurrence } from "@mykhaya/shared-types";
+import type { EventOccurrence, Member } from "@mykhaya/shared-types";
 
 export function dateKey(value: Date | string): string {
   return (typeof value === "string" ? value : value.toISOString()).slice(0, 10);
@@ -35,7 +35,13 @@ export function dayRange(base: Date) {
 }
 
 export function agendaRange(base: Date) {
-  const start = dayRange(base).start;
+  // Anchored to the start of the browsed month (same as monthRange) rather than
+  // `base` itself, so Schedule always covers at least everything Month view shows
+  // for the period the user is looking at — switching Month -> Schedule must not
+  // silently drop events that are still within the visible month just because
+  // they fall before "today" (or before `base`'s exact day). The +45 day
+  // extension keeps the "look ahead" agenda behaviour beyond the current month.
+  const start = monthRange(base).start;
   const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 45);
   return { start, end };
@@ -73,6 +79,65 @@ export function eventsForDay(
         left.title.localeCompare(right.title)
       );
     });
+}
+
+// Two independent, composable filters, applied in the same order and the same
+// way regardless of which view (Month/Week/Day/Schedule) is rendering the
+// resulting list, so all views stay in sync for a given selection:
+//
+// - `memberFilter` is a household member's stable user_id (the canonical
+//   event-membership relationship, EventOccurrence.member_ids, backed by
+//   CalendarEventMember) — "who is this event for", independent of who
+//   created it. Empty string means no member filter ("Everyone").
+// - `labelFilter` is a household-defined CalendarEventLabel id (a free-form
+//   category/tag, e.g. "Family calendar", "Work", or a personal label someone
+//   named after a household member such as "Megan") — a category filter, NOT
+//   a participant/member filter, even when its name happens to match a
+//   person's name. Empty string means no category filter.
+export function filterVisibleEvents(
+  events: EventOccurrence[],
+  memberFilter: string,
+  labelFilter: string,
+  query: string,
+): EventOccurrence[] {
+  let filtered = memberFilter
+    ? events.filter((event) => event.member_ids.includes(memberFilter))
+    : events;
+  filtered = labelFilter
+    ? filtered.filter((event) => (event.label?.id ?? "") === labelFilter)
+    : filtered;
+  const needle = query.trim().toLowerCase();
+  if (!needle) return filtered;
+  return filtered.filter((event) => event.title.toLowerCase().includes(needle));
+}
+
+// A persisted member-filter selection is only trustworthy while it still
+// names a real member of the *currently active* Home — a member who left,
+// was deleted, or belongs to a different Home (persistence is home-scoped,
+// see MEMBER_STORAGE_PREFIX in page.tsx, but this guards the load-race and
+// deletion cases too) must fall back to "Everyone" rather than silently
+// filtering the calendar down to nothing forever.
+export function resolveMemberFilter(
+  members: Member[],
+  persisted: string,
+): string {
+  if (!persisted) return "";
+  return members.some((member) => member.user_id === persisted) ? persisted : "";
+}
+
+// Empty-state copy for a filtered, otherwise-empty list. Deliberately simple
+// (member clause, then category clause) rather than generating full
+// sentences for every combination.
+export function emptyStateMessage(
+  memberName: string | null,
+  labelName: string | null,
+): string {
+  const clauses = [
+    memberName ? `for ${memberName}` : "",
+    labelName ? `in ${labelName}` : "",
+  ].filter(Boolean);
+  if (clauses.length === 0) return "No upcoming events.";
+  return `No upcoming events ${clauses.join(" ")}.`;
 }
 
 export function groupEventsByDay(

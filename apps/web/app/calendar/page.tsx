@@ -31,16 +31,23 @@ import {
   agendaRange,
   dateKey,
   dayRange,
+  emptyStateMessage,
   eventsForDay,
+  filterVisibleEvents,
   groupEventsByDay,
   monthCells,
   monthRange,
+  resolveMemberFilter,
   weekRange,
 } from "./calendar-utils";
 
 type ViewMode = "month" | "week" | "day" | "agenda";
 const VIEW_STORAGE = "mykhaya.calendar.view";
 const LABEL_STORAGE = "mykhaya.calendar.label";
+// Home-scoped so a member selection never leaks from one Home to another —
+// switching Home must never accidentally keep filtering by a member id that
+// only means something in the Home the user just left.
+const MEMBER_STORAGE_PREFIX = "mykhaya.calendar.member.";
 
 function formText(data: FormData, name: string) {
   const value = data.get(name);
@@ -339,6 +346,7 @@ export default function CalendarPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
+  const [memberFilter, setMemberFilter] = useState("");
 
   useEffect(() => {
     setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
@@ -348,6 +356,35 @@ export default function CalendarPage() {
     setLabelFilter(next);
     window.localStorage.setItem(LABEL_STORAGE, next);
   }
+
+  // Restore the previously selected household member for *this* Home as soon
+  // as we know which Home is active, and re-restore whenever the active Home
+  // changes — a stored id for Home A must never carry over when the user
+  // switches to Home B.
+  useEffect(() => {
+    if (!activeHomeId) return;
+    setMemberFilter(
+      window.localStorage.getItem(MEMBER_STORAGE_PREFIX + activeHomeId) ?? "",
+    );
+  }, [activeHomeId]);
+
+  function chooseMember(next: string) {
+    setMemberFilter(next);
+    if (activeHomeId)
+      window.localStorage.setItem(MEMBER_STORAGE_PREFIX + activeHomeId, next);
+  }
+
+  // Guards against a persisted member id that no longer belongs to this
+  // Home's roster (the member left, was deleted, or the id was left over
+  // from a different Home) — falls back to "Everyone" rather than leaving
+  // the calendar silently filtered to a member that can never match again.
+  // `members` starts empty until the first load resolves, so this only acts
+  // once a real roster is in hand.
+  useEffect(() => {
+    if (!memberFilter || members.length === 0) return;
+    const resolved = resolveMemberFilter(members, memberFilter);
+    if (resolved !== memberFilter) chooseMember(resolved);
+  }, [members, memberFilter, activeHomeId]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(VIEW_STORAGE) as ViewMode | null;
@@ -448,19 +485,25 @@ export default function CalendarPage() {
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
 
-  const visibleEvents = useMemo(() => {
-    const filtered = labelFilter
-      ? events.filter((event) => (event.label?.id ?? "") === labelFilter)
-      : events;
-    if (!query.trim()) return filtered;
-    const needle = query.trim().toLowerCase();
-    return filtered.filter((event) => event.title.toLowerCase().includes(needle));
-  }, [events, labelFilter, query]);
+  const visibleEvents = useMemo(
+    () => filterVisibleEvents(events, memberFilter, labelFilter, query),
+    [events, memberFilter, labelFilter, query],
+  );
   const byDay = useMemo(() => groupEventsByDay(visibleEvents), [visibleEvents]);
   const memberNames = useMemo(
     () =>
       new Map(members.map((member) => [member.user_id, member.display_name])),
     [members],
+  );
+  const selectedMemberName = memberFilter
+    ? (memberNames.get(memberFilter) ?? null)
+    : null;
+  const selectedLabelName = labelFilter
+    ? (labels.find((label) => label.id === labelFilter)?.name ?? null)
+    : null;
+  const scheduleEmptyMessage = emptyStateMessage(
+    selectedMemberName,
+    selectedLabelName,
   );
 
   function move(direction: -1 | 1) {
@@ -625,15 +668,18 @@ export default function CalendarPage() {
 
           <div className="calendar-selectors-row">
             <label className="calendar-selector">
-              {/* This filters by CalendarEventLabel — a free-form, unlimited event
-                  tag (Family/School/Work/...), not the commercial "event category"
-                  (HomeCalendar) concept limited by calendar.max_categories. Labelled
-                  "label" here specifically so it's never confused with that limit —
-                  see docs/architecture/commercial-entitlements.md#commercial-plan-cleanup. */}
-              <span className="sr-only">Filter by label</span>
-              <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by label">
-                <option value="">{activeHome?.name ?? "Household"} calendar</option>
-                {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
+              {/* The household member to view the calendar as — filters by the
+                  canonical event-membership relationship (member_ids, backed by
+                  CalendarEventMember), not by a CalendarEventLabel category.
+                  "Everyone" (value "") applies no member filter. */}
+              <span className="sr-only">Filter by household member</span>
+              <select value={memberFilter} onChange={(event) => chooseMember(event.target.value)} aria-label="Filter by household member">
+                <option value="">Everyone</option>
+                {members.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.display_name}
+                  </option>
+                ))}
               </select>
               <ChevronDown size={14} aria-hidden="true" />
             </label>
@@ -668,27 +714,45 @@ export default function CalendarPage() {
           )}
 
           {searchOpen && (
-            <div className="calendar-search">
-              <Search size={16} aria-hidden="true" />
-              <input
-                type="search"
-                placeholder="Search events"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                autoFocus
-                aria-label="Search events by title"
-              />
-              {query && (
-                <button
-                  type="button"
-                  className="icon-button secondary"
-                  onClick={() => setQuery("")}
-                  aria-label="Clear search"
-                >
-                  <X size={16} aria-hidden="true" />
-                </button>
-              )}
-            </div>
+            <>
+              <div className="calendar-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search events"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  autoFocus
+                  aria-label="Search events by title"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    className="icon-button secondary"
+                    onClick={() => setQuery("")}
+                    aria-label="Clear search"
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              <div className="calendar-selectors-row">
+                <label className="calendar-selector">
+                  {/* This filters by CalendarEventLabel — a free-form, unlimited event
+                      tag (Family/School/Work/...), not the commercial "event category"
+                      (HomeCalendar) concept limited by calendar.max_categories, and not
+                      the household-member filter above even when a label happens to
+                      share a member's name — see
+                      docs/architecture/commercial-entitlements.md#commercial-plan-cleanup. */}
+                  <span className="sr-only">Filter by category</span>
+                  <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by category">
+                    <option value="">{activeHome?.name ?? "Household"} calendar</option>
+                    {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
+                  </select>
+                  <ChevronDown size={14} aria-hidden="true" />
+                </label>
+              </div>
+            </>
           )}
         </header>
 
@@ -749,8 +813,8 @@ export default function CalendarPage() {
 
         {view === "agenda" && (
           <section className="agenda-view" aria-label="Upcoming events">
-            {events.length === 0 ? (
-              <p className="card hint">No upcoming events.</p>
+            {visibleEvents.length === 0 ? (
+              <p className="card hint">{scheduleEmptyMessage}</p>
             ) : (
               Array.from(byDay.entries())
                 .sort(([a], [b]) => a.localeCompare(b))
