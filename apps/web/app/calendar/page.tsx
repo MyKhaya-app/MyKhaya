@@ -4,10 +4,12 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  Bell,
   CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Layers,
   MapPin,
   Plus,
@@ -396,65 +398,91 @@ function EventForm({
           </label>
         </div>
         <div className="event-when-grid">
-          <label className="form-wide">
-            {multiDay ? "Starts" : "Date"}
-            <input
-              type="date"
-              value={startDate}
-              onChange={(event) => onStartDateChange(event.target.value)}
-              required
-            />
+          <label className="form-wide datetime-card">
+            <span className="datetime-card-icon" aria-hidden="true">
+              <CalendarDays size={18} />
+            </span>
+            <span className="datetime-card-body">
+              <span className="datetime-card-caption">{multiDay ? "Starts" : "Date"}</span>
+              <input
+                className="datetime-card-input"
+                type="date"
+                value={startDate}
+                onChange={(event) => onStartDateChange(event.target.value)}
+                required
+              />
+            </span>
+            <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
           </label>
           {!allDay && (
             <label>
               Start
-              <input
-                type="time"
-                value={startTime}
-                onChange={(event) => onStartTimeChange(event.target.value)}
-                required
-              />
+              <span className="time-card">
+                <Clock className="time-card-icon" size={15} aria-hidden="true" />
+                <input
+                  className="time-card-input"
+                  type="time"
+                  value={startTime}
+                  onChange={(event) => onStartTimeChange(event.target.value)}
+                  required
+                />
+              </span>
             </label>
           )}
           {!allDay && !multiDay && (
             <label>
               End
-              <input
-                type="time"
-                value={endTime}
-                onChange={(event) => onEndTimeChange(event.target.value)}
-                required
-              />
-            </label>
-          )}
-        </div>
-        {multiDay && (
-          <div className="event-when-grid">
-            <label className="form-wide">
-              Ends
-              <input
-                type="date"
-                value={endDate}
-                onChange={(event) => onEndDateChange(event.target.value)}
-                required
-              />
-            </label>
-            {!allDay && (
-              <label>
-                End time
+              <span className="time-card">
+                <Clock className="time-card-icon" size={15} aria-hidden="true" />
                 <input
+                  className="time-card-input"
                   type="time"
                   value={endTime}
                   onChange={(event) => onEndTimeChange(event.target.value)}
                   required
                 />
+              </span>
+            </label>
+          )}
+        </div>
+        {multiDay && (
+          <div className="event-when-grid">
+            <label className="form-wide datetime-card">
+              <span className="datetime-card-icon" aria-hidden="true">
+                <CalendarDays size={18} />
+              </span>
+              <span className="datetime-card-body">
+                <span className="datetime-card-caption">Ends</span>
+                <input
+                  className="datetime-card-input"
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => onEndDateChange(event.target.value)}
+                  required
+                />
+              </span>
+              <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
+            </label>
+            {!allDay && (
+              <label>
+                End time
+                <span className="time-card">
+                  <Clock className="time-card-icon" size={15} aria-hidden="true" />
+                  <input
+                    className="time-card-input"
+                    type="time"
+                    value={endTime}
+                    onChange={(event) => onEndTimeChange(event.target.value)}
+                    required
+                  />
+                </span>
               </label>
             )}
           </div>
         )}
         <button
           type="button"
-          className="link-button"
+          className="pill-button"
           onClick={() => onToggleMultiDay(!multiDay)}
         >
           {multiDay ? "− Same day event" : "+ Ends on another day"}
@@ -511,9 +539,16 @@ function EventForm({
           )}
         </div>
       )}
-      <label>
-        Calendar or category
-        <select name="label" defaultValue={initial?.label?.id ?? ""}>
+      <label className="form-wide icon-row">
+        <span className="icon-row-icon" aria-hidden="true">
+          <Layers size={16} />
+        </span>
+        <span className="sr-only">Calendar or category</span>
+        <select
+          className="icon-row-control"
+          name="label"
+          defaultValue={initial?.label?.id ?? ""}
+        >
           <option value="">Family calendar</option>
           {labels.map((label) => {
             // Transition-safe, matching update_event's own check: a category
@@ -531,18 +566,29 @@ function EventForm({
             );
           })}
         </select>
+        <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
       </label>
-      <label>
-        Location
+      <label className="form-wide icon-row">
+        <span className="icon-row-icon" aria-hidden="true">
+          <MapPin size={16} />
+        </span>
+        <span className="sr-only">Location</span>
         <input
+          className="icon-row-control"
           name="location"
+          placeholder="Add a location"
           maxLength={200}
           defaultValue={initial?.location_text ?? ""}
         />
       </label>
       <details className="form-wide event-advanced">
         <summary>
-          Reminder, repeat and notes
+          <span className="event-advanced-lead">
+            <span className="icon-row-icon" aria-hidden="true">
+              <Bell size={16} />
+            </span>
+            Reminder, repeat and notes
+          </span>
           <ChevronRight className="chevron" size={18} aria-hidden="true" />
         </summary>
         <div className="event-form advanced-fields">

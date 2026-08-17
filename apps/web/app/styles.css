@@ -1776,16 +1776,17 @@ body.sheet-open {
   gap: 0.3rem;
 }
 .bottom-sheet-close {
-  min-height: 36px;
-  min-width: 36px;
+  border-radius: 50%;
+  min-height: 34px;
+  min-width: 34px;
   padding: 0;
 }
 .sheet-handle {
   background: #c9cbc7;
   border-radius: 999px;
   height: 4px;
-  margin: 0.55rem auto 0;
-  width: 42px;
+  margin: 0.5rem auto 0;
+  width: 36px;
 }
 .sheet-content {
   height: calc(100% - 70px);
@@ -1845,6 +1846,158 @@ body.sheet-open {
   min-width: 0;
   width: 100%;
 }
+/* Date "info card": icon circle, stacked caption + native value, decorative
+   chevron — one bordered row, replacing the plain oversized native-looking
+   input. The native <input type="date"> stays fully functional underneath
+   (real semantics, real iOS behaviour); only its chrome is stripped so it
+   reads as the "value" line of the card. */
+.datetime-card {
+  align-items: center;
+  background: #fffefa;
+  border: 1px solid #d9d7d0;
+  border-radius: var(--radius-small);
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.45rem 0.75rem;
+}
+.datetime-card-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-sage-dark);
+  display: flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.datetime-card-body {
+  display: grid;
+  flex: 1;
+  gap: 0.05rem;
+  min-width: 0;
+}
+.datetime-card-caption {
+  color: var(--colour-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.datetime-card-input {
+  background: none;
+  border: 0;
+  color: var(--colour-slate);
+  font-size: 1rem;
+  font-weight: 700;
+  min-height: auto;
+  padding: 0;
+  width: 100%;
+}
+.datetime-card-chevron {
+  color: var(--colour-muted);
+  flex: none;
+  pointer-events: none;
+}
+/* Chromium/Android renders its own calendar-picker icon inside the input,
+   duplicating our decorative icon/chevron either side of it. Hiding it is
+   visual only — the indicator (and the click-to-open behaviour it drives)
+   stays in place at full size, just invisible, so tapping anywhere on the
+   card still opens the native picker. */
+.datetime-card-input::-webkit-calendar-picker-indicator,
+.time-card-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+}
+/* Start/End: the caption ("Start"/"End") is the outer <label>'s own text,
+   laid out above via the base `label { display: grid }` rule — this is just
+   the compact icon + value card underneath it. */
+.time-card {
+  align-items: center;
+  background: #fffefa;
+  border: 1px solid #d9d7d0;
+  border-radius: var(--radius-small);
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.6rem 0.7rem;
+}
+.time-card-icon {
+  color: var(--colour-muted);
+  flex: none;
+}
+.time-card-input {
+  background: none;
+  border: 0;
+  color: var(--colour-slate);
+  font-size: 1rem;
+  font-weight: 700;
+  min-height: auto;
+  min-width: 0;
+  padding: 0;
+  width: 100%;
+}
+/* Calendar/category and Location rows — an icon circle, the real
+   select/input stripped to look like a value, and (for the select) a
+   decorative chevron. Same card language as the date/time controls above. */
+.icon-row {
+  align-items: center;
+  background: #fffefa;
+  border: 1px solid #d9d7d0;
+  border-radius: var(--radius-small);
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+}
+.icon-row-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-sage-dark);
+  display: flex;
+  flex: none;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+.icon-row-control {
+  background: none;
+  border: 0;
+  color: var(--colour-slate);
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 700;
+  min-height: auto;
+  min-width: 0;
+  padding: 0;
+}
+.icon-row-control::placeholder {
+  color: var(--colour-muted);
+  font-weight: 500;
+}
+select.icon-row-control {
+  appearance: none;
+}
+.icon-row-chevron {
+  color: var(--colour-muted);
+  flex: none;
+  pointer-events: none;
+}
+/* Subtle pill secondary action, replacing the underlined link-button look
+   for the one control that toggles a real state change (multi-day). */
+.pill-button {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-sage-dark);
+  font-size: 0.8rem;
+  font-weight: 700;
+  justify-self: center;
+  min-height: 38px;
+  padding: 0.4rem 1.1rem;
+}
+.pill-button:hover {
+  background: var(--colour-sage-soft);
+  box-shadow: none;
+  transform: none;
+}
 .event-when-toggle {
   align-items: center;
   color: var(--colour-slate);
@@ -1889,50 +2042,80 @@ body.sheet-open {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Rounded-square tick control, styled from a native checkbox (kept fully
+   functional/accessible underneath) rather than a large default checkbox —
+   unchecked is an outline, checked fills solid with a white tick. The
+   member-row <label> remains the full tap target, so this can stay small. */
 .member-row input[type="checkbox"] {
-  accent-color: var(--colour-sage-dark);
+  appearance: none;
+  background: var(--colour-white);
+  border: 1.5px solid #d3cec2;
+  border-radius: 0.35rem;
+  cursor: pointer;
   flex: none;
   height: 22px;
   margin-left: auto;
   min-height: 0;
+  position: relative;
   width: 22px;
+}
+.member-row input[type="checkbox"]:checked {
+  background: var(--colour-sage-dark);
+  border-color: var(--colour-sage-dark);
+}
+.member-row input[type="checkbox"]:checked::after {
+  border: solid var(--colour-white);
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 9px;
+  left: 50%;
+  position: absolute;
+  top: 45%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 5px;
+}
+.member-row input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .member-row-locked {
   opacity: 0.6;
 }
 /* Compact switch, styled from a native checkbox so it keeps full checkbox
    semantics/keyboard behaviour for free — no separate ARIA switch role to
-   maintain. */
+   maintain. Sized to sit quietly next to the "All day" label rather than
+   dominate the When heading; the wrapping .event-when-toggle label keeps a
+   full accessible tap target regardless of this visual size. */
 .switch {
   appearance: none;
   background: #d9d7d0;
   border-radius: 999px;
   cursor: pointer;
   flex: none;
-  height: 20px;
+  height: 18px;
   margin: 0;
   min-height: 0;
   position: relative;
   transition: background 0.15s ease;
-  width: 36px;
+  width: 32px;
 }
 .switch::before {
   background: var(--colour-white);
   border-radius: 50%;
   box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
   content: "";
-  height: 16px;
+  height: 14px;
   left: 2px;
   position: absolute;
   top: 2px;
   transition: transform 0.15s ease;
-  width: 16px;
+  width: 14px;
 }
 .switch:checked {
   background: var(--colour-sage-dark);
 }
 .switch:checked::before {
-  transform: translateX(16px);
+  transform: translateX(14px);
 }
 @media (prefers-reduced-motion: reduce) {
   .switch,
@@ -2022,6 +2205,11 @@ body.sheet-open {
 }
 .event-advanced summary::-webkit-details-marker {
   display: none;
+}
+.event-advanced-lead {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
 }
 .event-advanced summary .chevron {
   color: var(--colour-muted);
