@@ -76,17 +76,20 @@ export function AppShell({
   }
   if (authState === "signed_out") return null;
 
+  const layered = Boolean(hero);
   return (
-    <div className="app-shell">
-      <AppHeader
-        user={user}
-        homes={homes}
-        activeHome={activeHome}
-        onSwitchHome={setActiveHomeId}
-        flush={Boolean(hero)}
-      />
-      {hero}
-      <main className="app-main">{children}</main>
+    <div className={`app-shell${layered ? " app-shell-layered" : ""}`}>
+      <div className={layered ? "home-hero-frame" : undefined}>
+        <AppHeader
+          user={user}
+          homes={homes}
+          activeHome={activeHome}
+          onSwitchHome={setActiveHomeId}
+          flush={layered}
+        />
+        {hero}
+      </div>
+      <main className={`app-main${layered ? " app-main-layered" : ""}`}>{children}</main>
       <BottomNav principalType={user?.principal_type} />
     </div>
   );

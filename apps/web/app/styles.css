@@ -570,6 +570,14 @@ textarea {
   min-width: 0;
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 1rem);
 }
+.home-hero-frame {
+  background: var(--colour-forest);
+  min-width: 0;
+}
+.app-main-layered {
+  position: relative;
+  z-index: 1;
+}
 .bottom-nav {
   align-items: stretch;
   background: rgb(255 254 251 / 97%);
@@ -1278,6 +1286,25 @@ textarea {
   .home-page,
   .standard-page {
     padding: 1.5rem 1rem 2rem;
+  }
+  .app-shell-layered .home-hero-frame {
+    position: sticky;
+    top: 0;
+    z-index: 0;
+  }
+  .app-shell-layered .app-header {
+    position: static;
+    z-index: auto;
+  }
+  .app-shell-layered .home-hero {
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .app-shell-layered .app-main-layered {
+    background: var(--colour-cream-light);
+    border-radius: 2rem 2rem 0 0;
+    margin-top: -40px;
+    padding-top: 40px;
   }
   .home-grid {
     display: block;
