@@ -3,6 +3,23 @@ import { NextRequest } from "next/server";
 import { config, middleware } from "./middleware";
 
 describe("hostname security boundaries", () => {
+	it("generates a unique nonce-bearing CSP for every application response", () => {
+		const first = middleware(new NextRequest("https://admin.localhost/login", { headers: { host: "admin.localhost" } }));
+		const second = middleware(new NextRequest("https://admin.localhost/login", { headers: { host: "admin.localhost" } }));
+		const firstCsp = first.headers.get("content-security-policy") ?? "";
+		const secondCsp = second.headers.get("content-security-policy") ?? "";
+		const firstNonce = firstCsp.match(/'nonce-([^']+)'/)?.[1];
+		const secondNonce = secondCsp.match(/'nonce-([^']+)'/)?.[1];
+
+		expect(firstNonce).toBeTruthy();
+		expect(secondNonce).toBeTruthy();
+		expect(firstNonce).not.toBe(secondNonce);
+		expect(firstCsp).toContain("script-src 'self'");
+		expect(firstCsp).toContain("frame-ancestors 'none'");
+		expect(firstCsp).toContain("object-src 'none'");
+		expect(firstCsp).not.toContain("'unsafe-inline'");
+	});
+
   it("rewrites the admin hostname to the internal Control Centre route", () => {
     const response = middleware(
       new NextRequest("http://admin.localhost/users", {

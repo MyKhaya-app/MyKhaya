@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -14,7 +14,8 @@ from mykhaya.calendar_occurrences import (
     expand_occurrences,
     recurrence_candidate_filter,
 )
-from mykhaya.colour_palette import ColourToken
+from mykhaya.calendar_provisioning import ensure_personal_calendar
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
@@ -36,6 +37,7 @@ from mykhaya.models import (
     FeatureKey,
     Group,
     HomeCalendar,
+    HouseholdRelationship,
     Invitation,
     Membership,
 )
@@ -55,6 +57,7 @@ from mykhaya.schemas import (
     HomeCalendarCreate,
     HomeCalendarDeleteRequest,
     HomeCalendarResponse,
+    HomeCalendarUpdate,
     HomeSummaryResponse,
 )
 
@@ -158,15 +161,44 @@ async def _ordered_calendars(db: AsyncSession, group_id: uuid.UUID) -> list[Home
     primary calendar always sorts first (it can never be deleted — see
     delete_calendar — so it's always the retained Free calendar), then the
     rest oldest-first. Never randomly ordered. See "Choosing the retained
-    Free calendar" in docs/architecture/commercial-entitlements.md."""
+    Free calendar" in docs/architecture/commercial-entitlements.md.
+
+    Personal Calendars (owner_user_id IS NOT NULL) are deliberately excluded
+    — they are not a Home-administered, entitlement-gated resource, so they
+    never participate in calendar.max_categories counting/classification or
+    the /calendar/calendars management list. See list_calendars'
+    `personal_calendar` field for how a user's own Personal Calendar is
+    surfaced instead."""
     return list(
         (
             await db.scalars(
                 select(HomeCalendar)
-                .where(HomeCalendar.group_id == group_id)
+                .where(
+                    HomeCalendar.group_id == group_id,
+                    HomeCalendar.owner_user_id.is_(None),
+                )
                 .order_by(HomeCalendar.is_primary.desc(), HomeCalendar.created_at.asc())
             )
         ).all()
+    )
+
+
+def _personal_calendar_visibility_filter(
+    home_id: uuid.UUID, user_id: uuid.UUID
+) -> ColumnElement[bool]:
+    """A hard privacy boundary, applied to *every* event query regardless of
+    the viewer's capabilities (including calendar_view_all — a Home
+    admin/partner's blanket visibility must not reach into someone else's
+    Personal Calendar). Excludes any event whose calendar is another
+    member's Personal Calendar. Events on shared calendars are never
+    affected (their calendar's owner_user_id is always NULL). See
+    docs/security/threat-model.md on cross-member data leakage."""
+    return CalendarEvent.calendar_id.not_in(
+        select(HomeCalendar.id).where(
+            HomeCalendar.group_id == home_id,
+            HomeCalendar.owner_user_id.isnot(None),
+            HomeCalendar.owner_user_id != user_id,
+        )
     )
 
 
@@ -245,11 +277,29 @@ async def list_calendars(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> CalendarListResponse:
-    await require_capability(home_id, Capability.calendar_view, auth, db)
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     await _ensure_home_calendar(db, home_id)
     calendars = await _ordered_calendars(db, home_id)
     limit = await get_limit(db, home_id, CALENDAR_LIMIT_KEY)
     access = classify_ordered_resources([calendar.id for calendar in calendars], limit)
+
+    personal_calendar = None
+    # Managed children are deliberately not provisioned one here — see
+    # calendar_provisioning's module docstring.
+    if membership.relationship != HouseholdRelationship.child:
+        personal_row = await ensure_personal_calendar(db, home_id, auth.user.id)
+        await db.commit()
+        personal_calendar = HomeCalendarResponse(
+            id=personal_row.id,
+            name=personal_row.name,
+            timezone=personal_row.timezone,
+            is_primary=False,
+            color=personal_row.color,
+            owner_user_id=personal_row.owner_user_id,
+            commercial_access="normal",
+            created_at=personal_row.created_at,
+        )
+
     return CalendarListResponse(
         items=[
             HomeCalendarResponse(
@@ -257,12 +307,14 @@ async def list_calendars(
                 name=calendar.name,
                 timezone=calendar.timezone,
                 is_primary=calendar.is_primary,
+                color=calendar.color,
                 commercial_access="normal" if access[calendar.id] else "read_only_due_to_plan",
                 created_at=calendar.created_at,
             )
             for calendar in calendars
         ],
         limit=limit,
+        personal_calendar=personal_calendar,
     )
 
 
@@ -291,7 +343,9 @@ async def create_calendar(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"calendar:{home_id}"}
     )
     current_count = await db.scalar(
-        select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
+        select(func.count())
+        .select_from(HomeCalendar)
+        .where(HomeCalendar.group_id == home_id, HomeCalendar.owner_user_id.is_(None))
     )
     await require_within_limit(db, home_id, CALENDAR_LIMIT_KEY, current_count or 0)
 
@@ -310,7 +364,52 @@ async def create_calendar(
         name=calendar.name,
         timezone=calendar.timezone,
         is_primary=False,
+        color=calendar.color,
         commercial_access="normal",
+        created_at=calendar.created_at,
+    )
+
+
+@router.patch("/{home_id}/calendars/{calendar_id}", response_model=HomeCalendarResponse)
+async def update_calendar(
+    home_id: uuid.UUID,
+    calendar_id: uuid.UUID,
+    body: HomeCalendarUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> HomeCalendarResponse:
+    # Same capability as create/delete — a shared calendar (including the
+    # primary "Home calendar") is Home-administered structure, not any one
+    # person's content. HomeCalendarUpdate only ever accepts `color`
+    # (StrictModel forbids any other field, including `name`) — see its
+    # docstring: the Home calendar's name is a fixed product concept, never
+    # user-editable data, enforced structurally rather than by convention.
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    calendar = await db.get(HomeCalendar, calendar_id)
+    # Never reachable for a Personal Calendar, regardless of
+    # calendar_edit_all — same reasoning as delete_calendar.
+    if calendar is None or calendar.group_id != home_id or calendar.owner_user_id is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+    # The primary/"Home calendar" is always the retained Free calendar (see
+    # _ordered_calendars) so this never actually blocks it — but a secondary
+    # shared calendar preserved read-only after a downgrade follows the same
+    # "can't edit paid-resource content" rule its events already do.
+    access = await _calendar_access(db, home_id)
+    _require_calendar_writable(access, calendar.id)
+
+    calendar.color = body.color
+    await db.flush()
+    audit(db, request, "calendar.calendar.updated", auth.user.id, home_id, "calendar", calendar.id)
+    await db.commit()
+
+    return HomeCalendarResponse(
+        id=calendar.id,
+        name=calendar.name,
+        timezone=calendar.timezone,
+        is_primary=calendar.is_primary,
+        color=calendar.color,
+        commercial_access="normal" if access.get(calendar.id, False) else "read_only_due_to_plan",
         created_at=calendar.created_at,
     )
 
@@ -326,7 +425,12 @@ async def delete_calendar(
 ) -> None:
     await require_capability(home_id, Capability.calendar_edit_all, auth, db)
     calendar = await db.get(HomeCalendar, calendar_id)
-    if calendar is None or calendar.group_id != home_id:
+    # A Personal Calendar is never reachable through this Home-administered
+    # endpoint, regardless of calendar_edit_all — it isn't part of the
+    # Home's shared calendar set. 404, not 409/403: this endpoint should
+    # behave as if another member's (or even the caller's own) Personal
+    # Calendar simply isn't a "calendar" in this API's sense.
+    if calendar is None or calendar.group_id != home_id or calendar.owner_user_id is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
     if calendar.is_primary:
         raise HTTPException(status.HTTP_409_CONFLICT, "The primary calendar can't be deleted.")
@@ -382,12 +486,24 @@ def _to_label_response(label: CalendarEventLabel | None) -> EventLabelResponse |
     )
 
 
+async def _calendar_color_map(
+    db: AsyncSession, group_id: uuid.UUID
+) -> dict[uuid.UUID, ColourToken]:
+    """Every calendar in the Home (shared and Personal alike) mapped to its
+    own colour — the fallback an event on it renders with when it carries no
+    label. One query per request, reused across every event in the response,
+    same shape as _label_map/_event_members_map."""
+    rows = (await db.scalars(select(HomeCalendar).where(HomeCalendar.group_id == group_id))).all()
+    return {row.id: row.color for row in rows}
+
+
 def _occurrence(
     event: CalendarEvent,
     start_at: datetime,
     end_at: datetime,
     label: CalendarEventLabel | None,
     member_ids: list[uuid.UUID],
+    calendar_color: ColourToken,
 ) -> EventOccurrence:
     return EventOccurrence(
         occurrence_id=f"{event.id}:{start_at.isoformat()}",
@@ -401,6 +517,7 @@ def _occurrence(
         description=event.description,
         location_text=event.location_text,
         label=_to_label_response(label),
+        calendar_color=calendar_color,
         member_ids=member_ids,
         recurrence=event.recurrence,
         reminder_minutes=event.reminder_minutes,
@@ -747,6 +864,9 @@ async def list_events(
         CalendarEvent.group_id == home_id,
         CalendarEvent.deleted_at.is_(None),
         recurrence_candidate_filter(start_at, end_at),
+        # Unconditional: applies even to calendar_view_all holders — see
+        # _personal_calendar_visibility_filter.
+        _personal_calendar_visibility_filter(home_id, auth.user.id),
     ]
     if Capability.calendar_view_all not in capabilities:
         filters.append(
@@ -782,13 +902,17 @@ async def list_events(
     events = rows[:page_size]
     label_by_id = await _label_map(db, home_id)
     members_by_event = await _event_members_map(db, [event.id for event in events])
+    calendar_colors = await _calendar_color_map(db, home_id)
 
     items: list[EventOccurrence] = []
     for event in events:
         label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
+        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR)
         for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
-            items.append(_occurrence(event, occurrence_start, occurrence_end, label, member_ids))
+            items.append(
+                _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
+            )
 
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=page + 1 if has_more else None)
@@ -817,8 +941,18 @@ async def create_event(
         if target_calendar is None or target_calendar.group_id != home_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
         calendar_row = target_calendar
-    access = await _calendar_access(db, home_id)
-    _require_calendar_writable(access, calendar_row.id)
+
+    if calendar_row.owner_user_id is not None:
+        # Personal Calendar: only its owner may create events on it. 404,
+        # not 403 — this endpoint must behave as if another member's
+        # Personal Calendar doesn't exist, not merely that it's off-limits.
+        # Never entitlement-gated (see _ordered_calendars/_calendar_access,
+        # which never see Personal Calendars in the first place).
+        if calendar_row.owner_user_id != auth.user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+    else:
+        access = await _calendar_access(db, home_id)
+        _require_calendar_writable(access, calendar_row.id)
     if body.label_id is not None:
         label = await db.scalar(
             select(CalendarEventLabel).where(
@@ -837,6 +971,14 @@ async def create_event(
         _require_label_selectable(await _label_access(db, home_id), body.label_id)
 
     requested_members = sorted(set(body.member_ids + [auth.user.id]))
+    if calendar_row.owner_user_id is not None and set(requested_members) != {auth.user.id}:
+        # A Personal Calendar event can never be assigned to anyone else —
+        # otherwise it would be a way to share an event (and bypass
+        # events.shared.enabled) without ever touching a shared calendar.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Events on your Personal Calendar can't be assigned to other members.",
+        )
     if requested_members:
         rows = (
             await db.scalars(
@@ -902,7 +1044,9 @@ async def create_event(
     await db.refresh(event)
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
-    return _occurrence(event, event.start_at, event.end_at, label, requested_members)
+    return _occurrence(
+        event, event.start_at, event.end_at, label, requested_members, calendar_row.color
+    )
 
 
 @router.get("/{home_id}/events/{event_id}", response_model=EventDetailResponse)
@@ -919,6 +1063,9 @@ async def event_detail(
             CalendarEvent.id == event_id,
             CalendarEvent.group_id == home_id,
             CalendarEvent.deleted_at.is_(None),
+            # Unconditional, even for calendar_view_all holders — see
+            # _personal_calendar_visibility_filter.
+            _personal_calendar_visibility_filter(home_id, auth.user.id),
         )
     )
     if event is None:
@@ -934,6 +1081,8 @@ async def event_detail(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
+    event_calendar = await db.get(HomeCalendar, event.calendar_id)
+    calendar_color = event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR
     member_ids = [
         row.user_id
         for row in (
@@ -951,7 +1100,7 @@ async def event_detail(
         )
     ).all()
     return EventDetailResponse(
-        event=_occurrence(event, event.start_at, event.end_at, label, member_ids),
+        event=_occurrence(event, event.start_at, event.end_at, label, member_ids, calendar_color),
         activity=[
             EventActivityResponse(
                 id=row.id,
@@ -989,17 +1138,27 @@ async def update_event(
             CalendarEvent.id == event_id,
             CalendarEvent.group_id == home_id,
             CalendarEvent.deleted_at.is_(None),
+            # Unconditional, even for calendar_edit_all holders below — see
+            # _personal_calendar_visibility_filter. An event can't be edited
+            # by someone who isn't even allowed to know it exists.
+            _personal_calendar_visibility_filter(home_id, auth.user.id),
         )
         .with_for_update()
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
-    if event.created_by != membership.user_id:
+    event_calendar = await db.get(HomeCalendar, event.calendar_id)
+    is_personal_calendar = event_calendar is not None and event_calendar.owner_user_id is not None
+    if event.created_by != membership.user_id and not is_personal_calendar:
         await require_capability(home_id, Capability.calendar_edit_all, auth, db)
     if event.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
-    access = await _calendar_access(db, home_id)
-    _require_calendar_writable(access, event.calendar_id)
+    if is_personal_calendar:
+        # Never entitlement-gated — same reasoning as create_event.
+        pass
+    else:
+        access = await _calendar_access(db, home_id)
+        _require_calendar_writable(access, event.calendar_id)
 
     # Transition-safe, same rule as shared events/routines: only a genuine
     # *change* of label is checked against the entitlement — resaving an
@@ -1019,6 +1178,11 @@ async def update_event(
         _require_label_selectable(await _label_access(db, home_id), body.label_id)
 
     requested_members = sorted(set(body.member_ids + [event.created_by]))
+    if is_personal_calendar and set(requested_members) != {event.created_by}:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Events on your Personal Calendar can't be assigned to other members.",
+        )
     if requested_members:
         rows = (
             await db.scalars(
@@ -1129,7 +1293,10 @@ async def update_event(
     await db.refresh(event)
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
-    return _occurrence(event, event.start_at, event.end_at, label, requested_members)
+    calendar_color = event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR
+    return _occurrence(
+        event, event.start_at, event.end_at, label, requested_members, calendar_color
+    )
 
 
 @router.delete("/{home_id}/events/{event_id}", status_code=204)
@@ -1148,13 +1315,20 @@ async def delete_event(
             CalendarEvent.id == event_id,
             CalendarEvent.group_id == home_id,
             CalendarEvent.deleted_at.is_(None),
+            # calendar_delete alone has no ownership tier server-side (any
+            # member holding it may delete any *shared* event) — but that
+            # must never reach into another member's Personal Calendar. See
+            # _personal_calendar_visibility_filter.
+            _personal_calendar_visibility_filter(home_id, auth.user.id),
         )
         .with_for_update()
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
-    access = await _calendar_access(db, home_id)
-    _require_calendar_writable(access, event.calendar_id)
+    event_calendar = await db.get(HomeCalendar, event.calendar_id)
+    if event_calendar is None or event_calendar.owner_user_id is None:
+        access = await _calendar_access(db, home_id)
+        _require_calendar_writable(access, event.calendar_id)
     member_ids = {
         row.user_id
         for row in (
@@ -1183,24 +1357,27 @@ async def event_activity(
 ) -> list[EventActivityResponse]:
     membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     capabilities = await capabilities_for(db, membership)
+    visibility_filters = [
+        CalendarEvent.id == event_id,
+        CalendarEvent.group_id == home_id,
+        CalendarEvent.deleted_at.is_(None),
+        # Unconditional — see _personal_calendar_visibility_filter.
+        _personal_calendar_visibility_filter(home_id, auth.user.id),
+    ]
     if Capability.calendar_view_all not in capabilities:
-        visible = await db.scalar(
-            select(CalendarEvent.id).where(
-                CalendarEvent.id == event_id,
-                CalendarEvent.group_id == home_id,
-                CalendarEvent.deleted_at.is_(None),
-                or_(
-                    CalendarEvent.created_by == auth.user.id,
-                    CalendarEvent.id.in_(
-                        select(CalendarEventMember.event_id).where(
-                            CalendarEventMember.user_id == auth.user.id
-                        )
-                    ),
+        visibility_filters.append(
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
                 ),
             )
         )
-        if visible is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    visible = await db.scalar(select(CalendarEvent.id).where(*visibility_filters))
+    if visible is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
     rows = (
         await db.scalars(
             select(CalendarEventActivity)
@@ -1237,7 +1414,9 @@ async def home_summary(
     day_end = day_start + timedelta(days=1)
 
     labels = await _label_map(db, home_id)
-    visibility_filters = []
+    calendar_colors = await _calendar_color_map(db, home_id)
+    # Unconditional — see _personal_calendar_visibility_filter.
+    visibility_filters = [_personal_calendar_visibility_filter(home_id, auth.user.id)]
     if Capability.calendar_view_all not in capabilities:
         visibility_filters.append(
             or_(
@@ -1271,6 +1450,7 @@ async def home_summary(
             event.end_at,
             labels.get(event.label_id) if event.label_id else None,
             member_map.get(event.id, []),
+            calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR),
         )
         for event in today_rows
     ]
@@ -1294,6 +1474,7 @@ async def home_summary(
             next_event_row.end_at,
             labels.get(next_event_row.label_id) if next_event_row.label_id else None,
             member_map.get(next_event_row.id, []),
+            calendar_colors.get(next_event_row.calendar_id, DEFAULT_LABEL_COLOUR),
         )
 
     pending_count = None

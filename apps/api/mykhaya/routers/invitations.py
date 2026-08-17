@@ -8,6 +8,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
@@ -421,6 +422,13 @@ async def accept(
         existing.shared_resources = row.shared_resources
         if existing.colour is None:
             existing.colour = await assign_member_colour(db, row.group_id)
+    # Give the new/returning adult member their Personal Calendar up front —
+    # idempotent, so re-accepting an existing membership is safe too. Skips
+    # managed children (see mykhaya.calendar_provisioning); invitations are
+    # always for adult accounts in practice, but this stays correct even if
+    # that ever changes.
+    if row.relationship != HouseholdRelationship.child:
+        await ensure_personal_calendar(db, row.group_id, auth.user.id)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

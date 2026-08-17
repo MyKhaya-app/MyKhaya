@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
@@ -149,6 +150,10 @@ async def create_group(
                 is_active=index == 0,
             )
         )
+    # The creating home_admin is always an adult — give them their Personal
+    # Calendar up front rather than relying solely on list_calendars' lazy
+    # fallback. See mykhaya.calendar_provisioning.
+    await ensure_personal_calendar(db, group.id, auth.user.id)
     audit(db, request, "group.created", auth.user.id, group.id, "group", group.id)
     await db.commit()
     return await group_response(db, group, membership)

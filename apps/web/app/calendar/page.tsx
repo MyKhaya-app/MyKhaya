@@ -189,12 +189,20 @@ function utcMidnightOf(dateInput: string): Date {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
+// Sentinel select value for "Personal calendar" — distinct from any real
+// label UUID, so the single "Calendar or category" control can represent
+// both concepts (which HomeCalendar the event belongs to, and which
+// CalendarEventLabel it's tagged with) without them ever colliding. Never
+// sent to the API as-is; submit() translates it into calendar_id.
+const PERSONAL_CALENDAR_VALUE = "__personal__";
+
 function EventForm({
   labels,
   members,
   initial,
   initialDay,
   timeZone,
+  personalCalendarId,
   busy,
   submitLabel,
   sharedEventsEnabled,
@@ -211,6 +219,10 @@ function EventForm({
    *  own governing timezone when editing one that already has a different
    *  one set. Never the browser's local zone, never a hardcoded literal. */
   timeZone: string;
+  /** The signed-in user's private Personal Calendar within this Home — null
+   *  only in the brief window before it's loaded (see CalendarPage.load) or
+   *  for a managed Child, who doesn't have one. */
+  personalCalendarId: string | null;
   busy: boolean;
   submitLabel: string;
   sharedEventsEnabled: boolean;
@@ -242,6 +254,16 @@ function EventForm({
   // must never itself trigger a render; it only gates what onToggleAllDay
   // does the next time the user actually turns All day off.
   const hasTimedValues = useRef(initialWhen.hasTimedValues);
+  // The "Calendar or category" select's value — either a real
+  // CalendarEventLabel id (unchanged existing behaviour), "" (the existing
+  // default/no-label option), or PERSONAL_CALENDAR_VALUE. Controlled (not
+  // read from FormData like the rest of this form) so the "Only you can
+  // see..." supporting copy can react live to the current selection.
+  const [calendarSelection, setCalendarSelection] = useState(() =>
+    initial && personalCalendarId && initial.calendar_id === personalCalendarId
+      ? PERSONAL_CALENDAR_VALUE
+      : (initial?.label?.id ?? ""),
+  );
 
   function zonedInstant(date: string, time: string): Date {
     return combineZoned(date, time, eventTimeZone);
@@ -351,14 +373,21 @@ function EventForm({
       end_at = zonedInstant(multiDay ? endDate : startDate, endTime).toISOString();
     }
 
+    const isPersonal = calendarSelection === PERSONAL_CALENDAR_VALUE;
     await onSubmit({
       title,
       start_at,
       end_at,
       timezone: eventTimeZone,
       is_all_day: allDay,
-      member_ids: data.getAll("members").map(String),
-      label_id: formText(data, "label") || null,
+      // A Personal Calendar event can never be assigned to anyone else (the
+      // backend rejects this too — see create_event/update_event's
+      // Personal-Calendar member check — this just avoids a round-trip
+      // rejection when the People section still shows other members
+      // checked from before switching to Personal calendar).
+      member_ids: isPersonal ? [] : data.getAll("members").map(String),
+      label_id: isPersonal ? null : calendarSelection || null,
+      calendar_id: isPersonal ? personalCalendarId : null,
       location_text: formText(data, "location") || null,
       reminder_minutes: formText(data, "reminder")
         ? Number(formText(data, "reminder"))
@@ -489,7 +518,10 @@ function EventForm({
         </button>
         {rangeNotice && <p className="quiet-state">{rangeNotice}</p>}
       </div>
-      {members.length > 0 && (
+      {/* A Personal Calendar event is never shared — see create_event's
+          Personal-Calendar member check — so there is nothing for the
+          People section to offer while it's selected. */}
+      {members.length > 0 && calendarSelection !== PERSONAL_CALENDAR_VALUE && (
         <div className="form-wide event-section">
           <span className="eyebrow">People</span>
           <div className="member-list">
@@ -547,9 +579,13 @@ function EventForm({
         <select
           className="icon-row-control"
           name="label"
-          defaultValue={initial?.label?.id ?? ""}
+          value={calendarSelection}
+          onChange={(event) => setCalendarSelection(event.target.value)}
         >
           <option value="">Family calendar</option>
+          {personalCalendarId && (
+            <option value={PERSONAL_CALENDAR_VALUE}>Personal calendar</option>
+          )}
           {labels.map((label) => {
             // Transition-safe, matching update_event's own check: a category
             // already assigned to this event stays selectable (so resaving
@@ -568,6 +604,9 @@ function EventForm({
         </select>
         <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
       </label>
+      {calendarSelection === PERSONAL_CALENDAR_VALUE && (
+        <p className="form-wide quiet-state">Only you can see events in this calendar.</p>
+      )}
       <label className="form-wide icon-row">
         <span className="icon-row-icon" aria-hidden="true">
           <MapPin size={16} />
@@ -656,12 +695,14 @@ function EventDetails({
   event,
   members,
   timeZone,
+  personalCalendarId,
   canDelete,
   onDelete,
 }: {
   event: EventOccurrence;
   members: Member[];
   timeZone: string;
+  personalCalendarId: string | null;
   canDelete: boolean;
   onDelete: () => Promise<void>;
 }) {
@@ -717,7 +758,9 @@ function EventDetails({
             style={{ "--swatch-colour": resolveColour(event.label?.color ?? "teal") } as React.CSSProperties}
             aria-hidden="true"
           />
-          {event.label?.name ?? "Family calendar"}
+          {personalCalendarId && event.calendar_id === personalCalendarId
+            ? "Personal calendar"
+            : (event.label?.name ?? "Family calendar")}
         </div>
       </div>
 
@@ -795,6 +838,10 @@ export default function CalendarPage() {
   // browser's own timezone). FALLBACK_TIMEZONE only covers the brief window
   // before the first successful load.
   const [calendarTimezone, setCalendarTimezone] = useState(FALLBACK_TIMEZONE);
+  // The signed-in user's own private Personal Calendar within this Home —
+  // null before the first load resolves, or for a managed Child (see
+  // apps/api/mykhaya/calendar_provisioning.py). Never another member's.
+  const [personalCalendarId, setPersonalCalendarId] = useState<string | null>(null);
 
   useEffect(() => {
     setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
@@ -886,6 +933,7 @@ export default function CalendarPage() {
     setMembers(memberRows);
     const primaryCalendar = calendarRows?.items.find((row) => row.is_primary);
     if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
+    setPersonalCalendarId(calendarRows?.personal_calendar?.id ?? null);
     api
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
@@ -1388,6 +1436,7 @@ export default function CalendarPage() {
               members={members}
               initialDay={editorDay}
               timeZone={calendarTimezone}
+              personalCalendarId={personalCalendarId}
               busy={busy}
               submitLabel="Save event"
               sharedEventsEnabled={sharedEventsEnabled}
@@ -1428,6 +1477,7 @@ export default function CalendarPage() {
                   initial={selectedEvent}
                   initialDay={new Date(selectedEvent.start_at)}
                   timeZone={calendarTimezone}
+                  personalCalendarId={personalCalendarId}
                   busy={busy}
                   submitLabel="Save changes"
                   sharedEventsEnabled={sharedEventsEnabled}
@@ -1440,6 +1490,7 @@ export default function CalendarPage() {
                   event={selectedEvent}
                   members={members}
                   timeZone={calendarTimezone}
+                  personalCalendarId={personalCalendarId}
                   canDelete={canDelete}
                   onDelete={remove}
                 />

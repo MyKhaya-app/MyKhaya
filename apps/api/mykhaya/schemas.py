@@ -374,11 +374,26 @@ class HomeCalendarDeleteRequest(StrictModel):
     confirmed: Literal[True]
 
 
+class HomeCalendarUpdate(StrictModel):
+    # Deliberately colour-only — a shared calendar's `name` (in particular
+    # the primary/system Home calendar's fixed "Home calendar" product
+    # identity) is not user-editable data. StrictModel's extra="forbid"
+    # means a client-supplied `name` is rejected outright (422), not merely
+    # ignored, so this is structural enforcement, not a convention.
+    color: ColourToken
+
+
 class HomeCalendarResponse(BaseModel):
     id: uuid.UUID
     name: str
     timezone: str
     is_primary: bool
+    color: ColourToken
+    # None for every shared/Home calendar in `items` below. Set only on the
+    # `personal_calendar` object — included here (rather than a separate
+    # response shape) so both cases share one type. See
+    # HomeCalendar.owner_user_id.
+    owner_user_id: uuid.UUID | None = None
     # "normal": full create/edit/delete access on Free or Family alike.
     # "read_only_due_to_plan": preserved after a downgrade left the Home with
     # more calendars than its plan allows — viewable, but its events can't be
@@ -387,13 +402,25 @@ class HomeCalendarResponse(BaseModel):
     # deleted to fall back within the limit. Derived fresh on every read from
     # current entitlement + current calendar count — never a persisted flag.
     # See docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture.
+    # A Personal Calendar is always "normal" — never entitlement-gated.
     commercial_access: Literal["normal", "read_only_due_to_plan"]
     created_at: datetime
 
 
 class CalendarListResponse(BaseModel):
+    # Shared/Home calendars only (owner_user_id is always None here) — the
+    # resource /calendar/calendars manages and calendar.max_categories
+    # counts. A Personal Calendar deliberately never appears in this list:
+    # it isn't a Home-administered resource. See `personal_calendar` below.
     items: list[HomeCalendarResponse]
     limit: int | None
+    # The requesting user's own Personal Calendar within this Home —
+    # provisioned on demand if it doesn't exist yet (see
+    # calendar_provisioning.ensure_personal_calendar). Always present for an
+    # adult member; never another member's. None for a managed Child — see
+    # calendar_provisioning's module docstring on why that's left an open
+    # product decision rather than assumed either way.
+    personal_calendar: HomeCalendarResponse | None
 
 
 class CalendarUsageResponse(BaseModel):
@@ -529,6 +556,14 @@ class EventOccurrence(BaseModel):
     description: str | None
     location_text: str | None
     label: EventLabelResponse | None
+    # This event's calendar's own colour (HomeCalendar.color) — what it
+    # should render as when `label` is None. A category's colour (label.color)
+    # always takes precedence when a label is set; this is only the
+    # fallback, but always populated so the frontend never needs its own
+    # hardcoded default. Reused as-is for Personal Calendar events too
+    # (unaffected by this feature — no UI exposes changing it, so it stays
+    # whatever it always defaulted to).
+    calendar_color: ColourToken
     member_ids: list[uuid.UUID]
     recurrence: RecurrencePattern
     reminder_minutes: int | None

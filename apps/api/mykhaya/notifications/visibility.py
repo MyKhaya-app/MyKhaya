@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.household_permissions import Capability, capabilities_for
-from mykhaya.models import CalendarEvent, CalendarEventMember, Membership
+from mykhaya.models import CalendarEvent, CalendarEventMember, HomeCalendar, Membership
 
 
 async def active_membership(
@@ -37,6 +37,18 @@ async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.U
         return False
     capabilities = await capabilities_for(db, membership)
     if Capability.calendar_view not in capabilities:
+        return False
+    # A hard privacy boundary, checked before (and independent of)
+    # calendar_view_all — a Home admin/partner's blanket visibility must
+    # never reach into another member's Personal Calendar. See
+    # routers.calendar._personal_calendar_visibility_filter, the same rule
+    # applied at the SQL-query level for list/detail endpoints.
+    calendar = await db.get(HomeCalendar, event.calendar_id)
+    if (
+        calendar is not None
+        and calendar.owner_user_id is not None
+        and calendar.owner_user_id != user_id
+    ):
         return False
     if Capability.calendar_view_all in capabilities:
         return True

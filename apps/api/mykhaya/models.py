@@ -291,6 +291,12 @@ class HomeCalendar(UuidTimeMixin, Base):
             unique=True,
             postgresql_where=text("is_primary"),
         ),
+        # One Personal Calendar per member per Home. A plain (not partial)
+        # UniqueConstraint is correct here: SQL treats NULLs as distinct from
+        # each other, so shared calendars (owner_user_id IS NULL) are never
+        # constrained by this — only the personal ones are. See migration
+        # 0028_personal_calendars.
+        UniqueConstraint("group_id", "owner_user_id", name="uq_home_calendar_owner"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
@@ -298,6 +304,33 @@ class HomeCalendar(UuidTimeMixin, Base):
     name: Mapped[str] = mapped_column(String(80), default="Home Calendar")
     timezone: Mapped[str] = mapped_column(String(100), default="Europe/London")
     is_primary: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # NULL = a shared/Home calendar (existing behaviour: entitlement-gated,
+    # managed at /calendar/calendars, visible per the normal
+    # calendar_view/calendar_view_all rules). Non-NULL = this member's
+    # private Personal Calendar — the structural privacy boundary itself;
+    # never entitlement-gated, and its events are visible/writable only to
+    # this user regardless of calendar_view_all (see
+    # routers.calendar's personal-calendar guards and
+    # notifications.visibility.can_view_event). Deliberately a real column,
+    # not inferred from `name` — see docs/security/threat-model.md on why
+    # privacy must never be represented by display text.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # The colour events on this calendar render with when they carry no
+    # CalendarEventLabel (label_id IS NULL) — a category's own colour still
+    # always takes precedence when one is assigned (see routers.calendar's
+    # _occurrence). Same palette/validation as CalendarEventLabel.color, and
+    # the same default ("teal"), so this is a pure enhancement: an
+    # uncategorised event's rendered colour is unchanged until someone
+    # deliberately customises it. User-editable (see update_calendar); the
+    # calendar's `name` deliberately is not — see migration
+    # 0029_home_calendar_colour.
+    color: Mapped[ColourToken] = mapped_column(
+        Enum(ColourToken, name="colour_token", create_type=False),
+        default=DEFAULT_LABEL_COLOUR,
+        server_default=DEFAULT_LABEL_COLOUR.value,
+    )
 
 
 class CalendarEventLabel(UuidTimeMixin, Base):

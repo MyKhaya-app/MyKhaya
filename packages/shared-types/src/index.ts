@@ -126,13 +126,24 @@ export interface HomeCalendar {
   name: string;
   timezone: string;
   is_primary: boolean;
+  // Set only on `CalendarListResponse.personal_calendar` — null for every
+  // shared/Home calendar in `items`. Non-null means this is that user's
+  // private Personal Calendar (see docs/architecture — never
+  // entitlement-gated, never another member's).
+  owner_user_id: string | null;
   commercial_access: CalendarCommercialAccess;
   created_at: string;
 }
 
 export interface CalendarListResponse {
+  // Shared/Home calendars only — never includes any Personal Calendar,
+  // including the caller's own. See `personal_calendar` below.
   items: HomeCalendar[];
   limit: number | null;
+  // The signed-in user's own Personal Calendar within this Home. Present
+  // for adult members; null for a managed Child (see
+  // apps/api/mykhaya/calendar_provisioning.py).
+  personal_calendar: HomeCalendar | null;
 }
 
 export interface CalendarUsage {

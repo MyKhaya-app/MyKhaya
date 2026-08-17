@@ -417,10 +417,19 @@ async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageR
     customers manage as "event categories" day to day — see category_usage
     below for that — but it shares the same limit key and is independently
     enforced (routers.calendar's create_calendar), so this stays accurate
-    for the Platform Control Centre's commercial-detail diagnostics."""
+    for the Platform Control Centre's commercial-detail diagnostics.
+
+    Personal Calendars (owner_user_id IS NOT NULL) are excluded — they are a
+    core per-member capability, not a Home-administered/entitlement-gated
+    resource, and must never count against a Free Home's single shared
+    calendar allowance just because it has members. See
+    routers.calendar._ordered_calendars for the matching exclusion on the
+    enforcement side."""
     count = (
         await db.scalar(
-            select(func.count()).select_from(HomeCalendar).where(HomeCalendar.group_id == home_id)
+            select(func.count())
+            .select_from(HomeCalendar)
+            .where(HomeCalendar.group_id == home_id, HomeCalendar.owner_user_id.is_(None))
         )
         or 0
     )

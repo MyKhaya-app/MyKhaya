@@ -128,12 +128,20 @@ async def _add_member(home_id: str, user_id: uuid.UUID, profile: PermissionProfi
 
 
 async def _calendar_rows(home_id: str) -> list[HomeCalendar]:
+    # Shared/Home calendars only — the resource this test file's
+    # calendar.max_categories assertions are about. Every Home now also
+    # carries its creating owner's Personal Calendar (owner_user_id set),
+    # which is a separate, never-entitlement-gated resource — see
+    # test_personal_calendar.py for that behaviour.
     async with SessionFactory() as db:
         return list(
             (
                 await db.scalars(
                     select(HomeCalendar)
-                    .where(HomeCalendar.group_id == uuid.UUID(home_id))
+                    .where(
+                        HomeCalendar.group_id == uuid.UUID(home_id),
+                        HomeCalendar.owner_user_id.is_(None),
+                    )
                     .order_by(HomeCalendar.created_at.asc())
                 )
             ).all()
