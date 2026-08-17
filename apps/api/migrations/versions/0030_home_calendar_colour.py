@@ -1,42 +1,38 @@
-"""Add a configurable colour to home_calendars.
+"""Merge point: reconnect the two branches that independently forked off
+0028_personal_calendars.
 
-Every calendar (shared Home calendars and Personal Calendars alike) now
-carries its own `color` — the colour an event on it renders with when it
-carries no CalendarEventLabel (label_id IS NULL). Defaults to the same
-"teal" every uncategorised event already rendered as (see
-mykhaya.colour_palette.DEFAULT_LABEL_COLOUR), so this is additive: nothing
-changes visually until a user with calendar.edit_all deliberately changes a
-shared calendar's colour via the new colour-only update endpoint (see
-routers.calendar.update_calendar) — `name` is not editable through that
-endpoint at all, by design (the Home calendar's name is a fixed product
-concept, not user data).
+History: this revision ID was briefly (and incorrectly) reused for the
+schema change that actually belongs to 0029_home_calendar_colour — a
+mid-development rename repointed this file after 0029_trusted_devices and
+dropped the 0029_home_calendar_colour identity entirely, which orphaned any
+database already stamped at that revision (deployment failure: "Can't
+locate revision identified by '0029_home_calendar_colour'"). The schema
+change (home_calendars.color) has been restored to its original home in
+0029_home_calendar_colour.py, unchanged from how it was first deployed.
 
-Revision ID: 0030_home_calendar_colour
-Revises: 0029_trusted_devices
+This revision's *identity* (0030_home_calendar_colour) is kept as-is rather
+than renumbered, because some databases were already stamped at it while it
+still carried the color-column upgrade — for those, this merge is correctly
+a no-op continuation of a revision they've already applied. For a database
+still at the orphaned 0029_home_calendar_colour, or a fresh database, this
+merge (only reachable once both parent branches are applied) is what
+reconnects them into one head.
 """
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-from alembic import op
-from sqlalchemy.dialects import postgresql
-
 revision: str = "0030_home_calendar_colour"
-down_revision: str | None = "0029_trusted_devices"
+down_revision: str | tuple[str, ...] | None = (
+    "0029_home_calendar_colour",
+    "0029_trusted_devices",
+)
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# The colour_token enum type already exists (see migration 0015) —
-# create_type=False so this column addition never tries to redefine it.
-colour_token = postgresql.ENUM(name="colour_token", create_type=False)
-
 
 def upgrade() -> None:
-    op.add_column(
-        "home_calendars",
-        sa.Column("color", colour_token, nullable=False, server_default="teal"),
-    )
+    pass
 
 
 def downgrade() -> None:
-    op.drop_column("home_calendars", "color")
+    pass

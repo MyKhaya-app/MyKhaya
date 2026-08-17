@@ -153,6 +153,7 @@ async def test_notify_writes_in_app_notification_and_delivery() -> None:
         await db.commit()
         assert notification is not None
         assert resolve_path(notification.deep_link) == "/settings/notifications"
+        assert resolve_path(target("calendar_today")) == "/calendar"
 
     async with SessionFactory() as db:
         stored = await db.scalar(select(Notification).where(Notification.id == notification.id))

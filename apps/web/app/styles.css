@@ -2,6 +2,7 @@
   box-sizing: border-box;
 }
 :root {
+  --app-header-height: calc(64px + env(safe-area-inset-top));
   --bottom-nav-height: 72px;
 }
 html {
@@ -1707,7 +1708,7 @@ textarea {
   min-width: 0;
 }
 .agenda-day {
-  scroll-margin-top: calc(var(--header-height) + 1rem);
+  scroll-margin-top: calc(var(--app-header-height) + 1rem);
 }
 .agenda-view,
 .child-list,

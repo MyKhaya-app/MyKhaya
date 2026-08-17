@@ -130,6 +130,7 @@ self.addEventListener("message", (event) => {
 function resolveDeepLinkPath(deepLink) {
   if (!deepLink || !deepLink.type) return "/home";
   if (deepLink.type === "calendar_event" && deepLink.id) return `/calendar?event=${deepLink.id}`;
+  if (deepLink.type === "calendar_today") return "/calendar";
   if (deepLink.type === "routine" && deepLink.id) return `/home?routine=${deepLink.id}`;
   if (deepLink.type === "member") return "/people";
   if (deepLink.type === "notifications") return "/home?notifications=1";

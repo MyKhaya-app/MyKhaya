@@ -11,6 +11,12 @@ RUN pip install --upgrade pip && pip install .
 FROM builder AS test
 RUN pip install '.[dev]'
 COPY apps/api/tests ./tests
+# Read-only, for test_migration_integrity.py: without this, the Alembic
+# revision graph is invisible to the test image and that check silently
+# passes over zero migrations instead of validating the real graph — see
+# the 0029_home_calendar_colour orphaned-revision incident this test exists
+# to catch.
+COPY apps/api/migrations ./migrations
 # Read-only, for test_colour_palette_consistency.py: it parses the TS/CSS palette
 # source directly to prove mykhaya.colour_palette never silently drifts from
 # packages/design-tokens, rather than trusting a hand-maintained comment.

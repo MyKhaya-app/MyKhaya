@@ -7,7 +7,9 @@ see mykhaya.notifications.visibility and mykhaya.calendar_occurrences.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from unicodedata import category
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -46,6 +48,15 @@ EMPTY_DAY_MESSAGES = (
     "Nothing planned just yet — enjoy the quieter day.",
     "Today looks wonderfully open.",
 )
+MAX_DISPLAYED_EVENTS = 5
+
+
+@dataclass(frozen=True)
+class BriefingOccurrence:
+    event_id: uuid.UUID
+    title: str
+    start_at: datetime
+    is_all_day: bool
 
 
 def empty_day_message(for_date: date) -> str:
@@ -69,9 +80,57 @@ def _describe_occurrence(event: CalendarEvent, occurrence_start: datetime, tz: t
     return f"{event.title} at {local_start.strftime('%H:%M')}"
 
 
+def _safe_push_text(value: str, *, max_length: int = 180) -> str:
+    """Keep user-provided text on one safe, readable push-notification line."""
+    cleaned = "".join(" " if category(char).startswith("C") else char for char in value)
+    return " ".join(cleaned.split())[:max_length].strip() or "Untitled event"
+
+
+def _briefing_event_line(occurrence: BriefingOccurrence, tz: tzinfo) -> str:
+    title = _safe_push_text(occurrence.title)
+    if occurrence.is_all_day:
+        return f"• All day – {title}"
+    local_start = occurrence.start_at.astimezone(tz)
+    return f"• {local_start.strftime('%H:%M')} {title}"
+
+
+def format_daily_briefing(
+    occurrences: list[BriefingOccurrence],
+    *,
+    local_date: date,
+    tz: tzinfo,
+    birthday_phrases: list[str] | None = None,
+) -> tuple[str, str]:
+    """Build the stable title/body while keeping event ordering deterministic."""
+    ordered = sorted(
+        occurrences,
+        key=lambda item: (
+            item.start_at,
+            _safe_push_text(item.title).casefold(),
+            str(item.event_id),
+        ),
+    )
+    count = len(ordered)
+    title = f"You have {count} event{'s' if count != 1 else ''} today."
+    lines = ["Please take care of yourself!"]
+
+    # Birthdays are an existing briefing feature. Preserve them without allowing
+    # display names to introduce control characters into the push payload.
+    for phrase in birthday_phrases or []:
+        safe_phrase = _safe_push_text(phrase).capitalize()
+        lines.append(f"{safe_phrase}.")
+
+    lines.extend(_briefing_event_line(item, tz) for item in ordered[:MAX_DISPLAYED_EVENTS])
+    if count > MAX_DISPLAYED_EVENTS:
+        lines.append(f"• +{count - MAX_DISPLAYED_EVENTS} more events")
+    if not ordered and not (birthday_phrases or []):
+        lines.append(empty_day_message(local_date))
+    return title, "\n".join(lines)
+
+
 async def _events_for_user_today(
     db: AsyncSession, user_id: uuid.UUID, local_date: date, tz: tzinfo
-) -> list[str]:
+) -> list[BriefingOccurrence]:
     day_start_local = datetime.combine(local_date, datetime.min.time(), tzinfo=tz)
     day_end_local = day_start_local + timedelta(days=1)
     day_start = day_start_local.astimezone(UTC)
@@ -83,7 +142,7 @@ async def _events_for_user_today(
         )
     ).all()
 
-    descriptions: list[tuple[datetime, str]] = []
+    occurrences: list[BriefingOccurrence] = []
     for membership in memberships:
         if not await is_feature_enabled(db, FeatureKey.calendar, membership.group_id):
             continue
@@ -110,11 +169,16 @@ async def _events_for_user_today(
                 ):
                     continue
             for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
-                description = _describe_occurrence(event, occurrence_start, tz)
-                descriptions.append((occurrence_start, description))
+                occurrences.append(
+                    BriefingOccurrence(
+                        event_id=event.id,
+                        title=event.title,
+                        start_at=occurrence_start,
+                        is_all_day=event.is_all_day,
+                    )
+                )
 
-    descriptions.sort(key=lambda item: item[0])
-    return [description for _start, description in descriptions]
+    return occurrences
 
 
 async def _birthdays_for_user_today(
@@ -229,24 +293,24 @@ async def deliver_daily_briefing(
     tz = effective_timezone(user.timezone, settings.default_timezone)
     local_date = date.fromisoformat(date_iso)
     birthday_phrases = await _birthdays_for_user_today(db, user.id, local_date)
-    event_descriptions = await _events_for_user_today(db, user.id, local_date, tz)
-    descriptions = birthday_phrases + event_descriptions
+    occurrences = await _events_for_user_today(db, user.id, local_date, tz)
 
-    if not descriptions and not prefs.empty_day_briefing_enabled:
+    if not occurrences and not birthday_phrases and not prefs.empty_day_briefing_enabled:
         return
 
-    if descriptions:
-        sentence = oxford_join(descriptions)
-        body = f"{sentence[0].upper()}{sentence[1:]}."
-    else:
-        body = empty_day_message(local_date)
+    title, body = format_daily_briefing(
+        occurrences,
+        local_date=local_date,
+        tz=tz,
+        birthday_phrases=birthday_phrases,
+    )
     await notify(
         db,
         settings=settings,
         recipient_user_id=user.id,
         notification_type="daily_briefing",
-        title="Your day at a glance",
+        title=title,
         body=body,
         idempotency_key=f"briefing:{user_id}:{date_iso}",
-        deep_link=target("home"),
+        deep_link=target("calendar_today"),
     )

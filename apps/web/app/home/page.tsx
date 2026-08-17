@@ -199,8 +199,17 @@ export default function HomePage() {
           }),
         ]);
         setSummary(homeSummary);
+        const todayOccurrenceIds = new Set(
+          homeSummary.today_events.map((event) => event.occurrence_id),
+        );
         setUpcoming(
-          upcomingRows.items.filter(isComingUp).sort(compareUpcoming).slice(0, 3),
+          upcomingRows.items
+            .filter(
+              (event) =>
+                !todayOccurrenceIds.has(event.occurrence_id) && isComingUp(event),
+            )
+            .sort(compareUpcoming)
+            .slice(0, 3),
         );
       })
       .catch((reason: Error) => setError(reason.message));
