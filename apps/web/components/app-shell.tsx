@@ -9,6 +9,38 @@ import { BottomNav } from "./bottom-nav";
 import { useActiveHome } from "./use-active-home";
 import { useUserUpdatedListener } from "./user-events";
 
+const AUTH_DIAGNOSTICS_KEY = "mykhaya.auth-diagnostics";
+const AUTH_BOOT_ID =
+  typeof window === "undefined"
+    ? "server"
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+function recordAuthDiagnostic(event: string, fields: Record<string, unknown> = {}) {
+  if (typeof window === "undefined") return;
+  const entry = {
+    event,
+    bootId: AUTH_BOOT_ID,
+    origin: window.location.origin,
+    pathname: window.location.pathname,
+    standalone:
+      window.matchMedia("(display-mode: standalone)").matches ||
+      ("standalone" in navigator && Boolean(navigator.standalone)),
+    at: new Date().toISOString(),
+    ...fields,
+  };
+  console.info("[AUTH_DIAG]", entry);
+  try {
+    const stored = window.localStorage.getItem(AUTH_DIAGNOSTICS_KEY);
+    const previous: unknown = stored ? JSON.parse(stored) : [];
+    const entries: unknown[] = Array.isArray(previous)
+      ? (previous as unknown[]).slice(-49)
+      : [];
+    window.localStorage.setItem(AUTH_DIAGNOSTICS_KEY, JSON.stringify([...entries, entry]));
+  } catch {
+    // Diagnostics must never affect authentication startup.
+  }
+}
+
 export function AppShell({
   children,
   hero,
@@ -27,25 +59,60 @@ export function AppShell({
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
 
   const bootstrap = useCallback(async () => {
+    recordAuthDiagnostic("APP_BOOT");
     setAuthState("loading");
     try {
+      recordAuthDiagnostic("ME_REQUEST_STARTED");
       setUser(await api.me());
       setAuthState("ready");
+      recordAuthDiagnostic("ME_RESULT_200");
+      recordAuthDiagnostic("AUTHENTICATED");
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) {
+        recordAuthDiagnostic("ME_RESULT_401");
         try {
+          recordAuthDiagnostic("RENEW_STARTED");
           setUser(await api.renew());
           setAuthState("ready");
+          recordAuthDiagnostic("RENEW_RESULT_200");
+          recordAuthDiagnostic("AUTHENTICATED");
           return;
         } catch (renewalCause) {
+          if (renewalCause instanceof ApiError) {
+            recordAuthDiagnostic(
+              renewalCause.status === 401
+                ? "RENEW_RESULT_401"
+                : renewalCause.status === 403
+                ? "RENEW_RESULT_403"
+                : renewalCause.status >= 500
+                ? "RENEW_RESULT_5XX"
+                : "RENEW_FAILED",
+              { status: renewalCause.status },
+            );
+          } else {
+            recordAuthDiagnostic("RENEW_NETWORK_ERROR");
+          }
           if (renewalCause instanceof ApiError && renewalCause.status === 401) {
             setAuthState("signed_out");
+            recordAuthDiagnostic("LOGIN_REDIRECT");
             router.replace("/login");
           } else {
             setAuthState("offline");
           }
           return;
         }
+      }
+      if (cause instanceof ApiError) {
+        recordAuthDiagnostic(
+          cause.status >= 500
+            ? "ME_RESULT_5XX"
+            : cause.status === 403
+            ? "ME_RESULT_403"
+            : "ME_FAILED",
+          { status: cause.status },
+        );
+      } else {
+        recordAuthDiagnostic("ME_NETWORK_ERROR");
       }
       setAuthState("offline");
     }

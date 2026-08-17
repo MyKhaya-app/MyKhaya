@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +65,21 @@ from mykhaya.security import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
+auth_diag_log = structlog.get_logger("auth_diag")
+
+
+def _auth_diag(request: Request, event: str, **fields: object) -> None:
+    auth_diag_log.info(
+        "auth_diag",
+        auth_event=event,
+        request_id=getattr(request.state, "request_id", None),
+        route=request.url.path,
+        session_cookie=bool(request.cookies.get("mk_session")),
+        device_cookie=bool(request.cookies.get("mk_device")),
+        device_csrf_cookie=bool(request.cookies.get("mk_device_csrf")),
+        csrf_header=bool(request.headers.get("x-csrf-token")),
+        **fields,
+    )
 
 
 def user_response(user: User, session: Session | None = None) -> UserResponse:
@@ -441,9 +457,25 @@ async def renew(
     """Silently replace an expired application session using the rotating
     family-device credential. The device credential is never returned in JSON.
     """
-    require_device_csrf(request, settings)
+    try:
+        require_device_csrf(request, settings)
+    except HTTPException as exc:
+        _auth_diag(
+            request,
+            "RENEW_CSRF_FAILED",
+            status_code=exc.status_code,
+            csrf_reason=(
+                "CSRF_COOKIE_MISSING"
+                if not request.cookies.get("mk_device_csrf")
+                else "CSRF_HEADER_MISSING"
+                if not request.headers.get("x-csrf-token")
+                else "CSRF_INVALID"
+            ),
+        )
+        raise
     raw = request.cookies.get("mk_device")
     if not raw:
+        _auth_diag(request, "RENEW_FAILED", result="NO_TRUSTED_COOKIE", status_code=401)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     now = datetime.now(UTC)
     device_result = await db.execute(
@@ -459,6 +491,40 @@ async def renew(
     )
     pair = device_result.one_or_none()
     if pair is None:
+        known_device_result = await db.execute(
+            select(User, TrustedDevice)
+            .join(TrustedDevice, TrustedDevice.user_id == User.id)
+            .where(
+                TrustedDevice.token_hash
+                == hash_secret(raw, settings.secret_key.get_secret_value())
+            )
+        )
+        known_pair = known_device_result.one_or_none()
+        if known_pair is None:
+            result = "TOKEN_MISMATCH"
+            device_id = None
+            user_id = None
+        else:
+            known_user, known_device = known_pair
+            device_id = str(known_device.id)
+            user_id = str(known_user.id)
+            result = (
+                "USER_INVALID"
+                if not known_user.is_active
+                else "DEVICE_REVOKED"
+                if known_device.revoked_at is not None
+                else "DEVICE_EXPIRED"
+                if known_device.expires_at <= now
+                else "TRUSTED_DEVICE_NOT_FOUND"
+            )
+        _auth_diag(
+            request,
+            "RENEW_FAILED",
+            result=result,
+            user_id=user_id,
+            device_id=device_id,
+            status_code=401,
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     user, device = pair
 
@@ -476,6 +542,14 @@ async def renew(
         if child_active is None:
             device.revoked_at = now
             await db.commit()
+            _auth_diag(
+                request,
+                "RENEW_FAILED",
+                result="CHILD_ACCOUNT_INVALID",
+                user_id=str(user.id),
+                device_id=str(device.id),
+                status_code=401,
+            )
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
 
     rotated_token = new_session_token()
@@ -496,6 +570,17 @@ async def renew(
         device_csrf=device_csrf,
     )
     await db.commit()
+    _auth_diag(
+        request,
+        "RENEW_SUCCESS",
+        result="SUCCESS",
+        user_id=str(user.id),
+        device_id=str(device.id),
+        session_id=str(session.id),
+        rotation_performed=True,
+        new_cookies_emitted=True,
+        status_code=200,
+    )
     return user_response(user, session)
 
 

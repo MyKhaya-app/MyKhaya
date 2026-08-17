@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+import structlog
 from fastapi import HTTPException, Request, Response, status
 from pwdlib import PasswordHash
 from sqlalchemy import or_, select
@@ -19,6 +20,7 @@ from mykhaya.models import ActionToken, Session, TokenPurpose, TrustedDevice, Us
 
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("a-valid-dummy-password-value")
+auth_diag_log = structlog.get_logger("auth_diag")
 
 
 def normalise_email(email: str) -> str:
@@ -236,7 +238,11 @@ EXPIRED_SESSION_MESSAGE = "Your session has ended. Please sign in again."
 
 
 async def _session_for_token(
-    db: AsyncSession, raw: str, settings: Settings, message: str
+    db: AsyncSession,
+    raw: str,
+    settings: Settings,
+    message: str,
+    request: Request | None = None,
 ) -> tuple[User, Session]:
     digest = hash_secret(raw, settings.secret_key.get_secret_value())
     now = datetime.now(UTC)
@@ -260,6 +266,42 @@ async def _session_for_token(
     )
     pair = result.one_or_none()
     if pair is None:
+        reason = "TOKEN_MISMATCH"
+        session_id = None
+        user_id = None
+        known = await db.execute(
+            select(User, Session, TrustedDevice)
+            .join(Session, Session.user_id == User.id)
+            .outerjoin(TrustedDevice, Session.trusted_device_id == TrustedDevice.id)
+            .where(Session.token_hash == digest)
+        )
+        known_pair = known.one_or_none()
+        if known_pair is not None:
+            known_user, known_session, known_device = known_pair
+            session_id = str(known_session.id)
+            user_id = str(known_user.id)
+            reason = (
+                "USER_INVALID"
+                if not known_user.is_active
+                else "SESSION_REVOKED"
+                if known_session.revoked_at is not None
+                else "SESSION_EXPIRED"
+                if known_session.expires_at <= now
+                else "DEVICE_REVOKED"
+                if known_device is not None and known_device.revoked_at is not None
+                else "DEVICE_EXPIRED"
+                if known_device is not None and known_device.expires_at <= now
+                else "SESSION_INVALID"
+            )
+        auth_diag_log.info(
+            "auth_diag",
+            auth_event="SESSION_LOOKUP_FAILED",
+            request_id=getattr(request.state, "request_id", None) if request else None,
+            route=request.url.path if request else None,
+            reason=reason,
+            session_id=session_id,
+            user_id=user_id,
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, message)
     pair[1].last_seen_at = now
     if pair[2] is not None and now - pair[2].last_used_at >= timedelta(
@@ -275,8 +317,15 @@ async def current_user(
 ) -> tuple[User, Session]:
     raw = request.cookies.get("mk_session")
     if not raw:
+        auth_diag_log.info(
+            "auth_diag",
+            auth_event="SESSION_LOOKUP_FAILED",
+            request_id=getattr(request.state, "request_id", None),
+            route=request.url.path,
+            reason="SESSION_COOKIE_MISSING",
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
-    return await _session_for_token(db, raw, settings, EXPIRED_SESSION_MESSAGE)
+    return await _session_for_token(db, raw, settings, EXPIRED_SESSION_MESSAGE, request)
 
 
 @dataclass(frozen=True)
@@ -300,7 +349,9 @@ async def resolve_session(
         scheme, _, token = header.partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your session could not be verified.")
-        user, session = await _session_for_token(db, token, settings, EXPIRED_SESSION_MESSAGE)
+        user, session = await _session_for_token(
+            db, token, settings, EXPIRED_SESSION_MESSAGE, request
+        )
         return AuthenticatedSession(user, session, "bearer")
     user, session = await current_user(request, db, settings)
     return AuthenticatedSession(user, session, "cookie")

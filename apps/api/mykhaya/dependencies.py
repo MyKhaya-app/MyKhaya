@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
+import structlog
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,8 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import Group, Membership, Role, Session, SessionKind, User
 from mykhaya.security import require_csrf, resolve_session
+
+auth_diag_log = structlog.get_logger("auth_diag")
 
 
 @dataclass(frozen=True)
@@ -25,9 +28,33 @@ async def auth_context(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AuthContext:
-    resolved = await resolve_session(request, db, settings)
-    if resolved.transport == "cookie":
-        require_csrf(request, settings)
+    try:
+        resolved = await resolve_session(request, db, settings)
+        if resolved.transport == "cookie":
+            require_csrf(request, settings)
+    except HTTPException as exc:
+        auth_diag_log.warning(
+            "auth_diag",
+            auth_event="ME_AUTH_FAILED",
+            request_id=getattr(request.state, "request_id", None),
+            route=request.url.path,
+            status_code=exc.status_code,
+            session_cookie=bool(request.cookies.get("mk_session")),
+            device_cookie=bool(request.cookies.get("mk_device")),
+            csrf_cookie=bool(request.cookies.get("mk_csrf")),
+            device_csrf_cookie=bool(request.cookies.get("mk_device_csrf")),
+            csrf_header=bool(request.headers.get("x-csrf-token")),
+        )
+        raise
+    auth_diag_log.info(
+        "auth_diag",
+        auth_event="ME_AUTHENTICATED",
+        request_id=getattr(request.state, "request_id", None),
+        route=request.url.path,
+        user_id=str(resolved.user.id),
+        session_id=str(resolved.session.id),
+        transport=resolved.transport,
+    )
     return AuthContext(resolved.user, resolved.session, resolved.transport)
 
 
