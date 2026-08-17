@@ -582,7 +582,7 @@ function EventForm({
           value={calendarSelection}
           onChange={(event) => setCalendarSelection(event.target.value)}
         >
-          <option value="">Family calendar</option>
+          <option value="">Home calendar</option>
           {personalCalendarId && (
             <option value={PERSONAL_CALENDAR_VALUE}>Personal calendar</option>
           )}
@@ -755,12 +755,14 @@ function EventDetails({
         <div className="event-view-value">
           <span
             className="colour-dot"
-            style={{ "--swatch-colour": resolveColour(event.label?.color ?? "teal") } as React.CSSProperties}
+            style={
+              { "--swatch-colour": resolveColour(event.label?.color ?? event.calendar_color) } as React.CSSProperties
+            }
             aria-hidden="true"
           />
           {personalCalendarId && event.calendar_id === personalCalendarId
             ? "Personal calendar"
-            : (event.label?.name ?? "Family calendar")}
+            : (event.label?.name ?? "Home calendar")}
         </div>
       </div>
 
@@ -1607,7 +1609,13 @@ function MonthView({
                     key={`${event.occurrence_id}-${weekStart}`}
                     type="button"
                     className={`month-event${isMultiDay ? " month-event-span" : ""}`}
-                    style={{ "--event-color": resolveColour(event.label?.color ?? "teal"), gridColumn: `${start + 1} / ${end + 2}`, gridRow: row + 2 } as React.CSSProperties}
+                    style={
+                      {
+                        "--event-color": resolveColour(event.label?.color ?? event.calendar_color),
+                        gridColumn: `${start + 1} / ${end + 2}`,
+                        gridRow: row + 2,
+                      } as React.CSSProperties
+                    }
                     onClick={() => onEvent(event)}
                     aria-label={`${eventTime(event, timeZone)} ${event.title}`}
                     title={event.title}
@@ -1659,8 +1667,8 @@ function EventList({
           >
             <span
               className="event-colour"
-              style={{ background: resolveColour(event.label?.color ?? "teal") }}
-              aria-label={event.label?.name ?? "Family event"}
+              style={{ background: resolveColour(event.label?.color ?? event.calendar_color) }}
+              aria-label={event.label?.name ?? "Home calendar"}
             />
             <span className="event-time">{eventTime(event, timeZone)}</span>
             <span className="event-copy">

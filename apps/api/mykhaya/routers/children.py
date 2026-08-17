@@ -25,6 +25,7 @@ from mykhaya.models import (
     PermissionProfile,
     Role,
     Session,
+    TrustedDevice,
     User,
 )
 from mykhaya.schemas import (
@@ -46,6 +47,20 @@ from mykhaya.security import (
 )
 
 router = APIRouter(prefix="/groups/{group_id}/children", tags=["children"])
+
+
+async def _revoke_user_access(db: AsyncSession, user_id: uuid.UUID) -> None:
+    now = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
 
 
 async def _child_response(db: AsyncSession, profile: ChildProfile) -> ChildResponse:
@@ -308,11 +323,7 @@ async def update_child_permissions(
     profile.permissions = SAFE_CHILD_DEFAULTS | body.permissions
     membership = await db.get(Membership, profile.membership_id)
     assert membership is not None
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
-    )
+    await _revoke_user_access(db, membership.user_id)
     changed = sorted(
         key for key in profile.permissions if previous[key] != profile.permissions[key]
     )
@@ -418,11 +429,7 @@ async def configure_child_login(
         profile.pin_hash = None
         profile.login_updated_at = datetime.now(UTC)
         if was_enabled:
-            await db.execute(
-                update(Session)
-                .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-                .values(revoked_at=datetime.now(UTC))
-            )
+            await _revoke_user_access(db, membership.user_id)
         audit(
             db, request, "child.login_disabled", auth.user.id, group_id, "membership", membership_id
         )
@@ -467,11 +474,7 @@ async def configure_child_login(
     # A username or PIN change invalidates any device signed in under the old
     # credential — matches the existing pattern for a permission change.
     if pin_changed or username_changed:
-        await db.execute(
-            update(Session)
-            .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
+        await _revoke_user_access(db, membership.user_id)
 
     audit(
         db,
@@ -511,11 +514,7 @@ async def revoke_child_sessions(
     profile = await _profile_for_group(db, group_id, membership_id)
     membership = await db.get(Membership, membership_id)
     assert membership is not None
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
-    )
+    await _revoke_user_access(db, membership.user_id)
     audit(
         db,
         request,
@@ -544,7 +543,7 @@ async def anonymise_child(
     assert membership is not None
     user = await db.get(User, membership.user_id)
     assert user is not None
-    await db.execute(delete(Session).where(Session.user_id == user.id))
+    await _revoke_user_access(db, user.id)
     await db.delete(profile)
     membership.removed_at = datetime.now(UTC)
     user.display_name = "Removed child"

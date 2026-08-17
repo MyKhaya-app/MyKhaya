@@ -6,10 +6,11 @@ export class MyKhayaClient {
   constructor(private readonly baseUrl = "/api/v1") {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const csrfCookieName = path === "/auth/renew" ? "mk_device_csrf" : "mk_csrf";
     const csrf =
       typeof document === "undefined"
         ? undefined
-        : document.cookie.match(/(?:^|; )mk_csrf=([^;]+)/)?.[1];
+        : document.cookie.match(new RegExp(`(?:^|; )${csrfCookieName}=([^;]+)`))?.[1];
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
     // Leave FormData bodies alone — the browser sets Content-Type itself, including
@@ -47,6 +48,22 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  renew = () => this.request<User>("/auth/renew", { method: "POST", body: "{}" });
+  devices = () =>
+    this.request<{
+      id: string;
+      created_at: string;
+      last_used_at: string;
+      expires_at: string;
+      device_name: string;
+      platform: string;
+      user_agent: string;
+      current: boolean;
+    }[]>("/auth/devices");
+  revokeDevice = (deviceId: string) =>
+    this.request<void>(`/auth/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+  revokeOtherDevices = () =>
+    this.request<void>("/auth/devices/revoke-others", { method: "POST", body: "{}" });
   updateMyBirthday = (
     body: import("@mykhaya/shared-types").UserBirthdayPayload,
   ) =>
@@ -282,6 +299,11 @@ export class MyKhayaClient {
     this.request<void>(
       `/homes/${encodeURIComponent(homeId)}/calendars/${encodeURIComponent(calendarId)}`,
       { method: "DELETE", body: JSON.stringify(body) },
+    );
+  updateCalendar = (homeId: string, calendarId: string, body: { color: string }) =>
+    this.request<import("@mykhaya/shared-types").HomeCalendar>(
+      `/homes/${encodeURIComponent(homeId)}/calendars/${encodeURIComponent(calendarId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
     );
   eventDetail = (homeId: string, eventId: string) =>
     this.request<import("@mykhaya/shared-types").EventDetailResponse>(

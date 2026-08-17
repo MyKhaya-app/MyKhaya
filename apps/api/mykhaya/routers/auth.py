@@ -22,6 +22,7 @@ from mykhaya.models import (
     Session,
     SessionKind,
     TokenPurpose,
+    TrustedDevice,
     User,
 )
 from mykhaya.notifications.engine import notify
@@ -38,6 +39,7 @@ from mykhaya.schemas import (
     ResetRequest,
     SessionResponse,
     TokenRequest,
+    TrustedDeviceResponse,
     UserResponse,
 )
 from mykhaya.security import (
@@ -53,7 +55,9 @@ from mykhaya.security import (
     normalise_email,
     normalise_home_code,
     password_hash,
+    require_device_csrf,
     require_secure_transport,
+    resolve_client_ip,
     set_auth_cookies,
     verify_password,
 )
@@ -87,11 +91,15 @@ async def issue_session(
     user: User,
     settings: Settings,
     kind: SessionKind = SessionKind.adult,
+    trusted_device_id: uuid.UUID | None = None,
+    device_token: str | None = None,
+    device_csrf: str | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
     session = Session(
         user_id=user.id,
+        trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
@@ -99,7 +107,7 @@ async def issue_session(
     )
     db.add(session)
     await db.flush()
-    set_auth_cookies(response, raw, csrf, settings)
+    set_auth_cookies(response, raw, csrf, settings, device_token, device_csrf)
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
     return session
 
@@ -115,6 +123,69 @@ def mobile_client_descriptor(request: Request) -> str:
     if parts:
         return " ".join(parts)[:300]
     return request.headers.get("user-agent", "Unknown device")[:300]
+
+
+def device_platform(request: Request) -> str:
+    return request.headers.get("x-mykhaya-platform", "Web/PWA")[:80]
+
+
+async def issue_trusted_device(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind,
+) -> tuple[TrustedDevice, str, str]:
+    raw = new_session_token()
+    csrf = secrets.token_urlsafe(32)
+    now = datetime.now(UTC)
+    device = TrustedDevice(
+        user_id=user.id,
+        token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
+        last_used_at=now,
+        expires_at=now + timedelta(days=settings.trusted_device_days),
+        device_name=request.headers.get("x-mykhaya-device-name", "MyKhaya device")[:120],
+        platform=device_platform(request),
+        user_agent=request.headers.get("user-agent", "Unknown device")[:300],
+        ip_created=resolve_client_ip(request, settings),
+        ip_last_seen=resolve_client_ip(request, settings),
+        kind=kind,
+    )
+    db.add(device)
+    await db.flush()
+    audit(
+        db,
+        request,
+        "trusted_device.created",
+        user.id,
+        target_type="trusted_device",
+        target_id=device.id,
+    )
+    return device, raw, csrf
+
+
+async def issue_family_session(
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind,
+) -> Session:
+    device, device_token, device_csrf = await issue_trusted_device(
+        db, request, user, settings, kind
+    )
+    return await issue_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        kind=kind,
+        trusted_device_id=device.id,
+        device_token=device_token,
+        device_csrf=device_csrf,
+    )
 
 
 async def issue_mobile_session(
@@ -281,7 +352,9 @@ async def login(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     user = await authenticate_credentials(db, request, settings, body, "login")
-    session = await issue_session(db, response, request, user, settings)
+    session = await issue_family_session(
+        db, response, request, user, settings, SessionKind.adult
+    )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
@@ -349,11 +422,79 @@ async def child_login(
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
 
-    session = await issue_session(
-        db, response, request, user, settings, kind=SessionKind.managed_child
+    session = await issue_family_session(
+        db, response, request, user, settings, SessionKind.managed_child
     )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    return user_response(user, session)
+
+
+@router.post("/renew", response_model=UserResponse)
+async def renew(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Silently replace an expired application session using the rotating
+    family-device credential. The device credential is never returned in JSON.
+    """
+    require_device_csrf(request, settings)
+    raw = request.cookies.get("mk_device")
+    if not raw:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    now = datetime.now(UTC)
+    device_result = await db.execute(
+        select(User, TrustedDevice)
+        .join(TrustedDevice, TrustedDevice.user_id == User.id)
+        .where(
+            TrustedDevice.token_hash == hash_secret(raw, settings.secret_key.get_secret_value()),
+            TrustedDevice.revoked_at.is_(None),
+            TrustedDevice.expires_at > now,
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    pair = device_result.one_or_none()
+    if pair is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    user, device = pair
+
+    if device.kind == SessionKind.managed_child:
+        child_active = await db.scalar(
+            select(ChildProfile.id)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                Membership.user_id == user.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+            )
+        )
+        if child_active is None:
+            device.revoked_at = now
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+
+    rotated_token = new_session_token()
+    device_csrf = secrets.token_urlsafe(32)
+    device.token_hash = hash_secret(rotated_token, settings.secret_key.get_secret_value())
+    device.last_used_at = now
+    device.expires_at = now + timedelta(days=settings.trusted_device_days)
+    device.ip_last_seen = resolve_client_ip(request, settings)
+    session = await issue_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        kind=device.kind,
+        trusted_device_id=device.id,
+        device_token=rotated_token,
+        device_csrf=device_csrf,
+    )
     await db.commit()
     return user_response(user, session)
 
@@ -450,6 +591,11 @@ async def reset(
         .where(Session.user_id == token.user_id, Session.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == token.user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
     audit(db, request, "password.reset", token.user_id, target_type="user", target_id=token.user_id)
     await db.commit()
     return MessageResponse(
@@ -466,6 +612,12 @@ async def logout(
     settings: Settings = Depends(get_settings),
 ) -> None:
     auth.session.revoked_at = datetime.now(UTC)
+    if auth.session.trusted_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(TrustedDevice.id == auth.session.trusted_device_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
     audit(
         db,
         request,
@@ -553,6 +705,104 @@ async def revoke_session(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That session could not be found.")
     target.revoked_at = datetime.now(UTC)
     audit(db, request, "session.revoked", auth.user.id, target_type="session", target_id=target.id)
+    await db.commit()
+
+
+@router.get("/devices", response_model=list[TrustedDeviceResponse])
+async def devices(
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
+) -> list[TrustedDeviceResponse]:
+    rows = (
+        await db.scalars(
+            select(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == auth.user.id,
+                TrustedDevice.revoked_at.is_(None),
+                TrustedDevice.expires_at > datetime.now(UTC),
+            )
+            .order_by(TrustedDevice.last_used_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return [
+        TrustedDeviceResponse(
+            id=row.id,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            expires_at=row.expires_at,
+            device_name=row.device_name,
+            platform=row.platform,
+            user_agent=row.user_agent,
+            current=row.id == auth.session.trusted_device_id,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_device(
+    device_id: uuid.UUID,
+    response: Response,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    target = await db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.id == device_id,
+            TrustedDevice.user_id == auth.user.id,
+            TrustedDevice.revoked_at.is_(None),
+        )
+    )
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That device could not be found.")
+    target.revoked_at = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.trusted_device_id == target.id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    audit(
+        db,
+        request,
+        "trusted_device.revoked",
+        auth.user.id,
+        target_type="trusted_device",
+        target_id=target.id,
+    )
+    await db.commit()
+    if target.id == auth.session.trusted_device_id:
+        clear_auth_cookies(response, settings)
+
+
+@router.post("/devices/revoke-others", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_other_devices(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    current_device_id = auth.session.trusted_device_id
+    if current_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == auth.user.id,
+                TrustedDevice.id != current_device_id,
+                TrustedDevice.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+        await db.execute(
+            update(Session)
+            .where(
+                Session.user_id == auth.user.id,
+                Session.trusted_device_id != current_device_id,
+                Session.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    audit(db, request, "trusted_device.others_revoked", auth.user.id)
     await db.commit()
 
 

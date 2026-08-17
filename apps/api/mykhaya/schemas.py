@@ -349,6 +349,17 @@ class SessionResponse(BaseModel):
     current: bool
 
 
+class TrustedDeviceResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime
+    device_name: str
+    platform: str
+    user_agent: str
+    current: bool
+
+
 class MessageResponse(BaseModel):
     message: str
 

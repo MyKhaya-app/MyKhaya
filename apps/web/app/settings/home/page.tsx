@@ -1,7 +1,7 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
 import { Lock } from "lucide-react";
-import type { CalendarUsage, EventLabel, Home } from "@mykhaya/shared-types";
+import type { CalendarUsage, EventLabel, Home, HomeCalendar } from "@mykhaya/shared-types";
 import { resolveColour, type ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
@@ -27,6 +27,13 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColour, setNewColour] = useState<ColourKey>("teal");
+  // The primary/system Home calendar — its `name` is a fixed product
+  // concept ("Home calendar" — see the copy below), never user-editable,
+  // but its colour is (the fallback uncategorised events render with; see
+  // routers.calendar.update_calendar, which structurally rejects any
+  // client-supplied `name`).
+  const [homeCalendar, setHomeCalendar] = useState<HomeCalendar | null>(null);
+  const [homeCalendarColourOpen, setHomeCalendarColourOpen] = useState(false);
 
   // This page is the actual user-facing "event category" resource
   // calendar.max_categories governs (every event belongs to one of these —
@@ -34,12 +41,32 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
   // See docs/architecture/commercial-entitlements.md "Event categories are
   // CalendarEventLabel, not HomeCalendar".
   async function load() {
-    const [rows, billing] = await Promise.all([
+    const [rows, billing, calendars] = await Promise.all([
       api.listLabels(homeId, { includeInactive: true }),
       api.billingStatus(homeId),
+      api.listCalendars(homeId),
     ]);
     setLabels(rows);
     setCategoryUsage(billing.category_usage);
+    setHomeCalendar(calendars.items.find((row) => row.is_primary) ?? null);
+  }
+
+  async function recolourHomeCalendar(colour: ColourKey) {
+    if (busy || !homeCalendar) return;
+    setBusy(true);
+    setStatus({ kind: "idle" });
+    try {
+      await api.updateCalendar(homeId, homeCalendar.id, { color: colour });
+      setHomeCalendarColourOpen(false);
+      await load();
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not change that colour.",
+      });
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -136,6 +163,33 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
         message={status.kind === "success" ? status.message : undefined}
         error={status.kind === "error" ? status.message : undefined}
       />
+      {homeCalendar && (
+        <ul className="label-list">
+          <li className="label-row">
+            <div className="label-row-main">
+              <button
+                type="button"
+                className="colour-dot"
+                style={{ "--swatch-colour": resolveColour(homeCalendar.color) } as React.CSSProperties}
+                aria-label="Change Home calendar colour"
+                aria-expanded={homeCalendarColourOpen}
+                disabled={busy}
+                onClick={() => setHomeCalendarColourOpen((open) => !open)}
+              />
+              <span>Home calendar</span>
+            </div>
+            <p className="muted">Shared events without a category</p>
+            {homeCalendarColourOpen && (
+              <ColourSwatchPicker
+                value={homeCalendar.color}
+                onChange={recolourHomeCalendar}
+                groupLabel="Home calendar colour"
+                disabled={busy}
+              />
+            )}
+          </li>
+        </ul>
+      )}
       <ul className="label-list">
         {labels.map((label) => {
           const locked = label.commercial_access === "read_only_due_to_plan";

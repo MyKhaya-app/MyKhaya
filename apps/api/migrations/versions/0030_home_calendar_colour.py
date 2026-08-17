@@ -11,8 +11,8 @@ routers.calendar.update_calendar) — `name` is not editable through that
 endpoint at all, by design (the Home calendar's name is a fixed product
 concept, not user data).
 
-Revision ID: 0029_home_calendar_colour
-Revises: 0028_personal_calendars
+Revision ID: 0030_home_calendar_colour
+Revises: 0029_trusted_devices
 """
 
 from collections.abc import Sequence
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0029_home_calendar_colour"
-down_revision: str | None = "0028_personal_calendars"
+revision: str = "0030_home_calendar_colour"
+down_revision: str | None = "0029_trusted_devices"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

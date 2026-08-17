@@ -11,11 +11,11 @@ from typing import Literal
 
 from fastapi import HTTPException, Request, Response, status
 from pwdlib import PasswordHash
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import ActionToken, Session, TokenPurpose, User
+from mykhaya.models import ActionToken, Session, TokenPurpose, TrustedDevice, User
 
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("a-valid-dummy-password-value")
@@ -96,7 +96,14 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(48)
 
 
-def set_auth_cookies(response: Response, token: str, csrf: str, settings: Settings) -> None:
+def set_auth_cookies(
+    response: Response,
+    token: str,
+    csrf: str,
+    settings: Settings,
+    device_token: str | None = None,
+    device_csrf: str | None = None,
+) -> None:
     response.set_cookie(
         "mk_session",
         token,
@@ -117,11 +124,35 @@ def set_auth_cookies(response: Response, token: str, csrf: str, settings: Settin
         path="/",
         max_age=settings.session_minutes * 60,
     )
+    if device_token is not None and device_csrf is not None:
+        max_age = settings.trusted_device_days * 24 * 60 * 60
+        response.set_cookie(
+            "mk_device",
+            device_token,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            domain=settings.cookie_domain,
+            path="/",
+            max_age=max_age,
+        )
+        response.set_cookie(
+            "mk_device_csrf",
+            device_csrf,
+            httponly=False,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            domain=settings.cookie_domain,
+            path="/",
+            max_age=max_age,
+        )
 
 
 def clear_auth_cookies(response: Response, settings: Settings) -> None:
     response.delete_cookie("mk_session", path="/", domain=settings.cookie_domain)
     response.delete_cookie("mk_csrf", path="/", domain=settings.cookie_domain)
+    response.delete_cookie("mk_device", path="/", domain=settings.cookie_domain)
+    response.delete_cookie("mk_device_csrf", path="/", domain=settings.cookie_domain)
 
 
 def require_csrf(request: Request, settings: Settings) -> None:
@@ -131,6 +162,23 @@ def require_csrf(request: Request, settings: Settings) -> None:
     if origin is not None and origin not in settings.cors_origins:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Request origin is not allowed")
     cookie = request.cookies.get("mk_csrf", "")
+    header = request.headers.get("x-csrf-token", "")
+    if not cookie or not hmac.compare_digest(cookie, header):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Your secure session check failed. Refresh and try again."
+        )
+
+
+def require_device_csrf(request: Request, settings: Settings) -> None:
+    """CSRF protection for renewal, which intentionally runs without a valid
+    short-lived application session. SameSite is defense in depth; the explicit
+    origin and double-submit check are the authorization boundary."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in settings.cors_origins:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Request origin is not allowed")
+    cookie = request.cookies.get("mk_device_csrf", "")
     header = request.headers.get("x-csrf-token", "")
     if not cookie or not hmac.compare_digest(cookie, header):
         raise HTTPException(
@@ -184,20 +232,34 @@ async def _session_for_token(
     db: AsyncSession, raw: str, settings: Settings, message: str
 ) -> tuple[User, Session]:
     digest = hash_secret(raw, settings.secret_key.get_secret_value())
+    now = datetime.now(UTC)
     result = await db.execute(
-        select(User, Session)
+        select(User, Session, TrustedDevice)
         .join(Session, Session.user_id == User.id)
+        .outerjoin(TrustedDevice, Session.trusted_device_id == TrustedDevice.id)
         .where(
             Session.token_hash == digest,
             Session.revoked_at.is_(None),
-            Session.expires_at > datetime.now(UTC),
+            Session.expires_at > now,
+            or_(
+                Session.trusted_device_id.is_(None),
+                (
+                    TrustedDevice.revoked_at.is_(None)
+                    & (TrustedDevice.expires_at > now)
+                ),
+            ),
             User.is_active.is_(True),
         )
     )
     pair = result.one_or_none()
     if pair is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, message)
-    pair[1].last_seen_at = datetime.now(UTC)
+    pair[1].last_seen_at = now
+    if pair[2] is not None and now - pair[2].last_used_at >= timedelta(
+        hours=settings.trusted_device_activity_update_hours
+    ):
+        pair[2].last_used_at = now
+        pair[2].expires_at = now + timedelta(days=settings.trusted_device_days)
     return pair[0], pair[1]
 
 

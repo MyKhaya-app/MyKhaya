@@ -495,6 +495,175 @@ async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_home_calendar_colour_can_be_changed_but_never_its_name(client: AsyncClient) -> None:
+    """The synthetic `label_id: null` option is presented to users as "Home
+    calendar" — a fixed product concept, never user-renamable, but its
+    colour (the fallback uncategorised events render with) is. StrictModel's
+    extra="forbid" on HomeCalendarUpdate means a client-supplied `name` is
+    rejected outright (422), not merely ignored."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"homecolour-{suffix}@example.com", "Home Colour Owner")
+    home_id = await _home_with_calendar(client, "Home Colour Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+    assert primary["name"] == "Home Calendar"
+    assert primary["color"] == "teal"
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "amber"},
+    )
+    assert recoloured.status_code == 200, recoloured.text
+    assert recoloured.json()["color"] == "amber"
+    assert recoloured.json()["name"] == "Home Calendar"  # unchanged
+
+    # A client-supplied `name` is rejected structurally, not just ignored.
+    rename_attempt = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"name": "Renamed Calendar", "color": "sky"},
+    )
+    assert rename_attempt.status_code == 422
+
+    unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
+    assert persisted["name"] == "Home Calendar"
+    assert persisted["color"] == "amber"  # the earlier colour-only update still stands
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_colour_update_requires_calendar_edit_all(client: AsyncClient) -> None:
+    """Same capability as event-category rename/recolour — a shared
+    calendar's colour is Home-administered structure, not any one member's
+    content."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"calcolourowner-{suffix}@example.com", "Cal Colour Owner")
+    home_id = await _home_with_calendar(client, "Cal Colour Perms Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        friend_email = f"calcolourfriend-{suffix}@example.com"
+        await create_verified_user(friend_client, friend_email, "Cal Colour Friend")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == friend_email))
+            assert user is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=user.id,
+                    role=Role.guest,
+                    relationship=HouseholdRelationship.friend,
+                    permission_profile=PermissionProfile.explicit_sharing,
+                )
+            )
+            await db.commit()
+
+        blocked = await unsafe(
+            friend_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+            json={"color": "rose"},
+        )
+        assert blocked.status_code == 403
+
+    unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
+    assert persisted["color"] == "teal"  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_uncategorised_events_use_home_calendar_colour_and_category_still_overrides(
+    client: AsyncClient,
+) -> None:
+    """`calendar_color` (the Home calendar's own colour) is what a
+    `label_id: null` event should render as; a category's own colour always
+    takes precedence once one is assigned."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"rendercolour-{suffix}@example.com", "Render Colour")
+    home_id = await _home_with_calendar(client, "Render Colour Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "violet"},
+    )
+    assert recoloured.status_code == 200
+
+    label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Chores", "color": "emerald"},
+    )
+    assert label.status_code == 201
+    label_id = label.json()["id"]
+
+    uncategorised = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "No category",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+        },
+    )
+    assert uncategorised.status_code == 201
+    assert uncategorised.json()["calendar_color"] == "violet"
+    assert uncategorised.json()["label"] is None
+
+    categorised = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "With category",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "label_id": label_id,
+        },
+    )
+    assert categorised.status_code == 201
+    # The Home calendar colour is still populated for a categorised event
+    # (uniform shape for the frontend) but its label colour takes precedence.
+    assert categorised.json()["calendar_color"] == "violet"
+    assert categorised.json()["label"]["color"] == "emerald"
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": datetime.now(UTC).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    items = {row["title"]: row for row in listed.json()["items"]}
+    assert items["No category"]["calendar_color"] == "violet"
+    assert items["With category"]["calendar_color"] == "violet"
+    assert items["With category"]["label"]["color"] == "emerald"
+
+
+@pytest.mark.asyncio
 async def test_recurring_event_occurrences_keep_consistent_label_colour(
     client: AsyncClient,
 ) -> None:

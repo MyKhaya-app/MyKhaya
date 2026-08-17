@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { EventLabel, Home } from "@mykhaya/shared-types";
 import HomeSettings from "./page";
 
@@ -87,9 +88,12 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
+      me: vi.fn(),
       homes: vi.fn(),
       listLabels: vi.fn(),
       billingStatus: vi.fn(),
+      listCalendars: vi.fn(),
+      updateCalendar: vi.fn(),
     },
   };
 });
@@ -98,7 +102,24 @@ const { api } = await import("@mykhaya/api-client");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
   (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([freeHome()]);
+  (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+    items: [
+      {
+        id: "cal-1",
+        name: "Home Calendar",
+        timezone: "Europe/London",
+        is_primary: true,
+        owner_user_id: null,
+        color: "teal",
+        commercial_access: "normal",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+    limit: null,
+    personal_calendar: null,
+  });
 });
 
 describe("Home settings — Calendars & categories locked states", () => {
@@ -148,5 +169,55 @@ describe("Home settings — Calendars & categories locked states", () => {
     expect(activeCheckboxes).toHaveLength(5);
     expect(activeCheckboxes.every((box) => (box as HTMLInputElement).checked)).toBe(true);
     expect(screen.getByRole("button", { name: /^add category$/i })).toBeInTheDocument();
+  });
+});
+
+// The synthetic `label_id: null` option is a normal Home event with no
+// category — this page is where an authorised user (calendar.edit_all,
+// gated one level up in HomeSettings) customises its colour. Its name is
+// a fixed product concept: this page must never expose a way to rename it.
+describe("Home settings — Home calendar colour", () => {
+  beforeEach(() => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue(sevenSeededLabels);
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      category_usage: { count: 1, limit: 1, over_limit: false },
+    });
+  });
+
+  it("shows the Home calendar with its current colour and no rename control", async () => {
+    render(<HomeSettings />);
+
+    await screen.findByRole("heading", { name: /calendars & categories/i });
+
+    // A colour-dot toggle button exists, but never a text input for its name.
+    await screen.findByRole("button", { name: /change home calendar colour/i });
+    expect(screen.getByText("Home calendar")).toBeInTheDocument();
+    expect(screen.getByText(/shared events without a category/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Home Calendar")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/home calendar name/i)).not.toBeInTheDocument();
+  });
+
+  it("lets an authorised user change the Home calendar colour via updateCalendar, not a name field", async () => {
+    (api.updateCalendar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "cal-1",
+      name: "Home Calendar",
+      timezone: "Europe/London",
+      is_primary: true,
+      owner_user_id: null,
+      color: "amber",
+      commercial_access: "normal",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+    const user = userEvent.setup();
+
+    render(<HomeSettings />);
+    await screen.findByRole("heading", { name: /calendars & categories/i });
+
+    await user.click(await screen.findByRole("button", { name: /change home calendar colour/i }));
+    const picker = screen.getByRole("radiogroup", { name: /home calendar colour/i });
+    await user.click(within(picker).getByRole("radio", { name: /amber/i }));
+
+    // Exact match: only `color` is ever sent — never a `name`.
+    expect(api.updateCalendar).toHaveBeenCalledWith("home-1", "cal-1", { color: "amber" });
   });
 });

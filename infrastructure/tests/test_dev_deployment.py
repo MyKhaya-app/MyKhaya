@@ -46,6 +46,13 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertLess(build, migration)
         self.assertLess(migration, app_start)
 
+    def test_caddy_is_recreated_after_configuration_changes(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            "compose up -d --force-recreate --no-build --no-deps caddy mailpit",
+            script,
+        )
+
     def test_dev_overlay_has_only_expected_published_services(self) -> None:
         overlay = (ROOT / "compose.dev.yml").read_text(encoding="utf-8")
         published_services = []

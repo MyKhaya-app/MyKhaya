@@ -442,6 +442,27 @@ async def test_personal_calendar_cannot_be_deleted_via_the_calendar_endpoint(
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_personal_calendar_colour_cannot_be_changed_via_the_calendar_endpoint(
+    client: AsyncClient,
+) -> None:
+    """The Home calendar colour endpoint (routers.calendar.update_calendar)
+    is for shared household structure — a Personal Calendar is nobody's to
+    administer but its own owner, and no UI exposes changing its colour, so
+    the endpoint 404s the same way it already does for delete."""
+    await create_verified_user(client, unique_email("nocolour"), "No Colour")
+    home_id = await _home_with_calendar(client, "No Colour Home")
+    personal_id = await _personal_calendar_id(client, home_id)
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{personal_id}",
+        json={"color": "amber"},
+    )
+    assert response.status_code == 404
+
+
 # --------------------------------------------------------------------------
 # Regression: shared/Home calendar behaviour is unchanged
 # --------------------------------------------------------------------------

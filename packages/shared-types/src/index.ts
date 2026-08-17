@@ -91,6 +91,11 @@ export interface EventOccurrence {
   description: string | null;
   location_text: string | null;
   label: EventLabel | null;
+  // This event's calendar's own colour — what it renders as when `label` is
+  // null. A category's colour always takes precedence when one is set; this
+  // is only the fallback, but always populated (never a frontend-hardcoded
+  // default). Unaffected by Personal Calendar privacy — just a colour.
+  calendar_color: string;
   member_ids: string[];
   recurrence: RecurrencePattern;
   reminder_minutes: number | null;
@@ -131,6 +136,11 @@ export interface HomeCalendar {
   // private Personal Calendar (see docs/architecture — never
   // entitlement-gated, never another member's).
   owner_user_id: string | null;
+  // Fallback colour for events on this calendar that carry no category
+  // (label_id null). For the primary/"Home calendar" this is user-editable
+  // (see api-client's updateCalendar); the calendar's `name` is not — it's
+  // a fixed product concept, not user data.
+  color: string;
   commercial_access: CalendarCommercialAccess;
   created_at: string;
 }

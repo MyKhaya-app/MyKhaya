@@ -293,7 +293,10 @@ deploy() {
   wait_healthy api
   compose up -d --no-build --no-deps web || die "web service failed to start"
   wait_healthy web
-  compose up -d --no-build --no-deps caddy mailpit || \
+  # Caddy reads its bind-mounted configuration at process start. Recreate it
+  # after an update so a changed CSP policy cannot remain stale in memory while
+  # the web image has already been replaced.
+  compose up -d --force-recreate --no-build --no-deps caddy mailpit || \
     die "Caddy or Mailpit failed to start"
   wait_healthy caddy
 

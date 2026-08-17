@@ -38,6 +38,7 @@ function event(overrides: Partial<EventOccurrence>): EventOccurrence {
     description: null,
     location_text: null,
     label: null,
+    calendar_color: "teal",
     member_ids: [],
     recurrence: "none",
     reminder_minutes: null,
@@ -190,7 +191,7 @@ describe("Schedule (agenda) view date range", () => {
 
 describe("Category (label) filter", () => {
   // The category selector (moved into the search/filter flyout) filters by
-  // CalendarEventLabel (a household-defined category, e.g. "Family calendar",
+  // CalendarEventLabel (a household-defined category, e.g. "Chores",
   // "Work", or a personal label a household names after someone, such as
   // "Megan") - it is NOT a member/participant filter, even when its name
   // happens to match a person's name. Both Month and Schedule must apply
@@ -214,8 +215,8 @@ describe("Category (label) filter", () => {
     start_at: "2026-08-15T07:00:00+00:00",
     end_at: "2026-08-15T07:15:00+00:00",
     label: {
-      id: "label-family",
-      name: "Family calendar",
+      id: "label-chores",
+      name: "Chores",
       color: "amber",
       commercial_access: "normal",
       is_active: true,
@@ -648,6 +649,7 @@ describe("All-day events are pure calendar dates, immune to timezone conversion"
       description: null,
       location_text: null,
       label: null,
+      calendar_color: "teal",
       member_ids: [],
       recurrence: "none",
       reminder_minutes: null,
@@ -692,6 +694,7 @@ describe("Overnight / multi-day timed events", () => {
       description: null,
       location_text: null,
       label: null,
+      calendar_color: "teal",
       member_ids: [],
       recurrence: "none",
       reminder_minutes: null,
@@ -747,6 +750,7 @@ describe("All day -> timed conversion never derives a clock value from the all-d
       description: null,
       location_text: null,
       label: null,
+      calendar_color: "teal",
       member_ids: [],
       recurrence: "none",
       reminder_minutes: null,
@@ -816,6 +820,7 @@ describe("All day -> timed conversion never derives a clock value from the all-d
       description: null,
       location_text: null,
       label: null,
+      calendar_color: "teal",
       member_ids: [],
       recurrence: "none",
       reminder_minutes: null,
@@ -919,6 +924,7 @@ describe("Event View/Edit permissions (mirrors update_event/delete_event)", () =
       description: null,
       location_text: null,
       label: null,
+      calendar_color: "teal",
       member_ids: [],
       recurrence: "none",
       reminder_minutes: null,

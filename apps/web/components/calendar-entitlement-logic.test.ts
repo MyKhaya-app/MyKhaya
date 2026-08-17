@@ -19,6 +19,7 @@ function calendar(overrides: Partial<HomeCalendar> = {}): HomeCalendar {
     timezone: "Europe/London",
     is_primary: true,
     owner_user_id: null,
+    color: "teal",
     commercial_access: "normal",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,

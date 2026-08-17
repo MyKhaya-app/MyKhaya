@@ -71,7 +71,10 @@
       "Bash(docker --version)",
       "Bash(timeout 590 sh infrastructure/scripts/run-tests.sh pytest tests/test_platform_stripe_settings.py tests/test_billing_config.py tests/test_billing_pricing.py -v)",
       "Bash(timeout 590 sh infrastructure/scripts/run-tests.sh pytest tests/test_platform_stripe_settings.py tests/test_billing_config.py tests/test_billing_pricing.py -q)",
-      "Bash(timeout 590 sh infrastructure/scripts/run-tests.sh pytest tests/test_billing_checkout.py tests/test_billing_webhooks.py tests/test_billing_webhook_observability.py tests/test_billing_production_readiness.py tests/test_platform_billing.py tests/test_platform_subscriptions.py tests/test_platform_subscriptions_management.py tests/test_billing_plan_page.py tests/test_billing_state.py -q)"
+      "Bash(timeout 590 sh infrastructure/scripts/run-tests.sh pytest tests/test_billing_checkout.py tests/test_billing_webhooks.py tests/test_billing_webhook_observability.py tests/test_billing_production_readiness.py tests/test_platform_billing.py tests/test_platform_subscriptions.py tests/test_platform_subscriptions_management.py tests/test_billing_plan_page.py tests/test_billing_state.py -q)",
+      "Bash(sh infrastructure/scripts/run-tests.sh mypy mykhaya)",
+      "Bash(sh infrastructure/scripts/run-tests.sh ruff check mykhaya tests)",
+      "Bash(sh infrastructure/scripts/run-tests.sh pytest tests/test_calendar.py tests/test_calendar_entitlements.py tests/test_personal_calendars.py tests/test_calendar_notifications.py tests/test_calendar_reminders.py tests/test_event_category_entitlements.py -q)"
     ]
   }
 }

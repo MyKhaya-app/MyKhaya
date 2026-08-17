@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_domain: str | None = None
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
+    trusted_device_days: int = Field(default=90, ge=7, le=365)
+    trusted_device_activity_update_hours: int = Field(default=24, ge=1, le=168)
     smtp_host: str = "mailpit"
     smtp_port: int = 1025
     smtp_username: str | None = None

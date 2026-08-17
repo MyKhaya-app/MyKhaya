@@ -319,7 +319,7 @@ export function eventsForDay(
 //   CalendarEventMember) — "who is this event for", independent of who
 //   created it. Empty string means no member filter ("Everyone").
 // - `labelFilter` is a household-defined CalendarEventLabel id (a free-form
-//   category/tag, e.g. "Family calendar", "Work", or a personal label someone
+//   category/tag, e.g. "Family", "Work", or a personal label someone
 //   named after a household member such as "Megan") — a category filter, NOT
 //   a participant/member filter, even when its name happens to match a
 //   person's name. Empty string means no category filter.

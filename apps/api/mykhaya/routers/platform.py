@@ -85,6 +85,7 @@ from mykhaya.models import (
     SubscriptionProvider,
     SubscriptionStatus,
     TokenPurpose,
+    TrustedDevice,
     User,
     WorkerJobRecord,
 )
@@ -2152,6 +2153,11 @@ async def _user_state_action(
             .where(Session.user_id == user.id, Session.revoked_at.is_(None))
             .values(revoked_at=datetime.now(UTC))
         )
+        await db.execute(
+            update(TrustedDevice)
+            .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
     platform_audit(
         db,
         request,
@@ -2206,6 +2212,11 @@ async def revoke_user_sessions(
     await db.execute(
         update(Session)
         .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
     platform_audit(
