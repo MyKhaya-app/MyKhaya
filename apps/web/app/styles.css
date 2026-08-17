@@ -570,40 +570,6 @@ textarea {
   min-width: 0;
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 1rem);
 }
-.app-shell-layered {
-  position: relative;
-}
-.home-background {
-  background: var(--colour-forest);
-  border-radius: 0 0 var(--radius-hero) var(--radius-hero);
-  box-shadow: var(--shadow-hero);
-  height: calc(var(--home-fixed-header-height, 0px) + 72px);
-  left: 0;
-  pointer-events: none;
-  position: absolute;
-  right: 0;
-  top: 0;
-  z-index: 0;
-}
-.home-fixed-header {
-  background: var(--colour-forest);
-  left: 0;
-  min-width: 0;
-  overflow: hidden;
-  position: fixed;
-  top: 0;
-  width: 100%;
-  z-index: 20;
-}
-.app-shell-layered .app-header {
-  position: static;
-  z-index: auto;
-}
-.app-main-layered {
-  padding-top: calc(var(--home-fixed-header-height, 0px) + 72px);
-  position: relative;
-  z-index: 10;
-}
 .bottom-nav {
   align-items: stretch;
   background: rgb(255 254 251 / 97%);
@@ -618,7 +584,7 @@ textarea {
   padding: 0.55rem 0.5rem env(safe-area-inset-bottom);
   position: fixed;
   right: 0;
-  z-index: 30;
+  z-index: 15;
 }
 .bottom-nav a {
   align-items: center;
@@ -681,11 +647,16 @@ textarea {
   max-width: 640px;
   padding: 1.75rem 1.25rem 2.5rem;
 }
-/* The greeting content is part of the fixed header mask on Home. */
+/* The greeting band: a full-bleed continuation of the header's green field.
+   Negative side/top margins cancel .home-page's own padding so the two
+   read as one uninterrupted block; its own rounded bottom + shadow become
+   the visual edge the white content cards sit against. */
 .home-hero {
   background: var(--colour-forest);
+  border-radius: 0 0 var(--radius-hero) var(--radius-hero);
+  box-shadow: var(--shadow-hero);
   color: var(--colour-white);
-  padding: 20px 24px 0;
+  padding: 20px 24px 72px;
 }
 .home-hero-eyebrow {
   color: rgb(255 254 251 / 72%);
@@ -707,7 +678,6 @@ textarea {
   display: flex;
   gap: 0.6rem;
   margin-top: 1rem;
-  padding-bottom: 4px;
 }
 .home-family-strip .avatar {
   box-shadow:
@@ -1308,10 +1278,6 @@ textarea {
   .home-page,
   .standard-page {
     padding: 1.5rem 1rem 2rem;
-  }
-  .app-shell-layered .app-header {
-    position: static;
-    z-index: auto;
   }
   .home-grid {
     display: block;

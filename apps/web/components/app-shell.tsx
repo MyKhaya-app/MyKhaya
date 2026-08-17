@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -56,8 +56,6 @@ export function AppShell({
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "offline" | "signed_out">("loading");
-  const fixedHeaderRef = useRef<HTMLDivElement>(null);
-  const layered = Boolean(hero);
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
 
   const bootstrap = useCallback(async () => {
@@ -124,25 +122,6 @@ export function AppShell({
     void bootstrap();
   }, [bootstrap]);
 
-  useLayoutEffect(() => {
-    if (!hero || !fixedHeaderRef.current) return;
-    const frame = fixedHeaderRef.current;
-    const updateHeight = () => {
-      document.documentElement.style.setProperty(
-        "--home-fixed-header-height",
-        `${frame.getBoundingClientRect().height}px`,
-      );
-    };
-    updateHeight();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(frame);
-    return () => {
-      observer.disconnect();
-      document.documentElement.style.removeProperty("--home-fixed-header-height");
-    };
-  }, [layered]);
-
   useEffect(() => {
     if (authState === "ready" && !homesError && !loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
@@ -165,28 +144,16 @@ export function AppShell({
   if (authState === "signed_out") return null;
 
   return (
-    <div className={`app-shell${layered ? " app-shell-layered" : ""}`}>
-      {layered && <div className="home-background" aria-hidden="true" />}
-      {layered ? (
-        <div ref={fixedHeaderRef} className="home-fixed-header">
-          <AppHeader
-            user={user}
-            homes={homes}
-            activeHome={activeHome}
-            onSwitchHome={setActiveHomeId}
-            flush
-          />
-          {hero}
-        </div>
-      ) : (
-        <AppHeader
-          user={user}
-          homes={homes}
-          activeHome={activeHome}
-          onSwitchHome={setActiveHomeId}
-        />
-      )}
-      <main className={`app-main${layered ? " app-main-layered" : ""}`}>{children}</main>
+    <div className="app-shell">
+      <AppHeader
+        user={user}
+        homes={homes}
+        activeHome={activeHome}
+        onSwitchHome={setActiveHomeId}
+        flush={Boolean(hero)}
+      />
+      {hero}
+      <main className="app-main">{children}</main>
       <BottomNav principalType={user?.principal_type} />
     </div>
   );
