@@ -9,6 +9,17 @@ export type AvatarStackPerson = {
   avatar_version?: string | null;
 };
 
+/** Resolve an event's canonical participant ids against the already-loaded
+ * member roster. The roster owns deterministic display ordering; the event
+ * only determines membership. */
+export function participantsForEvent<T extends AvatarStackPerson>(
+  people: T[],
+  memberIds: string[],
+): T[] {
+  const ids = new Set(memberIds);
+  return people.filter((person) => ids.has(person.user_id));
+}
+
 export const MAX_STACK_AVATARS = 3;
 
 /** Which avatars to actually render, and how many are left over for the

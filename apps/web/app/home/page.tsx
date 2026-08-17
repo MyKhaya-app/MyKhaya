@@ -13,6 +13,7 @@ import type {
 import { api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
+import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
 import { canAddMember } from "@/components/member-entitlement-logic";
 import { subscribeToPush } from "@/components/push-subscribe";
@@ -24,6 +25,11 @@ import {
   upcomingBirthdayIcon,
   upcomingBirthdayLabel,
 } from "./birthday-utils";
+import {
+  eventDateBounds,
+  eventInDateWindow,
+  upcomingDateWindow,
+} from "../calendar/calendar-utils";
 
 function eventTime(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -39,6 +45,23 @@ function eventDateStack(value: string, timezone: string) {
     day: new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: timezone }).format(date),
     month: new Intl.DateTimeFormat("en-GB", { month: "short", timeZone: timezone }).format(date),
   };
+}
+
+function isComingUp(event: EventOccurrence): boolean {
+  const timeZone = event.timezone;
+  return eventInDateWindow(event, timeZone, upcomingDateWindow(timeZone));
+}
+
+function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number {
+  const leftBounds = eventDateBounds(left, left.timezone);
+  const rightBounds = eventDateBounds(right, right.timezone);
+  return (
+    leftBounds.startKey.localeCompare(rightBounds.startKey) ||
+    Number(right.is_all_day) - Number(left.is_all_day) ||
+    left.start_at.localeCompare(right.start_at) ||
+    left.title.localeCompare(right.title) ||
+    left.occurrence_id.localeCompare(right.occurrence_id)
+  );
 }
 
 function greeting() {
@@ -168,15 +191,17 @@ export default function HomePage() {
         const [homeSummary, upcomingRows] = await Promise.all([
           api.homeSummary(activeHomeId),
           api.listEvents(activeHomeId, {
-            start_at: new Date(new Date().setUTCHours(24, 0, 0, 0)).toISOString(),
-            end_at: new Date(
-              new Date().setUTCDate(new Date().getUTCDate() + 14),
-            ).toISOString(),
-            page_size: 3,
+            // Fetch a small UTC safety envelope, then apply the exact local
+            // calendar-date window below using each occurrence's timezone.
+            start_at: new Date(Date.now() - 86_400_000).toISOString(),
+            end_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+            page_size: 200,
           }),
         ]);
         setSummary(homeSummary);
-        setUpcoming(upcomingRows.items.slice(0, 3));
+        setUpcoming(
+          upcomingRows.items.filter(isComingUp).sort(compareUpcoming).slice(0, 3),
+        );
       })
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
@@ -186,7 +211,7 @@ export default function HomePage() {
   // inventing a new order — same list, just filtered per event, so it's
   // always deterministic and never depends on event.member_ids' own order.
   function membersForEvent(memberIds: string[]) {
-    return members.filter((member) => memberIds.includes(member.user_id));
+    return participantsForEvent(members, memberIds);
   }
 
   async function enableNotifications() {

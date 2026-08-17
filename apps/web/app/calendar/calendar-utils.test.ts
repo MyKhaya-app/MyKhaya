@@ -11,6 +11,7 @@ import {
   DEFAULT_EVENT_START_TIME,
   emptyStateMessage,
   eventDateBounds,
+  eventInDateWindow,
   eventsForDay,
   filterVisibleEvents,
   groupEventsByDay,
@@ -23,6 +24,7 @@ import {
   zonedDateKey,
   zonedTimeToUtc,
   zonedToday,
+  upcomingDateWindow,
 } from "./calendar-utils";
 
 function event(overrides: Partial<EventOccurrence>): EventOccurrence {
@@ -66,6 +68,14 @@ function member(overrides: Partial<Member>): Member {
 }
 
 describe("Calendar presentation", () => {
+  it("defines Coming up as the next three local calendar dates", () => {
+    const now = new Date("2026-08-17T23:30:00Z");
+    const window = upcomingDateWindow("Europe/London", now);
+    expect(window).toEqual({ startKey: "2026-08-18", endExclusiveKey: "2026-08-21" });
+    expect(eventInDateWindow(event({ start_at: "2026-08-17T23:00:00Z", end_at: "2026-08-18T00:30:00Z" }), "Europe/London", window)).toBe(true);
+    expect(eventInDateWindow(event({ start_at: "2026-08-17T10:00:00Z", end_at: "2026-08-17T11:00:00Z" }), "Europe/London", window)).toBe(false);
+    expect(eventInDateWindow(event({ start_at: "2026-08-21T10:00:00Z", end_at: "2026-08-21T11:00:00Z" }), "Europe/London", window)).toBe(false);
+  });
   it("builds a stable six-week Monday-first month", () => {
     const cells = monthCells(new Date("2026-08-15T00:00:00Z"));
     expect(cells).toHaveLength(42);

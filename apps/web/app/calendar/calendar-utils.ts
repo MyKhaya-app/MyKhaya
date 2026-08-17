@@ -163,9 +163,36 @@ export function zonedDateKey(value: Date | string, timeZone: string): string {
  *  entirely in UTC-digit calendar-date arithmetic on top of a cursor like
  *  this one; what must be timezone-correct is *which* calendar date "today"
  *  names, not the arithmetic itself. */
-export function zonedToday(timeZone: string): Date {
-  const { year, month, day } = zonedParts(new Date(), timeZone);
+export function zonedToday(timeZone: string, now: Date = new Date()): Date {
+  const { year, month, day } = zonedParts(now, timeZone);
   return new Date(Date.UTC(year, month - 1, day));
+}
+
+export function calendarDateAfter(key: string, days: number): string {
+  const date = new Date(`${key}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateKey(date);
+}
+
+export function upcomingDateWindow(
+  timeZone: string,
+  now: Date = new Date(),
+  days = 3,
+): { startKey: string; endExclusiveKey: string } {
+  const todayKey = dateKey(zonedToday(timeZone, now));
+  return {
+    startKey: calendarDateAfter(todayKey, 1),
+    endExclusiveKey: calendarDateAfter(todayKey, days + 1),
+  };
+}
+
+export function eventInDateWindow(
+  event: EventOccurrence,
+  timeZone: string,
+  window: { startKey: string; endExclusiveKey: string },
+): boolean {
+  const { startKey, endKey } = eventDateBounds(event, timeZone);
+  return startKey < window.endExclusiveKey && endKey >= window.startKey;
 }
 
 /** Converts a wall-clock date/time as seen in `timeZone` (e.g. "14 Aug 2026,

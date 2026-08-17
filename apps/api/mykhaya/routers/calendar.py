@@ -1410,8 +1410,18 @@ async def home_summary(
     membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     capabilities = await capabilities_for(db, membership)
     now = datetime.now(UTC)
-    day_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=UTC)
-    day_end = day_start + timedelta(days=1)
+    primary_calendar = await db.scalar(
+        select(HomeCalendar)
+        .where(
+            HomeCalendar.group_id == home_id,
+            HomeCalendar.is_primary.is_(True),
+        )
+    )
+    home_timezone = ZoneInfo(primary_calendar.timezone if primary_calendar else "Europe/London")
+    local_today = now.astimezone(home_timezone).date()
+    local_day_start = datetime.combine(local_today, datetime.min.time(), tzinfo=home_timezone)
+    day_start = local_day_start.astimezone(UTC)
+    day_end = (local_day_start + timedelta(days=1)).astimezone(UTC)
 
     labels = await _label_map(db, home_id)
     calendar_colors = await _calendar_color_map(db, home_id)

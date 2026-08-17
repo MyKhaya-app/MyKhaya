@@ -29,6 +29,8 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { resolveColour } from "@mykhaya/design-tokens";
 import { AppShell } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
+import { AvatarStack } from "@/components/avatar";
+import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -844,6 +846,9 @@ export default function CalendarPage() {
   // null before the first load resolves, or for a managed Child (see
   // apps/api/mykhaya/calendar_provisioning.py). Never another member's.
   const [personalCalendarId, setPersonalCalendarId] = useState<string | null>(null);
+  const agendaAnchorRef = useRef<HTMLElement | null>(null);
+  const agendaEntryToken = useRef(0);
+  const positionedAgendaToken = useRef(-1);
 
   useEffect(() => {
     setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
@@ -891,6 +896,11 @@ export default function CalendarPage() {
   }, []);
 
   function chooseView(next: ViewMode) {
+    if (next === "agenda" && view !== "agenda") {
+      agendaEntryToken.current += 1;
+      hasNavigated.current = true;
+      setFocusDate(zonedToday(calendarTimezone));
+    }
     setView(next);
     window.localStorage.setItem(VIEW_STORAGE, next);
   }
@@ -1034,6 +1044,21 @@ export default function CalendarPage() {
     selectedMemberName,
     selectedLabelName,
   );
+
+  const agendaKeys = useMemo(
+    () => Array.from(byDay.keys()).sort((left, right) => left.localeCompare(right)),
+    [byDay],
+  );
+  const agendaTodayKey = dateKey(zonedToday(calendarTimezone));
+  const agendaAnchorKey =
+    agendaKeys.find((key) => key >= agendaTodayKey) ?? agendaKeys[0] ?? null;
+
+  useEffect(() => {
+    if (view !== "agenda" || positionedAgendaToken.current === agendaEntryToken.current) return;
+    if (!agendaAnchorRef.current) return;
+    positionedAgendaToken.current = agendaEntryToken.current;
+    agendaAnchorRef.current.scrollIntoView({ block: "start", behavior: "auto" });
+  }, [view, agendaAnchorKey, agendaEntryToken.current]);
 
   // Re-anchor to "today" (in the Home calendar's real timezone) once it's
   // known — but only until the user actually navigates; see hasNavigated.
@@ -1371,7 +1396,11 @@ export default function CalendarPage() {
               Array.from(byDay.entries())
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([key, rows]) => (
-                  <article className="agenda-day" key={key}>
+                  <article
+                    className="agenda-day"
+                    key={key}
+                    ref={key === agendaAnchorKey ? agendaAnchorRef : undefined}
+                  >
                     <h2>{relativeDayHeading(key, calendarTimezone)}</h2>
                     <EventList
                       events={rows}
@@ -1655,9 +1684,7 @@ function EventList({
         const people = event.member_ids
           .map((id) => memberNames.get(id))
           .filter(Boolean);
-        const firstMember = members.find((member) =>
-          event.member_ids.includes(member.user_id),
-        );
+        const participants = participantsForEvent(members, event.member_ids);
         return (
           <button
             className="event-row"
@@ -1679,15 +1706,7 @@ function EventList({
                   .join(" · ")}
               </small>
             </span>
-            {firstMember && (
-              <Avatar
-                id={firstMember.user_id}
-                name={firstMember.display_name}
-                colour={firstMember.colour}
-                avatarVersion={firstMember.avatar_version}
-                size="sm"
-              />
-            )}
+            <AvatarStack people={participants} size="sm" />
           </button>
         );
       })}

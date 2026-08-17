@@ -4,6 +4,7 @@ import {
   avatarStackLabel,
   buildAvatarStack,
   MAX_STACK_AVATARS,
+  participantsForEvent,
 } from "./avatar-stack-logic";
 
 function person(id: string, name: string): AvatarStackPerson {
@@ -64,6 +65,19 @@ describe("buildAvatarStack", () => {
     const { shown, extra } = buildAvatarStack([]);
     expect(shown).toEqual([]);
     expect(extra).toBe(0);
+  });
+});
+
+describe("participantsForEvent", () => {
+  it("resolves event ids in roster order", () => {
+    expect(participantsForEvent([charlie, alice, bob], ["2", "3"]).map((p) => p.user_id)).toEqual([
+      "3",
+      "2",
+    ]);
+  });
+
+  it("does not infer participants from unrelated roster members", () => {
+    expect(participantsForEvent([alice, bob], ["missing"]).map((p) => p.user_id)).toEqual([]);
   });
 });
 

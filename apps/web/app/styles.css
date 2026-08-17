@@ -1694,14 +1694,20 @@ textarea {
   font-size: 0.8rem;
 }
 .event-list.compact .event-row {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   padding: 0.45rem;
 }
 .event-list.compact .event-colour,
 .event-list.compact .event-time,
-.event-list.compact .event-copy small,
-.event-list.compact .avatar {
+.event-list.compact .event-copy small {
   display: none;
+}
+.event-list.compact .event-copy {
+  min-width: 0;
+}
+.agenda-day {
+  scroll-margin-top: calc(var(--header-height) + 1rem);
 }
 .agenda-view,
 .child-list,

@@ -209,6 +209,57 @@ async def test_free_home_second_calendar_is_blocked_with_a_structured_error(
     assert "complimentary" not in str(detail).lower()
 
 
+@pytest.mark.asyncio
+async def test_free_home_owner_can_recolour_the_home_calendar_without_touching_entitlement(
+    client: AsyncClient,
+) -> None:
+    """Recolouring the existing (only) Home calendar is a mutation on that
+    one row, not the creation of a new calendar/category — it must succeed
+    on Free and must never be mistaken for consuming
+    calendar.max_categories. See routers.calendar.update_calendar."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"freecolour-{suffix}@example.com", "Free Colour Owner")
+    home_id = await _home_with_calendar(client, "Free Colour Home")
+
+    before = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+    assert before.status_code == 200
+    assert before.json()["limit"] == 1
+    assert len(before.json()["items"]) == 1
+    primary = before.json()["items"][0]
+    assert primary["commercial_access"] == "normal"
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "amber"},
+    )
+    assert recoloured.status_code == 200, recoloured.text
+    assert recoloured.json()["color"] == "amber"
+    assert recoloured.json()["commercial_access"] == "normal"
+
+    # Still exactly one calendar, same limit — a colour change never creates
+    # a new calendar/category or otherwise moves the entitlement count.
+    after = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+    assert after.status_code == 200
+    assert after.json()["limit"] == 1
+    assert len(after.json()["items"]) == 1
+    assert after.json()["items"][0]["id"] == primary["id"]
+    assert after.json()["items"][0]["color"] == "amber"
+
+    # The Free one-calendar limit is still enforced exactly as before.
+    blocked = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/calendars",
+        json={"name": "Second calendar"},
+    )
+    assert blocked.status_code == 403
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "plan_limit_reached"
+    assert detail["entitlement"] == "calendar.max_categories"
+
+
 # ---------------------------------------------------------------------------
 # Family: multiple calendars, normal editing
 # ---------------------------------------------------------------------------
