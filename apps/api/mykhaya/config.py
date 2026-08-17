@@ -361,6 +361,17 @@ class Settings(BaseSettings):
         parts = urlsplit(self.admin_url)
         return f"{parts.scheme}://{parts.netloc}"
 
+    @property
+    def family_webauthn_rp_id(self) -> str:
+        """The family app's RP ID, derived from the public web origin."""
+        return urlsplit(self.public_web_url).hostname or "localhost"
+
+    @property
+    def family_webauthn_origin(self) -> str:
+        """Exact browser origin used by the family web/PWA ceremony."""
+        parts = urlsplit(self.public_web_url)
+        return f"{parts.scheme}://{parts.netloc}"
+
 
 @lru_cache
 def get_settings() -> Settings:

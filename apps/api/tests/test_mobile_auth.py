@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,7 @@ from mykhaya.models import (
 from mykhaya.models import (
     Session as SessionRow,
 )
+from mykhaya.platform_mfa import WebAuthnRegistrationResult
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -67,8 +69,116 @@ async def mobile_login(client: AsyncClient, email: str) -> tuple[str, object]:
     return response.json()["session_token"], response
 
 
+def csrf_header(client: AsyncClient) -> dict[str, str]:
+    return {"X-CSRF-Token": client.cookies["mk_csrf"]}
+
+
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_family_passkey_registration_options_are_fresh_and_single_use(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"passkey-options-{suffix}@example.com"
+    await register_and_verify(client, email, "Passkey User")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+
+    options = await client.post(
+        "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
+    )
+    assert options.status_code == 200, options.text
+    payload = json.loads(options.json()["options_json"])
+    assert payload["rp"]["id"] == "localhost"
+    assert payload["authenticatorSelection"]["userVerification"] == "required"
+
+    garbage = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={"credential_json": '{"not":"a credential"}'},
+    )
+    assert garbage.status_code == 400
+    replay = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={"credential_json": '{"not":"a credential"}'},
+    )
+    assert replay.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_family_passkey_login_options_are_anonymous_discoverable_and_cookie_bound(
+    client: AsyncClient,
+) -> None:
+    options = await client.post("/api/v1/auth/passkeys/login/options", json={})
+    assert options.status_code == 200, options.text
+    payload = json.loads(options.json()["options_json"])
+    assert payload["rpId"] == "localhost"
+    assert payload["userVerification"] == "required"
+    assert "allowCredentials" not in payload or payload["allowCredentials"] == []
+    assert "mk_passkey_challenge" in options.cookies
+
+
+@pytest.mark.asyncio
+async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_password_fallback(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"passkey-flow-{suffix}@example.com"
+    await register_and_verify(client, email, "Passkey Flow")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+
+    monkeypatch.setattr(
+        "mykhaya.routers.auth.verify_family_registration",
+        lambda *_args: WebAuthnRegistrationResult("AQI", "cHVibGlj", 0),
+    )
+    options = await client.post(
+        "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
+    )
+    assert options.status_code == 200
+    registered = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={"credential_json": '{"id":"AQI","rawId":"AQI"}', "label": "Phone"},
+    )
+    assert registered.status_code == 200, registered.text
+    passkey_id = registered.json()["id"]
+
+    await client.post("/api/v1/auth/logout", headers=csrf_header(client))
+    monkeypatch.setattr(
+        "mykhaya.routers.auth.verify_family_authentication", lambda *_args: 0
+    )
+    login_options = await client.post("/api/v1/auth/passkeys/login/options", json={})
+    assert login_options.status_code == 200
+    passkey_login = await client.post(
+        "/api/v1/auth/passkeys/login/verify",
+        json={"credential_json": '{"id":"AQI","rawId":"AQI"}'},
+    )
+    assert passkey_login.status_code == 200, passkey_login.text
+    assert client.cookies.get("mk_session") is not None
+    assert client.cookies.get("mk_device") is not None
+
+    removed = await client.delete(
+        f"/api/v1/auth/passkeys/{passkey_id}", headers=csrf_header(client)
+    )
+    assert removed.status_code == 204
+    await client.post("/api/v1/auth/logout", headers=csrf_header(client))
+
+    await client.post("/api/v1/auth/passkeys/login/options", json={})
+    revoked_login = await client.post(
+        "/api/v1/auth/passkeys/login/verify",
+        json={"credential_json": '{"id":"AQI","rawId":"AQI"}'},
+    )
+    assert revoked_login.status_code == 401
+
+    password_fallback = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert password_fallback.status_code == 200
 
 
 @pytest.mark.asyncio

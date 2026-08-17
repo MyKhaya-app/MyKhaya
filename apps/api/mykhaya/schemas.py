@@ -360,6 +360,30 @@ class TrustedDeviceResponse(BaseModel):
     current: bool
 
 
+class PasskeyOptionsResponse(BaseModel):
+    options_json: str
+
+
+class PasskeyRegistrationVerifyRequest(StrictModel):
+    credential_json: str = Field(min_length=2, max_length=100_000)
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class PasskeyAuthenticationVerifyRequest(StrictModel):
+    credential_json: str = Field(min_length=2, max_length=100_000)
+
+
+class PasskeyRenameRequest(StrictModel):
+    label: str = Field(min_length=1, max_length=100)
+
+
+class PasskeyResponse(BaseModel):
+    id: uuid.UUID
+    label: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
 class MessageResponse(BaseModel):
     message: str
 

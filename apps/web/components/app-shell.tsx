@@ -56,7 +56,7 @@ export function AppShell({
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "offline" | "signed_out">("loading");
-  const heroFrameRef = useRef<HTMLDivElement>(null);
+  const fixedHeaderRef = useRef<HTMLDivElement>(null);
   const layered = Boolean(hero);
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
 
@@ -125,11 +125,11 @@ export function AppShell({
   }, [bootstrap]);
 
   useLayoutEffect(() => {
-    if (!hero || !heroFrameRef.current) return;
-    const frame = heroFrameRef.current;
+    if (!hero || !fixedHeaderRef.current) return;
+    const frame = fixedHeaderRef.current;
     const updateHeight = () => {
       document.documentElement.style.setProperty(
-        "--home-hero-height",
+        "--home-fixed-header-height",
         `${frame.getBoundingClientRect().height}px`,
       );
     };
@@ -139,7 +139,7 @@ export function AppShell({
     observer.observe(frame);
     return () => {
       observer.disconnect();
-      document.documentElement.style.removeProperty("--home-hero-height");
+      document.documentElement.style.removeProperty("--home-fixed-header-height");
     };
   }, [layered]);
 
@@ -166,16 +166,26 @@ export function AppShell({
 
   return (
     <div className={`app-shell${layered ? " app-shell-layered" : ""}`}>
-      <div ref={layered ? heroFrameRef : undefined} className={layered ? "home-hero-frame" : undefined}>
+      {layered && <div className="home-background" aria-hidden="true" />}
+      {layered ? (
+        <div ref={fixedHeaderRef} className="home-fixed-header">
+          <AppHeader
+            user={user}
+            homes={homes}
+            activeHome={activeHome}
+            onSwitchHome={setActiveHomeId}
+            flush
+          />
+          {hero}
+        </div>
+      ) : (
         <AppHeader
           user={user}
           homes={homes}
           activeHome={activeHome}
           onSwitchHome={setActiveHomeId}
-          flush={layered}
         />
-        {hero}
-      </div>
+      )}
       <main className={`app-main${layered ? " app-main-layered" : ""}`}>{children}</main>
       <BottomNav principalType={user?.principal_type} />
     </div>

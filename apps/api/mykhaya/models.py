@@ -236,6 +236,9 @@ class Session(UuidTimeMixin, Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Set only by a password/passkey ceremony (never by silent trusted-device
+    # renewal), so sensitive security actions can require fresh authentication.
+    fresh_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     ip_prefix: Mapped[str | None] = mapped_column(String(80))
@@ -634,6 +637,28 @@ class AdminWebAuthnCredential(UuidTimeMixin, Base):
     # "iPhone Face ID") — display only, never used for lookup.
     label: Mapped[str] = mapped_column(String(100))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserPasskey(UuidTimeMixin, Base):
+    """Public WebAuthn credential material for an adult MyKhaya user.
+
+    This is intentionally a separate security realm/table from PCC administrator
+    credentials. Private keys and biometric data remain on the authenticator.
+    """
+
+    __tablename__ = "user_passkeys"
+    __table_args__ = (
+        Index("ix_user_passkeys_user_active", "user_id", "revoked_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    credential_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    label: Mapped[str] = mapped_column(String(100), default="Passkey 1")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AdminRecoveryCode(UuidTimeMixin, Base):

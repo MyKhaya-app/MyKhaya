@@ -6,12 +6,19 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import {
+  authenticateWithPasskey,
+  passkeyWasCancelled,
+  passkeysSupported,
+} from "@/components/passkey-client";
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
+    [passkeyBusy, setPasskeyBusy] = useState(false),
+    [passkeyAvailable, setPasskeyAvailable] = useState(false),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
       invited_by_display_name: string;
@@ -19,12 +26,34 @@ export default function Login() {
     } | null>(null);
 
   useEffect(() => {
+    setPasskeyAvailable(passkeysSupported());
     if (!invitation) return;
     api
       .previewInvitation(invitation)
       .then((result) => setInviteContext(result))
       .catch((reason: ApiError) => setError(reason.message));
   }, [invitation]);
+  async function signInWithPasskey() {
+    setPasskeyBusy(true);
+    setError("");
+    try {
+      const options = await api.passkeyLoginOptions();
+      const credential = await authenticateWithPasskey(options.options_json);
+      await api.passkeyLoginVerify(JSON.stringify(credential));
+      if (invitation) await api.post("/invitations/accept", { token: invitation });
+      router.push((await api.homes()).length ? "/home" : "/onboarding");
+    } catch (err) {
+      setError(
+        passkeyWasCancelled(err)
+          ? "Passkey sign-in was cancelled."
+          : err instanceof ApiError
+            ? err.message
+            : "We couldn't verify this passkey. Try again or use your password.",
+      );
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -102,6 +131,19 @@ export default function Login() {
         <FormStatus error={error} />
         <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
+      {passkeyAvailable && (
+        <div className="auth-passkey-option">
+          <span className="auth-divider">or</span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || passkeyBusy}
+            onClick={() => void signInWithPasskey()}
+          >
+            {passkeyBusy ? "Checking passkey..." : "Sign in with passkey"}
+          </button>
+        </div>
+      )}
     </AuthCard>
   );
 }

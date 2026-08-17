@@ -64,6 +64,40 @@ export class MyKhayaClient {
     this.request<void>(`/auth/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
   revokeOtherDevices = () =>
     this.request<void>("/auth/devices/revoke-others", { method: "POST", body: "{}" });
+  passkeyLoginOptions = () =>
+    this.request<{ options_json: string }>("/auth/passkeys/login/options", {
+      method: "POST",
+      body: "{}",
+    });
+  passkeyLoginVerify = (credentialJson: string) =>
+    this.request<User>("/auth/passkeys/login/verify", {
+      method: "POST",
+      body: JSON.stringify({ credential_json: credentialJson }),
+    });
+  passkeys = () =>
+    this.request<{
+      id: string;
+      label: string;
+      created_at: string;
+      last_used_at: string | null;
+    }[]>("/auth/passkeys");
+  passkeyRegistrationOptions = () =>
+    this.request<{ options_json: string }>("/auth/passkeys/register/options", {
+      method: "POST",
+      body: "{}",
+    });
+  passkeyRegistrationVerify = (credentialJson: string, label?: string) =>
+    this.request<{ id: string; label: string; created_at: string; last_used_at: string | null }>(
+      "/auth/passkeys/register/verify",
+      { method: "POST", body: JSON.stringify({ credential_json: credentialJson, label }) },
+    );
+  renamePasskey = (id: string, label: string) =>
+    this.request<{ id: string; label: string; created_at: string; last_used_at: string | null }>(
+      `/auth/passkeys/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ label }) },
+    );
+  revokePasskey = (id: string) =>
+    this.request<void>(`/auth/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
   updateMyBirthday = (
     body: import("@mykhaya/shared-types").UserBirthdayPayload,
   ) =>

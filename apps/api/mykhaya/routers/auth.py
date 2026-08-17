@@ -1,3 +1,4 @@
+import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -5,13 +6,14 @@ from typing import cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
@@ -25,9 +27,20 @@ from mykhaya.models import (
     TokenPurpose,
     TrustedDevice,
     User,
+    UserPasskey,
 )
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
+from mykhaya.platform_mfa import (
+    build_family_authentication_options,
+    build_family_registration_options,
+    pop_webauthn_challenge,
+    pop_webauthn_token_challenge,
+    store_webauthn_challenge,
+    store_webauthn_token_challenge,
+    verify_family_authentication,
+    verify_family_registration,
+)
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     ChildLoginRequest,
@@ -35,6 +48,11 @@ from mykhaya.schemas import (
     LoginRequest,
     MessageResponse,
     MobileSessionResponse,
+    PasskeyAuthenticationVerifyRequest,
+    PasskeyOptionsResponse,
+    PasskeyRegistrationVerifyRequest,
+    PasskeyRenameRequest,
+    PasskeyResponse,
     RegisterRequest,
     RegistrationResponse,
     ResetRequest,
@@ -66,6 +84,9 @@ from mykhaya.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
 auth_diag_log = structlog.get_logger("auth_diag")
+PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
+PASSKEY_CHALLENGE_TTL_SECONDS = 300
+FRESH_AUTH_WINDOW = timedelta(minutes=10)
 
 
 def _auth_diag(request: Request, event: str, **fields: object) -> None:
@@ -80,6 +101,39 @@ def _auth_diag(request: Request, event: str, **fields: object) -> None:
         csrf_header=bool(request.headers.get("x-csrf-token")),
         **fields,
     )
+
+
+def require_fresh_adult_auth(auth: AuthContext) -> None:
+    if auth.session.kind != SessionKind.adult:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This action is not available to a Child.")
+    if (
+        auth.session.fresh_auth_at is None
+        or datetime.now(UTC) - auth.session.fresh_auth_at > FRESH_AUTH_WINDOW
+    ):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Please sign in again before changing your passkey settings.",
+        )
+
+
+def passkey_response(row: UserPasskey) -> PasskeyResponse:
+    return PasskeyResponse(
+        id=row.id,
+        label=row.label,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+    )
+
+
+def parse_passkey_credential_id(credential_json: str) -> str | None:
+    try:
+        parsed = json.loads(credential_json)
+        raw_id = parsed.get("rawId") or parsed.get("id")
+        if not isinstance(raw_id, str):
+            return None
+        return bytes_to_base64url(base64url_to_bytes(raw_id))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 def user_response(user: User, session: Session | None = None) -> UserResponse:
@@ -110,6 +164,7 @@ async def issue_session(
     trusted_device_id: uuid.UUID | None = None,
     device_token: str | None = None,
     device_csrf: str | None = None,
+    fresh_auth_at: datetime | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
@@ -118,6 +173,7 @@ async def issue_session(
         trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        fresh_auth_at=fresh_auth_at,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         kind=kind,
     )
@@ -187,6 +243,7 @@ async def issue_family_session(
     user: User,
     settings: Settings,
     kind: SessionKind,
+    fresh_auth_at: datetime | None = None,
 ) -> Session:
     device, device_token, device_csrf = await issue_trusted_device(
         db, request, user, settings, kind
@@ -201,6 +258,7 @@ async def issue_family_session(
         trusted_device_id=device.id,
         device_token=device_token,
         device_csrf=device_csrf,
+        fresh_auth_at=fresh_auth_at,
     )
 
 
@@ -210,6 +268,7 @@ async def issue_mobile_session(
     user: User,
     settings: Settings,
     kind: SessionKind = SessionKind.adult,
+    fresh_auth_at: datetime | None = None,
 ) -> tuple[str, Session]:
     """Bearer-transport equivalent of issue_session: same Session model, same
     token scheme, no cookies. Returns the raw token - callers must put it in
@@ -219,6 +278,7 @@ async def issue_mobile_session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
         kind=kind,
     )
@@ -368,13 +428,262 @@ async def login(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     user = await authenticate_credentials(db, request, settings, body, "login")
+    fresh_auth_at = datetime.now(UTC)
     session = await issue_family_session(
-        db, response, request, user, settings, SessionKind.adult
+        db, response, request, user, settings, SessionKind.adult, fresh_auth_at=fresh_auth_at
     )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
     return user_response(user, session)
+
+
+@router.post("/passkeys/register/options", response_model=PasskeyOptionsResponse)
+async def passkey_register_options(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PasskeyOptionsResponse:
+    require_fresh_adult_auth(auth)
+    await enforce_rate_limit(request, settings, "family-passkey-register", 10, 300)
+    existing = list(
+        await db.scalars(
+            select(UserPasskey.credential_id).where(
+                UserPasskey.user_id == auth.user.id,
+                UserPasskey.revoked_at.is_(None),
+            )
+        )
+    )
+    options_json, challenge = build_family_registration_options(
+        settings,
+        auth.user.id,
+        auth.user.email,
+        auth.user.display_name,
+        existing,
+    )
+    await store_webauthn_challenge(settings, "family-register", auth.session.id, challenge)
+    return PasskeyOptionsResponse(options_json=options_json)
+
+
+@router.post("/passkeys/register/verify", response_model=PasskeyResponse)
+async def passkey_register_verify(
+    body: PasskeyRegistrationVerifyRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PasskeyResponse:
+    require_fresh_adult_auth(auth)
+    await enforce_rate_limit(request, settings, "family-passkey-register", 10, 300)
+    challenge = await pop_webauthn_challenge(settings, "family-register", auth.session.id)
+    if challenge is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This passkey setup attempt has expired.")
+    result = verify_family_registration(settings, body.credential_json, challenge)
+    if result is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This passkey could not be registered.")
+    duplicate = await db.scalar(
+        select(UserPasskey).where(UserPasskey.credential_id == result.credential_id)
+    )
+    if duplicate is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That passkey is already registered.")
+    count = await db.scalar(
+        select(func.count()).select_from(UserPasskey).where(UserPasskey.user_id == auth.user.id)
+    )
+    label = " ".join((body.label or f"Passkey {(count or 0) + 1}").split())[:100]
+    row = UserPasskey(
+        user_id=auth.user.id,
+        credential_id=result.credential_id,
+        public_key=result.public_key,
+        sign_count=result.sign_count,
+        label=label,
+    )
+    db.add(row)
+    audit(
+        db,
+        request,
+        "user.passkey_registered",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    return passkey_response(row)
+
+
+@router.post("/passkeys/login/options", response_model=PasskeyOptionsResponse)
+async def passkey_login_options(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+) -> PasskeyOptionsResponse:
+    require_secure_transport(request, settings)
+    await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
+    token = secrets.token_urlsafe(32)
+    options_json, challenge = build_family_authentication_options(settings)
+    await store_webauthn_token_challenge(settings, "family-login", token, challenge)
+    response.set_cookie(
+        PASSKEY_LOGIN_COOKIE,
+        token,
+        max_age=PASSKEY_CHALLENGE_TTL_SECONDS,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+        domain=settings.cookie_domain,
+    )
+    return PasskeyOptionsResponse(options_json=options_json)
+
+
+@router.post("/passkeys/login/verify", response_model=UserResponse)
+async def passkey_login_verify(
+    body: PasskeyAuthenticationVerifyRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    require_secure_transport(request, settings)
+    await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
+    token = request.cookies.get(PASSKEY_LOGIN_COOKIE)
+    challenge = (
+        await pop_webauthn_token_challenge(settings, "family-login", token)
+        if token
+        else None
+    )
+    if challenge is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This passkey sign-in attempt has expired."
+        )
+    credential_id = parse_passkey_credential_id(body.credential_json)
+    row = (
+        await db.scalar(
+            select(UserPasskey).where(
+                UserPasskey.credential_id == credential_id,
+                UserPasskey.revoked_at.is_(None),
+            )
+        )
+        if credential_id
+        else None
+    )
+    user = (
+        await db.scalar(
+            select(User)
+            .join(AuthIdentity, AuthIdentity.user_id == User.id)
+            .where(User.id == row.user_id, User.is_active.is_(True))
+        )
+        if row is not None
+        else None
+    )
+    if row is None or user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "We couldn't verify this passkey.")
+    new_sign_count = verify_family_authentication(
+        settings, body.credential_json, challenge, row.public_key, row.sign_count
+    )
+    if new_sign_count is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "We couldn't verify this passkey.")
+    now = datetime.now(UTC)
+    row.sign_count = new_sign_count
+    row.last_used_at = now
+    session = await issue_family_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        SessionKind.adult,
+        fresh_auth_at=now,
+    )
+    user.last_login_at = now
+    user.last_activity_at = now
+    audit(
+        db,
+        request,
+        "user.passkey_authenticated",
+        user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    response.delete_cookie(
+        PASSKEY_LOGIN_COOKIE,
+        path="/",
+        domain=settings.cookie_domain,
+    )
+    return user_response(user, session)
+
+
+@router.get("/passkeys", response_model=list[PasskeyResponse])
+async def list_passkeys(
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
+) -> list[PasskeyResponse]:
+    require_adult_session(auth)
+    rows = await db.scalars(
+        select(UserPasskey)
+        .where(UserPasskey.user_id == auth.user.id, UserPasskey.revoked_at.is_(None))
+        .order_by(UserPasskey.created_at)
+    )
+    return [passkey_response(row) for row in rows]
+
+
+@router.patch("/passkeys/{passkey_id}", response_model=PasskeyResponse)
+async def rename_passkey(
+    passkey_id: uuid.UUID,
+    body: PasskeyRenameRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> PasskeyResponse:
+    require_fresh_adult_auth(auth)
+    row = await db.scalar(
+        select(UserPasskey).where(
+            UserPasskey.id == passkey_id,
+            UserPasskey.user_id == auth.user.id,
+            UserPasskey.revoked_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That passkey could not be found.")
+    row.label = " ".join(body.label.split())[:100]
+    audit(
+        db,
+        request,
+        "user.passkey_renamed",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    return passkey_response(row)
+
+
+@router.delete("/passkeys/{passkey_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_passkey(
+    passkey_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_fresh_adult_auth(auth)
+    row = await db.scalar(
+        select(UserPasskey).where(
+            UserPasskey.id == passkey_id,
+            UserPasskey.user_id == auth.user.id,
+            UserPasskey.revoked_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That passkey could not be found.")
+    row.revoked_at = datetime.now(UTC)
+    audit(
+        db,
+        request,
+        "user.passkey_revoked",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
 
 
 CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
@@ -598,7 +907,9 @@ async def mobile_login(
     token - only the caller who receives this response ever sees it."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
-    raw, session = await issue_mobile_session(db, request, user, settings)
+    raw, session = await issue_mobile_session(
+        db, request, user, settings, fresh_auth_at=datetime.now(UTC)
+    )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
@@ -906,7 +1217,13 @@ async def rotate_session(
     # underlying User row, defeating require_adult_session and every other
     # kind-based check from that point on.
     new_session = await issue_session(
-        db, response, request, auth.user, settings, kind=auth.session.kind
+        db,
+        response,
+        request,
+        auth.user,
+        settings,
+        kind=auth.session.kind,
+        fresh_auth_at=auth.session.fresh_auth_at,
     )
     audit(
         db,
@@ -940,7 +1257,12 @@ async def rotate_mobile_session(
     # session being rotated, not silently reset to issue_mobile_session's adult
     # default.
     raw, new_session = await issue_mobile_session(
-        db, request, auth.user, settings, kind=auth.session.kind
+        db,
+        request,
+        auth.user,
+        settings,
+        kind=auth.session.kind,
+        fresh_auth_at=auth.session.fresh_auth_at,
     )
     audit(
         db,

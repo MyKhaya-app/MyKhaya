@@ -570,19 +570,37 @@ textarea {
   min-width: 0;
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 1rem);
 }
-.home-hero-frame {
+.app-shell-layered {
+  position: relative;
+}
+.home-background {
+  background: var(--colour-forest);
+  height: calc(var(--home-fixed-header-height, 0px) + 72px);
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 0;
+}
+.home-fixed-header {
   background: var(--colour-forest);
   left: 0;
   min-width: 0;
+  overflow: hidden;
   position: fixed;
   top: 0;
   width: 100%;
   z-index: 20;
 }
+.app-shell-layered .app-header {
+  position: static;
+  z-index: auto;
+}
 .app-main-layered {
-  padding-top: var(--home-hero-height, 0px);
+  padding-top: var(--home-fixed-header-height, 0px);
   position: relative;
-  z-index: 1;
+  z-index: 10;
 }
 .bottom-nav {
   align-items: stretch;
@@ -661,16 +679,11 @@ textarea {
   max-width: 640px;
   padding: 1.75rem 1.25rem 2.5rem;
 }
-/* The greeting band: a full-bleed continuation of the header's green field.
-   Negative side/top margins cancel .home-page's own padding so the two
-   read as one uninterrupted block; its own rounded bottom + shadow become
-   the visual edge the white content cards sit against. */
+/* The greeting content is part of the fixed header mask on Home. */
 .home-hero {
   background: var(--colour-forest);
-  border-radius: 0 0 var(--radius-hero) var(--radius-hero);
-  box-shadow: var(--shadow-hero);
   color: var(--colour-white);
-  padding: 20px 24px 72px;
+  padding: 20px 24px 0;
 }
 .home-hero-eyebrow {
   color: rgb(255 254 251 / 72%);
@@ -692,6 +705,7 @@ textarea {
   display: flex;
   gap: 0.6rem;
   margin-top: 1rem;
+  padding-bottom: 4px;
 }
 .home-family-strip .avatar {
   box-shadow:
@@ -1293,19 +1307,9 @@ textarea {
   .standard-page {
     padding: 1.5rem 1rem 2rem;
   }
-  .app-shell-layered .home-hero-frame {
-    background: var(--colour-forest);
-  }
   .app-shell-layered .app-header {
     position: static;
     z-index: auto;
-  }
-  .app-shell-layered .home-hero {
-    border-radius: 0;
-    box-shadow: none;
-  }
-  .app-shell-layered .app-main-layered {
-    background: transparent;
   }
   .home-grid {
     display: block;

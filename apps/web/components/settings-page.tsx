@@ -11,7 +11,7 @@ const links = [
   ["Profile", "Your name and account details", "/settings/profile"],
   ["Notifications", "Push, reminders and your daily briefing", "/settings/notifications"],
   ["Routines", "Bins, medication and other recurring reminders", "/settings/routines"],
-  ["Security", "Password and signed-in devices", "/settings/security"],
+  ["Security", "Password, passkeys and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
   ["Plan & Billing", "Your Home's plan, and payment status if applicable", "/settings/billing"],
 ] as const;
