@@ -104,6 +104,9 @@ def set_auth_cookies(
     device_token: str | None = None,
     device_csrf: str | None = None,
 ) -> None:
+    now = datetime.now(UTC)
+    session_expires = now + timedelta(minutes=settings.session_minutes)
+    device_expires = now + timedelta(days=settings.trusted_device_days)
     response.set_cookie(
         "mk_session",
         token,
@@ -113,6 +116,7 @@ def set_auth_cookies(
         domain=settings.cookie_domain,
         path="/",
         max_age=settings.session_minutes * 60,
+        expires=session_expires,
     )
     response.set_cookie(
         "mk_csrf",
@@ -123,6 +127,7 @@ def set_auth_cookies(
         domain=settings.cookie_domain,
         path="/",
         max_age=settings.session_minutes * 60,
+        expires=session_expires,
     )
     if device_token is not None and device_csrf is not None:
         max_age = settings.trusted_device_days * 24 * 60 * 60
@@ -135,6 +140,7 @@ def set_auth_cookies(
             domain=settings.cookie_domain,
             path="/",
             max_age=max_age,
+            expires=device_expires,
         )
         response.set_cookie(
             "mk_device_csrf",
@@ -145,6 +151,7 @@ def set_auth_cookies(
             domain=settings.cookie_domain,
             path="/",
             max_age=max_age,
+            expires=device_expires,
         )
 
 

@@ -54,6 +54,7 @@ import {
   resolveMemberFilter,
   shiftEndWithStart,
   splitZoned,
+  toEventUpdatePayload,
   weekRange,
   zonedDateKey,
   zonedTimeToUtc,
@@ -1109,10 +1110,8 @@ export default function CalendarPage() {
     setError("");
     setBusy(true);
     try {
-      const updated = await api.updateEvent(activeHomeId, selectedEvent.event_id, {
-        ...payload,
-        expected_updated_at: selectedEvent.updated_at,
-      });
+      const updatable = toEventUpdatePayload(payload, selectedEvent.updated_at);
+      const updated = await api.updateEvent(activeHomeId, selectedEvent.event_id, updatable);
       // Return to View mode showing the newly persisted values, rather than
       // closing the sheet — the freshly returned event (not a stale local
       // copy) is what View then renders.

@@ -35,6 +35,21 @@ async def test_login_creates_device_and_expired_application_session_renews(
     await register_and_verify(client, email, "Trusted User")
     login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
     assert login.status_code == 200
+    set_cookie_headers = login.headers.get_list("set-cookie")
+    device_cookie = next(header for header in set_cookie_headers if header.startswith("mk_device="))
+    device_csrf_cookie = next(
+        header for header in set_cookie_headers if header.startswith("mk_device_csrf=")
+    )
+    assert "HttpOnly" in device_cookie
+    assert "Secure" not in device_cookie
+    assert "SameSite=lax" in device_cookie
+    assert "Path=/" in device_cookie
+    assert "Max-Age=7776000" in device_cookie
+    assert "expires=" in device_cookie.lower()
+    assert "Domain=" not in device_cookie
+    assert "HttpOnly" not in device_csrf_cookie
+    assert "Max-Age=7776000" in device_csrf_cookie
+    assert "expires=" in device_csrf_cookie.lower()
     old_device_token = csrf(client, "mk_device")
     old_device_csrf = csrf(client, "mk_device_csrf")
 

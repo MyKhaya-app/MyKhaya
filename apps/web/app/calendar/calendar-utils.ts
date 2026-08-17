@@ -1,4 +1,9 @@
-import type { EventOccurrence, Member } from "@mykhaya/shared-types";
+import type {
+  EventOccurrence,
+  EventPayload,
+  EventUpdatePayload,
+  Member,
+} from "@mykhaya/shared-types";
 
 // Last-resort fallback only — used when no Home calendar timezone has loaded
 // yet (e.g. the very first render before the API responds). Matches the
@@ -583,4 +588,35 @@ export function canEditEvent(
  *  `calendar.delete` may delete any event in the Home (see delete_event). */
 export function canDeleteEvent(capabilities: string[]): boolean {
   return capabilities.includes("calendar.delete");
+}
+
+/** Builds the exact body PATCH /events/{id} accepts from the same
+ *  EventPayload EventForm already produces for create — deliberately drops
+ *  `calendar_id` (EventUpdatePayload has no such field; the backend's
+ *  EventUpdate schema is a StrictModel and 422s with `extra_forbidden` on
+ *  any unrecognised field). An event's calendar assignment is fixed at
+ *  creation and always resolved server-side from the existing row; sending
+ *  it here broke every edit regardless of what actually changed —
+ *  regression covered by calendar-utils.test.ts. */
+export function toEventUpdatePayload(
+  payload: EventPayload,
+  expectedUpdatedAt: string,
+): EventUpdatePayload {
+  return {
+    title: payload.title,
+    start_at: payload.start_at,
+    end_at: payload.end_at,
+    timezone: payload.timezone,
+    is_all_day: payload.is_all_day,
+    description: payload.description,
+    location_text: payload.location_text,
+    label_id: payload.label_id,
+    member_ids: payload.member_ids,
+    reminder_minutes: payload.reminder_minutes,
+    recurrence: payload.recurrence,
+    recurrence_interval: payload.recurrence_interval,
+    recurrence_until: payload.recurrence_until,
+    recurrence_count: payload.recurrence_count,
+    expected_updated_at: expectedUpdatedAt,
+  };
 }

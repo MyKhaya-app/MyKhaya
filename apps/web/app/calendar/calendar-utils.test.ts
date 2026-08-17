@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EventOccurrence, Member } from "@mykhaya/shared-types";
+import type { EventOccurrence, EventPayload, Member } from "@mykhaya/shared-types";
 import {
   agendaRange,
   applyAllDayToggle,
@@ -20,6 +20,7 @@ import {
   parseLocalInputValue,
   resolveMemberFilter,
   shiftEndWithStart,
+  toEventUpdatePayload,
   utcToZonedInputValue,
   zonedDateKey,
   zonedTimeToUtc,
@@ -981,6 +982,67 @@ describe("Event View/Edit permissions (mirrors update_event/delete_event)", () =
     it("denies delete access without the delete capability, even with edit_all", () => {
       expect(canDeleteEvent(["calendar.edit_all", "calendar.edit_own"])).toBe(false);
       expect(canDeleteEvent([])).toBe(false);
+    });
+  });
+});
+
+// Regression: editing any event 422'd ("extra_forbidden") because
+// EventForm's submit() always includes `calendar_id` in the payload it
+// builds (needed for create, via EventCreate), but EventUpdate has no such
+// field — an event's calendar assignment is fixed at creation. update() in
+// page.tsx now builds its PATCH body through toEventUpdatePayload instead
+// of spreading the raw create-shaped payload.
+describe("toEventUpdatePayload", () => {
+  function eventPayload(overrides: Partial<EventPayload> = {}): EventPayload {
+    return {
+      title: "Weekly sync",
+      start_at: "2026-08-20T09:00:00+00:00",
+      end_at: "2026-08-20T10:00:00+00:00",
+      timezone: "Europe/London",
+      is_all_day: false,
+      description: null,
+      location_text: null,
+      label_id: null,
+      calendar_id: null,
+      member_ids: [],
+      reminder_minutes: null,
+      recurrence: "none",
+      recurrence_interval: 1,
+      recurrence_until: null,
+      recurrence_count: null,
+      ...overrides,
+    };
+  }
+
+  it("never includes calendar_id, regardless of what the create-shaped payload carries", () => {
+    const withCalendarId = eventPayload({ calendar_id: "some-calendar-id" });
+    const result = toEventUpdatePayload(withCalendarId, "2026-08-01T00:00:00+00:00");
+    expect(result).not.toHaveProperty("calendar_id");
+  });
+
+  it("carries every other field through unchanged, plus expected_updated_at", () => {
+    const payload = eventPayload({
+      title: "Renamed",
+      label_id: "label-1",
+      member_ids: ["user-1", "user-2"],
+    });
+    const result = toEventUpdatePayload(payload, "2026-08-01T00:00:00+00:00");
+    expect(result).toEqual({
+      title: "Renamed",
+      start_at: payload.start_at,
+      end_at: payload.end_at,
+      timezone: payload.timezone,
+      is_all_day: false,
+      description: null,
+      location_text: null,
+      label_id: "label-1",
+      member_ids: ["user-1", "user-2"],
+      reminder_minutes: null,
+      recurrence: "none",
+      recurrence_interval: 1,
+      recurrence_until: null,
+      recurrence_count: null,
+      expected_updated_at: "2026-08-01T00:00:00+00:00",
     });
   });
 });

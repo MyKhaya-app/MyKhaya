@@ -162,7 +162,15 @@ export interface CalendarUsage {
   over_limit: boolean;
 }
 
-export interface EventUpdatePayload extends EventPayload {
+// Deliberately excludes `calendar_id` — matching the backend's EventUpdate
+// schema exactly (StrictModel, extra="forbid"). An event's calendar
+// assignment (shared Home calendar vs. a Personal Calendar) is fixed at
+// creation and never changes via edit; the backend always uses the
+// existing CalendarEvent.calendar_id row for updates. Sending `calendar_id`
+// on a PATCH is rejected with a 422 ("extra_forbidden") — see
+// EventForm.submit/`update()` in app/calendar/page.tsx, which strips it
+// before calling updateEvent.
+export interface EventUpdatePayload extends Omit<EventPayload, "calendar_id"> {
   expected_updated_at: string;
 }
 

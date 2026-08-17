@@ -834,3 +834,275 @@ async def test_all_day_event_normalized_to_utc_midnight_on_update(client: AsyncC
     assert body["start_at"] in ("2026-08-28T00:00:00Z", "2026-08-28T00:00:00+00:00")
     # Exclusive end: the day after the last covered date (30 Aug).
     assert body["end_at"] in ("2026-08-31T00:00:00Z", "2026-08-31T00:00:00+00:00")
+
+
+# ---------------------------------------------------------------------------
+# Regression: editing an event 422ing on every field (calendar_id in the
+# PATCH body) — the frontend's EventForm builds one payload shape shared by
+# create and edit, but EventUpdate (unlike EventCreate) has no `calendar_id`
+# field: an event's calendar assignment is fixed at creation and always
+# resolved server-side from the existing row (see update_event). StrictModel
+# rejects any unrecognised field with 422 `extra_forbidden`, so sending
+# `calendar_id` (even null) broke *every* edit, regardless of what changed.
+# ---------------------------------------------------------------------------
+
+
+def _update_body(event: dict, **overrides: object) -> dict:
+    """A full EventUpdate body seeded from an existing event's own current
+    values — mirrors what the frontend's EventForm actually submits (every
+    schema field present, since EventUpdate is not a partial/PATCH-semantics
+    schema), deliberately excluding `calendar_id`."""
+    body = {
+        "title": event["title"],
+        "start_at": event["start_at"],
+        "end_at": event["end_at"],
+        "timezone": event["timezone"],
+        "is_all_day": event["is_all_day"],
+        "member_ids": list(event.get("member_ids", [])),
+        "label_id": event["label"]["id"] if event.get("label") else None,
+        "location_text": event.get("location_text"),
+        "reminder_minutes": event.get("reminder_minutes"),
+        "recurrence": event.get("recurrence", "none"),
+        "recurrence_interval": 1,
+        "recurrence_until": None,
+        "recurrence_count": None,
+        "expected_updated_at": event["updated_at"],
+    }
+    body.update(overrides)
+    return body
+
+
+async def _create_event(client: AsyncClient, home_id: str, **overrides: object) -> dict:
+    body = {
+        "title": "Original title",
+        "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+        "timezone": "Europe/London",
+        "is_all_day": False,
+        "member_ids": [],
+        "recurrence": "none",
+    }
+    body.update(overrides)
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=body)
+    assert created.status_code == 201, created.text
+    return created.json()
+
+
+@pytest.mark.asyncio
+async def test_editing_only_the_title_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edittitle-{suffix}@example.com", "Edit Title")
+    home_id = await _home_with_calendar(client, "Edit Title Home")
+    event = await _create_event(client, home_id)
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, title="Updated title"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Updated title"
+
+
+@pytest.mark.asyncio
+async def test_editing_start_and_end_time_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edittime-{suffix}@example.com", "Edit Time")
+    home_id = await _home_with_calendar(client, "Edit Time Home")
+    event = await _create_event(client, home_id)
+
+    new_start = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    new_end = (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat()
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, start_at=new_start, end_at=new_end),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Compare as instants rather than string formats (the API may normalise offset notation).
+    assert datetime.fromisoformat(body["start_at"]) == datetime.fromisoformat(new_start)
+    assert datetime.fromisoformat(body["end_at"]) == datetime.fromisoformat(new_end)
+
+
+@pytest.mark.asyncio
+async def test_changing_category_on_an_existing_event_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editcat-{suffix}@example.com", "Edit Category")
+    home_id = await _home_with_calendar(client, "Edit Category Home")
+    event = await _create_event(client, home_id)
+
+    label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Sport", "color": "emerald"},
+    )
+    assert label.status_code == 201
+    label_id = label.json()["id"]
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, label_id=label_id),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["label"]["id"] == label_id
+
+
+@pytest.mark.asyncio
+async def test_changing_participants_succeeds_where_entitled(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    owner_email = f"editmembers-{suffix}@example.com"
+    await create_verified_user(client, owner_email, "Edit Members Owner")
+    home_id = await _home_with_calendar(client, "Edit Members Home")
+    event = await _create_event(client, home_id)
+
+    friend_email = f"editmembersfriend-{suffix}@example.com"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        await create_verified_user(friend_client, friend_email, "Edit Members Friend")
+    async with SessionFactory() as db:
+        owner = await db.scalar(select(User).where(User.email == owner_email))
+        friend = await db.scalar(select(User).where(User.email == friend_email))
+        assert owner is not None
+        assert friend is not None
+        db.add(
+            Membership(
+                group_id=uuid.UUID(home_id),
+                user_id=friend.id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+            )
+        )
+        await db.commit()
+        owner_id, friend_id = owner.id, friend.id
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, member_ids=[str(friend_id)]),
+    )
+    assert response.status_code == 200, response.text
+    assert str(friend_id) in response.json()["member_ids"]
+    assert str(owner_id) in response.json()["member_ids"]  # creator is always kept
+
+
+@pytest.mark.asyncio
+async def test_event_can_be_edited_without_setting_every_optional_field(
+    client: AsyncClient,
+) -> None:
+    """EventUpdate is not a partial/PATCH-semantics schema — but every field
+    beyond the handful of true requireds (title/start/end/timezone/is_all_day/
+    expected_updated_at) is still optional with a sensible default, so a
+    minimal body omitting description/location/label/members/reminder/
+    recurrence entirely must still succeed."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editminimal-{suffix}@example.com", "Edit Minimal")
+    home_id = await _home_with_calendar(client, "Edit Minimal Home")
+    event = await _create_event(
+        client, home_id, location_text="Kitchen", description="Weekly catch-up"
+    )
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json={
+            "title": "Still weekly catch-up",
+            "start_at": event["start_at"],
+            "end_at": event["end_at"],
+            "timezone": event["timezone"],
+            "is_all_day": False,
+            "expected_updated_at": event["updated_at"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Still weekly catch-up"
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_event_label_id_null_can_be_edited(client: AsyncClient) -> None:
+    """An uncategorised event (label_id null — presented to users as "Home
+    calendar") must be editable exactly like a categorised one."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edithomecal-{suffix}@example.com", "Edit Home Cal")
+    home_id = await _home_with_calendar(client, "Edit Home Cal Home")
+    event = await _create_event(client, home_id)
+    assert event["label"] is None
+    assert event["calendar_color"]  # always populated
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, location_text="Living room"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["label"] is None
+    assert response.json()["location_text"] == "Living room"
+
+
+@pytest.mark.asyncio
+async def test_legacy_event_created_before_recent_calendar_changes_can_still_be_updated(
+    client: AsyncClient,
+) -> None:
+    """Simulates an event whose row predates the newer optional fields ever
+    being touched (reminder_minutes/recurrence_until/recurrence_count all
+    left at their original None/default) — editing it must not require the
+    caller to first "upgrade" it by supplying values for fields it never had."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editlegacy-{suffix}@example.com", "Edit Legacy")
+    home_id = await _home_with_calendar(client, "Edit Legacy Home")
+    event = await _create_event(client, home_id)
+    assert event["reminder_minutes"] is None
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, title="Legacy event, updated"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Legacy event, updated"
+    assert response.json()["reminder_minutes"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_still_rejects_a_calendar_id_field_and_other_invalid_input(
+    client: AsyncClient,
+) -> None:
+    """Confirms the fix was made on the frontend contract, not by loosening
+    backend validation: `calendar_id` (an event's calendar is fixed at
+    creation, never editable) and a nonsensical end-before-start range must
+    both still be rejected."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editinvalid-{suffix}@example.com", "Edit Invalid")
+    home_id = await _home_with_calendar(client, "Edit Invalid Home")
+    event = await _create_event(client, home_id)
+
+    with_calendar_id = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, calendar_id=None),
+    )
+    assert with_calendar_id.status_code == 422
+    detail = with_calendar_id.json()["detail"]
+    assert detail[0]["type"] == "extra_forbidden"
+    assert detail[0]["loc"] == ["body", "calendar_id"]
+
+    end_before_start = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, end_at=event["start_at"], start_at=event["end_at"]),
+    )
+    assert end_before_start.status_code == 422
+    assert end_before_start.json()["detail"] == "End must be after start"
