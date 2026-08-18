@@ -1,5 +1,5 @@
 """Tests for Platform-Admin-managed SMTP configuration: access control, validation,
-secret handling, environment precedence, test-email delivery, and audit records.
+secret handling, precedence, test-email delivery, and audit records.
 
 No fake SMTP transport exists in the repo yet (test_worker.py relies on
 email_delivery_configured being false by default rather than mocking smtplib), so this
@@ -396,7 +396,7 @@ async def test_undecryptable_password_degrades_gracefully_instead_of_crashing(
 
 
 @pytest.mark.asyncio
-async def test_environment_managed_smtp_rejects_writes_and_reports_source(
+async def test_platform_smtp_wins_over_local_environment_fallback(
     admin_client: AsyncClient, admin_factory: AdminFactory
 ) -> None:
     admin = await admin_factory(PlatformRole.owner)
@@ -412,11 +412,14 @@ async def test_environment_managed_smtp_rejects_writes_and_reports_source(
     try:
         read = await admin_client.get("/api/v1/platform/mail")
         assert read.json()["managed_by"] == "environment"
-        assert read.json()["smtp_settings"]["editable"] is False
+        assert read.json()["smtp_settings"]["editable"] is True
         write = await unsafe(
             admin_client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload()
         )
-        assert write.status_code == 409
+        assert write.status_code == 200
+        read_after = await admin_client.get("/api/v1/platform/mail")
+        assert read_after.json()["managed_by"] == "platform_admin"
+        assert read_after.json()["smtp_settings"]["host"] == "smtp.example.com"
     finally:
         app.dependency_overrides.pop(get_settings, None)
 

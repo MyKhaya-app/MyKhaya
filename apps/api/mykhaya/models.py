@@ -761,8 +761,9 @@ class SmtpConnectionSecurity(StrEnum):
 class PlatformSmtpSettings(UuidTimeMixin, Base):
     """Platform-Admin-managed SMTP configuration. Single row; app logic enforces that.
 
-    Used only when no MYKHAYA_SMTP_* environment override is active — see
-    mykhaya.mailer.resolve_smtp_config and docs/architecture/platform-control-centre.md.
+    Authoritative for application email whenever enabled; local environment SMTP is
+    only a development/test fallback — see mykhaya.mailer.resolve_smtp_config and
+    docs/architecture/platform-control-centre.md.
     """
 
     __tablename__ = "platform_smtp_settings"

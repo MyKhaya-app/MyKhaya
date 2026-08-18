@@ -21,17 +21,18 @@ Exceptional future content access requires a separate design: record scope, elev
 
 ## SMTP configuration precedence
 
-Outbound email transport can come from either deployment-level env vars or Platform-Admin
-stored configuration, never both at once:
+Outbound email transport has one authoritative operational source: the enabled
+Platform-Admin stored configuration. Environment SMTP is retained only as an explicit
+development/test fallback for isolated local runs:
 
-1. **Environment variables** (`MYKHAYA_SMTP_HOST` set to a non-empty value in `.env`) —
-   always wins when present. The Platform Admin Email page shows the settings as
-   read-only ("managed by deployment environment") and rejects writes with `409` rather
-   than silently accepting a value it would then ignore.
-2. **Platform Admin stored configuration** (`platform_smtp_settings` table, one row,
-   password encrypted at rest — see `mykhaya.secrets_crypto`) — used only when no env var
-   is set and the stored row has `enabled=true`.
-3. **Unconfigured** — no env var and no enabled stored row. Email-dependent journeys are
+1. **Platform Admin stored configuration** (`platform_smtp_settings` table, one row,
+   password encrypted at rest — see `mykhaya.secrets_crypto`) — used when the stored row
+   has `enabled=true` and always wins over environment SMTP.
+2. **Development/test fallback** — when no enabled stored row exists and
+   `MYKHAYA_EMAIL_DELIVERY_CONFIGURED=true`, environment settings may be used only when
+   `MYKHAYA_ENVIRONMENT` is `development` or `test` (for example, Mailpit).
+3. **Unconfigured** — neither an enabled stored row nor an allowed local fallback exists.
+   Email-dependent journeys are
    blocked with a clear "email not configured" condition rather than failing silently.
 
 The environment path supports the same three connection-security options as the stored

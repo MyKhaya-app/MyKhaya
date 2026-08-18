@@ -136,8 +136,8 @@ optional-communications surface.
 ## Email
 
 `mykhaya/mailer.py` holds the SMTP transport (`SmtpConfig`, `resolve_smtp_config`,
-`send_email`) — see `docs/architecture/platform-control-centre.md` for the
-environment-vs-Platform-Admin precedence rule. `send_email` is called from exactly one
+`send_email`) — the enabled Platform Control Centre SMTP row is authoritative; Mailpit
+environment settings are only an explicit development/test fallback. `send_email` is called from exactly one
 place: `worker.py`'s `_process_email()`, handling the `notification.email` topic.
 Content (subject/body) is rendered once, at `notify()`-call time, by the caller, via
 `mykhaya/notifications/templates.render_notification_email` — `default_templates.py`

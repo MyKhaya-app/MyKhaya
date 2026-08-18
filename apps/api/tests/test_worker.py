@@ -13,8 +13,19 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
+from mykhaya import worker
+from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.models import OutboxEvent, WorkerJobRecord
+from mykhaya.models import (
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationDeliveryStatus,
+    OutboxEvent,
+    PlatformSmtpSettings,
+    SmtpConnectionSecurity,
+    WorkerJobRecord,
+)
+from mykhaya.secrets_crypto import encrypt_secret
 from mykhaya.worker import MAX_ATTEMPTS, _backoff_seconds, process
 
 
@@ -131,3 +142,89 @@ async def test_already_processed_event_is_not_reprocessed() -> None:
             select(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id)
         )
         assert job is None
+
+
+@pytest.mark.asyncio
+async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings().model_copy(
+        update={
+            "environment": "development",
+            "email_delivery_configured": True,
+            "smtp_host": "mailpit",
+        }
+    )
+    event = OutboxEvent(
+        topic="notification.email",
+        payload={
+            "recipient_email": "recipient@example.com",
+            "subject": "Verify your MyKhaya email",
+            "body": "Please verify your email.",
+            "html_body": None,
+            "delivery_idempotency_key": "worker-pcc-smtp-test:email",
+        },
+    )
+    smtp = PlatformSmtpSettings(
+        enabled=True,
+        host="smtp2go.example",
+        port=587,
+        connection_security=SmtpConnectionSecurity.starttls,
+        auth_enabled=True,
+        username="smtp-user",
+        encrypted_password=encrypt_secret(settings, "smtp-password"),
+        sender_name="MyKhaya",
+        sender_email="hello@example.com",
+        timeout_seconds=10,
+    )
+    async with SessionFactory() as db:
+        db.add_all([event, smtp])
+        await db.flush()
+        delivery = NotificationDelivery(
+            channel=NotificationChannel.email,
+            notification_type="email_verification",
+            idempotency_key="worker-pcc-smtp-test:email",
+            outbox_event_id=event.id,
+            status=NotificationDeliveryStatus.queued,
+        )
+        db.add(delivery)
+        await db.commit()
+        event_id = event.id
+        smtp_id = smtp.id
+
+    calls: list[tuple[object, str, str, str]] = []
+
+    def fake_send(
+        config: object, recipient: str, subject: str, body: str, html: str | None
+    ) -> None:
+        calls.append((config, recipient, subject, body))
+
+    monkeypatch.setattr(worker, "get_settings", lambda: settings)
+    monkeypatch.setattr(worker, "send_email", fake_send)
+    try:
+        await worker.process(event_id)
+        assert len(calls) == 1
+        config, recipient, subject, body = calls[0]
+        assert config.source == "platform_admin"
+        assert config.host == "smtp2go.example"
+        assert config.password == "smtp-password"
+        assert recipient == "recipient@example.com"
+        assert subject == "Verify your MyKhaya email"
+        assert body == "Please verify your email."
+        async with SessionFactory() as db:
+            stored_delivery = await db.scalar(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.idempotency_key == "worker-pcc-smtp-test:email"
+                )
+            )
+            assert stored_delivery is not None
+            assert stored_delivery.status == NotificationDeliveryStatus.sent
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(WorkerJobRecord).where(WorkerJobRecord.id == event_id))
+            await db.execute(
+                delete(NotificationDelivery).where(NotificationDelivery.outbox_event_id == event_id)
+            )
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+            await db.execute(delete(PlatformSmtpSettings).where(PlatformSmtpSettings.id == smtp_id))
+            await db.commit()

@@ -90,14 +90,14 @@ def _from_environment(settings: Settings) -> SmtpConfig:
 
 
 async def resolve_smtp_config(settings: Settings, db: AsyncSession) -> SmtpConfig:
-    """Environment variables win when explicitly enabled; otherwise the Platform-Admin
-    stored row is used if enabled; otherwise email is unconfigured.
+    """The enabled Platform Control Centre row is authoritative.
+
+    Environment SMTP is retained only as an explicit development/test fallback for
+    isolated local runs (for example, Mailpit). It must never override an enabled
+    Platform Control Centre configuration.
 
     See docs/architecture/platform-control-centre.md "SMTP configuration precedence".
     """
-    if settings.email_delivery_configured:
-        return _from_environment(settings)
-
     row = await db.scalar(select(PlatformSmtpSettings).limit(1))
     if row is not None and row.enabled:
         try:
@@ -123,6 +123,9 @@ async def resolve_smtp_config(settings: Settings, db: AsyncSession) -> SmtpConfi
             reply_to=row.reply_to,
             timeout_seconds=row.timeout_seconds,
         )
+
+    if settings.environment in {"development", "test"} and settings.email_delivery_configured:
+        return _from_environment(settings)
 
     return SmtpConfig(source="unconfigured", configured=False)
 

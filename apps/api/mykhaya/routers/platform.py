@@ -4137,7 +4137,7 @@ async def mail_configuration(
             "reply_to": row.reply_to if row else None,
             "timeout_seconds": row.timeout_seconds if row else 10,
             "updated_at": row.updated_at if row else None,
-            "editable": config.source != "environment",
+            "editable": True,
         },
     }
 
@@ -4151,11 +4151,6 @@ async def update_smtp_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    if settings.email_delivery_configured:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "SMTP is managed by the deployment environment and cannot be changed here.",
-        )
     row = await _get_smtp_settings_row(db)
     was_enabled = row.enabled if row else False
     had_password = bool(row.encrypted_password) if row else False
