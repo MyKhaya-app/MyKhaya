@@ -122,7 +122,22 @@ def passkey_response(row: UserPasskey) -> PasskeyResponse:
         label=row.label,
         created_at=row.created_at,
         last_used_at=row.last_used_at,
+        authenticator_attachment=row.authenticator_attachment,
     )
+
+
+def parse_authenticator_attachment(credential_json: str) -> str | None:
+    """The browser reports this directly on the registration response
+    (RegistrationResponseJSON.authenticatorAttachment) — "platform" or
+    "cross-platform". Older browsers, or a client that didn't send it, omit
+    the field entirely; treated the same as an unrecognised value: unknown,
+    not a security signal either way (see UserPasskey.authenticator_attachment)."""
+    try:
+        parsed = json.loads(credential_json)
+        value = parsed.get("authenticatorAttachment")
+        return value if value in ("platform", "cross-platform") else None
+    except (json.JSONDecodeError, AttributeError):
+        return None
 
 
 def parse_passkey_credential_id(credential_json: str) -> str | None:
@@ -497,6 +512,7 @@ async def passkey_register_verify(
         public_key=result.public_key,
         sign_count=result.sign_count,
         label=label,
+        authenticator_attachment=parse_authenticator_attachment(body.credential_json),
     )
     db.add(row)
     audit(

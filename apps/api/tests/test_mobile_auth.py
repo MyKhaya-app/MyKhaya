@@ -16,7 +16,9 @@ from mykhaya.models import (
     FeatureKey,
     FeatureOverride,
     TokenPurpose,
+    TrustedDevice,
     User,
+    UserPasskey,
 )
 from mykhaya.models import (
     Session as SessionRow,
@@ -94,6 +96,14 @@ async def test_family_passkey_registration_options_are_fresh_and_single_use(
     payload = json.loads(options.json()["options_json"])
     assert payload["rp"]["id"] == "localhost"
     assert payload["authenticatorSelection"]["userVerification"] == "required"
+    # Biometric sign-in asks specifically for the built-in platform
+    # authenticator (Face ID/Touch ID/Windows Hello/fingerprint) — never a
+    # roaming/cross-platform security key — and a discoverable (resident)
+    # credential, so a later sign-in never needs the user's email first. See
+    # the biometric sign-in report for what this can and can't control on
+    # iOS specifically.
+    assert payload["authenticatorSelection"]["authenticatorAttachment"] == "platform"
+    assert payload["authenticatorSelection"]["residentKey"] == "required"
 
     garbage = await client.post(
         "/api/v1/auth/passkeys/register/verify",
@@ -132,6 +142,18 @@ async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_p
     login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
     assert login.status_code == 200
 
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        trusted_before = (
+            await db.scalars(
+                select(TrustedDevice).where(
+                    TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
+                )
+            )
+        ).all()
+        assert len(trusted_before) == 1  # created by the password login above
+
     monkeypatch.setattr(
         "mykhaya.routers.auth.verify_family_registration",
         lambda *_args: WebAuthnRegistrationResult("AQI", "cHVibGlj", 0),
@@ -148,6 +170,9 @@ async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_p
     assert registered.status_code == 200, registered.text
     passkey_id = registered.json()["id"]
 
+    listed_before_revoke = await client.get("/api/v1/auth/passkeys")
+    assert len(listed_before_revoke.json()) == 1
+
     await client.post("/api/v1/auth/logout", headers=csrf_header(client))
     monkeypatch.setattr(
         "mykhaya.routers.auth.verify_family_authentication", lambda *_args: 0
@@ -159,13 +184,43 @@ async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_p
         json={"credential_json": '{"id":"AQI","rawId":"AQI"}'},
     )
     assert passkey_login.status_code == 200, passkey_login.text
+    # Same session/device/CSRF cookie set a password login produces — no
+    # separate, parallel authentication mechanism for biometric sign-in.
     assert client.cookies.get("mk_session") is not None
     assert client.cookies.get("mk_device") is not None
+    assert client.cookies.get("mk_csrf") is not None
+
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        trusted_after = (
+            await db.scalars(
+                select(TrustedDevice).where(
+                    TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
+                )
+            )
+        ).all()
+        # logout (above) revokes the trusted device along with the session —
+        # by design, not a bug (see routers.auth.logout) — so biometric
+        # login goes through the exact same issue_trusted_device() path a
+        # password login does and creates a fresh active one; it must never
+        # leave the account with zero, or with more than one active device
+        # for what is still, from the user's perspective, one sign-in.
+        assert len(trusted_after) == 1
+        assert trusted_after[0].id != trusted_before[0].id
 
     removed = await client.delete(
         f"/api/v1/auth/passkeys/{passkey_id}", headers=csrf_header(client)
     )
     assert removed.status_code == 204
+
+    listed_after_revoke = await client.get("/api/v1/auth/passkeys")
+    assert listed_after_revoke.json() == []
+    async with SessionFactory() as db:
+        row = await db.get(UserPasskey, uuid.UUID(passkey_id))
+        assert row is not None
+        assert row.revoked_at is not None  # soft-revoked, not deleted
+
     await client.post("/api/v1/auth/logout", headers=csrf_header(client))
 
     await client.post("/api/v1/auth/passkeys/login/options", json={})
@@ -179,6 +234,69 @@ async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_p
         "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
     )
     assert password_fallback.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_registration_records_the_browser_reported_authenticator_attachment(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Security page's "Face ID is enabled on this device" state (and
+    any future re-enrolment prompt for a legacy roaming credential) depends
+    on this being recorded accurately from what the browser actually
+    reports — never guessed or defaulted to "platform"."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"attachment-{suffix}@example.com"
+    await register_and_verify(client, email, "Attachment User")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+
+    monkeypatch.setattr(
+        "mykhaya.routers.auth.verify_family_registration",
+        lambda *_args: WebAuthnRegistrationResult("AQM", "cHVibGlj", 0),
+    )
+    await client.post(
+        "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
+    )
+    registered = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={
+            "credential_json": '{"id":"AQM","rawId":"AQM","authenticatorAttachment":"platform"}',
+            "label": "Phone",
+        },
+    )
+    assert registered.status_code == 200, registered.text
+    assert registered.json()["authenticator_attachment"] == "platform"
+
+    listed = await client.get("/api/v1/auth/passkeys")
+    assert listed.status_code == 200
+    assert listed.json()[0]["authenticator_attachment"] == "platform"
+
+
+@pytest.mark.asyncio
+async def test_registration_leaves_attachment_null_when_the_browser_does_not_report_it(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"noattachment-{suffix}@example.com"
+    await register_and_verify(client, email, "No Attachment User")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+
+    monkeypatch.setattr(
+        "mykhaya.routers.auth.verify_family_registration",
+        lambda *_args: WebAuthnRegistrationResult("AQJ", "cHVibGlj", 0),
+    )
+    await client.post(
+        "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
+    )
+    registered = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={"credential_json": '{"id":"AQJ","rawId":"AQJ"}', "label": "Older browser"},
+    )
+    assert registered.status_code == 200, registered.text
+    assert registered.json()["authenticator_attachment"] is None
 
 
 @pytest.mark.asyncio

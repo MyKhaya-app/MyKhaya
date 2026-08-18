@@ -32,6 +32,18 @@ export interface User {
   avatar_version: string | null;
   principal_type: PrincipalType;
 }
+// The user-facing product name for this is "Biometric sign-in" — see
+// apps/web/components/passkey-client.ts. `label` is a per-device name
+// ("iPhone", "Work laptop"), not shown as the primary UX (see Security
+// settings). `authenticator_attachment` is "platform" | "cross-platform" |
+// null (older credential/unreported) — informational only.
+export interface Passkey {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  authenticator_attachment: string | null;
+}
 export interface Home {
   id: string;
   name: string;

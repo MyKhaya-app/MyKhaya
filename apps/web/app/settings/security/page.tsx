@@ -1,8 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@mykhaya/api-client";
+import type { Passkey } from "@mykhaya/shared-types";
 import { SettingsPage } from "@/components/settings-page";
-import { createPasskey, passkeyWasCancelled, passkeysSupported } from "@/components/passkey-client";
+import {
+  biometricLabel,
+  biometricSignInAvailable,
+  clearBiometricHint,
+  clearEnrolledPasskeyId,
+  createPasskey,
+  getEnrolledPasskeyId,
+  passkeyWasCancelled,
+  setBiometricHint,
+  setEnrolledPasskeyId,
+} from "@/components/passkey-client";
+
 type Device = {
   id: string;
   device_name: string;
@@ -11,64 +23,109 @@ type Device = {
   last_used_at: string;
   current: boolean;
 };
-type Passkey = {
-  id: string;
-  label: string;
-  created_at: string;
-  last_used_at: string | null;
-};
+
 export default function Security() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [passkeyBusy, setPasskeyBusy] = useState(false);
-  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  const [biometricBusy, setBiometricBusy] = useState(false);
+  // Undecided while the async platform check runs — deliberately not "no",
+  // so the Enable button doesn't flash in and immediately vanish on a
+  // device that does have Face ID/Touch ID/Windows Hello.
+  const [biometricAvailable, setBiometricAvailable] = useState<boolean | null>(null);
+  const [labelText, setLabelText] = useState("biometrics");
+
   useEffect(() => {
     api.devices().then(setDevices).catch(() => setError("Could not load your signed-in devices."));
-    api.passkeys().then(setPasskeys).catch(() => setError("Could not load your passkeys."));
-    setPasskeyAvailable(passkeysSupported());
+    api.passkeys().then(setPasskeys).catch(() => setError("Could not load your biometric sign-in status."));
+    biometricSignInAvailable().then(setBiometricAvailable);
+    setLabelText(biometricLabel());
   }, []);
-  async function addPasskey() {
-    setPasskeyBusy(true);
+
+  // "Enabled on this device" — precisely the credential this browser
+  // created (see getEnrolledPasskeyId), not just "the account has some
+  // passkey somewhere". A credential id from a different device never
+  // counts here, even though the account-level list below still shows it.
+  const enrolledId = getEnrolledPasskeyId();
+  const thisDevicePasskey = passkeys.find((row) => row.id === enrolledId) ?? null;
+
+  async function enableBiometricSignIn() {
+    setBiometricBusy(true);
     setError("");
     try {
       const options = await api.passkeyRegistrationOptions();
       const credential = await createPasskey(options.options_json);
       const created = await api.passkeyRegistrationVerify(JSON.stringify(credential));
       setPasskeys((value) => [...value, created]);
-      setMessage("Faster sign-in is ready on this account.");
+      setEnrolledPasskeyId(created.id);
+      const me = await api.me();
+      setBiometricHint({
+        userId: me.id,
+        displayName: me.display_name,
+        avatarVersion: me.avatar_version,
+      });
+      setMessage(`${labelText} is ready — you can use it next time you sign in.`);
     } catch (cause) {
       setError(
         passkeyWasCancelled(cause)
-          ? "Passkey setup was cancelled."
+          ? "Biometric sign-in setup was cancelled."
           : cause instanceof ApiError
             ? cause.message
-            : "Could not set up faster sign-in.",
+            : "Could not set up biometric sign-in.",
       );
     } finally {
-      setPasskeyBusy(false);
+      setBiometricBusy(false);
     }
   }
+
+  async function disableBiometricSignIn() {
+    if (!thisDevicePasskey) return;
+    if (
+      !window.confirm(
+        `Turn off biometric sign-in on this device? You can still sign in with your password.`,
+      )
+    )
+      return;
+    setBiometricBusy(true);
+    setError("");
+    try {
+      await api.revokePasskey(thisDevicePasskey.id);
+      setPasskeys((value) => value.filter((item) => item.id !== thisDevicePasskey.id));
+      clearEnrolledPasskeyId();
+      clearBiometricHint();
+      setMessage("Biometric sign-in has been turned off on this device.");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not turn off biometric sign-in.");
+    } finally {
+      setBiometricBusy(false);
+    }
+  }
+
   async function renamePasskey(passkey: Passkey) {
-    const label = window.prompt("Name this passkey", passkey.label)?.trim();
+    const label = window.prompt("Name this device", passkey.label)?.trim();
     if (!label || label === passkey.label) return;
     try {
       const updated = await api.renamePasskey(passkey.id, label);
       setPasskeys((value) => value.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not rename this passkey.");
+      setError(cause instanceof ApiError ? cause.message : "Could not rename this device.");
     }
   }
-  async function revokePasskey(passkey: Passkey) {
-    if (!window.confirm(`Remove ${passkey.label}? You can still sign in with your password.`)) return;
+
+  async function revokeOtherPasskey(passkey: Passkey) {
+    if (
+      !window.confirm(`Remove biometric sign-in for "${passkey.label}"? That device will need your password again.`)
+    )
+      return;
     try {
       await api.revokePasskey(passkey.id);
       setPasskeys((value) => value.filter((item) => item.id !== passkey.id));
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not remove this passkey.");
+      setError(cause instanceof ApiError ? cause.message : "Could not remove that device.");
     }
   }
+
   async function revoke(id: string) {
     setError("");
     try {
@@ -88,33 +145,76 @@ export default function Security() {
       setError(cause instanceof ApiError ? cause.message : "Could not sign out other devices.");
     }
   }
+
+  const otherPasskeys = passkeys.filter((row) => row.id !== enrolledId);
+
   return (
     <SettingsPage title="Security">
       <section className="card details">
-        <h2>Faster sign-in</h2>
-        <p className="muted">
-          Use Face ID, Touch ID, Windows Hello or your device security to sign in without typing your password.
-        </p>
-        {passkeyAvailable && (
-          <button className="secondary" disabled={passkeyBusy} onClick={() => void addPasskey()}>
-            {passkeyBusy ? "Setting up..." : "Set up faster sign-in"}
-          </button>
+        <h2>Biometric sign-in</h2>
+        {thisDevicePasskey ? (
+          <>
+            <p className="muted">{labelText} is enabled on this device.</p>
+            <button
+              className="secondary"
+              disabled={biometricBusy}
+              onClick={() => void disableBiometricSignIn()}
+            >
+              {biometricBusy ? "Turning off…" : "Disable"}
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="muted">
+              Use Face ID, Touch ID or your device security to quickly sign in to MyKhaya on this
+              device.
+            </p>
+            {biometricAvailable === false && (
+              <p className="muted">
+                Biometric sign-in isn't available on this device or browser — your password still
+                works as usual.
+              </p>
+            )}
+            {biometricAvailable && (
+              <button
+                className="secondary"
+                disabled={biometricBusy}
+                onClick={() => void enableBiometricSignIn()}
+              >
+                {biometricBusy ? "Setting up…" : `Enable ${labelText}`}
+              </button>
+            )}
+          </>
         )}
-        {passkeys.map((passkey) => (
-          <div className="session" key={passkey.id}>
-            <div>
-              <strong>{passkey.label}</strong>
-              <small>
-                Added {new Date(passkey.created_at).toLocaleDateString()}
-                {passkey.last_used_at && ` · Last used ${new Date(passkey.last_used_at).toLocaleDateString()}`}
-              </small>
-            </div>
-            <span className="settings-inline-actions">
-              <button className="tertiary" onClick={() => void renamePasskey(passkey)}>Rename</button>
-              <button className="secondary" onClick={() => void revokePasskey(passkey)}>Remove</button>
-            </span>
-          </div>
-        ))}
+        {otherPasskeys.length > 0 && (
+          <details>
+            <summary>
+              {otherPasskeys.length === 1
+                ? "1 other device with biometric sign-in"
+                : `${otherPasskeys.length} other devices with biometric sign-in`}
+            </summary>
+            {otherPasskeys.map((passkey) => (
+              <div className="session" key={passkey.id}>
+                <div>
+                  <strong>{passkey.label}</strong>
+                  <small>
+                    Added {new Date(passkey.created_at).toLocaleDateString()}
+                    {passkey.last_used_at &&
+                      ` · Last used ${new Date(passkey.last_used_at).toLocaleDateString()}`}
+                  </small>
+                </div>
+                <span className="settings-inline-actions">
+                  <button className="tertiary" onClick={() => void renamePasskey(passkey)}>
+                    Rename
+                  </button>
+                  <button className="secondary" onClick={() => void revokeOtherPasskey(passkey)}>
+                    Remove
+                  </button>
+                </span>
+              </div>
+            ))}
+          </details>
+        )}
       </section>
       <section className="card details">
         <h2>Signed-in devices</h2>

@@ -386,6 +386,26 @@ textarea {
   color: var(--colour-sage-dark);
   font-weight: 800;
 }
+.auth-biometric {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  text-align: center;
+}
+.auth-biometric-name {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0.25rem 0 1.5rem;
+}
+.auth-biometric-button {
+  width: 100%;
+}
+.auth-biometric .tertiary {
+  margin-top: 0.25rem;
+}
 .onboarding {
   align-items: center;
   background:

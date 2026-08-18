@@ -75,24 +75,19 @@ export class MyKhayaClient {
       body: JSON.stringify({ credential_json: credentialJson }),
     });
   passkeys = () =>
-    this.request<{
-      id: string;
-      label: string;
-      created_at: string;
-      last_used_at: string | null;
-    }[]>("/auth/passkeys");
+    this.request<import("@mykhaya/shared-types").Passkey[]>("/auth/passkeys");
   passkeyRegistrationOptions = () =>
     this.request<{ options_json: string }>("/auth/passkeys/register/options", {
       method: "POST",
       body: "{}",
     });
   passkeyRegistrationVerify = (credentialJson: string, label?: string) =>
-    this.request<{ id: string; label: string; created_at: string; last_used_at: string | null }>(
-      "/auth/passkeys/register/verify",
-      { method: "POST", body: JSON.stringify({ credential_json: credentialJson, label }) },
-    );
+    this.request<import("@mykhaya/shared-types").Passkey>("/auth/passkeys/register/verify", {
+      method: "POST",
+      body: JSON.stringify({ credential_json: credentialJson, label }),
+    });
   renamePasskey = (id: string, label: string) =>
-    this.request<{ id: string; label: string; created_at: string; last_used_at: string | null }>(
+    this.request<import("@mykhaya/shared-types").Passkey>(
       `/auth/passkeys/${encodeURIComponent(id)}`,
       { method: "PATCH", body: JSON.stringify({ label }) },
     );

@@ -28,6 +28,7 @@ from webauthn import (
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     PublicKeyCredentialRequestOptions,
@@ -300,6 +301,25 @@ def build_family_registration_options(
     display_name: str,
     existing_credential_ids: list[str],
 ) -> tuple[str, bytes]:
+    """The family "Biometric sign-in" product surface is specifically this
+    device's built-in Face ID/Touch ID/Windows Hello/fingerprint — not a
+    portable, roaming credential. `authenticator_attachment=PLATFORM` is the
+    standards-based way to ask the browser for the built-in authenticator
+    only (excludes USB/NFC/BLE security keys entirely); `resident_key=
+    REQUIRED` asks for a discoverable credential so a later sign-in never
+    needs the user to type their email first (see build_family_
+    authentication_options' empty allow_credentials).
+
+    Neither flag can force *which* app on the device fulfils a "platform"
+    request. Since iOS 17, Apple's Credential Provider Extension framework
+    lets a third-party password manager the user has enabled and set as
+    their preferred AutoFill Passwords provider (e.g. Bitwarden) register
+    itself as eligible for platform-attachment WebAuthn requests too — that
+    substitution happens entirely in OS-owned UI, outside the web content
+    process, and no WebAuthn option MyKhaya sends can see or override the
+    user's own OS-level choice. See docs/architecture and the biometric
+    sign-in report this accompanies for the full investigation.
+    """
     options = generate_registration_options(
         rp_id=settings.family_webauthn_rp_id,
         rp_name=TOTP_ISSUER,
@@ -311,7 +331,8 @@ def build_family_registration_options(
             for credential_id in existing_credential_ids
         ],
         authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.PREFERRED,
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
     )

@@ -382,6 +382,9 @@ class PasskeyResponse(BaseModel):
     label: str
     created_at: datetime
     last_used_at: datetime | None
+    # "platform" | "cross-platform" | null (unknown/older credential) — see
+    # UserPasskey.authenticator_attachment. Informational only.
+    authenticator_attachment: str | None = None
 
 
 class MessageResponse(BaseModel):

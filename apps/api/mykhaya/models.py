@@ -657,6 +657,16 @@ class UserPasskey(UuidTimeMixin, Base):
     public_key: Mapped[str] = mapped_column(Text)
     sign_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     label: Mapped[str] = mapped_column(String(100), default="Passkey 1")
+    # The browser-reported `authenticatorAttachment` from the registration
+    # ceremony ("platform" | "cross-platform"), or null for a credential
+    # registered before this was recorded, or if the browser didn't report
+    # it. Informational only — never used for a security decision (the
+    # WebAuthn assertion is what's actually verified either way) — purely so
+    # the Biometric sign-in UI can tell "this device's own Face ID/Touch
+    # ID/Windows Hello" apart from a roaming/password-manager-stored
+    # credential registered under the old generic "passkey" UX, and offer
+    # re-enrolment rather than silently misrepresenting it as biometric.
+    authenticator_attachment: Mapped[str | None] = mapped_column(String(20))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
