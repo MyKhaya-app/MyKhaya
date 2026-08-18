@@ -44,6 +44,16 @@ _HANDLED_EVENT_TYPES = frozenset(
 )
 
 
+def _stripe_object_id(value: Any) -> str | None:
+    """Return an object's Stripe ID whether Stripe sent an ID or an expanded object."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        raw_id = value.get("id")
+        return str(raw_id) if raw_id else None
+    return None
+
+
 class WebhookSignatureError(RuntimeError):
     """Signature verification failed — the request is rejected outright
     (400) before any database work happens."""
@@ -77,10 +87,12 @@ async def _resolve_group_id(
         except ValueError:
             pass
 
-    subscription_id = data_object.get("subscription") or (
-        data_object.get("id") if event_type.startswith("customer.subscription.") else None
+    subscription_id = _stripe_object_id(data_object.get("subscription")) or (
+        _stripe_object_id(data_object.get("id"))
+        if event_type.startswith("customer.subscription.")
+        else None
     )
-    customer_id = data_object.get("customer")
+    customer_id = _stripe_object_id(data_object.get("customer"))
     conditions = []
     if subscription_id:
         conditions.append(HomeSubscription.external_subscription_id == subscription_id)
@@ -113,8 +125,8 @@ async def _handle_checkout_completed(
     from mykhaya.entitlements import ensure_home_subscription
 
     subscription = await ensure_home_subscription(db, group_id)
-    customer_id = session_obj.get("customer")
-    subscription_id = session_obj.get("subscription")
+    customer_id = _stripe_object_id(session_obj.get("customer"))
+    subscription_id = _stripe_object_id(session_obj.get("subscription"))
     if customer_id and not subscription.external_customer_id:
         subscription.external_customer_id = customer_id
     if subscription_id and not subscription.external_subscription_id:
@@ -154,7 +166,7 @@ async def _handle_invoice_event(
     the invoice payload's own snapshot of subscription state — the
     out-of-order-safe pattern documented in
     docs/architecture/commercial-entitlements.md#out-of-order-events."""
-    subscription_id = invoice_obj.get("subscription")
+    subscription_id = _stripe_object_id(invoice_obj.get("subscription"))
     if not subscription_id or not config.secret_key:
         return
     stripe_subscription = await call_stripe(

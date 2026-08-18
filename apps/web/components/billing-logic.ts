@@ -10,6 +10,30 @@ import type { BillingStatus } from "@mykhaya/shared-types";
 
 export type CheckoutBanner = "success" | "cancelled" | null;
 
+export type BillingStatusLoader = () => Promise<BillingStatus | null>;
+
+export async function pollForFamilyBillingStatus(
+  load: BillingStatusLoader,
+  options: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    sleep?: (milliseconds: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<BillingStatus | null> {
+  const intervalMs = options.intervalMs ?? 2_000;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const now = options.now ?? (() => Date.now());
+  const startedAt = now();
+  let result = await load();
+  while (result?.effective_plan !== "family" && now() - startedAt < timeoutMs) {
+    await sleep(Math.min(intervalMs, timeoutMs - (now() - startedAt)));
+    result = await load();
+  }
+  return result;
+}
+
 /** Maps the ?checkout= query param Stripe's success/cancel redirect carries
  * to which banner to show. Never used to grant Family access — see
  * docs/security/platform-administration-security.md#checkout — this is

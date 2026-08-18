@@ -207,6 +207,67 @@ async def test_checkout_session_completed_records_ids_but_does_not_activate_fami
         assert subscription.external_subscription_id == "sub_from_checkout"
 
 
+@pytest.mark.asyncio
+async def test_checkout_session_accepts_expanded_customer_and_subscription_objects(
+    client: AsyncClient,
+) -> None:
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    payload = _event(
+        "checkout.session.completed",
+        {
+            "customer": {"id": "cus_expanded"},
+            "subscription": {"id": "sub_expanded"},
+            "client_reference_id": str(home_id),
+        },
+    )
+    response = await client.post(
+        "/api/v1/billing/stripe/webhook", content=payload, headers=_signed_headers(payload)
+    )
+    assert response.status_code == 200
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        assert subscription.external_customer_id == "cus_expanded"
+        assert subscription.external_subscription_id == "sub_expanded"
+
+
+@pytest.mark.asyncio
+async def test_subscription_created_before_checkout_completed_still_activates_family(
+    client: AsyncClient,
+) -> None:
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    sub_id = f"sub_{uuid.uuid4().hex[:12]}"
+    subscription_payload = _event(
+        "customer.subscription.created",
+        _subscription_object(home_id, status="active", sub_id=sub_id),
+    )
+    checkout_payload = _event(
+        "checkout.session.completed",
+        {
+            "customer": "cus_ordered",
+            "subscription": sub_id,
+            "client_reference_id": str(home_id),
+        },
+    )
+    first = await client.post(
+        "/api/v1/billing/stripe/webhook",
+        content=subscription_payload,
+        headers=_signed_headers(subscription_payload),
+    )
+    second = await client.post(
+        "/api/v1/billing/stripe/webhook",
+        content=checkout_payload,
+        headers=_signed_headers(checkout_payload),
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        assert await effective_plan(db, home_id) == SubscriptionPlan.family
+        assert subscription.external_subscription_id == sub_id
+
+
 # ---------------------------------------------------------------------------
 # Activation via confirmed subscription status
 # ---------------------------------------------------------------------------

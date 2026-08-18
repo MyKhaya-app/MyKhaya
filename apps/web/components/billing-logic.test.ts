@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BillingStatus } from "@mykhaya/shared-types";
 import {
   canShowPortalAction,
@@ -7,6 +7,7 @@ import {
   intervalName,
   intervalSuffix,
   periodLabel,
+  pollForFamilyBillingStatus,
   resolvePlanCardKind,
 } from "./billing-logic";
 
@@ -22,6 +23,39 @@ describe("checkoutBannerKind", () => {
   it("shows no banner for a missing or unrecognised param", () => {
     expect(checkoutBannerKind(null)).toBeNull();
     expect(checkoutBannerKind("something-else")).toBeNull();
+  });
+});
+
+describe("pollForFamilyBillingStatus", () => {
+  it("refetches until Family is effective and then stops", async () => {
+    const statuses = [billingStatus({}), billingStatus({ effective_plan: "family", provider: "stripe" })];
+    const loaded = vi.fn(async () => statuses.shift() ?? null);
+    let clock = 0;
+    const result = await pollForFamilyBillingStatus(loaded, {
+      intervalMs: 2_000,
+      timeoutMs: 30_000,
+      now: () => clock,
+      sleep: async () => {
+        clock += 2_000;
+      },
+    });
+    expect(result?.effective_plan).toBe("family");
+    expect(loaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after the bounded confirmation window", async () => {
+    const loaded = vi.fn(async () => billingStatus({}));
+    let clock = 0;
+    const result = await pollForFamilyBillingStatus(loaded, {
+      intervalMs: 2_000,
+      timeoutMs: 6_000,
+      now: () => clock,
+      sleep: async () => {
+        clock += 2_000;
+      },
+    });
+    expect(result?.effective_plan).toBe("free");
+    expect(loaded).toHaveBeenCalledTimes(4);
   });
 });
 

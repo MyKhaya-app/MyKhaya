@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { BillingStatus, FamilyPricing, PlanComparison } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
@@ -14,6 +14,7 @@ import {
   intervalName,
   intervalSuffix,
   periodLabel,
+  pollForFamilyBillingStatus,
   resolvePlanCardKind,
 } from "@/components/billing-logic";
 import { overLimitExplanation } from "@/components/calendar-entitlement-logic";
@@ -45,7 +46,7 @@ export default function PlanAndBillingSettings() {
   const [comparison, setComparison] = useState<PlanComparison | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const confirmingRetryDone = useRef(false);
+  const [confirmationTimedOut, setConfirmationTimedOut] = useState(false);
 
   const load = useCallback(async () => {
     if (!activeHomeId) return null;
@@ -80,16 +81,18 @@ export default function PlanAndBillingSettings() {
   }, []);
 
   // A browser return from Checkout never activates Family by itself (see
-  // docs/architecture/commercial-entitlements.md#checkout-lifecycle) — the
-  // webhook usually beats the redirect back, but if it hasn't yet, retry
-  // the fetch exactly once after a short delay rather than polling.
+  // docs/architecture/commercial-entitlements.md#checkout-lifecycle). Poll
+  // authoritative billing state while the webhook is being delivered.
   useEffect(() => {
-    if (checkoutBanner !== "success" || confirmingRetryDone.current) return;
-    confirmingRetryDone.current = true;
-    const timer = setTimeout(() => {
-      void load();
-    }, 4000);
-    return () => clearTimeout(timer);
+    if (checkoutBanner !== "success") return;
+    setConfirmationTimedOut(false);
+    let cancelled = false;
+    void pollForFamilyBillingStatus(load).then((result) => {
+      if (!cancelled && result?.effective_plan !== "family") setConfirmationTimedOut(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [checkoutBanner, load]);
 
   async function startCheckout(interval: "month" | "year") {
@@ -135,7 +138,7 @@ export default function PlanAndBillingSettings() {
 
   const cardKind = status ? resolvePlanCardKind(status) : null;
   const stillConfirming =
-    checkoutBanner === "success" && status?.effective_plan === "free" && !confirmingRetryDone.current;
+    checkoutBanner === "success" && status?.effective_plan === "free" && !confirmationTimedOut;
 
   return (
     <SettingsPage title="Plan & Billing">
@@ -144,7 +147,9 @@ export default function PlanAndBillingSettings() {
           <p className="notice" role="status">
             {status?.effective_plan === "family"
               ? "Your Family subscription is active."
-              : "Payment received. We're confirming your subscription — this usually takes just a few seconds."}
+              : confirmationTimedOut
+                ? "Your payment was completed, but we're still confirming your subscription. Please check again shortly."
+                : "Payment received. We're confirming your subscription — this usually takes just a few seconds."}
           </p>
         )}
         {checkoutBanner === "cancelled" && (
