@@ -61,8 +61,8 @@ class StripeConfig:
     # Homes, webhooks, renewals, cancellations, the Customer Portal, and
     # reconciliation are never gated by this — only new acquisition is. See
     # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
-    # Deliberately still environment-only — this task moves credentials, not
-    # the go-live kill switch.
+    # Stored with the PCC row when Stripe is managed there; the environment
+    # value remains the bootstrap/fallback value when no enabled PCC row exists.
     acquisition_enabled: bool = False
     secret_key: str | None = field(default=None, repr=False)
     webhook_secret: str | None = field(default=None, repr=False)
@@ -101,7 +101,7 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
     from mykhaya.models import StripeMode  # local import avoids a circular import at module load
 
     mode: StripeModeLiteral = "live" if row.mode == StripeMode.live else "test"
-    acquisition_enabled = settings.stripe_billing_acquisition_enabled
+    acquisition_enabled = row.acquisition_enabled
 
     if mode == "test":
         publishable_key = row.test_publishable_key

@@ -42,6 +42,7 @@ const emptyModeSettings = {
 const unconfigured: StripeConfiguration = {
   configured: false,
   enabled: false,
+  acquisition_enabled: false,
   mode: "test" as const,
   source: "unconfigured" as const,
   incomplete_reason: null,
@@ -63,6 +64,7 @@ const configuredTest: StripeConfiguration = {
   ...unconfigured,
   configured: true,
   enabled: true,
+  acquisition_enabled: true,
   source: "database" as const,
   editable: true,
   test: {

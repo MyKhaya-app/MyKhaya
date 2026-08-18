@@ -297,6 +297,7 @@ class StripeSettingsUpdate(SensitiveActionRequest):
     stored value by the frontend."""
 
     enabled: bool
+    acquisition_enabled: bool = False
     mode: Literal["test", "live"]
     test_publishable_key: str | None = Field(default=None, max_length=200)
     test_secret_key: str | None = Field(default=None, max_length=500)
@@ -398,6 +399,7 @@ class StripeWebhookSummary(BaseModel):
 class StripeConfigurationResponse(BaseModel):
     configured: bool
     enabled: bool
+    acquisition_enabled: bool
     mode: Literal["test", "live"]
     # "database" | "environment" | "unconfigured"
     source: str

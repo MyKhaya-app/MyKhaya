@@ -254,6 +254,7 @@ export type StripeWebhookSummary = {
 export type StripeConfiguration = {
   configured: boolean;
   enabled: boolean;
+  acquisition_enabled: boolean;
   mode: "test" | "live";
   source: "database" | "environment" | "unconfigured";
   incomplete_reason: string | null;

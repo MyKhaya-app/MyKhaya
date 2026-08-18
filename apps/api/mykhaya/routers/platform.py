@@ -4571,10 +4571,11 @@ async def stripe_configuration(
     return StripeConfigurationResponse(
         configured=config.configured,
         enabled=row.enabled if row else False,
+        acquisition_enabled=row.acquisition_enabled if row else config.acquisition_enabled,
         mode=row.mode.value if row else config.mode,
         source=config.source,
         incomplete_reason=config.incomplete_reason,
-        editable=not settings.stripe_billing_configured,
+        editable=True,
         updated_at=row.updated_at if row else None,
         test=_stripe_mode_settings_response(row, settings, "test"),
         live=_stripe_mode_settings_response(row, settings, "live"),
@@ -4601,20 +4602,21 @@ async def update_stripe_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    if settings.stripe_billing_configured:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Stripe is managed by the deployment environment and cannot be changed here.",
-        )
     row = await _get_stripe_settings_row(db)
     previous_mode = row.mode.value if row else None
     was_enabled = row.enabled if row else False
+    was_acquisition_enabled = row.acquisition_enabled if row else False
     if row is None:
         row = PlatformStripeSettings()
         db.add(row)
 
     new_mode = StripeMode(body.mode)
-    if body.enabled:
+    if body.acquisition_enabled and not body.enabled:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Enable the Stripe integration before allowing new subscriptions.",
+        )
+    if body.enabled and body.acquisition_enabled:
         active_publishable = (
             body.test_publishable_key if body.mode == "test" else body.live_publishable_key
         )
@@ -4660,6 +4662,7 @@ async def update_stripe_settings(
             )
 
     row.enabled = body.enabled
+    row.acquisition_enabled = body.acquisition_enabled
     row.mode = new_mode
     row.test_publishable_key = body.test_publishable_key
     row.test_family_monthly_price_id = body.test_family_monthly_price_id
@@ -4696,6 +4699,7 @@ async def update_stripe_settings(
         reason=body.reason,
         new={
             "enabled": row.enabled,
+            "acquisition_enabled": row.acquisition_enabled,
             "mode": row.mode.value,
             "test_publishable_key": row.test_publishable_key,
             "test_family_monthly_price_id": row.test_family_monthly_price_id,
@@ -4728,6 +4732,21 @@ async def update_stripe_settings(
             "stripe.enabled" if row.enabled else "stripe.disabled",
             "stripe_settings",
             reason=body.reason,
+        )
+    if was_acquisition_enabled != row.acquisition_enabled:
+        platform_audit(
+            db,
+            request,
+            context,
+            (
+                "stripe.acquisition_enabled"
+                if row.acquisition_enabled
+                else "stripe.acquisition_disabled"
+            ),
+            "stripe_settings",
+            reason=body.reason,
+            previous={"acquisition_enabled": was_acquisition_enabled},
+            new={"acquisition_enabled": row.acquisition_enabled},
         )
 
     await db.commit()

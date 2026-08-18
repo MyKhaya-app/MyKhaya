@@ -35,6 +35,7 @@ ADMIN_PASSWORD = "A separate operator password!"
 
 VALID_TEST_SETTINGS = {
     "enabled": True,
+    "acquisition_enabled": True,
     "mode": "test",
     "test_publishable_key": "pk_test_abc123",
     "test_secret_key": "sk_test_abc123",
@@ -444,7 +445,7 @@ async def test_stored_configuration_takes_precedence_over_environment(
 
 
 @pytest.mark.asyncio
-async def test_environment_managed_stripe_rejects_writes(
+async def test_environment_configured_stripe_can_be_managed_from_pcc(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
 ) -> None:
@@ -462,7 +463,10 @@ async def test_environment_managed_stripe_rejects_writes(
         operator = await admin_factory(PlatformRole.owner)
         await admin_login(admin_client, operator)
         response = await _save_settings(admin_client)
-        assert response.status_code == 409
+        assert response.status_code == 200, response.text
+        payload = (await admin_client.get("/api/v1/platform/payments/stripe")).json()
+        assert payload["source"] == "database"
+        assert payload["acquisition_enabled"] is True
     finally:
         app.dependency_overrides.pop(get_settings, None)
 

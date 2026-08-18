@@ -72,6 +72,30 @@ async def test_fully_configured_test_mode_is_accepted_in_development() -> None:
     assert config.family_annual_price_id == "price_year123"
 
 
+@pytest.mark.asyncio
+async def test_database_configuration_uses_pcc_acquisition_switch() -> None:
+    from mykhaya.models import PlatformStripeSettings
+    from mykhaya.secrets_crypto import encrypt_stripe_secret
+
+    settings = _settings(**_stripe_test_kwargs(stripe_billing_acquisition_enabled=True))
+    async with SessionFactory() as db:
+        row = PlatformStripeSettings(
+            enabled=True,
+            acquisition_enabled=False,
+            test_publishable_key="pk_test_db123",
+            encrypted_test_secret_key=encrypt_stripe_secret(settings, "sk_test_db123"),
+            encrypted_test_webhook_secret=encrypt_stripe_secret(settings, "whsec_db123"),
+            test_family_monthly_price_id="price_month_db",
+            test_family_annual_price_id="price_year_db",
+        )
+        db.add(row)
+        await db.commit()
+        config = await resolve_stripe_config(settings, db)
+    assert config.source == "database"
+    assert config.configured is True
+    assert config.acquisition_enabled is False
+
+
 @pytest.mark.parametrize(
     "missing_field",
     [

@@ -1205,6 +1205,9 @@ class PlatformStripeSettings(UuidTimeMixin, Base):
 
     __tablename__ = "platform_stripe_settings"
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    acquisition_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     mode: Mapped[StripeMode] = mapped_column(
         Enum(
             StripeMode,

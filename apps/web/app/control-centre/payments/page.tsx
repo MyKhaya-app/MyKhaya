@@ -68,6 +68,7 @@ export default function PaymentsPage() {
     try {
       const result = await platformApi.put<{ message: string }>("/payments/stripe/settings", {
         enabled: form.get("enabled") === "on",
+        acquisition_enabled: form.get("acquisition_enabled") === "on",
         mode: form.get("mode"),
         test_publishable_key: str("test_publishable_key"),
         test_secret_key: str("test_secret_key"),
@@ -262,6 +263,14 @@ export default function PaymentsPage() {
                     </CcBadge>
                   </dd>
                 </div>
+                <div>
+                  <dt>New subscriptions</dt>
+                  <dd>
+                    <CcBadge tone={data.acquisition_enabled ? "success" : "warning"}>
+                      {data.acquisition_enabled ? "Allowed" : "Paused"}
+                    </CcBadge>
+                  </dd>
+                </div>
                 {data.incomplete_reason && (
                   <div>
                     <dt>Diagnostic</dt>
@@ -283,6 +292,14 @@ export default function PaymentsPage() {
                   <label className="check-row">
                     <input type="checkbox" name="enabled" defaultChecked={data.enabled} /> Integration enabled
                   </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      name="acquisition_enabled"
+                      defaultChecked={data.acquisition_enabled}
+                    /> Allow new Family subscriptions
+                  </label>
+                  <p><small>Pause new paid sign-ups without disabling renewals, webhooks, cancellations, or the customer portal.</small></p>
                   <label className="check-row">
                     <input
                       type="radio"
