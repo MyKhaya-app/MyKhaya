@@ -1,16 +1,16 @@
 const STEPS = [
   {
     title: "Create your Home",
-    description: "Sign up free in under a minute — no card required.",
+    description: "Sign up free in under a minute. No card required.",
   },
   {
-    title: "Add your family",
+    title: "Make it yours",
+    description: "Set up your calendar, categories and personal routines.",
+  },
+  {
+    title: "Your home, organised",
     description:
-      "Invite the people who share your home, or keep it just for you.",
-  },
-  {
-    title: "Get organised, together",
-    description: "Calendar, routines and lists everyone can see and trust.",
+      "Keep everything in one place, or upgrade to Family when you’re ready to bring everyone together.",
   },
 ] as const;
 
