@@ -396,6 +396,51 @@ class StripeWebhookSummary(BaseModel):
     endpoint_url: str | None
 
 
+class StripeBillingDiagnosticResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    source: str
+    stripe_mode: str | None
+    stage: str
+    result: str
+    stripe_event_id: str | None
+    checkout_session_id: str | None
+    stripe_customer_id: str | None
+    stripe_subscription_id: str | None
+    group_id: uuid.UUID | None
+    stripe_subscription_status: str | None
+    stored_subscription_status: str | None
+    stored_plan: str | None
+    effective_plan: str | None
+    safe_error_code: str | None
+    safe_error_message: str | None
+
+
+class StripeBillingDiagnosticsResponse(BaseModel):
+    latest: StripeBillingDiagnosticResponse | None
+    latest_checkout: StripeBillingDiagnosticResponse | None
+    latest_webhook: StripeBillingDiagnosticResponse | None
+    latest_reconciliation: StripeBillingDiagnosticResponse | None
+    recent: list[StripeBillingDiagnosticResponse]
+
+
+class StripeCheckoutInspectionRequest(SensitiveActionRequest):
+    session_id: str = Field(min_length=10, max_length=200, pattern=r"^cs_[A-Za-z0-9_]+$")
+
+
+class StripeCheckoutInspectionResponse(BaseModel):
+    session_exists: bool
+    status: str | None
+    payment_status: str | None
+    mode: str | None
+    home_reference: str
+    customer_id: str | None
+    subscription_id: str | None
+    price_id: str | None
+    configured_price_matched: bool
+    subscription_status: str | None
+
+
 class StripeConfigurationResponse(BaseModel):
     configured: bool
     enabled: bool
@@ -409,6 +454,7 @@ class StripeConfigurationResponse(BaseModel):
     test: StripeModeSettingsResponse
     live: StripeModeSettingsResponse
     webhook: StripeWebhookSummary
+    diagnostics: StripeBillingDiagnosticsResponse
 
 
 class StripeTestConnectionResponse(BaseModel):
@@ -773,6 +819,7 @@ class SubscriptionDetailResponse(BaseModel):
     # Home, so an operator can see whether Stripe's webhook actually arrived
     # without database access.
     recent_webhook_events: list[WebhookEventSummary]
+    billing_diagnostics: list[StripeBillingDiagnosticResponse]
     history: list[SubscriptionEventResponse]
     stripe_price: StripePriceInfo | None = None
     # Built from validated Stripe object IDs already stored on this Home —

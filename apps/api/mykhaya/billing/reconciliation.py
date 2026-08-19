@@ -15,8 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError
+from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.state import apply_stripe_subscription_state
-from mykhaya.entitlements import ensure_home_subscription, get_home_subscription
+from mykhaya.entitlements import (
+    ensure_home_subscription,
+    get_home_subscription,
+    resolve_effective_plan,
+)
 from mykhaya.models import HomeSubscription
 
 
@@ -79,6 +84,17 @@ async def confirm_checkout_session(
     if session.get("status") != "complete":
         subscription = await ensure_home_subscription(db, group_id)
         await db.commit()
+        await record_billing_diagnostic(
+            db,
+            source="checkout_confirmation",
+            stage="checkout_validation",
+            result="pending",
+            stripe_mode=config.mode,
+            checkout_session_id=session_id,
+            group_id=group_id,
+            safe_error_code="checkout_not_complete",
+            safe_error_message="Stripe Checkout has not completed yet.",
+        )
         return False, subscription
 
     session_customer_id = _stripe_id(session.get("customer"))
@@ -120,7 +136,54 @@ async def confirm_checkout_session(
     subscription.external_customer_id = session_customer_id
     subscription.external_subscription_id = session_subscription_id
     await db.commit()
-    return True, subscription
+    db.expire_all()
+    fresh_subscription = await get_home_subscription(db, group_id)
+    if fresh_subscription is None:
+        await record_billing_diagnostic(
+            db,
+            source="checkout_confirmation",
+            stage="subscription_persistence",
+            result="failed",
+            stripe_mode=config.mode,
+            checkout_session_id=session_id,
+            stripe_customer_id=session_customer_id,
+            stripe_subscription_id=session_subscription_id,
+            group_id=group_id,
+            stripe_subscription_status=stripe_subscription.get("status"),
+            safe_error_code="subscription_not_persisted",
+            safe_error_message="The reconciled subscription was not found after commit.",
+        )
+        raise CheckoutConfirmationError("The subscription could not be persisted.")
+    await record_billing_diagnostic(
+        db,
+        source="checkout_confirmation",
+        stage="completed",
+        result=(
+            "mismatch"
+            if stripe_subscription.get("status") in {"active", "trialing"}
+            and resolve_effective_plan(fresh_subscription).value != "family"
+            else "completed"
+        ),
+        stripe_mode=config.mode,
+        checkout_session_id=session_id,
+        stripe_customer_id=session_customer_id,
+        stripe_subscription_id=session_subscription_id,
+        group_id=group_id,
+        stripe_subscription_status=stripe_subscription.get("status"),
+        safe_error_code=(
+            "entitlement_mismatch"
+            if stripe_subscription.get("status") in {"active", "trialing"}
+            and resolve_effective_plan(fresh_subscription).value != "family"
+            else None
+        ),
+        safe_error_message=(
+            "Stripe reports an active subscription but MyKhaya resolves Free."
+            if stripe_subscription.get("status") in {"active", "trialing"}
+            and resolve_effective_plan(fresh_subscription).value != "family"
+            else None
+        ),
+    )
+    return True, fresh_subscription
 
 
 async def reconcile_home_subscription(

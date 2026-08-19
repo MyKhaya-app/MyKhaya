@@ -5,6 +5,7 @@ import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { relativeTime, titleCase } from "@/components/platform-format";
 import type {
+  StripeCheckoutInspection,
   StripeConfiguration,
   StripeModeSettings,
   StripeTestConnectionResponse,
@@ -42,6 +43,7 @@ export default function PaymentsPage() {
   const [clearField, setClearField] = useState<SecretField | null>(null);
   const [testDialogOpen, setTestDialogOpen] = useState(false);
   const [selectedMode, setSelectedMode] = useState<"test" | "live">("test");
+  const [inspection, setInspection] = useState<StripeCheckoutInspection | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -126,6 +128,26 @@ export default function PaymentsPage() {
       setError(cause instanceof ApiError ? cause.message : "Could not test the Stripe connection.");
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function inspectCheckout(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setInspection(null);
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await platformApi.post<StripeCheckoutInspection>(
+        "/payments/stripe/inspect-checkout",
+        {
+          session_id: form.get("inspection_session_id"),
+          reason: form.get("inspection_reason"),
+          confirmed: true,
+        },
+      );
+      setInspection(result);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not inspect that Checkout Session.");
     }
   }
 
@@ -372,6 +394,83 @@ export default function PaymentsPage() {
               <button type="button" onClick={() => setTestDialogOpen(true)} disabled={testing}>
                 {testing ? "Testing…" : "Test Stripe connection"}
               </button>
+            </CcSection>
+
+            <CcSection title="Billing diagnostics">
+              <dl>
+                <div>
+                  <dt>Last checkout confirmation</dt>
+                  <dd>
+                    {data.diagnostics.latest_checkout
+                      ? `${relativeTime(data.diagnostics.latest_checkout.created_at)} — ${titleCase(data.diagnostics.latest_checkout.result)}`
+                      : "None"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last webhook</dt>
+                  <dd>
+                    {data.diagnostics.latest_webhook
+                      ? `${relativeTime(data.diagnostics.latest_webhook.created_at)} — ${titleCase(data.diagnostics.latest_webhook.result)}`
+                      : "None"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last reconciliation</dt>
+                  <dd>
+                    {data.diagnostics.latest_reconciliation
+                      ? `${relativeTime(data.diagnostics.latest_reconciliation.created_at)} — ${titleCase(data.diagnostics.latest_reconciliation.result)}`
+                      : "None"}
+                  </dd>
+                </div>
+              </dl>
+              {data.diagnostics.latest && (
+                <div className="notice">
+                  <strong>Latest result: {titleCase(data.diagnostics.latest.result)}</strong>
+                  <p>
+                    Stage: {data.diagnostics.latest.stage}
+                    {data.diagnostics.latest.safe_error_message
+                      ? ` — ${data.diagnostics.latest.safe_error_message}`
+                      : ""}
+                  </p>
+                  {data.diagnostics.latest.checkout_session_id && (
+                    <p>Checkout Session: {data.diagnostics.latest.checkout_session_id}</p>
+                  )}
+                  {data.diagnostics.latest.stripe_subscription_id && (
+                    <p>Subscription: {data.diagnostics.latest.stripe_subscription_id}</p>
+                  )}
+                  <p>
+                    Stored plan: {data.diagnostics.latest.stored_plan ?? "None"}; Effective plan:{" "}
+                    {data.diagnostics.latest.effective_plan ?? "None"}
+                  </p>
+                </div>
+              )}
+            </CcSection>
+
+            <CcSection title="Inspect Checkout">
+              <p><small>Read-only lookup for a Stripe Checkout Session. This does not change billing state.</small></p>
+              <form onSubmit={inspectCheckout}>
+                <label>
+                  Checkout Session ID
+                  <input name="inspection_session_id" placeholder="cs_..." pattern="cs_[A-Za-z0-9_]+" required />
+                </label>
+                <label>
+                  Reason for inspection
+                  <input name="inspection_reason" minLength={10} maxLength={500} required />
+                </label>
+                <button type="submit">Inspect Checkout</button>
+              </form>
+              {inspection && (
+                <dl>
+                  <div><dt>Session</dt><dd>{inspection.session_exists ? "Found" : "Not found"}</dd></div>
+                  <div><dt>Status</dt><dd>{inspection.status ?? "Unknown"}</dd></div>
+                  <div><dt>Payment</dt><dd>{inspection.payment_status ?? "Unknown"}</dd></div>
+                  <div><dt>Home reference</dt><dd>{inspection.home_reference}</dd></div>
+                  <div><dt>Customer</dt><dd>{inspection.customer_id ?? "None"}</dd></div>
+                  <div><dt>Subscription</dt><dd>{inspection.subscription_id ?? "None"}</dd></div>
+                  <div><dt>Price matched</dt><dd>{inspection.configured_price_matched ? "Yes" : "No"}</dd></div>
+                  <div><dt>Subscription status</dt><dd>{inspection.subscription_status ?? "Unknown"}</dd></div>
+                </dl>
+              )}
             </CcSection>
           </>
         )}

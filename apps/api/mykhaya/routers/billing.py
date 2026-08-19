@@ -28,6 +28,7 @@ from mykhaya.billing.checkout import (
 )
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import StripeNotConfiguredError, resolve_stripe_config
+from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import (
     StripePriceConfigurationError,
     fetch_price_amount,
@@ -415,6 +416,17 @@ async def confirm_checkout(
             group_id=str(group_id),
             detail=str(exc),
         )
+        await record_billing_diagnostic(
+            db,
+            source="checkout_confirmation",
+            stage="checkout_validation",
+            result="failed",
+            stripe_mode=config.mode,
+            checkout_session_id=body.session_id,
+            group_id=group_id,
+            safe_error_code="checkout_confirmation_rejected",
+            safe_error_message="The Checkout Session could not be confirmed for this Home.",
+        )
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Checkout Session cannot be confirmed."
         ) from None
@@ -524,6 +536,21 @@ async def stripe_webhook(
             )
         )
         await db.commit()
+        try:
+            await record_billing_diagnostic(
+                db,
+                source="webhook",
+                stage="subscription_reconciliation",
+                result="failed",
+                stripe_mode=config.mode,
+                stripe_event_id=event.get("id"),
+                safe_error_code="webhook_processing_failed",
+                safe_error_message=(
+                    "MyKhaya could not process the Stripe event; Stripe should retry it."
+                ),
+            )
+        except Exception:
+            await db.rollback()
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not process this event."
         ) from None

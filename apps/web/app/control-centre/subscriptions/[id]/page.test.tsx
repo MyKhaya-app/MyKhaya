@@ -73,6 +73,7 @@ function freeDetail(): SubscriptionDetail {
     member_usage: { count: 1, limit: 1, over_limit: false },
     personal_routines_total: 0,
     recent_webhook_events: [],
+    billing_diagnostics: [],
     history: [],
     stripe_price: null,
     stripe_dashboard_customer_url: null,

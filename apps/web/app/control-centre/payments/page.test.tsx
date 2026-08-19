@@ -58,6 +58,13 @@ const unconfigured: StripeConfiguration = {
     recent_failure_count: 0,
     endpoint_url: "/billing/stripe/webhook",
   },
+  diagnostics: {
+    latest: null,
+    latest_checkout: null,
+    latest_webhook: null,
+    latest_reconciliation: null,
+    recent: [],
+  },
 };
 
 const configuredTest: StripeConfiguration = {

@@ -514,6 +514,27 @@ export default function SubscriptionDetailPage({
                   )}
                 </CcSection>
               )}
+              {data.subscription.provider === "stripe" && (
+                <CcSection title="Billing diagnostics">
+                  {data.billing_diagnostics.length === 0 ? (
+                    <p className="quiet-state">No billing diagnostics recorded yet.</p>
+                  ) : (
+                    <div className="record-list">
+                      {data.billing_diagnostics.slice(0, 10).map((diagnostic) => (
+                        <article key={diagnostic.id}>
+                          <strong>{diagnostic.source}</strong>{" "}
+                          <CcBadge tone={diagnostic.result === "completed" || diagnostic.result === "processed" ? "success" : "warning"}>
+                            {diagnostic.result}
+                          </CcBadge>
+                          <p>Stage: {diagnostic.stage}</p>
+                          <time dateTime={diagnostic.created_at}>{readableDate(diagnostic.created_at)}</time>
+                          {diagnostic.safe_error_message && <p>{diagnostic.safe_error_message}</p>}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </CcSection>
+              )}
             </div>
 
             <div>

@@ -1486,3 +1486,32 @@ class StripeWebhookFailure(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class StripeBillingDiagnostic(Base):
+    """Safe, durable Stripe billing stage diagnostics for Platform Control
+    Centre troubleshooting. Never stores secrets, payloads, payment details,
+    or customer contact data."""
+
+    __tablename__ = "stripe_billing_diagnostics"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    stripe_mode: Mapped[str | None] = mapped_column(String(10))
+    stage: Mapped[str] = mapped_column(String(60))
+    result: Mapped[str] = mapped_column(String(20), index=True)
+    stripe_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    checkout_session_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255))
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255))
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    stripe_subscription_status: Mapped[str | None] = mapped_column(String(40))
+    stored_subscription_status: Mapped[str | None] = mapped_column(String(40))
+    stored_plan: Mapped[str | None] = mapped_column(String(40))
+    effective_plan: Mapped[str | None] = mapped_column(String(40))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_message: Mapped[str | None] = mapped_column(String(500))

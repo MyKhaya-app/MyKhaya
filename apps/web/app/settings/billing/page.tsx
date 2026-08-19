@@ -96,6 +96,8 @@ export default function PlanAndBillingSettings() {
         } catch (cause) {
           if (!cancelled && cause instanceof ApiError && cause.status !== 503) {
             setError("We could not confirm this checkout for the current Home.");
+            setConfirmationTimedOut(true);
+            return;
           }
         }
       }

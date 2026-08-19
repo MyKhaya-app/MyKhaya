@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig
+from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.state import apply_stripe_subscription_state
 from mykhaya.models import HomeSubscription, StripeWebhookEvent
 
@@ -280,4 +281,35 @@ async def process_webhook_event(
         )
     )
     await db.commit()
+    try:
+        db.expire_all()
+        await record_billing_diagnostic(
+            db,
+            source="webhook",
+            stage="completed" if group_id is not None else "home_resolution",
+            result=outcome,
+            stripe_mode=config.mode,
+            stripe_event_id=event_id,
+            stripe_customer_id=_stripe_object_id(data_object.get("customer")),
+            stripe_subscription_id=_stripe_object_id(
+                data_object.get("subscription")
+                or (
+                    data_object.get("id")
+                    if event_type.startswith("customer.subscription.")
+                    else None
+                )
+            ),
+            group_id=group_id,
+            stripe_subscription_status=data_object.get("status"),
+            safe_error_code="home_not_resolved" if group_id is None else None,
+            safe_error_message=(
+                "Stripe event did not contain a resolvable MyKhaya Home reference."
+                if group_id is None
+                else None
+            ),
+        )
+    except Exception:
+        # Diagnostics must never turn an already-committed valid webhook into
+        # a retryable failure or interfere with event deduplication.
+        await db.rollback()
     return outcome

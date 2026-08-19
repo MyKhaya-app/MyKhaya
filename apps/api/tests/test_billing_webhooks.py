@@ -27,6 +27,7 @@ from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
     HomeSubscriptionEvent,
+    StripeBillingDiagnostic,
     StripeWebhookEvent,
     SubscriptionPlan,
     SubscriptionStatus,
@@ -322,6 +323,13 @@ async def test_confirm_checkout_reconciles_authoritative_active_subscription(
     assert response.json()["effective_plan"] == "family"
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.family
+        diagnostic = await db.scalar(
+            select(StripeBillingDiagnostic)
+            .where(StripeBillingDiagnostic.checkout_session_id == "cs_confirmed_123")
+        )
+        assert diagnostic is not None
+        assert diagnostic.result == "completed"
+        assert diagnostic.effective_plan == "family"
 
 
 @pytest.mark.asyncio

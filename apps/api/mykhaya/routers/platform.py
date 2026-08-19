@@ -20,6 +20,7 @@ from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import resolve_stripe_config
+from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
@@ -78,6 +79,7 @@ from mykhaya.models import (
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    StripeBillingDiagnostic,
     StripeMode,
     StripeWebhookEvent,
     StripeWebhookFailure,
@@ -160,6 +162,10 @@ from mykhaya.platform_schemas import (
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
+    StripeBillingDiagnosticResponse,
+    StripeBillingDiagnosticsResponse,
+    StripeCheckoutInspectionRequest,
+    StripeCheckoutInspectionResponse,
     StripeConfigurationResponse,
     StripeModeSettingsResponse,
     StripePriceInfo,
@@ -2949,6 +2955,14 @@ async def subscription_detail(
             .limit(10)
         )
     ).all()
+    diagnostic_rows = (
+        await db.scalars(
+            select(StripeBillingDiagnostic)
+            .where(StripeBillingDiagnostic.group_id == group_id)
+            .order_by(StripeBillingDiagnostic.created_at.desc())
+            .limit(20)
+        )
+    ).all()
 
     stripe_price: StripePriceInfo | None = None
     dashboard_customer_url: str | None = None
@@ -3005,6 +3019,28 @@ async def subscription_detail(
                 outcome=row.outcome,
             )
             for row in webhook_rows
+        ],
+        billing_diagnostics=[
+            StripeBillingDiagnosticResponse(
+                id=row.id,
+                created_at=row.created_at,
+                source=row.source,
+                stripe_mode=row.stripe_mode,
+                stage=row.stage,
+                result=row.result,
+                stripe_event_id=row.stripe_event_id,
+                checkout_session_id=row.checkout_session_id,
+                stripe_customer_id=row.stripe_customer_id,
+                stripe_subscription_id=row.stripe_subscription_id,
+                group_id=row.group_id,
+                stripe_subscription_status=row.stripe_subscription_status,
+                stored_subscription_status=row.stored_subscription_status,
+                stored_plan=row.stored_plan,
+                effective_plan=row.effective_plan,
+                safe_error_code=row.safe_error_code,
+                safe_error_message=row.safe_error_message,
+            )
+            for row in diagnostic_rows
         ],
         history=[
             SubscriptionEventResponse(
@@ -3105,6 +3141,43 @@ async def reconcile_stripe_subscription(
         else None,
     )
     await db.commit()
+    db.expire_all()
+    subscription_after = await get_home_subscription(db, group_id)
+    await record_billing_diagnostic(
+        db,
+        source="manual_reconciliation",
+        stage="completed",
+        result=(
+            "mismatch"
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else "completed"
+        ),
+        stripe_mode=stripe_config.mode,
+        stripe_customer_id=(
+            subscription_after.external_customer_id if subscription_after else None
+        ),
+        stripe_subscription_id=(
+            subscription_after.external_subscription_id if subscription_after else None
+        ),
+        group_id=group_id,
+        stripe_subscription_status=subscription_after.status.value if subscription_after else None,
+        safe_error_code=(
+            "entitlement_mismatch"
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else None
+        ),
+        safe_error_message=(
+            "Stripe reports an active subscription but MyKhaya resolves Free."
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else None
+        ),
+    )
     return await _subscription_response(db, subscription_after)
 
 
@@ -4508,6 +4581,15 @@ def _last4(secret: str | None) -> str | None:
     return secret[-4:] if secret and len(secret) >= 4 else None
 
 
+def _stripe_id(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        raw_id = value.get("id")
+        return str(raw_id) if raw_id else None
+    return None
+
+
 def _stripe_mode_settings_response(
     row: PlatformStripeSettings | None, settings: Settings, mode: Literal["test", "live"]
 ) -> StripeModeSettingsResponse:
@@ -4568,6 +4650,42 @@ async def stripe_configuration(
     config = await resolve_stripe_config(settings, db)
     row = await _get_stripe_settings_row(db)
     webhook = (await current_platform_health(db, settings)).stripe_webhook
+    diagnostic_rows = (
+        await db.scalars(
+            select(StripeBillingDiagnostic)
+            .order_by(StripeBillingDiagnostic.created_at.desc())
+            .limit(50)
+        )
+    ).all()
+
+    def diagnostic_response(row: StripeBillingDiagnostic) -> StripeBillingDiagnosticResponse:
+        return StripeBillingDiagnosticResponse(
+            id=row.id,
+            created_at=row.created_at,
+            source=row.source,
+            stripe_mode=row.stripe_mode,
+            stage=row.stage,
+            result=row.result,
+            stripe_event_id=row.stripe_event_id,
+            checkout_session_id=row.checkout_session_id,
+            stripe_customer_id=row.stripe_customer_id,
+            stripe_subscription_id=row.stripe_subscription_id,
+            group_id=row.group_id,
+            stripe_subscription_status=row.stripe_subscription_status,
+            stored_subscription_status=row.stored_subscription_status,
+            stored_plan=row.stored_plan,
+            effective_plan=row.effective_plan,
+            safe_error_code=row.safe_error_code,
+            safe_error_message=row.safe_error_message,
+        )
+
+    latest_checkout = next(
+        (row for row in diagnostic_rows if row.source == "checkout_confirmation"), None
+    )
+    latest_webhook = next((row for row in diagnostic_rows if row.source == "webhook"), None)
+    latest_reconciliation = next(
+        (row for row in diagnostic_rows if row.source == "manual_reconciliation"), None
+    )
     return StripeConfigurationResponse(
         configured=config.configured,
         enabled=row.enabled if row else False,
@@ -4590,6 +4708,108 @@ async def stripe_configuration(
             # registering the endpoint in the Stripe Dashboard.
             endpoint_url="/billing/stripe/webhook",
         ),
+        diagnostics=StripeBillingDiagnosticsResponse(
+            latest=diagnostic_response(diagnostic_rows[0]) if diagnostic_rows else None,
+            latest_checkout=diagnostic_response(latest_checkout) if latest_checkout else None,
+            latest_webhook=diagnostic_response(latest_webhook) if latest_webhook else None,
+            latest_reconciliation=(
+                diagnostic_response(latest_reconciliation) if latest_reconciliation else None
+            ),
+            recent=[diagnostic_response(row) for row in diagnostic_rows],
+        ),
+    )
+
+
+@router.post(
+    "/payments/stripe/inspect-checkout",
+    response_model=StripeCheckoutInspectionResponse,
+)
+async def inspect_stripe_checkout(
+    body: StripeCheckoutInspectionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeCheckoutInspectionResponse:
+    """Read-only operator inspection of a Stripe Checkout Session."""
+    require_recent_auth(context, settings)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured or not config.secret_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    try:
+        session = await call_stripe(
+            lambda: stripe.checkout.Session.retrieve(
+                body.session_id,
+                expand=["subscription", "customer"],
+                api_key=config.secret_key,
+            )
+        )
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror(
+            "stripe_checkout_inspection_failed", session_id=body.session_id, detail=str(exc)
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not inspect that Checkout Session right now.",
+        ) from None
+
+    subscription = session.get("subscription")
+    subscription_id = _stripe_id(subscription)
+    customer_id = _stripe_id(session.get("customer"))
+    price_id = None
+    subscription_status = None
+    if isinstance(subscription, dict):
+        subscription_status = subscription.get("status")
+        items = (subscription.get("items") or {}).get("data") or []
+        if items:
+            price_id = ((items[0].get("price") or {}).get("id"))
+    elif subscription_id:
+        try:
+            stripe_subscription = await call_stripe(
+                lambda: stripe.Subscription.retrieve(subscription_id, api_key=config.secret_key)
+            )
+        except (StripeUnavailableError, StripeRequestError) as exc:
+            await log.aerror(
+                "stripe_checkout_inspection_subscription_failed",
+                session_id=body.session_id,
+                subscription_id=subscription_id,
+                detail=str(exc),
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Could not inspect the Checkout subscription right now.",
+            ) from None
+        subscription_status = stripe_subscription.get("status")
+        items = (stripe_subscription.get("items") or {}).get("data") or []
+        if items:
+            price_id = ((items[0].get("price") or {}).get("id"))
+    configured_prices = {config.family_monthly_price_id, config.family_annual_price_id}
+    metadata_group = (session.get("metadata") or {}).get("mykhaya_group_id")
+    reference_group = session.get("client_reference_id")
+    home_reference = "matches" if metadata_group or reference_group else "missing"
+    if metadata_group and reference_group and str(metadata_group) != str(reference_group):
+        home_reference = "mismatch"
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.checkout_inspected",
+        "stripe_settings",
+        reason=body.reason,
+        new={"checkout_session_id": body.session_id, "home_reference": home_reference},
+    )
+    await db.commit()
+    return StripeCheckoutInspectionResponse(
+        session_exists=True,
+        status=session.get("status"),
+        payment_status=session.get("payment_status"),
+        mode=session.get("mode"),
+        home_reference=home_reference,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        price_id=price_id,
+        configured_price_matched=price_id in configured_prices,
+        subscription_status=subscription_status,
     )
 
 

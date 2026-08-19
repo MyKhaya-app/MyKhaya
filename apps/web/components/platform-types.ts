@@ -263,6 +263,48 @@ export type StripeConfiguration = {
   test: StripeModeSettings;
   live: StripeModeSettings;
   webhook: StripeWebhookSummary;
+  diagnostics: StripeBillingDiagnostics;
+};
+
+export type StripeBillingDiagnostic = {
+  id: string;
+  created_at: string;
+  source: string;
+  stripe_mode: string | null;
+  stage: string;
+  result: string;
+  stripe_event_id: string | null;
+  checkout_session_id: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  group_id: string | null;
+  stripe_subscription_status: string | null;
+  stored_subscription_status: string | null;
+  stored_plan: string | null;
+  effective_plan: string | null;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+};
+
+export type StripeBillingDiagnostics = {
+  latest: StripeBillingDiagnostic | null;
+  latest_checkout: StripeBillingDiagnostic | null;
+  latest_webhook: StripeBillingDiagnostic | null;
+  latest_reconciliation: StripeBillingDiagnostic | null;
+  recent: StripeBillingDiagnostic[];
+};
+
+export type StripeCheckoutInspection = {
+  session_exists: boolean;
+  status: string | null;
+  payment_status: string | null;
+  mode: string | null;
+  home_reference: string;
+  customer_id: string | null;
+  subscription_id: string | null;
+  price_id: string | null;
+  configured_price_matched: boolean;
+  subscription_status: string | null;
 };
 
 export type StripeTestConnectionResult =
@@ -290,6 +332,7 @@ export type SubscriptionDetail = {
   member_usage: CalendarUsage;
   personal_routines_total: number;
   recent_webhook_events: WebhookEventSummary[];
+  billing_diagnostics: StripeBillingDiagnostic[];
   history: SubscriptionEvent[];
   stripe_price: StripePriceInfo | null;
   stripe_dashboard_customer_url: string | null;
