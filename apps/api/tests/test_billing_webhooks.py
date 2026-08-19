@@ -288,6 +288,100 @@ async def test_subscription_created_active_activates_family(client: AsyncClient)
 
 
 @pytest.mark.asyncio
+async def test_confirm_checkout_reconciles_authoritative_active_subscription(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    sub_id = "sub_confirmed_123"
+    customer_id = "cus_confirmed_123"
+    session = {
+        "id": "cs_confirmed_123",
+        "mode": "subscription",
+        "status": "complete",
+        "customer": customer_id,
+        "subscription": sub_id,
+        "client_reference_id": str(home_id),
+        "metadata": {"mykhaya_group_id": str(home_id)},
+    }
+    subscription = _subscription_object(
+        home_id,
+        status="active",
+        sub_id=sub_id,
+        customer=customer_id,
+    )
+    subscription["customer"] = {"id": customer_id}
+    monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
+    monkeypatch.setattr(stripe.Subscription, "retrieve", lambda *args, **kwargs: subscription)
+
+    response = await client.post(
+        "/api/v1/billing/stripe/confirm-checkout",
+        json={"session_id": "cs_confirmed_123"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["confirmed"] is True
+    assert response.json()["effective_plan"] == "family"
+    async with SessionFactory() as db:
+        assert await effective_plan(db, home_id) == SubscriptionPlan.family
+
+
+@pytest.mark.asyncio
+async def test_confirm_checkout_rejects_session_for_another_home(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    second_home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    session = {
+        "id": "cs_other_home",
+        "mode": "subscription",
+        "status": "complete",
+        "customer": "cus_other_home",
+        "subscription": "sub_other_home",
+        "client_reference_id": str(first_home_id),
+        "metadata": {"mykhaya_group_id": str(first_home_id)},
+    }
+    monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
+    response = await client.post(
+        "/api/v1/billing/stripe/confirm-checkout",
+        json={"session_id": "cs_other_home"},
+    )
+    assert response.status_code == 403
+    async with SessionFactory() as db:
+        assert await effective_plan(db, second_home_id) == SubscriptionPlan.free
+
+
+@pytest.mark.asyncio
+async def test_confirm_checkout_does_not_activate_incomplete_subscription(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    session = {
+        "id": "cs_incomplete_sub",
+        "mode": "subscription",
+        "status": "complete",
+        "customer": "cus_incomplete_sub",
+        "subscription": "sub_incomplete_sub",
+        "client_reference_id": str(home_id),
+        "metadata": {"mykhaya_group_id": str(home_id)},
+    }
+    subscription = _subscription_object(
+        home_id,
+        status="incomplete",
+        sub_id="sub_incomplete_sub",
+        customer="cus_incomplete_sub",
+    )
+    monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
+    monkeypatch.setattr(stripe.Subscription, "retrieve", lambda *args, **kwargs: subscription)
+    response = await client.post(
+        "/api/v1/billing/stripe/confirm-checkout",
+        json={"session_id": "cs_incomplete_sub"},
+    )
+    assert response.status_code == 200
+    assert response.json()["confirmed"] is False
+    async with SessionFactory() as db:
+        assert await effective_plan(db, home_id) == SubscriptionPlan.free
+
+
+@pytest.mark.asyncio
 async def test_subscription_created_incomplete_does_not_activate_family(
     client: AsyncClient,
 ) -> None:

@@ -76,6 +76,15 @@ _STRIPE_STATUS_MAP: dict[str, SubscriptionStatus] = {
 }
 
 
+def _stripe_object_id(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        raw_id = value.get("id")
+        return str(raw_id) if raw_id else None
+    return None
+
+
 def map_stripe_subscription_status(
     stripe_subscription: dict[str, Any],
 ) -> SubscriptionStatus | None:
@@ -197,7 +206,7 @@ async def apply_stripe_subscription_state(
         db.add(subscription)
         await db.flush()
 
-    incoming_subscription_id = stripe_subscription.get("id")
+    incoming_subscription_id = _stripe_object_id(stripe_subscription.get("id"))
     current_subscription_id = subscription.external_subscription_id
 
     # Out-of-order guard 1: an event for a *different* subscription ID than
@@ -235,7 +244,7 @@ async def apply_stripe_subscription_state(
         subscription.status,
     )
     was_complimentary = subscription.provider == SubscriptionProvider.complimentary
-    customer_id = stripe_subscription.get("customer")
+    customer_id = _stripe_object_id(stripe_subscription.get("customer"))
 
     materially_changed = (
         subscription.provider != SubscriptionProvider.stripe

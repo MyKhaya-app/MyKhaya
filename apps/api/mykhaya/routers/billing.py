@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 
+import stripe
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import text
@@ -25,13 +26,18 @@ from mykhaya.billing.checkout import (
     create_checkout_session,
     create_portal_session,
 )
-from mykhaya.billing.client import StripeRequestError, StripeUnavailableError
+from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import StripeNotConfiguredError, resolve_stripe_config
 from mykhaya.billing.pricing import (
     StripePriceConfigurationError,
     fetch_price_amount,
     format_amount,
     get_family_pricing,
+)
+from mykhaya.billing.reconciliation import (
+    CheckoutConfirmationError,
+    CheckoutNotCompleteError,
+    confirm_checkout_session,
 )
 from mykhaya.billing.webhooks import (
     WebhookSignatureError,
@@ -40,6 +46,8 @@ from mykhaya.billing.webhooks import (
 )
 from mykhaya.billing_schemas import (
     BillingStatusResponse,
+    CheckoutConfirmationRequest,
+    CheckoutConfirmationResponse,
     CheckoutSessionRequest,
     CheckoutSessionResponse,
     FamilyPricingResponse,
@@ -337,6 +345,110 @@ async def checkout_session(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
         ) from exc
     return CheckoutSessionResponse(checkout_url=checkout_url)
+
+
+@router.post("/stripe/confirm-checkout", response_model=CheckoutConfirmationResponse)
+async def confirm_checkout(
+    body: CheckoutConfirmationRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CheckoutConfirmationResponse:
+    """Immediately reconcile the authenticated user's completed Checkout.
+
+    The request supplies only Stripe's opaque Checkout Session ID. The Home is
+    derived from Stripe metadata and then authorized against the current user.
+    Webhooks remain the primary lifecycle path; this is a safe, idempotent
+    self-healing path for a browser return that outruns webhook delivery.
+    """
+    await enforce_rate_limit(request, settings, "billing-confirm-checkout", 20, 60)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+
+    # The service validates the Stripe-owned Home metadata before mutating it.
+    # It is intentionally called only after the caller is authenticated; the
+    # resulting group is then checked through the normal billing capability.
+    # Retrieve the session once here to discover the Home would duplicate a
+    # Stripe call, so the service returns ownership failures without exposing
+    # whether another Home's session exists. The session's group metadata is
+    # validated inside confirm_checkout_session before any mutation.
+    try:
+        # A session must carry MyKhaya metadata, so use a narrowly scoped
+        # lookup via the Stripe API, then authorize the derived Home below.
+        session = await call_stripe(
+            lambda: stripe.checkout.Session.retrieve(
+                body.session_id,
+                expand=["subscription", "customer"],
+                api_key=config.secret_key,
+            )
+        )
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_checkout_confirmation_lookup_failed", detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't confirm your subscription yet. Please try again shortly.",
+        ) from None
+    raw_group_id = (session.get("metadata") or {}).get("mykhaya_group_id") or session.get(
+        "client_reference_id"
+    )
+    try:
+        group_id = uuid.UUID(str(raw_group_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkout Session not found.") from None
+    await require_capability(group_id, Capability.billing_manage, auth, db)
+
+    # The service performs its own authoritative retrieval and all validation;
+    # the first lookup above exists only to derive the server-side Home binding.
+    try:
+        confirmed, subscription = await confirm_checkout_session(
+            db, config, group_id, body.session_id
+        )
+    except CheckoutNotCompleteError:
+        subscription = await get_home_subscription(db, group_id)
+        confirmed = False
+    except CheckoutConfirmationError as exc:
+        await log.awarning(
+            "stripe_checkout_confirmation_rejected",
+            checkout_session_id=body.session_id,
+            group_id=str(group_id),
+            detail=str(exc),
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Checkout Session cannot be confirmed."
+        ) from None
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror(
+            "stripe_checkout_confirmation_failed",
+            checkout_session_id=body.session_id,
+            group_id=str(group_id),
+            detail=str(exc),
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't confirm your subscription yet. Please try again shortly.",
+        ) from None
+
+    if subscription is None:
+        subscription = await ensure_home_subscription(db, group_id)
+        await db.commit()
+    resolved_plan = await effective_plan(db, group_id)
+    await log.ainfo(
+        "stripe_checkout_reconciled",
+        checkout_session_id=body.session_id,
+        stripe_subscription_id=subscription.external_subscription_id,
+        stripe_customer_id=subscription.external_customer_id,
+        mykhaya_group_id=str(group_id),
+        stripe_mode=config.mode,
+        subscription_status=subscription.status.value,
+        reconciliation_result="confirmed" if confirmed else "pending",
+    )
+    return CheckoutConfirmationResponse(
+        confirmed=confirmed and resolved_plan == SubscriptionPlan.family,
+        effective_plan=resolved_plan,
+        subscription_status=subscription.status,
+    )
 
 
 @group_router.post("/portal-session", response_model=PortalSessionResponse)

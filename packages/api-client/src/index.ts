@@ -439,6 +439,15 @@ export class MyKhayaClient {
       `/groups/${encodeURIComponent(homeId)}/billing/checkout-session`,
       { method: "POST", body: JSON.stringify({ interval }) },
     );
+  confirmCheckoutSession = (sessionId: string) =>
+    this.request<{
+      confirmed: boolean;
+      effective_plan: string;
+      subscription_status: string;
+    }>("/billing/stripe/confirm-checkout", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   createPortalSession = (homeId: string) =>
     this.request<{ portal_url: string }>(
       `/groups/${encodeURIComponent(homeId)}/billing/portal-session`,

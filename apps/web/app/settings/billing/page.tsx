@@ -39,6 +39,7 @@ export default function PlanAndBillingSettings() {
   const { activeHomeId, loading: homeLoading } = useActiveHome();
   const searchParams = useSearchParams();
   const checkoutBanner = checkoutBannerKind(searchParams.get("checkout"));
+  const checkoutSessionId = searchParams.get("session_id");
 
   const [status, setStatus] = useState<BillingStatus | null>(null);
   const [pricing, setPricing] = useState<FamilyPricing | null>(null);
@@ -87,13 +88,25 @@ export default function PlanAndBillingSettings() {
     if (checkoutBanner !== "success") return;
     setConfirmationTimedOut(false);
     let cancelled = false;
-    void pollForFamilyBillingStatus(load).then((result) => {
+    void (async () => {
+      if (checkoutSessionId) {
+        try {
+          await api.confirmCheckoutSession(checkoutSessionId);
+          await load();
+        } catch (cause) {
+          if (!cancelled && cause instanceof ApiError && cause.status !== 503) {
+            setError("We could not confirm this checkout for the current Home.");
+          }
+        }
+      }
+      return pollForFamilyBillingStatus(load);
+    })().then((result) => {
       if (!cancelled && result?.effective_plan !== "family") setConfirmationTimedOut(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [checkoutBanner, load]);
+  }, [checkoutBanner, checkoutSessionId, load]);
 
   async function startCheckout(interval: "month" | "year") {
     if (!activeHomeId || busy) return;

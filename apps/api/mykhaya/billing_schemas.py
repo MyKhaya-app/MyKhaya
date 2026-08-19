@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mykhaya.models import (
     BillingInterval,
@@ -46,6 +46,16 @@ class CheckoutSessionRequest(StrictModel):
 
 class CheckoutSessionResponse(BaseModel):
     checkout_url: str
+
+
+class CheckoutConfirmationRequest(StrictModel):
+    session_id: str = Field(min_length=10, max_length=200, pattern=r"^cs_[A-Za-z0-9_]+$")
+
+
+class CheckoutConfirmationResponse(BaseModel):
+    confirmed: bool
+    effective_plan: SubscriptionPlan
+    subscription_status: SubscriptionStatus
 
 
 class PortalSessionResponse(BaseModel):
