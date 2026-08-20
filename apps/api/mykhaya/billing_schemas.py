@@ -124,6 +124,10 @@ class BillingStatusResponse(BaseModel):
     # routers.invitations/routers.groups's members.external_invites.enabled
     # enforcement.
     external_invites_enabled: bool
+    # Whether this Home's plan currently includes Meal Plans — lets the
+    # module entry show its locked state before the user ever taps in and
+    # hits a 403. See routers.meal_plans' meals.enabled enforcement.
+    meals_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):

@@ -423,6 +423,78 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}/complete/${encodeURIComponent(occurrenceDate)}`,
       { method: "DELETE" },
     );
+  // --- Meal Plans (Family-only) -------------------------------------------
+  meals = (homeId: string, params?: { favourite?: boolean; q?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.favourite !== undefined) search.set("favourite", String(params.favourite));
+    if (params?.q) search.set("q", params.q);
+    const query = search.toString();
+    return this.request<import("@mykhaya/shared-types").MealListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/meals${query ? `?${query}` : ""}`,
+    );
+  };
+  meal = (homeId: string, mealId: string) =>
+    this.request<import("@mykhaya/shared-types").Meal>(
+      `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}`,
+    );
+  createMeal = (homeId: string, body: import("@mykhaya/shared-types").MealPayload) =>
+    this.request<import("@mykhaya/shared-types").Meal>(
+      `/homes/${encodeURIComponent(homeId)}/meals`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateMeal = (
+    homeId: string,
+    mealId: string,
+    body: import("@mykhaya/shared-types").MealUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Meal>(
+      `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  setMealFavourite = (homeId: string, mealId: string, isFavourite: boolean) =>
+    this.request<import("@mykhaya/shared-types").Meal>(
+      `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}/favourite`,
+      { method: "PATCH", body: JSON.stringify({ is_favourite: isFavourite }) },
+    );
+  deleteMeal = (homeId: string, mealId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}`,
+      { method: "DELETE" },
+    );
+  createMealPlanEntry = (
+    homeId: string,
+    body: import("@mykhaya/shared-types").MealPlanEntryPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").MealPlanEntry>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/entries`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  mealPlanEntry = (homeId: string, entryId: string) =>
+    this.request<import("@mykhaya/shared-types").MealPlanEntry>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/entries/${encodeURIComponent(entryId)}`,
+    );
+  updateMealPlanEntry = (
+    homeId: string,
+    entryId: string,
+    body: import("@mykhaya/shared-types").MealPlanEntryUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").MealPlanEntry>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/entries/${encodeURIComponent(entryId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteMealPlanEntry = (homeId: string, entryId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/entries/${encodeURIComponent(entryId)}`,
+      { method: "DELETE" },
+    );
+  mealPlanDay = (homeId: string, date: string) =>
+    this.request<import("@mykhaya/shared-types").MealPlanDay>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/day?date=${encodeURIComponent(date)}`,
+    );
+  mealPlanWeek = (homeId: string, startDate: string) =>
+    this.request<import("@mykhaya/shared-types").MealPlanWeek>(
+      `/homes/${encodeURIComponent(homeId)}/meal-plan/week?start_date=${encodeURIComponent(startDate)}`,
+    );
   billingStatus = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").BillingStatus>(
       `/groups/${encodeURIComponent(homeId)}/billing`,

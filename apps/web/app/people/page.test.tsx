@@ -90,6 +90,7 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
     household_routines_enabled: false,
     shared_events_enabled: false,
     external_invites_enabled: false,
+    meals_enabled: false,
     ...overrides,
   };
 }

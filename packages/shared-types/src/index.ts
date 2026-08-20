@@ -388,6 +388,113 @@ export interface RoutineListResponse {
   items: Routine[];
 }
 
+// ---------------------------------------------------------------------------
+// Meal Plans (Family-only)
+// ---------------------------------------------------------------------------
+
+export type MealType = "breakfast" | "lunch" | "dinner" | "snack" | "dessert" | "other";
+export type MealSlot = "breakfast" | "lunch" | "dinner";
+
+export interface MealIngredient {
+  id: string;
+  position: number;
+  text: string;
+  quantity: string | null;
+  unit: string | null;
+}
+
+export interface MealIngredientInput {
+  text: string;
+  quantity?: string | null;
+  unit?: string | null;
+}
+
+export interface Meal {
+  id: string;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  instructions: string | null;
+  is_favourite: boolean;
+  tags: string[];
+  source_url: string | null;
+  ingredients: MealIngredient[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MealPayload {
+  name: string;
+  description?: string | null;
+  image_url?: string | null;
+  meal_type?: MealType;
+  prep_minutes?: number | null;
+  cook_minutes?: number | null;
+  servings?: number | null;
+  instructions?: string | null;
+  is_favourite?: boolean;
+  tags?: string[];
+  source_url?: string | null;
+  ingredients?: MealIngredientInput[];
+}
+
+export interface MealUpdatePayload extends MealPayload {
+  expected_updated_at: string;
+}
+
+export interface MealListResponse {
+  items: Meal[];
+}
+
+export interface MealPlanEntry {
+  id: string;
+  meal_id: string | null;
+  meal_name: string | null;
+  quick_meal_name: string | null;
+  meal_image_url: string | null;
+  is_favourite: boolean;
+  date: string;
+  meal_slot: MealSlot;
+  time: string | null;
+  member_ids: string[];
+  cook_member_id: string | null;
+  makes_leftovers: boolean;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface MealPlanEntryPayload {
+  meal_id?: string | null;
+  quick_meal_name?: string | null;
+  date: string;
+  meal_slot: MealSlot;
+  time?: string | null;
+  // Omitted entirely means "Everyone" (the whole household) — an explicit
+  // empty array means nobody. See mykhaya.routers.meal_plans.
+  member_ids?: string[];
+  cook_member_id?: string | null;
+  makes_leftovers?: boolean;
+}
+
+export interface MealPlanEntryUpdatePayload extends MealPlanEntryPayload {
+  expected_updated_at: string;
+}
+
+export interface MealPlanDay {
+  date: string;
+  entries: MealPlanEntry[];
+}
+
+export interface MealPlanWeek {
+  start_date: string;
+  days: MealPlanDay[];
+}
+
 export interface UserBirthdayPayload {
   birth_month: number | null;
   birth_day: number | null;
@@ -457,6 +564,7 @@ export interface BillingStatus {
   household_routines_enabled: boolean;
   shared_events_enabled: boolean;
   external_invites_enabled: boolean;
+  meals_enabled: boolean;
 }
 
 export interface PricingOption {

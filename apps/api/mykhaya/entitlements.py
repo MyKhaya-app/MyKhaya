@@ -104,6 +104,9 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "members.external_invites.enabled": False,
             "family_plans.enabled": False,
             "support.priority.enabled": False,
+            # Meal Plans (mykhaya.routers.meal_plans) — Family-only, per
+            # docs/architecture/meal-plans.md.
+            "meals.enabled": False,
         },
         limits={
             "calendar.max_categories": 1,
@@ -123,6 +126,7 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "members.external_invites.enabled": True,
             "family_plans.enabled": True,
             "support.priority.enabled": True,
+            "meals.enabled": True,
         },
         limits={
             "calendar.max_categories": None,

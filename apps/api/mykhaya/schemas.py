@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from datetime import time as clock_time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -9,6 +10,8 @@ from mykhaya.models import (
     ChildAgeBand,
     ChildTransitionStatus,
     HouseholdRelationship,
+    MealSlot,
+    MealType,
     PermissionProfile,
     RecurrencePattern,
     Role,
@@ -714,6 +717,139 @@ class RoutineListResponse(BaseModel):
 
 class RoutineCompletionRequest(StrictModel):
     occurrence_date: date
+
+
+# ---------------------------------------------------------------------------
+# Meal Plans (Family-only) — see docs/architecture/meal-plans.md.
+# ---------------------------------------------------------------------------
+
+
+class MealIngredientInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+    quantity: str | None = Field(default=None, max_length=40)
+    unit: str | None = Field(default=None, max_length=40)
+
+
+class MealIngredientResponse(BaseModel):
+    id: uuid.UUID
+    position: int
+    text: str
+    quantity: str | None
+    unit: str | None
+
+
+class MealCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    image_url: str | None = Field(default=None, max_length=2000)
+    meal_type: MealType = MealType.dinner
+    prep_minutes: int | None = Field(default=None, ge=0, le=1440)
+    cook_minutes: int | None = Field(default=None, ge=0, le=1440)
+    servings: int | None = Field(default=None, ge=1, le=100)
+    instructions: str | None = Field(default=None, max_length=8000)
+    is_favourite: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    source_url: str | None = Field(default=None, max_length=2000)
+    ingredients: list[MealIngredientInput] = Field(default_factory=list, max_length=100)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags_trimmed(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:40] for tag in value if tag.strip()]
+
+
+class MealUpdate(MealCreate):
+    expected_updated_at: datetime
+
+
+class MealResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    instructions: str | None
+    is_favourite: bool
+    tags: list[str]
+    source_url: str | None
+    ingredients: list[MealIngredientResponse]
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class MealListResponse(BaseModel):
+    items: list[MealResponse]
+
+
+class MealFavouriteRequest(StrictModel):
+    is_favourite: bool
+
+
+class MealPlanEntryCreate(StrictModel):
+    # Exactly one of meal_id/quick_meal_name — enforced in the router (a
+    # clearer 422 message than a generic model_validator failure).
+    meal_id: uuid.UUID | None = None
+    quick_meal_name: str | None = Field(default=None, min_length=1, max_length=160)
+    date: date
+    meal_slot: MealSlot
+    # `clock_time`, not `time`: a field literally named `time` typed as
+    # `time | None` collides with Python 3.13's deferred-annotation
+    # evaluation (PEP 649, get_type_hints included the class's own
+    # namespace) — by the time the annotation resolves, `time` has already
+    # been rebound to this field's own default value. Quoting the
+    # annotation does *not* fix this (pydantic's resolver still sees the
+    # class namespace) — the type import itself has to use a distinct
+    # name. See MealPlanEntry.time in models.py for the same fix.
+    time: clock_time | None = None
+    member_ids: list[uuid.UUID] | None = Field(default=None, max_length=25)
+    cook_member_id: uuid.UUID | None = None
+    makes_leftovers: bool = False
+
+    @model_validator(mode="after")
+    def _exactly_one_meal_reference(self) -> "MealPlanEntryCreate":
+        has_meal = self.meal_id is not None
+        has_quick = bool(self.quick_meal_name and self.quick_meal_name.strip())
+        if has_meal == has_quick:
+            raise ValueError("Provide either meal_id or quick_meal_name, not both")
+        return self
+
+
+class MealPlanEntryUpdate(MealPlanEntryCreate):
+    expected_updated_at: datetime
+
+
+class MealPlanEntryResponse(BaseModel):
+    id: uuid.UUID
+    meal_id: uuid.UUID | None
+    meal_name: str | None
+    quick_meal_name: str | None
+    meal_image_url: str | None
+    is_favourite: bool
+    date: date
+    meal_slot: MealSlot
+    time: clock_time | None
+    # Member ids only, same convention as EventOccurrence.member_ids — the
+    # frontend already loads the Home's member list once and cross-refers
+    # names/avatars locally rather than every response embedding them.
+    member_ids: list[uuid.UUID]
+    cook_member_id: uuid.UUID | None
+    makes_leftovers: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class MealPlanDayResponse(BaseModel):
+    date: date
+    entries: list[MealPlanEntryResponse]
+
+
+class MealPlanWeekResponse(BaseModel):
+    start_date: date
+    days: list[MealPlanDayResponse]
 
 
 class NotificationPreferencesResponse(BaseModel):

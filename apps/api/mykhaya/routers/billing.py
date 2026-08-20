@@ -290,6 +290,7 @@ async def billing_status(
         external_invites_enabled=await has_entitlement(
             db, group_id, "members.external_invites.enabled"
         ),
+        meals_enabled=await has_entitlement(db, group_id, "meals.enabled"),
     )
 
 

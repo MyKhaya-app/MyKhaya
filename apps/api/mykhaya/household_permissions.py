@@ -41,6 +41,11 @@ class Capability(StrEnum):
     # member; billing decisions stay with whoever administers the Home. See
     # docs/security/platform-administration-security.md#billing-manage.
     billing_manage = "billing.manage"
+    # Meal Plans (mykhaya.routers.meal_plans) — shared household structure,
+    # the same "view vs manage" split calendar categories use, not a
+    # per-person ownership model. See docs/architecture/meal-plans.md.
+    meals_view = "meals.view"
+    meals_manage = "meals.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
@@ -56,6 +61,8 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.calendar_edit_all,
             Capability.calendar_delete,
             Capability.household_manage_routines,
+            Capability.meals_view,
+            Capability.meals_manage,
         }
     ),
     PermissionProfile.child_restricted: frozenset(),

@@ -16,6 +16,7 @@ import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
 import { canAddMember } from "@/components/member-entitlement-logic";
+import { MealPlansTonightCard } from "@/components/meal-plans-tonight-card";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -339,6 +340,8 @@ export default function HomePage() {
             )}
           </section>
         )}
+
+        {activeHomeId && <MealPlansTonightCard homeId={activeHomeId} />}
 
         {calendarEnabled && (
           <section className="card home-section">

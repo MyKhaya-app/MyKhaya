@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from datetime import date, datetime, time
+from datetime import time as clock_time
 from enum import StrEnum
 from typing import Any
 
@@ -1169,6 +1170,162 @@ class HouseholdRoutineCompletion(UuidTimeMixin, Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class MealType(StrEnum):
+    """A saved Meal's category — deliberately the same short, closed list a
+    household actually thinks in, not a cuisine/dietary taxonomy. See
+    docs/architecture/meal-plans.md."""
+
+    breakfast = "breakfast"
+    lunch = "lunch"
+    dinner = "dinner"
+    snack = "snack"
+    dessert = "dessert"
+    other = "other"
+
+
+class MealSlot(StrEnum):
+    """Which part of the day a MealPlanEntry sits in. Deliberately narrower
+    than MealType (no snack/dessert/other slot) — the planner has exactly
+    three rows a day; a "dessert" or "snack" saved Meal can still be planned
+    into any of them."""
+
+    breakfast = "breakfast"
+    lunch = "lunch"
+    dinner = "dinner"
+
+
+class Meal(UuidTimeMixin, Base):
+    """A reusable household meal/recipe — the "Meals library". Soft-deleted
+    (deleted_at), never hard-deleted, so an existing MealPlanEntry.meal_id
+    never dangles or has to be nulled out from under a plan the household
+    already made — see MealPlanEntry's own docstring."""
+
+    __tablename__ = "meals"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_meal_name_nonempty"),
+        Index("ix_meal_group_type", "group_id", "meal_type"),
+        Index("ix_meal_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    # A plain external reference, not an uploaded/processed asset — V1
+    # deliberately doesn't add a second image-storage pipeline alongside
+    # mykhaya/avatars/. See docs/architecture/meal-plans.md "Deferred".
+    image_url: Mapped[str | None] = mapped_column(String(2000))
+    meal_type: Mapped[MealType] = mapped_column(
+        Enum(MealType, name="meal_type"),
+        default=MealType.dinner,
+        server_default=MealType.dinner.value,
+    )
+    prep_minutes: Mapped[int | None] = mapped_column(Integer)
+    cook_minutes: Mapped[int | None] = mapped_column(Integer)
+    servings: Mapped[int | None] = mapped_column(Integer)
+    instructions: Mapped[str | None] = mapped_column(String(8000))
+    is_favourite: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Simple free-form tags — no bespoke taxonomy/tag-management table, per
+    # the explicit "avoid a complicated taxonomy system" scope decision.
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_url: Mapped[str | None] = mapped_column(String(2000))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MealIngredient(UuidTimeMixin, Base):
+    """One line of a Meal's ingredient list. Deliberately unstructured
+    beyond quantity/unit/text — no nutrition database, no ingredient
+    canonicalisation (see docs/architecture/meal-plans.md "Scope
+    exclusions") — this is exactly the shape "Add ingredients to list"
+    needs to hand off to a list item (text, with quantity/unit folded into
+    the display text) once MyKhaya has a Lists module to hand it to."""
+
+    __tablename__ = "meal_ingredients"
+    __table_args__ = (Index("ix_meal_ingredient_meal_position", "meal_id", "position"),)
+    meal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meals.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Free text throughout, deliberately — "500", "g", "beef mince" but
+    # equally just text="a pinch of salt" with quantity/unit both null.
+    quantity: Mapped[str | None] = mapped_column(String(40))
+    unit: Mapped[str | None] = mapped_column(String(40))
+    text: Mapped[str] = mapped_column(String(200))
+
+
+class MealPlanEntry(UuidTimeMixin, Base):
+    """A specific day's planned use of a Meal — or a one-off "quick meal"
+    that never touches the reusable library (quick_meal_name; see
+    docs/architecture/meal-plans.md "Quick meals"). Exactly one of
+    meal_id/quick_meal_name is set, enforced below.
+
+    `date`/`time` are deliberately plain (no timezone) — unlike
+    CalendarEvent, a meal isn't an instant with a duration to convert
+    across zones; it's "this Home's Tuesday dinner", read and written
+    as-is, the same way HouseholdRoutine.week_anchor_date is a plain date.
+    This is what keeps meal times free of the server-local timezone bugs
+    the brief warns about: there is no UTC conversion to get wrong because
+    none is ever performed. See docs/architecture/meal-plans.md
+    "Timezone approach"."""
+
+    __tablename__ = "meal_plan_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "(meal_id IS NOT NULL) OR (quick_meal_name IS NOT NULL)",
+            name="ck_meal_plan_entry_has_meal",
+        ),
+        Index("ix_meal_plan_entry_group_date", "group_id", "date"),
+        Index("ix_meal_plan_entry_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    meal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("meals.id", ondelete="SET NULL"), index=True
+    )
+    quick_meal_name: Mapped[str | None] = mapped_column(String(160))
+    date: Mapped[date] = mapped_column(Date, index=True)
+    meal_slot: Mapped[MealSlot] = mapped_column(Enum(MealSlot, name="meal_slot"))
+    # `clock_time`, not `time`: a field literally named `time` typed as
+    # `time | None` collides with Python 3.13's deferred-annotation
+    # evaluation (PEP 649) — by the time the annotation resolves, the
+    # class-body name `time` has already been rebound to this field's own
+    # value, so `time | None` looks up the wrong `time`. A *quoted*
+    # annotation doesn't fix it either (SQLAlchemy/pydantic's resolvers
+    # still see the class's own namespace) — the type import itself needs
+    # a distinct name.
+    time: Mapped[clock_time | None] = mapped_column(Time)
+    cook_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # "Plan leftovers for tomorrow" (an automatic linked next-day entry) is
+    # deferred — see docs/architecture/meal-plans.md "Deferred". This flag
+    # alone is V1, exactly as the brief allows.
+    makes_leftovers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MealPlanParticipant(UuidTimeMixin, Base):
+    """Who is eating a given MealPlanEntry — member ids, never copied
+    names (see docs/architecture/meal-plans.md "Eating members"). A
+    membership being removed later leaves this row pointing at a real but
+    no-longer-active user_id; readers resolve it against active
+    membership and simply omit a no-longer-active participant rather than
+    erroring — the same fail-safe-not-corrupting behaviour
+    CalendarEventMember already relies on elsewhere in this codebase."""
+
+    __tablename__ = "meal_plan_participants"
+    __table_args__ = (
+        UniqueConstraint("meal_plan_entry_id", "user_id", name="uq_meal_plan_participant"),
+    )
+    meal_plan_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meal_plan_entries.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
 
 
 class PlatformPushSettings(UuidTimeMixin, Base):
