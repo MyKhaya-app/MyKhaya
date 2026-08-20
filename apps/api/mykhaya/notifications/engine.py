@@ -94,6 +94,7 @@ async def notify(
     is_critical: bool = False,
     timezone_override: str | None = None,
     html_body: str | None = None,
+    allow_email: bool = True,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -178,7 +179,7 @@ async def notify(
             timezone_override=timezone_override,
         )
 
-    if is_mandatory or (prefs.email_enabled and category_enabled):
+    if allow_email and (is_mandatory or (prefs.email_enabled and category_enabled)):
         user = await db.get(User, recipient_user_id)
         resolved_email = recipient_email or (user.email if user else None)
         if resolved_email:

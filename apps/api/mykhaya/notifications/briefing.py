@@ -32,6 +32,7 @@ from mykhaya.models import (
 from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
+from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
 from mykhaya.notifications.quiet_hours import effective_timezone
 from mykhaya.notifications.visibility import viewer_ids_for_event
 
@@ -100,6 +101,7 @@ def format_daily_briefing(
     local_date: date,
     tz: tzinfo,
     birthday_phrases: list[str] | None = None,
+    meal_items: list[MealBriefingItem] | None = None,
 ) -> tuple[str, str]:
     """Build the stable title/body while keeping event ordering deterministic."""
     ordered = sorted(
@@ -110,7 +112,8 @@ def format_daily_briefing(
             str(item.event_id),
         ),
     )
-    count = len(ordered)
+    meals = meal_items or []
+    count = len(ordered) + len(meals)
     title = f"You have {count} event{'s' if count != 1 else ''} today."
     lines = ["Please take care of yourself!"]
 
@@ -121,9 +124,19 @@ def format_daily_briefing(
         lines.append(f"{safe_phrase}.")
 
     lines.extend(_briefing_event_line(item, tz) for item in ordered[:MAX_DISPLAYED_EVENTS])
+    remaining_slots = max(0, MAX_DISPLAYED_EVENTS - len(ordered))
+    for item in meals[:remaining_slots]:
+        meal_line = f"• {item.slot}: {item.name}"
+        if item.meal_time is not None:
+            meal_line += f" at {item.meal_time.strftime('%H:%M')}"
+        if item.is_cooking:
+            meal_line += " · You're cooking"
+        elif item.cook_name:
+            meal_line += f" · {_safe_push_text(item.cook_name)} cooking"
+        lines.append(meal_line)
     if count > MAX_DISPLAYED_EVENTS:
         lines.append(f"• +{count - MAX_DISPLAYED_EVENTS} more events")
-    if not ordered and not (birthday_phrases or []):
+    if not ordered and not meals and not (birthday_phrases or []):
         lines.append(empty_day_message(local_date))
     return title, "\n".join(lines)
 
@@ -294,8 +307,14 @@ async def deliver_daily_briefing(
     local_date = date.fromisoformat(date_iso)
     birthday_phrases = await _birthdays_for_user_today(db, user.id, local_date)
     occurrences = await _events_for_user_today(db, user.id, local_date, tz)
+    meal_items = await briefing_items_for_user(db, user.id, local_date)
 
-    if not occurrences and not birthday_phrases and not prefs.empty_day_briefing_enabled:
+    if (
+        not occurrences
+        and not meal_items
+        and not birthday_phrases
+        and not prefs.empty_day_briefing_enabled
+    ):
         return
 
     title, body = format_daily_briefing(
@@ -303,6 +322,7 @@ async def deliver_daily_briefing(
         local_date=local_date,
         tz=tz,
         birthday_phrases=birthday_phrases,
+        meal_items=meal_items,
     )
     await notify(
         db,

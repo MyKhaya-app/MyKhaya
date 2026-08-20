@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.entitlements import require_entitlement, require_within_limit
+from mykhaya.entitlements import has_entitlement, require_entitlement, require_within_limit
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
@@ -20,7 +22,9 @@ from mykhaya.models import (
     HouseholdRoutineMember,
     Membership,
     RoutineScope,
+    User,
 )
+from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.routine_occurrences import is_occurrence_date, next_occurrence_date
 from mykhaya.notifications.visibility import active_membership
 from mykhaya.schemas import (
@@ -72,7 +76,14 @@ def _is_visible(routine: HouseholdRoutine, user_id: uuid.UUID) -> bool:
     return True
 
 
-async def _to_response(db: AsyncSession, routine: HouseholdRoutine) -> RoutineResponse:
+async def _to_response(
+    db: AsyncSession,
+    routine: HouseholdRoutine,
+    *,
+    home_occurrence_date: date | None = None,
+    home_completion: HouseholdRoutineCompletion | None = None,
+    home_completed_by_display_name: str | None = None,
+) -> RoutineResponse:
     today = datetime.now(UTC).date()
     completed = await db.scalar(
         select(HouseholdRoutineCompletion.id).where(
@@ -98,6 +109,10 @@ async def _to_response(db: AsyncSession, routine: HouseholdRoutine) -> RoutineRe
         member_ids=await _member_ids(db, routine.id),
         next_occurrence_date=next_occurrence_date(routine, today),
         completed_today=completed is not None and is_occurrence_date(routine, today),
+        home_occurrence_date=home_occurrence_date,
+        home_completed_at=home_completion.completed_at if home_completion else None,
+        home_completed_by_user_id=home_completion.completed_by if home_completion else None,
+        home_completed_by_display_name=home_completed_by_display_name,
         created_by=routine.created_by,
         updated_at=routine.updated_at,
     )
@@ -128,6 +143,8 @@ async def list_routines(
     home_id: uuid.UUID,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    home: bool = Query(default=False),
+    settings: Settings = Depends(get_settings),
 ) -> RoutineListResponse:
     await _require_member(home_id, auth, db)
     routines = (
@@ -142,7 +159,81 @@ async def list_routines(
             .limit(200)
         )
     ).all()
-    return RoutineListResponse(items=[await _to_response(db, routine) for routine in routines])
+    if not home:
+        return RoutineListResponse(items=[await _to_response(db, routine) for routine in routines])
+
+    # Home may show personal routines to their owner, but household routines
+    # remain Family-gated even though the route is otherwise readable.
+    household_enabled = await has_entitlement(db, home_id, "routines.household.enabled")
+    routines = [
+        routine
+        for routine in routines
+        if routine.scope == RoutineScope.personal or household_enabled
+    ]
+    tz = await home_timezone(db, home_id, settings.default_timezone)
+    today = datetime.now(UTC).astimezone(tz).date()
+    candidate_dates: dict[uuid.UUID, list[date]] = {}
+    for routine in routines:
+        start = today if routine.scope == RoutineScope.personal else today - timedelta(days=60)
+        candidate_dates[routine.id] = [
+            day
+            for offset in range((today + timedelta(days=1) - start).days + 1)
+            if is_occurrence_date(routine, day := start + timedelta(days=offset))
+        ]
+    routine_ids = list(candidate_dates)
+    completions = (
+        await db.scalars(
+            select(HouseholdRoutineCompletion).where(
+                HouseholdRoutineCompletion.routine_id.in_(routine_ids),
+                HouseholdRoutineCompletion.occurrence_date >= today - timedelta(days=60),
+                HouseholdRoutineCompletion.occurrence_date <= today + timedelta(days=1),
+            )
+        )
+    ).all() if routine_ids else []
+    completion_by_key = {(row.routine_id, row.occurrence_date): row for row in completions}
+    completed_by_ids = {row.completed_by for row in completions if row.completed_by}
+    completed_by_users = {
+        user.id: user.display_name
+        for user in (
+            await db.scalars(select(User).where(User.id.in_(completed_by_ids)))
+        ).all()
+    } if completed_by_ids else {}
+
+    selected: list[tuple[int, date, HouseholdRoutine, HouseholdRoutineCompletion | None]] = []
+    now = datetime.now(UTC)
+    for routine in routines:
+        for occurrence_date in reversed(candidate_dates[routine.id]):
+            completion = completion_by_key.get((routine.id, occurrence_date))
+            if completion is None:
+                if occurrence_date < today:
+                    priority = 0
+                elif occurrence_date == today:
+                    priority = 2 if routine.scope == RoutineScope.personal else 1
+                else:
+                    priority = 3
+                selected.append((priority, occurrence_date, routine, None))
+                break
+            if (
+                occurrence_date == today
+                and completion.completed_at is not None
+                and completion.completed_at >= now - timedelta(minutes=15)
+            ):
+                selected.append((4, occurrence_date, routine, completion))
+                break
+    selected.sort(key=lambda item: (item[0], item[1], item[2].title.casefold(), str(item[2].id)))
+    items = [
+        await _to_response(
+            db,
+            routine,
+            home_occurrence_date=occurrence_date,
+            home_completion=completion,
+            home_completed_by_display_name=(
+                completed_by_users.get(completion.completed_by) if completion else None
+            ),
+        )
+        for _priority, occurrence_date, routine, completion in selected[:3]
+    ]
+    return RoutineListResponse(items=items)
 
 
 @router.post("/{home_id}/routines", response_model=RoutineResponse, status_code=201)
@@ -341,25 +432,22 @@ async def complete_routine(
     )
     if routine is None or not _is_visible(routine, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That routine could not be found")
+    if routine.scope == RoutineScope.household:
+        await require_entitlement(db, home_id, "routines.household.enabled")
     if not is_occurrence_date(routine, body.occurrence_date):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "That date is not a scheduled occurrence"
         )
 
-    existing = await db.scalar(
-        select(HouseholdRoutineCompletion).where(
-            HouseholdRoutineCompletion.routine_id == routine.id,
-            HouseholdRoutineCompletion.occurrence_date == body.occurrence_date,
+    await db.execute(
+        pg_insert(HouseholdRoutineCompletion)
+        .values(
+            routine_id=routine.id,
+            occurrence_date=body.occurrence_date,
+            completed_by=auth.user.id,
         )
+        .on_conflict_do_nothing(constraint="uq_routine_occurrence")
     )
-    if existing is None:
-        db.add(
-            HouseholdRoutineCompletion(
-                routine_id=routine.id,
-                occurrence_date=body.occurrence_date,
-                completed_by=auth.user.id,
-            )
-        )
     await db.commit()
     return await _to_response(db, routine)
 

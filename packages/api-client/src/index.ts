@@ -387,9 +387,9 @@ export class MyKhayaClient {
       "/notifications/preferences",
       { method: "PUT", body: JSON.stringify(body) },
     );
-  routines = (homeId: string) =>
+  routines = (homeId: string, params?: { home?: boolean }) =>
     this.request<import("@mykhaya/shared-types").RoutineListResponse>(
-      `/homes/${encodeURIComponent(homeId)}/routines`,
+      `/homes/${encodeURIComponent(homeId)}/routines${params?.home ? "?home=true" : ""}`,
     );
   createRoutine = (
     homeId: string,
@@ -519,42 +519,67 @@ export class MyKhayaClient {
       { method: "POST", body: JSON.stringify(body) },
     );
   // --- Household Lists -----------------------------------------------------
-  lists = (homeId: string) =>
-    this.request<import("@mykhaya/shared-types").HouseholdListListResponse>(
-      `/homes/${encodeURIComponent(homeId)}/lists`,
+  lists = (homeId: string, params?: { q?: string }) => {
+    const search = params?.q ? `?q=${encodeURIComponent(params.q)}` : "";
+    return this.request<import("@mykhaya/shared-types").HouseholdListListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/lists${search}`,
     );
+  };
   list = (homeId: string, listId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}`,
     );
-  createList = (homeId: string, name: string) =>
+  createList = (homeId: string, body: import("@mykhaya/shared-types").ListCreatePayload) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists`,
-      { method: "POST", body: JSON.stringify({ name }) },
+      { method: "POST", body: JSON.stringify(body) },
     );
-  renameList = (homeId: string, listId: string, name: string) =>
+  renameList = (
+    homeId: string,
+    listId: string,
+    body: import("@mykhaya/shared-types").ListRenamePayload,
+  ) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}`,
-      { method: "PATCH", body: JSON.stringify({ name }) },
+      { method: "PATCH", body: JSON.stringify(body) },
     );
   deleteList = (homeId: string, listId: string) =>
     this.request<void>(`/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}`, {
       method: "DELETE",
     });
-  addListItem = (homeId: string, listId: string, text: string) =>
+  addListItem = (
+    homeId: string,
+    listId: string,
+    body: import("@mykhaya/shared-types").ListItemInputPayload,
+  ) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items`,
-      { method: "POST", body: JSON.stringify({ text }) },
+      { method: "POST", body: JSON.stringify(body) },
     );
-  toggleListItem = (homeId: string, listId: string, itemId: string, isChecked: boolean) =>
+  updateListItem = (
+    homeId: string,
+    listId: string,
+    itemId: string,
+    body: import("@mykhaya/shared-types").ListItemUpdatePayload,
+  ) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`,
-      { method: "PATCH", body: JSON.stringify({ is_checked: isChecked }) },
+      { method: "PATCH", body: JSON.stringify(body) },
     );
   removeListItem = (homeId: string, listId: string, itemId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`,
       { method: "DELETE" },
+    );
+  reorderListItems = (homeId: string, listId: string, itemIds: string[]) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/reorder`,
+      { method: "POST", body: JSON.stringify({ item_ids: itemIds }) },
+    );
+  clearCompletedListItems = (homeId: string, listId: string) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/clear-completed`,
+      { method: "POST" },
     );
   billingStatus = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").BillingStatus>(

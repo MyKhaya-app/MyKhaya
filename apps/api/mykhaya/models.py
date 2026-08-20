@@ -1345,29 +1345,49 @@ class HouseholdList(UuidTimeMixin, Base):
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(160))
+    # A presentation helper only — one of mykhaya.schemas.LIST_ICONS, or
+    # None. No category-administration table; adding a new preset is a code
+    # change, not a data migration.
+    icon: Mapped[str | None] = mapped_column(String(20))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class HouseholdListItem(UuidTimeMixin, Base):
-    """One line on a HouseholdList. Plain text plus a checked-off flag —
-    no quantity/unit split of its own (a Meal ingredient's "500 g beef
-    mince" is folded into `text` once, when it's added — see
-    mykhaya.routers.lists.ingredient_item_text). Hard-deleted on removal:
-    unlike a Meal or a MealPlanEntry, nothing else ever references a list
-    item by id, so there's no dangling-reference risk to guard against."""
+    """One line on a HouseholdList. Text plus a checked-off flag remains the
+    normal path — quantity/note/assignment are all optional additions for
+    Lists V1 (see docs/architecture/lists.md), layered on without disturbing
+    how Meal Plans' "Add ingredients to list" already writes items: a meal
+    ingredient still folds straight into `text` ("500 g beef mince"), never
+    into `quantity` — see mykhaya.routers.meal_plans.add_ingredients_to_list.
+    Hard-deleted on removal: unlike a Meal or a MealPlanEntry, nothing else
+    ever references a list item by id, so there's no dangling-reference risk
+    to guard against."""
 
     __tablename__ = "household_list_items"
     __table_args__ = (
         CheckConstraint("char_length(text) >= 1", name="ck_household_list_item_text_nonempty"),
         Index("ix_household_list_item_list_position", "list_id", "position"),
+        Index("ix_household_list_item_list_checked", "list_id", "is_checked"),
     )
     list_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
     )
     position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     text: Mapped[str] = mapped_column(String(200))
+    # A separate, optional multiplier-style quantity ("2 × Milk") for
+    # manually-added items — distinct from a Meal ingredient's quantity,
+    # which stays folded into `text` and never touches this column.
+    quantity: Mapped[str | None] = mapped_column(String(40))
+    note: Mapped[str | None] = mapped_column(String(500))
+    assigned_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     is_checked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
 
 

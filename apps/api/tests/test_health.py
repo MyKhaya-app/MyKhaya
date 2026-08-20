@@ -31,8 +31,9 @@ async def test_ready_passes_when_schema_matches_expected_head(
     # Read the real current revision directly, then assert the expected
     # head "matches" it, isolating this test from whatever the real
     # alembic.ini/migrations layout looks like in this image.
-    from mykhaya.db import SessionFactory
     from sqlalchemy import text
+
+    from mykhaya.db import SessionFactory
 
     async with SessionFactory() as db:
         row = (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar()

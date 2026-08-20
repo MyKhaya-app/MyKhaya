@@ -1149,10 +1149,73 @@ textarea {
   font-size: var(--font-small);
   margin: 0;
 }
+.home-todo-section {
+  padding-bottom: 12px;
+  padding-top: 16px;
+}
+.home-routine-list {
+  display: grid;
+}
+.home-routine-row {
+  align-items: center;
+  border-bottom: 1px solid #f1ece1;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 40px minmax(0, 1fr);
+  min-height: 58px;
+  padding: 0.45rem 0.1rem;
+}
+.home-routine-row:last-child {
+  border-bottom: 0;
+}
+.home-routine-check {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--colour-sage);
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  padding: 0;
+  width: 40px;
+}
+.home-routine-check:hover,
+.home-routine-check:focus-visible {
+  background: var(--colour-cream-light);
+  color: var(--colour-forest);
+}
+.home-routine-check:disabled {
+  background: var(--colour-sage);
+  color: var(--colour-white);
+}
+.home-routine-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  text-decoration: none;
+}
+.home-routine-copy strong {
+  overflow-wrap: anywhere;
+}
+.home-routine-copy small {
+  color: var(--colour-muted);
+  font-size: var(--font-micro);
+}
+.home-routine-row.is-complete .home-routine-copy strong {
+  color: var(--colour-muted);
+  text-decoration: line-through;
+}
+/* A 2-column grid rather than flex-wrap: with up to 4 shortcuts now
+   (calendar/invite/meal plans/lists), flex-wrap's fixed 84px chips either
+   overflow to an orphan card on their own row at narrow widths, or crowd
+   together at 390px+ — a 2x2 grid stays intentional at every width,
+   including the 2- and 3-item cases (a lone third item simply takes the
+   left half of its own row, not a jarring failure state). */
 .quick-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.6rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .quick-action {
   align-items: center;
@@ -1161,7 +1224,6 @@ textarea {
   border-radius: 1rem;
   color: var(--colour-slate);
   display: flex;
-  flex: 0 1 84px;
   flex-direction: column;
   font-size: var(--font-micro);
   font-weight: 600;
@@ -4764,4 +4826,175 @@ button.danger,
 }
 .meal-tonight-summary strong {
   color: var(--colour-slate);
+}
+
+/* --- Lists --- */
+.lists-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+.lists-toolbar input[type="search"] {
+  flex: 1;
+  min-width: 160px;
+}
+.lists-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.lists-card {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.9rem;
+}
+.lists-card-body {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  flex: 1;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 0.6rem 0;
+}
+.lists-card-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-sage-dark);
+  display: flex;
+  flex: none;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.lists-card-copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.lists-card-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lists-card-complete {
+  color: var(--colour-sage-dark);
+}
+
+/* --- Lists: individual list --- */
+.lists-back-link {
+  margin: -0.3rem 0 0.3rem -0.6rem;
+}
+.lists-detail-heading {
+  align-items: center;
+}
+.lists-progress {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  font-weight: 700;
+  margin: -0.5rem 0 1rem;
+}
+.lists-add-item {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.lists-add-item input {
+  flex: 1;
+}
+.lists-add-item .icon-button {
+  background: var(--colour-sage-dark);
+  color: white;
+  flex: none;
+}
+.lists-toggle-completed {
+  margin: -0.2rem 0 0.6rem;
+  padding-left: 0;
+}
+.lists-item-list {
+  display: grid;
+  gap: 0.3rem;
+}
+.lists-item-row {
+  align-items: center;
+  border-bottom: 1px solid #f1ece1;
+  display: flex;
+  gap: 0.5rem;
+  min-height: 52px;
+  padding: 0.3rem 0.1rem;
+}
+.lists-item-list .lists-item-row:last-child {
+  border-bottom: 0;
+}
+.lists-item-check {
+  align-items: center;
+  display: flex;
+  flex: none;
+  min-height: 44px;
+  min-width: 32px;
+}
+.lists-item-check input[type="checkbox"] {
+  appearance: none;
+  background: var(--colour-white);
+  border: 1.5px solid #d3cec2;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  height: 24px;
+  position: relative;
+  width: 24px;
+}
+.lists-item-check input[type="checkbox"]:checked {
+  background: var(--colour-sage-dark);
+  border-color: var(--colour-sage-dark);
+}
+.lists-item-check input[type="checkbox"]:checked::after {
+  border: solid var(--colour-white);
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 10px;
+  left: 50%;
+  position: absolute;
+  top: 44%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 6px;
+}
+.lists-item-text {
+  background: none;
+  color: var(--colour-slate);
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-height: auto;
+  min-width: 0;
+  padding: 0.3rem 0;
+  text-align: left;
+}
+.lists-item-text:hover {
+  box-shadow: none;
+  transform: none;
+}
+.lists-item-text > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Completed state is conveyed by strikethrough + muted colour together,
+   never colour alone. */
+.lists-item-row.checked .lists-item-text > span:first-child {
+  color: var(--colour-muted);
+  text-decoration: line-through;
+}
+/* Reordering lives in the item's Edit sheet (Move up/down), not as extra
+   buttons crammed into every row — keeps the row itself thumb-friendly at
+   320px with just a checkbox, text and an optional avatar. See
+   docs/architecture/lists.md "Reordering". */
+.lists-edit-item-secondary {
+  display: flex;
+  gap: 0.5rem;
+}
+.lists-edit-item-secondary button {
+  flex: 1;
 }

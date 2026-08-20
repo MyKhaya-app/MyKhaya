@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.entitlements import require_entitlement
@@ -33,6 +34,12 @@ from mykhaya.models import (
     MealPlanParticipant,
     MealType,
     Membership,
+)
+from mykhaya.notifications.meal_plans import (
+    notify_created,
+    notify_removed,
+    notify_updated,
+    participant_ids,
 )
 from mykhaya.schemas import (
     AddIngredientsToListRequest,
@@ -545,6 +552,7 @@ async def create_meal_plan_entry(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> MealPlanEntryResponse:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
@@ -578,6 +586,7 @@ async def create_meal_plan_entry(
     audit(
         db, request, "meals.plan_entry.created", auth.user.id, home_id, "meal_plan_entry", entry.id
     )
+    await notify_created(db, settings, entry, meal, auth.user.id)
     await db.commit()
     return await _entry_response(db, entry, meal)
 
@@ -620,6 +629,7 @@ async def update_meal_plan_entry(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> MealPlanEntryResponse:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
@@ -630,6 +640,16 @@ async def update_meal_plan_entry(
             status.HTTP_409_CONFLICT, "This planned meal changed. Reload and try again."
         )
 
+    before_participants = await participant_ids(db, entry.id)
+    before_cook = entry.cook_member_id
+    before_state = (
+        entry.meal_id,
+        entry.quick_meal_name,
+        entry.date,
+        entry.meal_slot,
+        entry.time,
+        entry.cook_member_id,
+    )
     meal = await _resolve_meal_reference(db, home_id, body.meal_id)
 
     if body.member_ids is None:
@@ -647,9 +667,28 @@ async def update_meal_plan_entry(
     entry.cook_member_id = body.cook_member_id
     entry.makes_leftovers = body.makes_leftovers
 
+    material_change = before_state != (
+        entry.meal_id,
+        entry.quick_meal_name,
+        entry.date,
+        entry.meal_slot,
+        entry.time,
+        entry.cook_member_id,
+    ) or before_participants != set(member_ids)
+
     await _set_participants(db, entry.id, member_ids)
     audit(
         db, request, "meals.plan_entry.updated", auth.user.id, home_id, "meal_plan_entry", entry.id
+    )
+    await notify_updated(
+        db,
+        settings,
+        entry,
+        meal,
+        auth.user.id,
+        before_participants,
+        before_cook,
+        material_change,
     )
     await db.commit()
     await db.refresh(entry)
@@ -663,14 +702,19 @@ async def delete_meal_plan_entry(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> None:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
     entry = await _get_active_entry(db, home_id, entry_id)
+    prior_participants = await participant_ids(db, entry.id)
+    prior_cook = entry.cook_member_id
+    meal = await _resolve_meal_reference(db, home_id, entry.meal_id) if entry.meal_id else None
     entry.deleted_at = datetime.now(tz=entry.created_at.tzinfo)
     audit(
         db, request, "meals.plan_entry.deleted", auth.user.id, home_id, "meal_plan_entry", entry.id
     )
+    await notify_removed(db, settings, entry, meal, auth.user.id, prior_participants, prior_cook)
     await db.commit()
 
 

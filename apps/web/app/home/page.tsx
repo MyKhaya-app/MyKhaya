@@ -2,12 +2,23 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Bell, CalendarPlus, Gift, Lock, UserPlus, UtensilsCrossed } from "lucide-react";
+import {
+  Bell,
+  CalendarPlus,
+  Check,
+  Circle,
+  Gift,
+  ListChecks,
+  Lock,
+  UserPlus,
+  UtensilsCrossed,
+} from "lucide-react";
 import type {
   BirthdayEntry,
   EventOccurrence,
   HomeSummary,
   Member,
+  Routine,
   User,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
@@ -153,8 +164,11 @@ export default function HomePage() {
   const [calendarEnabled, setCalendarEnabled] = useState(false);
   const [mealsFeatureOn, setMealsFeatureOn] = useState(false);
   const [mealsEnabled, setMealsEnabled] = useState(false);
+  const [listsFeatureOn, setListsFeatureOn] = useState(false);
+  const [listsEnabled, setListsEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
   const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
@@ -180,10 +194,12 @@ export default function HomePage() {
       .then((billing) => {
         setCanInviteMore(canAddMember(billing.member_usage));
         setMealsEnabled(billing.meals_enabled);
+        setListsEnabled(billing.lists_enabled);
       })
       .catch(() => {
         setCanInviteMore(false);
         setMealsEnabled(false);
+        setListsEnabled(false);
       });
     Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
       .then(async ([matrix, memberRows]) => {
@@ -195,34 +211,53 @@ export default function HomePage() {
         setMealsFeatureOn(
           matrix.features.some((feature) => feature.feature === "meals" && feature.enabled),
         );
-        if (!enabled) {
+        setListsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "shopping" && feature.enabled),
+        );
+        const notificationsEnabled = matrix.features.some(
+          (feature) => feature.feature === "notifications" && feature.enabled,
+        );
+        if (!enabled && !notificationsEnabled) {
           setSummary(null);
           setUpcoming([]);
+          setRoutines([]);
           return;
         }
-        const [homeSummary, upcomingRows] = await Promise.all([
-          api.homeSummary(activeHomeId),
-          api.listEvents(activeHomeId, {
-            // Fetch a small UTC safety envelope, then apply the exact local
-            // calendar-date window below using each occurrence's timezone.
-            start_at: new Date(Date.now() - 86_400_000).toISOString(),
-            end_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
-            page_size: 200,
-          }),
+        const [calendarData, routineData] = await Promise.all([
+          enabled
+            ? Promise.all([
+                api.homeSummary(activeHomeId),
+                api.listEvents(activeHomeId, {
+                  // Fetch a small UTC safety envelope, then apply the exact local
+                  // calendar-date window below using each occurrence's timezone.
+                  start_at: new Date(Date.now() - 86_400_000).toISOString(),
+                  end_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+                  page_size: 200,
+                }),
+              ])
+            : null,
+          notificationsEnabled ? api.routines(activeHomeId, { home: true }) : null,
         ]);
-        setSummary(homeSummary);
-        const todayOccurrenceIds = new Set(
-          homeSummary.today_events.map((event) => event.occurrence_id),
-        );
-        setUpcoming(
-          upcomingRows.items
-            .filter(
-              (event) =>
-                !todayOccurrenceIds.has(event.occurrence_id) && isComingUp(event),
-            )
-            .sort(compareUpcoming)
-            .slice(0, 3),
-        );
+        if (calendarData) {
+          const [homeSummary, upcomingRows] = calendarData;
+          setSummary(homeSummary);
+          const todayOccurrenceIds = new Set(
+            homeSummary.today_events.map((event) => event.occurrence_id),
+          );
+          setUpcoming(
+            upcomingRows.items
+              .filter(
+                (event) =>
+                  !todayOccurrenceIds.has(event.occurrence_id) && isComingUp(event),
+              )
+              .sort(compareUpcoming)
+              .slice(0, 3),
+          );
+        } else {
+          setSummary(null);
+          setUpcoming([]);
+        }
+        setRoutines(routineData?.items ?? []);
       })
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
@@ -242,6 +277,45 @@ export default function HomePage() {
     if (!result.ok && result.reason === "error") {
       setError("Could not enable notifications on this device. Please try again.");
     }
+  }
+
+  async function completeRoutine(routine: Routine) {
+    if (!activeHomeId || !routine.home_occurrence_date || routine.home_completed_at) return;
+    const previous = routines;
+    const completedAt = new Date().toISOString();
+    setRoutines((current) =>
+      current.map((item) =>
+        item.id === routine.id
+          ? {
+              ...item,
+              home_completed_at: completedAt,
+              home_completed_by_user_id: user?.id ?? null,
+              home_completed_by_display_name: user?.display_name ?? "You",
+            }
+          : item,
+      ),
+    );
+    try {
+      await api.completeRoutine(activeHomeId, routine.id, routine.home_occurrence_date);
+      window.setTimeout(() => {
+        setRoutines((current) => current.filter((item) => item.id !== routine.id));
+      }, 1500);
+    } catch (cause) {
+      setRoutines(previous);
+      setError((cause as Error).message);
+    }
+  }
+
+  function routineDueLabel(routine: Routine) {
+    const occurrence = routine.home_occurrence_date;
+    if (!occurrence) return "Scheduled";
+    const today = new Date().toISOString().slice(0, 10);
+    if (occurrence < today) return "Overdue";
+    if (occurrence === today) return "Today";
+    if (occurrence === new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)) {
+      return "Tomorrow";
+    }
+    return occurrence;
   }
 
   // Requesting push permission before the app is installed leads nowhere useful on
@@ -352,6 +426,44 @@ export default function HomePage() {
           </section>
         )}
 
+        {routines.length > 0 && (
+          <section className="card home-section home-todo-section">
+            <div className="section-heading">
+              <h2>To do</h2>
+              <Link className="tertiary" href="/settings/routines">
+                See all
+              </Link>
+            </div>
+            <div className="home-routine-list">
+              {routines.map((routine) => {
+                const completed = Boolean(routine.home_completed_at);
+                return (
+                  <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={routine.id}>
+                    <button
+                      className="home-routine-check"
+                      type="button"
+                      aria-label={`${completed ? "Completed" : "Complete"} ${routine.title}`}
+                      aria-pressed={completed}
+                      onClick={() => completeRoutine(routine)}
+                      disabled={completed}
+                    >
+                      {completed ? <Check size={16} aria-hidden="true" /> : <Circle size={19} aria-hidden="true" />}
+                    </button>
+                    <Link className="home-routine-copy" href="/settings/routines">
+                      <strong>{routine.title}</strong>
+                      <small>
+                        {completed && routine.home_completed_by_display_name
+                          ? `Done by ${routine.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
+                          : `${routineDueLabel(routine)} · ${routine.scope === "household" ? "Household" : "Personal"}`}
+                      </small>
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {activeHomeId && <MealPlansTonightCard homeId={activeHomeId} />}
 
         {calendarEnabled && (
@@ -418,6 +530,20 @@ export default function HomePage() {
                 )}
                 <UtensilsCrossed size={20} aria-hidden="true" />
                 Meal plans
+              </Link>
+            )}
+            {listsFeatureOn && (
+              <Link
+                className={`quick-action${listsEnabled ? "" : " quick-action-locked"}`}
+                href="/lists"
+              >
+                {!listsEnabled && (
+                  <span className="quick-action-lock" aria-hidden="true">
+                    <Lock size={11} />
+                  </span>
+                )}
+                <ListChecks size={20} aria-hidden="true" />
+                Lists
               </Link>
             )}
           </div>

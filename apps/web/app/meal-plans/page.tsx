@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   ChefHat,
   ChevronLeft,
@@ -1041,8 +1042,11 @@ function AddIngredientsToListSheet({
     setBusy(true);
     setError("");
     try {
-      const created = await api.createList(homeId, newListName.trim());
-      setLists((current) => [...current, { ...created, item_count: 0 }]);
+      const created = await api.createList(homeId, { name: newListName.trim() });
+      setLists((current) => [
+        ...current,
+        { ...created, item_count: 0, remaining_count: 0 },
+      ]);
       setListId(created.id);
       setCreatingList(false);
       setNewListName("");
@@ -1097,9 +1101,14 @@ function AddIngredientsToListSheet({
           {result.duplicate_count > 0 &&
             ` ${result.duplicate_count} ${result.duplicate_count === 1 ? "was" : "were"} already there.`}
         </p>
-        <button type="button" className="secondary" onClick={onClose}>
-          Done
-        </button>
+        <div className="meal-copy-week-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Done
+          </button>
+          <Link className="button sheet-primary" href={`/lists/${result.list_id}`}>
+            View {listName}
+          </Link>
+        </div>
       </BottomSheet>
     );
   }

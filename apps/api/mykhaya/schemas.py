@@ -707,6 +707,10 @@ class RoutineResponse(BaseModel):
     member_ids: list[uuid.UUID]
     next_occurrence_date: date | None
     completed_today: bool
+    home_occurrence_date: date | None = None
+    home_completed_at: datetime | None = None
+    home_completed_by_user_id: uuid.UUID | None = None
+    home_completed_by_display_name: str | None = None
     created_by: uuid.UUID
     updated_at: datetime
 
@@ -922,29 +926,79 @@ class AddIngredientsToListResponse(StrictModel):
 # ---------------------------------------------------------------------------
 
 
+LIST_ICONS = (
+    "groceries",
+    "shopping",
+    "packing",
+    "home",
+    "school",
+    "party",
+    "christmas",
+    "other",
+)
+
+
 class ListCreate(StrictModel):
     name: str = Field(min_length=1, max_length=160)
+    icon: str | None = Field(default=None, max_length=20)
+
+    @field_validator("icon")
+    @classmethod
+    def _icon_known(cls, value: str | None) -> str | None:
+        if value is not None and value not in LIST_ICONS:
+            raise ValueError(f"icon must be one of {', '.join(LIST_ICONS)}")
+        return value
+
+
+class ListRenameRequest(ListCreate):
+    expected_updated_at: datetime
 
 
 class ListItemInput(StrictModel):
     text: str = Field(min_length=1, max_length=200)
+    quantity: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=500)
+    assigned_member_id: uuid.UUID | None = None
 
 
 class ListItemResponse(BaseModel):
     id: uuid.UUID
     position: int
     text: str
+    quantity: str | None
+    note: str | None
+    assigned_member_id: uuid.UUID | None
     is_checked: bool
+    completed_at: datetime | None
+    completed_by: uuid.UUID | None
 
 
-class ListItemToggleRequest(StrictModel):
-    is_checked: bool
+class ListItemUpdate(StrictModel):
+    """Every field optional — only the ones present in the request body are
+    applied (see `model_fields_set` in mykhaya.routers.lists), so a single
+    endpoint covers a quick checkbox toggle and a full edit alike without
+    a client needing to resend fields it isn't changing."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=200)
+    quantity: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=500)
+    assigned_member_id: uuid.UUID | None = None
+    is_checked: bool | None = None
+
+
+class ListItemReorderRequest(StrictModel):
+    # The full ordered set of item ids for this list — validated as an
+    # exact match against the list's current active items, then applied as
+    # position = index. See mykhaya.routers.lists.reorder_list_items.
+    item_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
 
 
 class ListResponse(BaseModel):
     id: uuid.UUID
     name: str
+    icon: str | None
     item_count: int
+    remaining_count: int
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -953,7 +1007,10 @@ class ListResponse(BaseModel):
 class ListDetailResponse(BaseModel):
     id: uuid.UUID
     name: str
+    icon: str | None
     items: list[ListItemResponse]
+    item_count: int
+    remaining_count: int
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime

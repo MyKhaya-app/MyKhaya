@@ -360,6 +360,10 @@ export interface Routine {
   member_ids: string[];
   next_occurrence_date: string | null;
   completed_today: boolean;
+  home_occurrence_date?: string | null;
+  home_completed_at?: string | null;
+  home_completed_by_user_id?: string | null;
+  home_completed_by_display_name?: string | null;
   created_by: string;
   updated_at: string;
 }
@@ -550,22 +554,41 @@ export interface AddIngredientsToListResult {
 }
 
 // ---------------------------------------------------------------------------
-// Household Lists — MyKhaya's one shared-list primitive. See
-// mykhaya.routers.lists and docs/architecture/meal-plans.md "Lists
-// integration".
+// Household Lists — MyKhaya's one shared-list primitive (groceries,
+// packing, DIY, school, party/Christmas/holiday prep, and Meal Plans' "Add
+// ingredients to list" destination). See mykhaya.routers.lists and
+// docs/architecture/lists.md.
 // ---------------------------------------------------------------------------
+
+// Presentation-only preset — mirrors mykhaya.schemas.LIST_ICONS.
+export type ListIcon =
+  | "groceries"
+  | "shopping"
+  | "packing"
+  | "home"
+  | "school"
+  | "party"
+  | "christmas"
+  | "other";
 
 export interface HouseholdListItem {
   id: string;
   position: number;
   text: string;
+  quantity: string | null;
+  note: string | null;
+  assigned_member_id: string | null;
   is_checked: boolean;
+  completed_at: string | null;
+  completed_by: string | null;
 }
 
 export interface HouseholdList {
   id: string;
   name: string;
+  icon: ListIcon | null;
   item_count: number;
+  remaining_count: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -574,7 +597,10 @@ export interface HouseholdList {
 export interface HouseholdListDetail {
   id: string;
   name: string;
+  icon: ListIcon | null;
   items: HouseholdListItem[];
+  item_count: number;
+  remaining_count: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -582,6 +608,35 @@ export interface HouseholdListDetail {
 
 export interface HouseholdListListResponse {
   items: HouseholdList[];
+}
+
+export interface ListCreatePayload {
+  name: string;
+  icon?: ListIcon | null;
+}
+
+export interface ListRenamePayload {
+  name: string;
+  icon?: ListIcon | null;
+  expected_updated_at: string;
+}
+
+export interface ListItemInputPayload {
+  text: string;
+  quantity?: string | null;
+  note?: string | null;
+  assigned_member_id?: string | null;
+}
+
+// Every field optional — only the ones present are applied server-side
+// (see mykhaya.schemas.ListItemUpdate). A plain checkbox toggle sends only
+// `is_checked`; an edit sends only the fields that changed.
+export interface ListItemUpdatePayload {
+  text?: string;
+  quantity?: string | null;
+  note?: string | null;
+  assigned_member_id?: string | null;
+  is_checked?: boolean;
 }
 
 export interface UserBirthdayPayload {
