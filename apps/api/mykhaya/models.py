@@ -1328,6 +1328,49 @@ class MealPlanParticipant(UuidTimeMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
 
 
+class HouseholdList(UuidTimeMixin, Base):
+    """A shared household list — groceries, packing, to-dos, and (via Meal
+    Plans' "Add ingredients to list") a meal's ingredients. Deliberately
+    generic, not meal- or shopping-specific: this is MyKhaya's one Lists
+    primitive, reused by any module that needs "put some items on a shared
+    list" rather than each module growing its own. Soft-deleted, matching
+    Meal's pattern, so nothing else has to null out a reference to it."""
+
+    __tablename__ = "household_lists"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_household_list_name_nonempty"),
+        Index("ix_household_list_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HouseholdListItem(UuidTimeMixin, Base):
+    """One line on a HouseholdList. Plain text plus a checked-off flag —
+    no quantity/unit split of its own (a Meal ingredient's "500 g beef
+    mince" is folded into `text` once, when it's added — see
+    mykhaya.routers.lists.ingredient_item_text). Hard-deleted on removal:
+    unlike a Meal or a MealPlanEntry, nothing else ever references a list
+    item by id, so there's no dangling-reference risk to guard against."""
+
+    __tablename__ = "household_list_items"
+    __table_args__ = (
+        CheckConstraint("char_length(text) >= 1", name="ck_household_list_item_text_nonempty"),
+        Index("ix_household_list_item_list_position", "list_id", "position"),
+    )
+    list_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    text: Mapped[str] = mapped_column(String(200))
+    is_checked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
 class PlatformPushSettings(UuidTimeMixin, Base):
     """Platform-Admin-managed Web Push (VAPID) configuration. Single row; app logic
     enforces that. Same environment-wins precedence model as PlatformSmtpSettings."""

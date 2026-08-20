@@ -71,7 +71,9 @@ async def test_home_admin_features_relationships_and_managed_child(
     module_ids = {row["id"] for row in management.json()}
     assert "calendar" in module_ids
     assert "tasks" not in module_ids
-    assert "shopping" not in module_ids
+    # "shopping" is now the released Lists module (mykhaya.routers.lists) —
+    # see docs/architecture/meal-plans.md "Lists integration".
+    assert "shopping" in module_ids
 
     hidden_update = await unsafe(
         client,

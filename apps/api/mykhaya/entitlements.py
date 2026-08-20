@@ -78,10 +78,12 @@ class PlanDefinition:
 #
 # Enforced today (a real endpoint calls require_entitlement/require_within_limit
 # against it): calendar.max_categories, home.max_members,
-# routines.personal.max_active, routines.household.enabled.
+# routines.personal.max_active, routines.household.enabled, meals.enabled,
+# lists.enabled (mykhaya.routers.lists, reusing FeatureKey.shopping's
+# release slot — see docs/architecture/meal-plans.md "Lists integration").
 #
 # Declared as commercial data only — no live enforcement, because either the
-# underlying module doesn't exist/isn't released yet (lists/chores/wishlists/
+# underlying module doesn't exist/isn't released yet (chores/wishlists/
 # notes — see mykhaya.module_registry), or the correct enforcement design is
 # a deliberate follow-up task rather than something to improvise here
 # (events.shared.enabled, members.external_invites.enabled,

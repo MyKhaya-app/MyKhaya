@@ -46,6 +46,12 @@ class Capability(StrEnum):
     # per-person ownership model. See docs/architecture/meal-plans.md.
     meals_view = "meals.view"
     meals_manage = "meals.manage"
+    # Household Lists (mykhaya.routers.lists) — same shared-structure "view
+    # vs manage" split as Meal Plans, reusing FeatureKey.shopping's release
+    # slot and the pre-declared "lists.enabled" entitlement (see
+    # entitlements.PLAN_DEFINITIONS) rather than adding a new feature key.
+    lists_view = "lists.view"
+    lists_manage = "lists.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
@@ -63,6 +69,8 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.household_manage_routines,
             Capability.meals_view,
             Capability.meals_manage,
+            Capability.lists_view,
+            Capability.lists_manage,
         }
     ),
     PermissionProfile.child_restricted: frozenset(),

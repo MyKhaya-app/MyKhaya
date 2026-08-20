@@ -95,6 +95,9 @@ async def create_home(
     home_id = uuid.UUID(group.json()["id"])
     async with SessionFactory() as db:
         db.add(FeatureOverride(feature_key=FeatureKey.meals, group_id=home_id, enabled=True))
+        # Lists (FeatureKey.shopping) too — the ingredients-to-list flow
+        # this test module also covers needs both modules released.
+        db.add(FeatureOverride(feature_key=FeatureKey.shopping, group_id=home_id, enabled=True))
         subscription = await get_home_subscription(db, home_id)
         assert subscription is not None
         subscription.plan = plan
@@ -688,3 +691,534 @@ async def test_billing_status_exposes_meals_enabled_for_the_frontend_locked_stat
     family_status = await client.get(f"/api/v1/groups/{home_id}/billing")
     assert family_status.status_code == 200
     assert family_status.json()["meals_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_billing_status_exposes_lists_enabled(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("lists-billing"), "Lists Billing User")
+    home_id = await create_home(client, "Lists Billing Free Home", plan=SubscriptionPlan.free)
+    free_status = await client.get(f"/api/v1/groups/{home_id}/billing")
+    assert free_status.json()["lists_enabled"] is False
+
+    home_id_family = await create_home(client, "Lists Billing Family Home")
+    family_status = await client.get(f"/api/v1/groups/{home_id_family}/billing")
+    assert family_status.json()["lists_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Meals library list shape (lightweight, batched) and recently-used
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_meal_list_response_omits_ingredients_but_reports_a_count(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("summary"), "Summary User")
+    home_id = await create_home(client, "Summary Home")
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    assert created.status_code == 201
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/meals")
+    assert listed.status_code == 200
+    row = listed.json()["items"][0]
+    assert "ingredients" not in row
+    assert row["ingredient_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_recently_used_meals_derived_from_plan_history(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("recent"), "Recent User")
+    home_id = await create_home(client, "Recent Home")
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+
+    empty = await client.get(f"/api/v1/homes/{home_id}/meals/recent")
+    assert empty.json()["items"] == []
+
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(meal_id=meal_id, quick_meal_name=None),
+    )
+    recent = await client.get(f"/api/v1/homes/{home_id}/meals/recent")
+    assert recent.status_code == 200
+    assert len(recent.json()["items"]) == 1
+    assert recent.json()["items"][0]["meal"]["id"] == meal_id
+    assert recent.json()["items"][0]["last_planned"] == date.today().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Save a quick meal to the library
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_save_quick_meal_to_library(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("save-quick"), "Save Quick User")
+    home_id = await create_home(client, "Save Quick Home")
+    entry = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(quick_meal_name="Fajitas"),
+    )
+    entry_id = entry.json()["id"]
+
+    saved = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/meal-plan/entries/{entry_id}/save-as-meal"
+    )
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["quick_meal_name"] is None
+    assert body["meal_id"] is not None
+    assert body["meal_name"] == "Fajitas"
+
+    library = await client.get(f"/api/v1/homes/{home_id}/meals")
+    assert any(row["name"] == "Fajitas" for row in library.json()["items"])
+
+    again = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/meal-plan/entries/{entry_id}/save-as-meal"
+    )
+    assert again.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Household Lists
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lists_crud_and_items(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("lists-crud"), "Lists Crud User")
+    home_id = await create_home(client, "Lists Crud Home")
+
+    created = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Groceries"}
+    )
+    assert created.status_code == 201
+    list_id = created.json()["id"]
+    assert created.json()["items"] == []
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
+    assert listed.status_code == 200
+    assert any(row["id"] == list_id and row["item_count"] == 0 for row in listed.json()["items"])
+
+    item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items",
+        json={"text": "Milk"},
+    )
+    assert item.status_code == 201
+    item_id = item.json()["items"][0]["id"]
+    assert item.json()["items"][0]["is_checked"] is False
+
+    toggled = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/{item_id}",
+        json={"is_checked": True},
+    )
+    assert toggled.json()["items"][0]["is_checked"] is True
+
+    removed = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/lists/{list_id}/items/{item_id}"
+    )
+    assert removed.status_code == 200
+    assert removed.json()["items"] == []
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert deleted.status_code == 204
+    after_delete = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert after_delete.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_read_or_write_another_homes_list(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("lists-a"), "Lists Home A")
+    home_a = await create_home(client, "Lists Home A")
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_a}/lists", json={"name": "A"})
+    list_id = created.json()["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        await create_verified_user(other_client, unique_email("lists-b"), "Lists Home B")
+        home_b = await create_home(other_client, "Lists Home B")
+
+        read = await other_client.get(f"/api/v1/homes/{home_b}/lists/{list_id}")
+        assert read.status_code == 404
+
+        write = await unsafe(
+            other_client,
+            "POST",
+            f"/api/v1/homes/{home_b}/lists/{list_id}/items",
+            json={"text": "Sneaky"},
+        )
+        assert write.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Ingredients -> Lists integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_meal_ingredients_to_list(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("add-ing"), "Add Ingredients User")
+    home_id = await create_home(client, "Add Ingredients Home")
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+    target_list = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Groceries"}
+    )
+    list_id = target_list.json()["id"]
+
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+        json={"list_id": list_id},
+    )
+    assert result.status_code == 200
+    body = result.json()
+    assert body["requires_confirmation"] is False
+    assert body["added_count"] == 2
+
+    fetched_list = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    texts = {row["text"] for row in fetched_list.json()["items"]}
+    assert texts == {"500 g beef mince", "1 onion"}
+
+
+@pytest.mark.asyncio
+async def test_add_ingredients_to_list_warns_then_skips_duplicates(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("dupe"), "Dupe User")
+    home_id = await create_home(client, "Dupe Home")
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+    target_list = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Groceries"}
+    )
+    list_id = target_list.json()["id"]
+    # Pre-seed one duplicate (case-insensitive exact text match).
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items",
+        json={"text": "500 G BEEF MINCE"},
+    )
+
+    first_call = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+        json={"list_id": list_id},
+    )
+    assert first_call.status_code == 200
+    body = first_call.json()
+    assert body["requires_confirmation"] is True
+    assert body["added_count"] == 0
+    assert body["duplicate_count"] == 1
+
+    fetched_list = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert len(fetched_list.json()["items"]) == 1  # nothing added yet
+
+    confirmed = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+        json={"list_id": list_id, "confirm": True},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["added_count"] == 1  # only the non-duplicate
+
+    fetched_list = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert len(fetched_list.json()["items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_add_ingredients_to_list_rejects_a_meal_with_no_ingredients(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("no-ing"), "No Ingredients User")
+    home_id = await create_home(client, "No Ingredients Home")
+    meal = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/meals", json={"name": "Cereal"}
+    )
+    meal_id = meal.json()["id"]
+    target_list = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Groceries"}
+    )
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+        json={"list_id": target_list.json()["id"]},
+    )
+    assert result.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_add_ingredients_to_list_rejects_cross_home_list_and_deleted_meal(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("cross-add"), "Cross Add User")
+    home_id = await create_home(client, "Cross Add Home")
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        await create_verified_user(other_client, unique_email("cross-add-b"), "Other Home")
+        other_home = await create_home(other_client, "Other Home")
+        other_list = await unsafe(
+            other_client, "POST", f"/api/v1/homes/{other_home}/lists", json={"name": "Theirs"}
+        )
+        other_list_id = other_list.json()["id"]
+
+        # Same Home's meal, but a List belonging to a different Home.
+        cross = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+            json={"list_id": other_list_id},
+        )
+        assert cross.status_code == 404
+
+    # A deleted Meal must also be rejected, not silently resurrected.
+    own_list = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Own"}
+    )
+    await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/meals/{meal_id}")
+    deleted_meal = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+        json={"list_id": own_list.json()["id"]},
+    )
+    assert deleted_meal.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_add_ingredients_to_list_requires_meals_and_lists_entitlement(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("free-add"), "Free Add User")
+    home_id = await create_home(client, "Free Add Home", plan=SubscriptionPlan.free)
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meals/{uuid.uuid4()}/add-ingredients-to-list",
+        json={"list_id": str(uuid.uuid4())},
+    )
+    assert result.status_code == 403
+    assert result.json()["detail"]["code"] == "plan_feature_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Copy previous week
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_copy_previous_week_copies_and_skips_existing(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("copy"), "Copy User")
+    home_id = await create_home(client, "Copy Home")
+    partner_id = await add_partner(client, home_id, unique_email("copy-partner"), "Partner")
+
+    source_start = date.today() - timedelta(days=date.today().weekday())
+    target_start = source_start + timedelta(days=7)
+
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(
+            meal_id=meal_id,
+            quick_meal_name=None,
+            date=source_start.isoformat(),
+            meal_slot="dinner",
+            time="18:30:00",
+            member_ids=[str(partner_id)],
+            cook_member_id=str(partner_id),
+            makes_leftovers=True,
+        ),
+    )
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(date=source_start.isoformat(), meal_slot="lunch"),
+    )
+    # Target already has a Tuesday breakfast planned — must be left alone.
+    already_there = source_start + timedelta(days=1)
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(
+            date=already_there.isoformat(), meal_slot="breakfast", quick_meal_name="Existing"
+        ),
+    )
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(
+            date=(already_there + timedelta(days=7)).isoformat(),
+            meal_slot="breakfast",
+            quick_meal_name="Don't touch me",
+        ),
+    )
+
+    preview = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/week/copy",
+        json={
+            "source_start_date": source_start.isoformat(),
+            "target_start_date": target_start.isoformat(),
+            "dry_run": True,
+        },
+    )
+    assert preview.status_code == 200
+    assert preview.json() == {"copied_count": 2, "skipped_count": 1}
+
+    # A dry run must not have written anything.
+    target_week = await client.get(
+        f"/api/v1/homes/{home_id}/meal-plan/week?start_date={target_start.isoformat()}"
+    )
+    total_target_entries = sum(len(day["entries"]) for day in target_week.json()["days"])
+    assert total_target_entries == 1  # only the pre-seeded "Don't touch me"
+
+    committed = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/week/copy",
+        json={
+            "source_start_date": source_start.isoformat(),
+            "target_start_date": target_start.isoformat(),
+        },
+    )
+    assert committed.status_code == 200
+    assert committed.json() == {"copied_count": 2, "skipped_count": 1}
+
+    target_week = await client.get(
+        f"/api/v1/homes/{home_id}/meal-plan/week?start_date={target_start.isoformat()}"
+    )
+    days_by_date = {day["date"]: day["entries"] for day in target_week.json()["days"]}
+    dinner = next(e for e in days_by_date[target_start.isoformat()] if e["meal_slot"] == "dinner")
+    assert dinner["meal_id"] == meal_id
+    assert dinner["time"] == "18:30:00"
+    assert dinner["member_ids"] == [str(partner_id)]
+    assert dinner["cook_member_id"] == str(partner_id)
+    assert dinner["makes_leftovers"] is True
+
+    # The pre-existing breakfast the following week was never overwritten.
+    untouched_date = (already_there + timedelta(days=7)).isoformat()
+    breakfast = next(e for e in days_by_date[untouched_date] if e["meal_slot"] == "breakfast")
+    assert breakfast["quick_meal_name"] == "Don't touch me"
+
+
+@pytest.mark.asyncio
+async def test_copy_previous_week_omits_removed_participants_and_deleted_meals(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("copy-safe"), "Copy Safe User")
+    home_id = await create_home(client, "Copy Safe Home")
+    partner_id = await add_partner(client, home_id, unique_email("copy-safe-p"), "Partner")
+
+    source_start = date.today() - timedelta(days=date.today().weekday())
+    target_start = source_start + timedelta(days=14)
+
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
+    meal_id = meal.json()["id"]
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(
+            meal_id=meal_id,
+            quick_meal_name=None,
+            date=source_start.isoformat(),
+            meal_slot="dinner",
+            member_ids=[str(partner_id)],
+            cook_member_id=str(partner_id),
+        ),
+    )
+
+    # The Meal gets soft-deleted, and the partner leaves the Home, before
+    # the copy happens.
+    await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/meals/{meal_id}")
+    async with SessionFactory() as db:
+        membership = await db.scalar(
+            select(Membership).where(
+                Membership.group_id == home_id, Membership.user_id == partner_id
+            )
+        )
+        assert membership is not None
+        membership.removed_at = datetime.now(UTC)
+        await db.commit()
+
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/week/copy",
+        json={
+            "source_start_date": source_start.isoformat(),
+            "target_start_date": target_start.isoformat(),
+        },
+    )
+    assert result.status_code == 200
+    assert result.json()["copied_count"] == 1
+
+    target_week = await client.get(
+        f"/api/v1/homes/{home_id}/meal-plan/week?start_date={target_start.isoformat()}"
+    )
+    days_by_date = {day["date"]: day["entries"] for day in target_week.json()["days"]}
+    dinner = next(e for e in days_by_date[target_start.isoformat()] if e["meal_slot"] == "dinner")
+    # The deleted Meal falls back to its name as a quick meal, not a
+    # resurrected reference; the removed partner is simply omitted.
+    assert dinner["meal_id"] is None
+    assert dinner["quick_meal_name"] == "Spaghetti Bolognese"
+    assert dinner["member_ids"] == []
+    assert dinner["cook_member_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_copy_previous_week_cross_home_isolation(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("copy-x"), "Copy X User")
+    home_id = await create_home(client, "Copy X Home")
+    source_start = date.today() - timedelta(days=date.today().weekday())
+    await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/meal-plan/entries",
+        json=entry_body(date=source_start.isoformat(), meal_slot="dinner"),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        await create_verified_user(other_client, unique_email("copy-y"), "Copy Y User")
+        other_home = await create_home(other_client, "Copy Y Home")
+        # Another Home cannot use a source week to read/copy this Home's
+        # entries into itself just by naming the same date range — the
+        # source range is always read scoped to the *caller's* home_id.
+        result = await unsafe(
+            other_client,
+            "POST",
+            f"/api/v1/homes/{other_home}/meal-plan/week/copy",
+            json={
+                "source_start_date": source_start.isoformat(),
+                "target_start_date": (source_start + timedelta(days=7)).isoformat(),
+            },
+        )
+        assert result.status_code == 200
+        assert result.json()["copied_count"] == 0

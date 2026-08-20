@@ -4451,6 +4451,7 @@ button.danger,
 }
 .meal-entry-card {
   align-items: center;
+  color: var(--colour-slate);
   display: flex;
   gap: 0.75rem;
   justify-content: space-between;
@@ -4578,11 +4579,15 @@ button.danger,
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.7rem;
 }
 .meal-library-toolbar input[type="search"] {
   flex: 1;
   min-width: 160px;
+}
+.meal-library-filter {
+  margin-bottom: 1rem;
+  max-width: 220px;
 }
 .meal-library-grid {
   display: grid;
@@ -4592,7 +4597,20 @@ button.danger,
 .meal-library-card {
   display: grid;
   gap: 0.5rem;
-  padding: 1rem 1.1rem;
+  padding: 0;
+}
+.meal-library-card-body {
+  background: none;
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem 0;
+  text-align: left;
+  width: 100%;
+}
+.meal-library-card-body:hover {
+  box-shadow: none;
+  transform: none;
 }
 .meal-library-heading {
   align-items: center;
@@ -4611,21 +4629,130 @@ button.danger,
   align-items: center;
   display: flex;
   gap: 0.4rem;
-  margin-top: 0.3rem;
+  padding: 0 1.1rem 1rem;
 }
-.meal-ingredient-list {
+.meal-library-actions .secondary {
+  flex: 1;
+}
+/* Good empty state for a Home with no saved meals yet — not just an
+   apologetic sentence, a clear way forward. */
+.meal-empty-state {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  padding: 1rem 0.1rem;
+}
+.meal-recent-section {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.meal-recent-list {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+.meal-recent-row {
+  background: var(--colour-white);
+  border: 1px solid #efe9dd;
+  border-radius: var(--radius-small);
+  color: var(--colour-slate);
+  display: grid;
+  flex: none;
+  gap: 0.2rem;
+  min-width: 160px;
+  padding: 0.6rem 0.85rem;
+  text-align: left;
+}
+.meal-actions-sheet {
   display: grid;
   gap: 0.5rem;
 }
-.meal-ingredient-row {
-  align-items: center;
+.meal-actions-sheet button {
+  justify-content: flex-start;
+}
+.meal-copy-week-button {
+  margin-bottom: 0.75rem;
+}
+.meal-copy-week-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.meal-copy-week-actions button {
+  flex: 1;
+}
+.meal-duplicate-list {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  list-style: disc;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.meal-entry-thumb {
+  border-radius: var(--radius-small);
+  flex: none;
+  height: 44px;
+  object-fit: cover;
+  width: 44px;
+}
+.meal-view-image {
+  border-radius: var(--radius-card);
+  max-height: 200px;
+  object-fit: cover;
+  width: 100%;
+}
+.meal-view-actions {
+  display: grid;
+  gap: 0.5rem;
+}
+.meal-favourite-field {
+  justify-content: center;
+}
+.meal-ingredient-list {
+  display: grid;
+  gap: 0.6rem;
+}
+/* One small card per ingredient — Quantity/Unit share a row (both narrow
+   enough), Ingredient always gets its own full-width row, so nothing ever
+   has to squeeze three fields into one line on a phone. */
+.meal-ingredient-card {
+  background: var(--colour-cream-light);
+  border-radius: var(--radius-small);
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 0.75rem 0.65rem;
+  position: relative;
+}
+.meal-ingredient-qty-row {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  padding-right: 2.2rem;
+}
+.meal-ingredient-remove {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  position: absolute;
+  right: 0.6rem;
+  top: 0.6rem;
+}
+.meal-ingredient-checklist {
+  display: grid;
+  gap: 0.3rem;
+}
+.meal-ingredient-view-list {
+  color: var(--colour-slate);
   display: grid;
   gap: 0.4rem;
-  grid-template-columns: 4.5rem 4.5rem minmax(0, 1fr) auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
-.meal-ingredient-qty,
-.meal-ingredient-unit {
-  min-width: 0;
+.meal-instructions {
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 .meal-tonight-summary {
   align-items: center;
@@ -4637,12 +4764,4 @@ button.danger,
 }
 .meal-tonight-summary strong {
   color: var(--colour-slate);
-}
-@media (max-width: 480px) {
-  .meal-ingredient-row {
-    grid-template-columns: 1fr 1fr;
-  }
-  .meal-ingredient-row .meal-ingredient-text {
-    grid-column: 1 / -1;
-  }
 }

@@ -781,8 +781,38 @@ class MealResponse(BaseModel):
     updated_at: datetime
 
 
+class MealSummaryResponse(BaseModel):
+    """The Meals library list view's shape — everything a meal card needs,
+    deliberately *without* the ingredient list, so browsing the library
+    never pulls every meal's full ingredient set over the wire. See
+    MealResponse for the full detail shape (get/create/update)."""
+
+    id: uuid.UUID
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    is_favourite: bool
+    tags: list[str]
+    ingredient_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class MealListResponse(BaseModel):
-    items: list[MealResponse]
+    items: list[MealSummaryResponse]
+
+
+class RecentMealResponse(BaseModel):
+    meal: MealSummaryResponse
+    last_planned: date
+
+
+class RecentMealsResponse(BaseModel):
+    items: list[RecentMealResponse]
 
 
 class MealFavouriteRequest(StrictModel):
@@ -850,6 +880,87 @@ class MealPlanDayResponse(BaseModel):
 class MealPlanWeekResponse(BaseModel):
     start_date: date
     days: list[MealPlanDayResponse]
+
+
+class CopyWeekRequest(StrictModel):
+    source_start_date: date
+    target_start_date: date
+    # A preview pass: computes copied_count/skipped_count without writing
+    # anything, so the frontend can show "This will copy N meals..." before
+    # the user commits. See mykhaya.routers.meal_plans.copy_week.
+    dry_run: bool = False
+
+
+class CopyWeekResponse(BaseModel):
+    copied_count: int
+    skipped_count: int
+
+
+class AddIngredientsToListRequest(StrictModel):
+    list_id: uuid.UUID
+    # None means "every ingredient on the meal" — matches MealPlanEntryCreate's
+    # member_ids=None-means-Everyone convention.
+    ingredient_ids: list[uuid.UUID] | None = None
+    # First call omits this; if the chosen List already has exact-text
+    # duplicates, the response comes back with requires_confirmation=True
+    # and nothing is written yet. The frontend re-calls with confirm=True to
+    # actually add the non-duplicate items.
+    confirm: bool = False
+
+
+class AddIngredientsToListResponse(StrictModel):
+    requires_confirmation: bool
+    added_count: int
+    duplicate_count: int
+    duplicate_texts: list[str]
+    list_id: uuid.UUID
+
+
+# ---------------------------------------------------------------------------
+# Household Lists — see mykhaya.models.HouseholdList/HouseholdListItem and
+# docs/architecture/meal-plans.md "Lists integration".
+# ---------------------------------------------------------------------------
+
+
+class ListCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class ListItemInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+
+
+class ListItemResponse(BaseModel):
+    id: uuid.UUID
+    position: int
+    text: str
+    is_checked: bool
+
+
+class ListItemToggleRequest(StrictModel):
+    is_checked: bool
+
+
+class ListResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    item_count: int
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListDetailResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    items: list[ListItemResponse]
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListListResponse(BaseModel):
+    items: list[ListResponse]
 
 
 class NotificationPreferencesResponse(BaseModel):

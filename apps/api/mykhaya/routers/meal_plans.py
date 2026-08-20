@@ -2,8 +2,10 @@
 architecture notes this module was built against: reused entitlement
 service, household/member model, feature-flag gate and API conventions,
 and the explicit V1 scope decisions (deferred recurrence, deferred
-auto-linked leftovers, deferred Lists integration since MyKhaya has no
-Lists module yet).
+auto-linked leftovers). "Add ingredients to list" now integrates with
+mykhaya.routers.lists' HouseholdList/HouseholdListItem, MyKhaya's one Lists
+primitive — added alongside this iteration rather than a second,
+meal-specific shopping-list implementation.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -23,13 +25,20 @@ from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
     FeatureKey,
+    HouseholdList,
+    HouseholdListItem,
     Meal,
     MealIngredient,
     MealPlanEntry,
     MealPlanParticipant,
+    MealType,
     Membership,
 )
 from mykhaya.schemas import (
+    AddIngredientsToListRequest,
+    AddIngredientsToListResponse,
+    CopyWeekRequest,
+    CopyWeekResponse,
     MealCreate,
     MealFavouriteRequest,
     MealIngredientResponse,
@@ -40,7 +49,10 @@ from mykhaya.schemas import (
     MealPlanEntryUpdate,
     MealPlanWeekResponse,
     MealResponse,
+    MealSummaryResponse,
     MealUpdate,
+    RecentMealResponse,
+    RecentMealsResponse,
 )
 
 # Meal Plans has its own dedicated FeatureKey/module_registry entry (unlike
@@ -115,6 +127,40 @@ async def _meal_ingredients(db: AsyncSession, meal_id: uuid.UUID) -> list[MealIn
     ]
 
 
+async def _ingredient_counts(db: AsyncSession, meal_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """One grouped query for every meal's ingredient count rather than N —
+    the library list view only ever needs a count per card, never the full
+    ingredient text of every meal on screen."""
+    if not meal_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(MealIngredient.meal_id, func.count())
+            .where(MealIngredient.meal_id.in_(meal_ids))
+            .group_by(MealIngredient.meal_id)
+        )
+    ).all()
+    return {meal_id: count for meal_id, count in rows}
+
+
+def _meal_summary(meal: Meal, ingredient_count: int) -> MealSummaryResponse:
+    return MealSummaryResponse(
+        id=meal.id,
+        name=meal.name,
+        description=meal.description,
+        image_url=meal.image_url,
+        meal_type=meal.meal_type,
+        prep_minutes=meal.prep_minutes,
+        cook_minutes=meal.cook_minutes,
+        servings=meal.servings,
+        is_favourite=meal.is_favourite,
+        tags=meal.tags,
+        ingredient_count=ingredient_count,
+        created_at=meal.created_at,
+        updated_at=meal.updated_at,
+    )
+
+
 def _meal_response(meal: Meal, ingredients: list[MealIngredientResponse]) -> MealResponse:
     return MealResponse(
         id=meal.id,
@@ -158,10 +204,39 @@ async def _participant_ids(db: AsyncSession, entry_id: uuid.UUID) -> list[uuid.U
     return sorted(rows)
 
 
+async def _participants_by_entry(
+    db: AsyncSession, entry_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """One query for every entry's participants rather than one query per
+    entry — used by day/week retrieval, where N entries would otherwise
+    mean N+1 queries just to know who's eating."""
+    if not entry_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(MealPlanParticipant.meal_plan_entry_id, MealPlanParticipant.user_id).where(
+                MealPlanParticipant.meal_plan_entry_id.in_(entry_ids)
+            )
+        )
+    ).all()
+    by_entry: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for entry_id, user_id in rows:
+        by_entry.setdefault(entry_id, []).append(user_id)
+    for participants in by_entry.values():
+        participants.sort()
+    return by_entry
+
+
 async def _entry_response(
-    db: AsyncSession, entry: MealPlanEntry, meal: Meal | None
+    db: AsyncSession,
+    entry: MealPlanEntry,
+    meal: Meal | None,
+    *,
+    participants: list[uuid.UUID] | None = None,
 ) -> MealPlanEntryResponse:
-    participants = await _participant_ids(db, entry.id)
+    resolved_participants = (
+        participants if participants is not None else await _participant_ids(db, entry.id)
+    )
     return MealPlanEntryResponse(
         id=entry.id,
         meal_id=entry.meal_id,
@@ -172,7 +247,7 @@ async def _entry_response(
         date=entry.date,
         meal_slot=entry.meal_slot,
         time=entry.time,
-        member_ids=participants,
+        member_ids=resolved_participants,
         cook_member_id=entry.cook_member_id,
         makes_leftovers=entry.makes_leftovers,
         created_by=entry.created_by,
@@ -258,14 +333,64 @@ async def list_meals(
     if favourite is not None:
         filters.append(Meal.is_favourite.is_(favourite))
     if q:
-        filters.append(Meal.name.ilike(f"%{q.strip()}%"))
+        needle = f"%{q.strip()}%"
+        # Name + description only — tags is a JSON column, and matching
+        # into it isn't a "straightforward" text search, so it's left out
+        # rather than reached for with a bespoke JSON-text cast.
+        filters.append(or_(Meal.name.ilike(needle), Meal.description.ilike(needle)))
     meals = (
         await db.scalars(select(Meal).where(*filters).order_by(Meal.name))
     ).all()
-    items = []
-    for meal in meals:
-        items.append(_meal_response(meal, await _meal_ingredients(db, meal.id)))
-    return MealListResponse(items=items)
+    counts = await _ingredient_counts(db, [meal.id for meal in meals])
+    return MealListResponse(
+        items=[_meal_summary(meal, counts.get(meal.id, 0)) for meal in meals]
+    )
+
+
+@router.get("/{home_id}/meals/recent", response_model=RecentMealsResponse)
+async def recent_meals(
+    home_id: uuid.UUID,
+    limit: int = Query(default=8, ge=1, le=25),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> RecentMealsResponse:
+    """Meals most recently planned, derived straight from MealPlanEntry —
+    not a separate "last used" counter to keep in sync. One grouped query
+    for the most recent date per meal, then a batch meal + ingredient-count
+    fetch for just those meals."""
+    await require_capability(home_id, Capability.meals_view, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+
+    last_planned_rows = (
+        await db.execute(
+            select(MealPlanEntry.meal_id, func.max(MealPlanEntry.date))
+            .where(
+                MealPlanEntry.group_id == home_id,
+                MealPlanEntry.deleted_at.is_(None),
+                MealPlanEntry.meal_id.is_not(None),
+            )
+            .group_by(MealPlanEntry.meal_id)
+            .order_by(func.max(MealPlanEntry.date).desc())
+            .limit(limit)
+        )
+    ).all()
+    meal_ids = [meal_id for meal_id, _ in last_planned_rows]
+    meals = await _meals_by_id(db, home_id, set(meal_ids))
+    counts = await _ingredient_counts(db, meal_ids)
+    items = [
+        RecentMealResponse(
+            meal=_meal_summary(meals[meal_id], counts.get(meal_id, 0)),
+            last_planned=last_planned,
+        )
+        for meal_id, last_planned in last_planned_rows
+        # A meal soft-deleted since it was last planned simply drops out of
+        # "recently used" rather than surfacing a dead card — _meals_by_id
+        # itself still returns deleted rows (day/week views need that, to
+        # keep showing a historical entry's name/image), so the filter has
+        # to check deleted_at explicitly here rather than membership alone.
+        if meal_id in meals and meals[meal_id].deleted_at is None
+    ]
+    return RecentMealsResponse(items=items)
 
 
 @router.get("/{home_id}/meals/{meal_id}", response_model=MealResponse)
@@ -584,7 +709,13 @@ async def get_meal_plan_day(
     await require_entitlement(db, home_id, "meals.enabled")
     entries = await _entries_for_range(db, home_id, plan_date, plan_date)
     meals = await _meals_by_id(db, home_id, {row.meal_id for row in entries if row.meal_id})
-    items = [await _entry_response(db, row, _meal_for(row, meals)) for row in entries]
+    participants = await _participants_by_entry(db, [row.id for row in entries])
+    items = [
+        await _entry_response(
+            db, row, _meal_for(row, meals), participants=participants.get(row.id, [])
+        )
+        for row in entries
+    ]
     return MealPlanDayResponse(date=plan_date, entries=items)
 
 
@@ -600,6 +731,7 @@ async def get_meal_plan_week(
     end_date = start_date + timedelta(days=6)
     entries = await _entries_for_range(db, home_id, start_date, end_date)
     meals = await _meals_by_id(db, home_id, {row.meal_id for row in entries if row.meal_id})
+    participants = await _participants_by_entry(db, [row.id for row in entries])
     by_date: dict[date, list[MealPlanEntry]] = {}
     for row in entries:
         by_date.setdefault(row.date, []).append(row)
@@ -607,6 +739,275 @@ async def get_meal_plan_week(
     for offset in range(7):
         day = start_date + timedelta(days=offset)
         rows = by_date.get(day, [])
-        items = [await _entry_response(db, row, _meal_for(row, meals)) for row in rows]
+        items = [
+            await _entry_response(
+                db, row, _meal_for(row, meals), participants=participants.get(row.id, [])
+            )
+            for row in rows
+        ]
         days.append(MealPlanDayResponse(date=day, entries=items))
     return MealPlanWeekResponse(start_date=start_date, days=days)
+
+
+# ---------------------------------------------------------------------------
+# Save a quick meal to the library
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{home_id}/meal-plan/entries/{entry_id}/save-as-meal", response_model=MealPlanEntryResponse
+)
+async def save_entry_as_meal(
+    home_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> MealPlanEntryResponse:
+    """Turns a frequently-reused quick meal ("Fajitas") into a real library
+    Meal, and repoints this one planned entry at it — the mechanical half
+    of "Save to Meals"; the other planned entries an ambiguous quick-meal
+    text might match are deliberately left untouched, since MealPlanEntry
+    keeps free text, not a foreign key, until this action is taken."""
+    await require_capability(home_id, Capability.meals_manage, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+
+    entry = await _get_active_entry(db, home_id, entry_id, for_update=True)
+    if entry.meal_id is not None or not entry.quick_meal_name:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This planned meal is already backed by a saved meal."
+        )
+
+    # MealSlot (breakfast/lunch/dinner) is a strict subset of MealType's
+    # values, so the slot the quick meal was planned into is always a valid
+    # starting category for the new library Meal.
+    meal = Meal(
+        group_id=home_id,
+        name=entry.quick_meal_name,
+        meal_type=MealType(entry.meal_slot.value),
+        created_by=auth.user.id,
+    )
+    db.add(meal)
+    await db.flush()
+    entry.meal_id = meal.id
+    entry.quick_meal_name = None
+    audit(db, request, "meals.meal.created_from_quick_meal", auth.user.id, home_id, "meal", meal.id)
+    await db.commit()
+    await db.refresh(entry)
+    return await _entry_response(db, entry, meal)
+
+
+# ---------------------------------------------------------------------------
+# Add ingredients to a Household List
+# ---------------------------------------------------------------------------
+
+
+def _ingredient_item_text(ingredient: MealIngredient) -> str:
+    parts = [part for part in (ingredient.quantity, ingredient.unit, ingredient.text) if part]
+    return " ".join(parts)
+
+
+@router.post(
+    "/{home_id}/meals/{meal_id}/add-ingredients-to-list",
+    response_model=AddIngredientsToListResponse,
+)
+async def add_ingredients_to_list(
+    home_id: uuid.UUID,
+    meal_id: uuid.UUID,
+    body: AddIngredientsToListRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> AddIngredientsToListResponse:
+    """A single server-side operation rather than a client-orchestrated
+    read-list/read-meal/write-items sequence — the server is the only place
+    that can validate Meal ownership, List ownership and both modules'
+    entitlements together in one transaction. See
+    docs/architecture/meal-plans.md "Lists integration"."""
+    await require_capability(home_id, Capability.meals_view, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+
+    meal = await _get_active_meal(db, home_id, meal_id)
+    target_list = await db.scalar(
+        select(HouseholdList)
+        .where(
+            HouseholdList.id == body.list_id,
+            HouseholdList.group_id == home_id,
+            HouseholdList.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if target_list is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That list could not be found")
+
+    ingredients = (
+        await db.scalars(
+            select(MealIngredient)
+            .where(MealIngredient.meal_id == meal.id)
+            .order_by(MealIngredient.position)
+        )
+    ).all()
+    if body.ingredient_ids is not None:
+        wanted = set(body.ingredient_ids)
+        ingredients = [row for row in ingredients if row.id in wanted]
+
+    candidate_texts = [_ingredient_item_text(row) for row in ingredients]
+    candidate_texts = [text for text in candidate_texts if text]
+    if not candidate_texts:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No ingredients to add")
+
+    existing_texts = {
+        text.strip().lower()
+        for text in (
+            await db.scalars(
+                select(HouseholdListItem.text).where(HouseholdListItem.list_id == target_list.id)
+            )
+        ).all()
+    }
+    duplicates = [text for text in candidate_texts if text.strip().lower() in existing_texts]
+    new_texts = [text for text in candidate_texts if text.strip().lower() not in existing_texts]
+
+    if duplicates and not body.confirm:
+        return AddIngredientsToListResponse(
+            requires_confirmation=True,
+            added_count=0,
+            duplicate_count=len(duplicates),
+            duplicate_texts=duplicates,
+            list_id=target_list.id,
+        )
+
+    # Duplicates are never (re-)added, confirmed or not — "confirm" only
+    # gets the user past the warning ("2 already on Groceries. Add the
+    # remaining 4?"); the 4 it then adds are exactly `new_texts`.
+    to_add = new_texts
+    next_position = await db.scalar(
+        select(func.count()).select_from(HouseholdListItem).where(
+            HouseholdListItem.list_id == target_list.id
+        )
+    ) or 0
+    for offset, text in enumerate(to_add):
+        db.add(
+            HouseholdListItem(
+                list_id=target_list.id,
+                position=next_position + offset,
+                text=text,
+                created_by=auth.user.id,
+            )
+        )
+    audit(
+        db,
+        request,
+        "meals.meal.ingredients_added_to_list",
+        auth.user.id,
+        home_id,
+        "list",
+        target_list.id,
+        metadata={"meal_id": str(meal.id), "count": len(to_add)},
+    )
+    await db.commit()
+    return AddIngredientsToListResponse(
+        requires_confirmation=False,
+        added_count=len(to_add),
+        duplicate_count=len(duplicates),
+        duplicate_texts=duplicates,
+        list_id=target_list.id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Copy previous week
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{home_id}/meal-plan/week/copy", response_model=CopyWeekResponse)
+async def copy_week(
+    home_id: uuid.UUID,
+    body: CopyWeekRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> CopyWeekResponse:
+    """Copies each source-week entry into the corresponding weekday/slot of
+    the target week, skipping any target slot that already has a planned
+    meal. A one-off copy, not a recurrence record — see
+    docs/architecture/meal-plans.md "Copy previous week". Runs inside the
+    request's single transaction (one commit at the end), so a failure
+    partway through leaves nothing copied rather than half a week."""
+    await require_capability(home_id, Capability.meals_manage, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+
+    source_end = body.source_start_date + timedelta(days=6)
+    target_end = body.target_start_date + timedelta(days=6)
+    source_entries = await _entries_for_range(db, home_id, body.source_start_date, source_end)
+    target_entries = await _entries_for_range(db, home_id, body.target_start_date, target_end)
+    occupied = {(row.date, row.meal_slot) for row in target_entries}
+
+    active_members = set(await _active_member_ids(db, home_id))
+    meal_ids = {row.meal_id for row in source_entries if row.meal_id}
+    meals = await _meals_by_id(db, home_id, meal_ids)
+    participants = await _participants_by_entry(db, [row.id for row in source_entries])
+
+    copied = 0
+    skipped = 0
+    for row in source_entries:
+        offset = (row.date - body.source_start_date).days
+        target_date = body.target_start_date + timedelta(days=offset)
+        if (target_date, row.meal_slot) in occupied:
+            skipped += 1
+            continue
+
+        # A meal soft-deleted since the source week was planned falls back
+        # to a quick-meal name rather than resurrecting it or copying a
+        # broken reference (see docs/architecture/meal-plans.md "Copy
+        # previous week" safety notes).
+        meal = meals.get(row.meal_id) if row.meal_id else None
+        if meal is not None and meal.deleted_at is not None:
+            meal = None
+        meal_id = meal.id if meal is not None else None
+        quick_name = row.quick_meal_name
+        if row.meal_id is not None and meal is None:
+            source_meal = await db.scalar(select(Meal).where(Meal.id == row.meal_id))
+            quick_name = source_meal.name if source_meal is not None else "Meal"
+
+        cook_member_id = row.cook_member_id if row.cook_member_id in active_members else None
+        entry_participants = [
+            user_id for user_id in participants.get(row.id, []) if user_id in active_members
+        ]
+
+        if not body.dry_run:
+            new_entry = MealPlanEntry(
+                group_id=home_id,
+                meal_id=meal_id,
+                quick_meal_name=quick_name if meal_id is None else None,
+                date=target_date,
+                meal_slot=row.meal_slot,
+                time=row.time,
+                cook_member_id=cook_member_id,
+                makes_leftovers=row.makes_leftovers,
+                created_by=auth.user.id,
+            )
+            db.add(new_entry)
+            await db.flush()
+            await _set_participants(db, new_entry.id, entry_participants)
+        copied += 1
+
+    if not body.dry_run:
+        audit(
+            db,
+            request,
+            "meals.plan_week.copied",
+            auth.user.id,
+            home_id,
+            "meal_plan_entry",
+            None,
+            metadata={
+                "source_start_date": body.source_start_date.isoformat(),
+                "target_start_date": body.target_start_date.isoformat(),
+                "copied": copied,
+                "skipped": skipped,
+            },
+        )
+        await db.commit()
+    return CopyWeekResponse(copied_count=copied, skipped_count=skipped)

@@ -128,6 +128,11 @@ class BillingStatusResponse(BaseModel):
     # module entry show its locked state before the user ever taps in and
     # hits a 403. See routers.meal_plans' meals.enabled enforcement.
     meals_enabled: bool
+    # Whether this Home's plan currently includes Household Lists — used by
+    # Meal Plans' "Add ingredients to list" to show its own locked state
+    # (Lists is a separate entitlement from meals.enabled, even though both
+    # currently match Free/Family 1:1). See routers.lists.
+    lists_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):

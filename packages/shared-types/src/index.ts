@@ -447,8 +447,37 @@ export interface MealUpdatePayload extends MealPayload {
   expected_updated_at: string;
 }
 
+// The Meals library list/recent views' shape — a meal card's worth of
+// data, deliberately without the ingredient list (see
+// mykhaya.schemas.MealSummaryResponse). Fetch the full Meal (via the detail
+// endpoint) only when the ingredients/instructions are actually needed.
+export interface MealSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  is_favourite: boolean;
+  tags: string[];
+  ingredient_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MealListResponse {
-  items: Meal[];
+  items: MealSummary[];
+}
+
+export interface RecentMeal {
+  meal: MealSummary;
+  last_planned: string;
+}
+
+export interface RecentMealsResponse {
+  items: RecentMeal[];
 }
 
 export interface MealPlanEntry {
@@ -493,6 +522,66 @@ export interface MealPlanDay {
 export interface MealPlanWeek {
   start_date: string;
   days: MealPlanDay[];
+}
+
+export interface CopyWeekPayload {
+  source_start_date: string;
+  target_start_date: string;
+  dry_run?: boolean;
+}
+
+export interface CopyWeekResult {
+  copied_count: number;
+  skipped_count: number;
+}
+
+export interface AddIngredientsToListPayload {
+  list_id: string;
+  ingredient_ids?: string[];
+  confirm?: boolean;
+}
+
+export interface AddIngredientsToListResult {
+  requires_confirmation: boolean;
+  added_count: number;
+  duplicate_count: number;
+  duplicate_texts: string[];
+  list_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Household Lists — MyKhaya's one shared-list primitive. See
+// mykhaya.routers.lists and docs/architecture/meal-plans.md "Lists
+// integration".
+// ---------------------------------------------------------------------------
+
+export interface HouseholdListItem {
+  id: string;
+  position: number;
+  text: string;
+  is_checked: boolean;
+}
+
+export interface HouseholdList {
+  id: string;
+  name: string;
+  item_count: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HouseholdListDetail {
+  id: string;
+  name: string;
+  items: HouseholdListItem[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HouseholdListListResponse {
+  items: HouseholdList[];
 }
 
 export interface UserBirthdayPayload {
@@ -565,6 +654,7 @@ export interface BillingStatus {
   shared_events_enabled: boolean;
   external_invites_enabled: boolean;
   meals_enabled: boolean;
+  lists_enabled: boolean;
 }
 
 export interface PricingOption {
