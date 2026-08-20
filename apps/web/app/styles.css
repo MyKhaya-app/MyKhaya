@@ -1169,6 +1169,7 @@ textarea {
   justify-content: center;
   min-height: 76px;
   padding: 0.75rem 0.5rem;
+  position: relative;
   text-align: center;
   transition:
     transform 0.15s ease,
@@ -1184,6 +1185,32 @@ textarea {
 }
 .quick-action:active {
   transform: translateY(0) scale(0.97);
+}
+/* Visible-but-locked premium shortcut — same visible-not-hidden treatment as
+   .label-row-locked (see settings/home): reduced emphasis plus a small Lock
+   badge, rather than removing the shortcut for a Free Home. Still a normal
+   link to the feature's own page, where the existing FamilyUpsell gate
+   applies — this card never grants access on its own. */
+.quick-action-locked {
+  color: var(--colour-muted);
+  opacity: 0.8;
+}
+.quick-action-locked svg {
+  color: var(--colour-muted);
+}
+.quick-action-lock {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid #efe9dd;
+  border-radius: 50%;
+  color: var(--colour-muted);
+  display: flex;
+  height: 20px;
+  justify-content: center;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 20px;
 }
 @media (prefers-reduced-motion: reduce) {
   .quick-action {
@@ -4328,7 +4355,7 @@ button.danger,
   flex: 1;
 }
 .meal-plan-toolbar {
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.6rem;
 }
 .meal-plan-toolbar-actions {
   align-items: center;
@@ -4336,11 +4363,30 @@ button.danger,
   gap: 0.5rem;
   justify-content: flex-end;
 }
+/* Compact Day/Week segmented control — sits next to Today in the same
+   toolbar row it navigates, rather than floating as its own detached pill. */
+.meal-view-toggle {
+  background: var(--colour-cream-light);
+  border-radius: 999px;
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+}
+.meal-view-toggle button {
+  border-radius: 999px;
+  font-size: var(--font-small);
+  min-height: 34px;
+  padding: 0.35rem 0.8rem;
+}
+.meal-view-toggle .secondary {
+  background: none;
+  border: 0;
+}
 .week-strip {
   display: grid;
   gap: 0.35rem;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  margin-bottom: 1.1rem;
+  margin-bottom: 0.75rem;
 }
 .week-strip-day {
   align-items: center;
@@ -4377,26 +4423,26 @@ button.danger,
 }
 .meal-slot-list {
   display: grid;
-  gap: 1.1rem;
+  gap: 0.75rem;
 }
 .meal-slot-section h2 {
   font-size: var(--font-body);
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.35rem;
 }
 .meal-slot-section {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 .meal-add-button {
   align-items: center;
   background: var(--colour-white);
   border: 1.5px dashed #d3cec2;
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-small);
   color: var(--colour-sage-dark);
   display: flex;
   gap: 0.4rem;
   justify-content: center;
-  min-height: 52px;
+  min-height: 46px;
 }
 .meal-add-button:hover {
   background: var(--colour-sage-soft);
@@ -4489,6 +4535,22 @@ button.danger,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Meal + Time keep sharing a row at ordinary mobile widths even though
+   .event-form collapses to one column at <=800px for Calendar's own longer
+   fields (see that media query) — a plain slot <select> and a <input
+   type="time"> are narrow enough to stay paired, matching the ticket's
+   "no three-column mobile grid, but Meal/Time may still share a row"
+   requirement. Only genuinely narrow phones stack them. */
+.meal-time-row {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+@media (max-width: 340px) {
+  .meal-time-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .meal-view-details {
   display: grid;

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Bell, CalendarPlus, Gift, UserPlus } from "lucide-react";
+import { Bell, CalendarPlus, Gift, Lock, UserPlus, UtensilsCrossed } from "lucide-react";
 import type {
   BirthdayEntry,
   EventOccurrence,
@@ -151,6 +151,8 @@ export default function HomePage() {
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
   const [calendarEnabled, setCalendarEnabled] = useState(false);
+  const [mealsFeatureOn, setMealsFeatureOn] = useState(false);
+  const [mealsEnabled, setMealsEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [canInviteMore, setCanInviteMore] = useState(false);
@@ -175,8 +177,14 @@ export default function HomePage() {
       .catch(() => setBirthdays([]));
     api
       .billingStatus(activeHomeId)
-      .then((billing) => setCanInviteMore(canAddMember(billing.member_usage)))
-      .catch(() => setCanInviteMore(false));
+      .then((billing) => {
+        setCanInviteMore(canAddMember(billing.member_usage));
+        setMealsEnabled(billing.meals_enabled);
+      })
+      .catch(() => {
+        setCanInviteMore(false);
+        setMealsEnabled(false);
+      });
     Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
       .then(async ([matrix, memberRows]) => {
         setMembers(memberRows);
@@ -184,6 +192,9 @@ export default function HomePage() {
           (feature) => feature.feature === "calendar" && feature.enabled,
         );
         setCalendarEnabled(enabled);
+        setMealsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "meals" && feature.enabled),
+        );
         if (!enabled) {
           setSummary(null);
           setUpcoming([]);
@@ -393,6 +404,20 @@ export default function HomePage() {
               <Link className="quick-action" href="/people">
                 <UserPlus size={20} aria-hidden="true" />
                 Invite family
+              </Link>
+            )}
+            {mealsFeatureOn && (
+              <Link
+                className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}
+                href="/meal-plans"
+              >
+                {!mealsEnabled && (
+                  <span className="quick-action-lock" aria-hidden="true">
+                    <Lock size={11} />
+                  </span>
+                )}
+                <UtensilsCrossed size={20} aria-hidden="true" />
+                Meal plans
               </Link>
             )}
           </div>

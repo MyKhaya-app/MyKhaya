@@ -55,6 +55,12 @@ const MEAL_TYPES: { key: MealType; label: string }[] = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 
+const QUICK_MEAL_PLACEHOLDERS: Record<MealSlot, string> = {
+  breakfast: "e.g. Overnight oats, Toast, Cereal",
+  lunch: "e.g. Sandwiches, School lunch, Leftovers",
+  dinner: "e.g. Lasagne, Takeaway, Leftovers",
+};
+
 // Meal dates/times are plain wall-clock values (no timezone conversion —
 // see MealPlanEntry.date/time in the backend model) — so date arithmetic
 // here is pure calendar-date maths on the "YYYY-MM-DD" string, the same
@@ -88,6 +94,19 @@ function formatTime(value: string | null): string | null {
 
 function entryTitle(entry: MealPlanEntry): string {
   return entry.meal_name ?? entry.quick_meal_name ?? "Meal";
+}
+
+// A 404 here means the Meal Plans module itself isn't switched on for this
+// Home yet (a separate, Platform-Admin-controlled release gate ahead of the
+// Family/Free entitlement check this page already handles via
+// FamilyUpsell) — a real but different situation from "your request
+// failed", so it gets its own calm message rather than surfacing the raw
+// backend "Not found" detail as a technical-looking error banner.
+function loadErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof ApiError && cause.status === 404) {
+    return "Meal Plans isn't available for this Home yet. Please check back soon.";
+  }
+  return cause instanceof ApiError ? cause.message : fallback;
 }
 
 function memberNamesFor(memberIds: string[], members: Member[]): string {
@@ -212,7 +231,7 @@ function PlannerTab({
       const result = await api.mealPlanDay(homeId, focusDate);
       setDayEntries(result.entries);
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not load your meal plan.");
+      onError(loadErrorMessage(cause, "Could not load your meal plan."));
     }
   }
   async function loadWeek() {
@@ -220,7 +239,7 @@ function PlannerTab({
       const result = await api.mealPlanWeek(homeId, startOfWeek(focusDate));
       setWeekDays(result.days);
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not load your meal plan.");
+      onError(loadErrorMessage(cause, "Could not load your meal plan."));
     }
   }
 
@@ -278,13 +297,26 @@ function PlannerTab({
               Today
             </button>
           )}
-          <label className="calendar-selector">
-            <span className="sr-only">View</span>
-            <select value={view} onChange={(event) => setView(event.target.value as "day" | "week")}>
-              <option value="day">Day</option>
-              <option value="week">Week</option>
-            </select>
-          </label>
+          <div className="meal-view-toggle" role="tablist" aria-label="Choose view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "day"}
+              className={view === "day" ? "toggle-active" : "secondary"}
+              onClick={() => setView("day")}
+            >
+              Day
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "week"}
+              className={view === "week" ? "toggle-active" : "secondary"}
+              onClick={() => setView("week")}
+            >
+              Week
+            </button>
+          </div>
         </div>
       </header>
 
@@ -564,8 +596,8 @@ function MealEntrySheet({
 
   return (
     <BottomSheet title={state.mode === "edit" ? "Edit meal" : "Add meal"} onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <div className="meal-source-toggle">
+      <form className="event-form" onSubmit={submit}>
+        <div className="form-wide meal-source-toggle">
           <button
             type="button"
             className={source === "saved" ? "toggle-active" : "secondary"}
@@ -582,7 +614,7 @@ function MealEntrySheet({
           </button>
         </div>
         {source === "saved" ? (
-          <label>
+          <label className="form-wide">
             Meal
             <select value={mealId} onChange={(event) => setMealId(event.target.value)}>
               <option value="">Choose a saved meal…</option>
@@ -595,21 +627,22 @@ function MealEntrySheet({
             </select>
           </label>
         ) : (
-          <label>
+          <label className="form-wide">
             What's for {SLOTS.find((row) => row.key === slot)?.label.toLowerCase()}?
             <input
               value={quickName}
               onChange={(event) => setQuickName(event.target.value)}
-              placeholder="e.g. Takeaway, School lunch, Leftovers"
+              placeholder={QUICK_MEAL_PLACEHOLDERS[slot]}
               maxLength={160}
             />
           </label>
         )}
-        <div className="meal-form-row">
-          <label>
-            Date
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
-          </label>
+
+        <label className="form-wide">
+          Date
+          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+        </label>
+        <div className="form-wide meal-time-row">
           <label>
             Meal
             <select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)}>
@@ -626,48 +659,50 @@ function MealEntrySheet({
           </label>
         </div>
 
-        <span className="eyebrow">Who's eating</span>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={everyone}
-            onChange={(event) => {
-              setEveryone(event.target.checked);
-              if (event.target.checked) setMemberIds(members.map((member) => member.user_id));
-            }}
-          />
-          Everyone
-        </label>
-        {!everyone && (
-          <div className="member-list">
-            {members.map((member) => (
-              <label className="member-row" key={member.user_id}>
-                <Avatar
-                  id={member.user_id}
-                  name={member.display_name}
-                  colour={member.colour}
-                  avatarVersion={member.avatar_version}
-                  size="sm"
-                />
-                <span className="member-row-name">{member.display_name}</span>
-                <input
-                  type="checkbox"
-                  checked={memberIds.includes(member.user_id)}
-                  onChange={(event) =>
-                    setMemberIds((current) =>
-                      event.target.checked
-                        ? [...current, member.user_id]
-                        : current.filter((id) => id !== member.user_id),
-                    )
-                  }
-                  aria-label={`Include ${member.display_name}`}
-                />
-              </label>
-            ))}
-          </div>
-        )}
+        <div className="form-wide event-section">
+          <span className="eyebrow">Who's eating</span>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={everyone}
+              onChange={(event) => {
+                setEveryone(event.target.checked);
+                if (event.target.checked) setMemberIds(members.map((member) => member.user_id));
+              }}
+            />
+            Everyone
+          </label>
+          {!everyone && (
+            <div className="member-list">
+              {members.map((member) => (
+                <label className="member-row" key={member.user_id}>
+                  <Avatar
+                    id={member.user_id}
+                    name={member.display_name}
+                    colour={member.colour}
+                    avatarVersion={member.avatar_version}
+                    size="sm"
+                  />
+                  <span className="member-row-name">{member.display_name}</span>
+                  <input
+                    type="checkbox"
+                    checked={memberIds.includes(member.user_id)}
+                    onChange={(event) =>
+                      setMemberIds((current) =>
+                        event.target.checked
+                          ? [...current, member.user_id]
+                          : current.filter((id) => id !== member.user_id),
+                      )
+                    }
+                    aria-label={`Include ${member.display_name}`}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
 
-        <label>
+        <label className="form-wide">
           Cooking (optional)
           <select value={cookId} onChange={(event) => setCookId(event.target.value)}>
             <option value="">No one set</option>
@@ -679,7 +714,7 @@ function MealEntrySheet({
           </select>
         </label>
 
-        <label className="check-row">
+        <label className="check-row form-wide">
           <input
             type="checkbox"
             checked={leftovers}
@@ -688,8 +723,12 @@ function MealEntrySheet({
           Makes leftovers
         </label>
 
-        <FormStatus error={error} />
-        <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+        <div className="form-wide">
+          <FormStatus error={error} />
+        </div>
+        <button className="sheet-primary form-wide" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
       </form>
     </BottomSheet>
   );
@@ -714,7 +753,7 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
       });
       setMeals(result.items);
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not load your meals.");
+      onError(loadErrorMessage(cause, "Could not load your meals."));
     }
   }
 
