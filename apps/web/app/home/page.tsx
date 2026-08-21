@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Children, useEffect, useMemo, useState } from "react";
+import { Children, useEffect, useState } from "react";
 import {
   Bell,
   CalendarPlus,
   Check,
-  Circle,
   ClipboardList,
   Gift,
   ListChecks,
@@ -28,7 +27,7 @@ import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
 import { canAddMember } from "@/components/member-entitlement-logic";
-import { MealPlansTonightCard } from "@/components/meal-plans-tonight-card";
+import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -38,6 +37,7 @@ import {
   upcomingBirthdayIcon,
   upcomingBirthdayLabel,
 } from "./birthday-utils";
+import { routineDueLabel } from "./routine-utils";
 import {
   eventDateBounds,
   eventInDateWindow,
@@ -318,18 +318,6 @@ export default function HomePage() {
     }
   }
 
-  function routineDueLabel(routine: Routine) {
-    const occurrence = routine.home_occurrence_date;
-    if (!occurrence) return "Scheduled";
-    const today = new Date().toISOString().slice(0, 10);
-    if (occurrence < today) return "Overdue";
-    if (occurrence === today) return "Today";
-    if (occurrence === new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)) {
-      return "Tomorrow";
-    }
-    return occurrence;
-  }
-
   // Requesting push permission before the app is installed leads nowhere useful on
   // iOS Safari (Notification.requestPermission works, but there is no way to receive
   // push while the tab is closed) — so the prompt only appears once installed.
@@ -338,14 +326,11 @@ export default function HomePage() {
   const showInstallFirstNotice =
     notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
-  const orderedRoutines = useMemo(
-    () => [
-      ...routines.filter((routine) => !routine.home_completed_at),
-      ...routines.filter((routine) => Boolean(routine.home_completed_at)),
-    ],
-    [routines],
-  );
-  const visibleRoutines = routinesExpanded ? orderedRoutines : orderedRoutines.slice(0, 3);
+  // The API's home=true view already returns routines in Home's exact
+  // priority order (overdue, due today, upcoming, then completed) — see
+  // household_routines.list_routines — so this only slices for the
+  // show-more/show-less toggle, it doesn't re-sort.
+  const visibleRoutines = routinesExpanded ? routines : routines.slice(0, 3);
 
   return (
     <AppShell
@@ -467,7 +452,9 @@ export default function HomePage() {
                       onClick={() => completeRoutine(routine)}
                       disabled={completed}
                     >
-                      {completed ? <Check size={16} aria-hidden="true" /> : <Circle size={19} aria-hidden="true" />}
+                      <span className="home-routine-check-dot" aria-hidden="true">
+                        {completed && <Check size={10} />}
+                      </span>
                     </button>
                     <Link className="home-routine-copy" href="/settings/routines">
                       <strong>{routine.title}</strong>
@@ -476,14 +463,14 @@ export default function HomePage() {
                           ? routine.scope === "household" && routine.home_completed_by_display_name
                             ? `Done by ${routine.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
                             : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
-                          : `${routineDueLabel(routine)} · ${routine.scope === "household" ? "Household" : "Personal"}`}
+                          : `${routineDueLabel(routine.home_occurrence_date)} · ${routine.scope === "household" ? "Household" : "Personal"}`}
                       </small>
                     </Link>
                   </div>
                 );
               })}
             </div>
-            {orderedRoutines.length > 3 && (
+            {routines.length > 3 && (
               <button
                 className="home-routine-expand tertiary"
                 type="button"
@@ -497,7 +484,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {activeHomeId && <MealPlansTonightCard homeId={activeHomeId} />}
+        {activeHomeId && <MealPlansTodayCard homeId={activeHomeId} />}
 
         {calendarEnabled && (
           <section className="card home-section">

@@ -36,7 +36,13 @@ from mykhaya.models import (
     TokenPurpose,
     User,
 )
-from mykhaya.notifications.routine_occurrences import is_occurrence_date, next_occurrence_date
+from mykhaya.notifications.routine_occurrences import (
+    HOME_VISIBILITY_WINDOW_DAYS,
+    is_occurrence_date,
+    last_occurrence_on_or_before,
+    next_occurrence_date,
+    select_home_occurrence,
+)
 from mykhaya.notifications.routines import (
     ROUTINE_TOPIC,
     deliver_routine_reminder,
@@ -242,6 +248,240 @@ def test_next_occurrence_date_none_past_end_date() -> None:
         end_date=anchor,
     )
     assert next_occurrence_date(routine, anchor + timedelta(days=1)) is None
+
+
+# --- Home "To do" card visibility window ------------------------------------
+# select_home_occurrence (backing household_routines.list_routines's
+# `home=true` branch) is the single source of truth for which occurrence, if
+# any, a routine surfaces on Home: its current overdue/due-today occurrence
+# until completed, that occurrence through the rest of its due date once
+# completed, or its next occurrence once within HOME_VISIBILITY_WINDOW_DAYS
+# days of its own due date. These are pure-function tests — no DB, no HTTP —
+# covering the window/overdue/completion rules against every recurrence
+# cadence the interval_weeks engine can express: daily, weekly, bi-weekly,
+# and (via a larger interval_weeks — this engine's only way to approximate
+# them, see routine_occurrences.HOME_LOOKBACK_DAYS) monthly and yearly.
+
+NO_COMPLETIONS = lambda occurrence_date: False  # noqa: E731
+
+
+def completed_on(*dates: date):
+    dates_set = set(dates)
+    return lambda occurrence_date: occurrence_date in dates_set
+
+
+def test_home_visibility_hides_occurrence_more_than_window_away() -> None:
+    today = date(2026, 3, 10)
+    due = today + timedelta(days=HOME_VISIBILITY_WINDOW_DAYS + 1)
+    # start_date=due: this occurrence's very first one, so there is no
+    # earlier weekly occurrence for last_occurrence_on_or_before to find
+    # (make_routine's own default start_date would otherwise backdate a
+    # year of weekly occurrences before `due`).
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=due, start_date=due
+    )
+    assert select_home_occurrence(routine, today, NO_COMPLETIONS) is None
+
+
+def test_home_visibility_shows_occurrence_exactly_at_window_edge() -> None:
+    today = date(2026, 3, 10)
+    due = today + timedelta(days=HOME_VISIBILITY_WINDOW_DAYS)
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=due, start_date=due
+    )
+    selection = select_home_occurrence(routine, today, NO_COMPLETIONS)
+    assert selection is not None
+    assert selection.occurrence_date == due
+    assert selection.is_completed is False
+    assert selection.priority == 2
+
+
+def test_home_visibility_shows_occurrence_due_tomorrow() -> None:
+    today = date(2026, 3, 10)
+    due = today + timedelta(days=1)
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=due, start_date=due
+    )
+    selection = select_home_occurrence(routine, today, NO_COMPLETIONS)
+    assert selection is not None
+    assert selection.occurrence_date == due
+    assert selection.priority == 2
+
+
+def test_home_visibility_shows_occurrence_due_today() -> None:
+    today = date(2026, 3, 10)
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=today)
+    selection = select_home_occurrence(routine, today, NO_COMPLETIONS)
+    assert selection is not None
+    assert selection.occurrence_date == today
+    assert selection.is_completed is False
+    assert selection.priority == 1
+
+
+def test_home_visibility_keeps_completed_due_today_occurrence_visible() -> None:
+    today = date(2026, 3, 10)
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=today)
+    selection = select_home_occurrence(routine, today, completed_on(today))
+    assert selection is not None
+    assert selection.occurrence_date == today
+    assert selection.is_completed is True
+    assert selection.priority == 3
+
+
+def test_home_visibility_drops_completed_occurrence_after_its_due_date() -> None:
+    anchor = date(2026, 3, 6)  # Friday
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor)
+    # Completed on its due date (Friday); by Saturday the due date has
+    # passed and the next occurrence (next Friday) is far outside the
+    # visibility window, so nothing should show.
+    saturday = anchor + timedelta(days=1)
+    assert select_home_occurrence(routine, saturday, completed_on(anchor)) is None
+
+
+def test_home_visibility_does_not_show_next_occurrence_early_after_completion() -> None:
+    anchor = date(2026, 3, 6)  # Friday, weekly
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor)
+    completed = completed_on(anchor)
+    # The day right after completion, next Friday is still 6 days away.
+    assert select_home_occurrence(routine, anchor + timedelta(days=1), completed) is None
+    # Still hidden the day before next Friday's 2-day window opens.
+    next_friday = anchor + timedelta(weeks=1)
+    just_outside_window = next_friday - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS + 1)
+    assert select_home_occurrence(routine, just_outside_window, completed) is None
+
+
+def test_home_visibility_shows_next_occurrence_once_it_enters_the_window() -> None:
+    anchor = date(2026, 3, 6)  # Friday, weekly
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor)
+    completed = completed_on(anchor)
+    next_friday = anchor + timedelta(weeks=1)
+    today = next_friday - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS)
+    selection = select_home_occurrence(routine, today, completed)
+    assert selection is not None
+    assert selection.occurrence_date == next_friday
+    assert selection.is_completed is False
+    assert selection.priority == 2
+
+
+def test_home_visibility_keeps_overdue_incomplete_occurrence_visible() -> None:
+    anchor = date(2026, 3, 6)  # Friday, weekly, never completed
+    routine = make_routine(group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor)
+    # A few days later (still before next Friday's own occurrence), the
+    # missed Friday occurrence itself stays the selected occurrence — it
+    # does not silently disappear or roll forward.
+    today = anchor + timedelta(days=3)
+    selection = select_home_occurrence(routine, today, NO_COMPLETIONS)
+    assert selection is not None
+    assert selection.occurrence_date == anchor
+    assert selection.is_completed is False
+    assert selection.priority == 0
+
+
+def test_home_visibility_daily_recurrence() -> None:
+    routine = make_routine(
+        group_id=uuid.uuid4(),
+        created_by=uuid.uuid4(),
+        week_anchor_date=date(2026, 3, 1),
+        repeat_unit="daily",
+        start_date=date(2026, 3, 1),
+    )
+    today = date(2026, 3, 15)
+    # Uncompleted: today's occurrence is due today.
+    due_today = select_home_occurrence(routine, today, NO_COMPLETIONS)
+    assert due_today is not None
+    assert due_today.occurrence_date == today
+    assert due_today.priority == 1
+    # Completed: stays visible today, gone the next day (tomorrow's own
+    # occurrence isn't due yet, and is within the window so it takes over).
+    tomorrow_selection = select_home_occurrence(
+        routine, today + timedelta(days=1), completed_on(today)
+    )
+    assert tomorrow_selection is not None
+    assert tomorrow_selection.occurrence_date == today + timedelta(days=1)
+    assert tomorrow_selection.is_completed is False
+
+
+def test_home_visibility_weekly_recurrence() -> None:
+    anchor = date(2026, 3, 6)
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor, interval_weeks=1
+    )
+    assert next_occurrence_date(routine, anchor + timedelta(days=1)) == anchor + timedelta(weeks=1)
+    selection = select_home_occurrence(routine, anchor, NO_COMPLETIONS)
+    assert selection is not None
+    assert selection.occurrence_date == anchor
+    assert selection.priority == 1
+
+
+def test_home_visibility_biweekly_recurrence() -> None:
+    anchor = date(2026, 3, 6)
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor, interval_weeks=2
+    )
+    next_due = anchor + timedelta(weeks=2)
+    assert next_occurrence_date(routine, anchor + timedelta(days=1)) == next_due
+    today = next_due - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS)
+    selection = select_home_occurrence(routine, today, completed_on(anchor))
+    assert selection is not None
+    assert selection.occurrence_date == next_due
+    assert selection.priority == 2
+
+
+def test_home_visibility_monthly_ish_recurrence() -> None:
+    # This routine engine has no dedicated "monthly" unit — a ~4-week
+    # interval_weeks is the closest existing cadence it can express (see
+    # HOME_LOOKBACK_DAYS's docstring) — but the Home visibility window logic
+    # itself is generic over any occurrence date, so it must still hold here.
+    anchor = date(2026, 1, 2)
+    routine = make_routine(
+        group_id=uuid.uuid4(), created_by=uuid.uuid4(), week_anchor_date=anchor, interval_weeks=4
+    )
+    next_due = anchor + timedelta(weeks=4)
+    assert (
+        select_home_occurrence(
+            routine,
+            next_due - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS + 1),
+            completed_on(anchor),
+        )
+        is None
+    )
+    today = next_due - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS)
+    selection = select_home_occurrence(routine, today, completed_on(anchor))
+    assert selection is not None
+    assert selection.occurrence_date == next_due
+    assert selection.priority == 2
+    # And a missed monthly-ish occurrence stays overdue rather than
+    # disappearing or silently jumping to the following one.
+    overdue_selection = select_home_occurrence(
+        routine, next_due + timedelta(days=10), NO_COMPLETIONS
+    )
+    assert overdue_selection is not None
+    assert overdue_selection.occurrence_date == next_due
+    assert overdue_selection.priority == 0
+
+
+def test_home_visibility_yearly_ish_recurrence() -> None:
+    # Same caveat as the monthly-ish test above — a ~52-week interval_weeks
+    # is the closest cadence this engine can express as "yearly". This also
+    # exercises last_occurrence_on_or_before's backward search across a gap
+    # much wider than the old 60-day lookback ever supported.
+    anchor = date(2025, 6, 1)
+    routine = make_routine(
+        group_id=uuid.uuid4(),
+        created_by=uuid.uuid4(),
+        week_anchor_date=anchor,
+        interval_weeks=52,
+        start_date=anchor,
+    )
+    next_due = anchor + timedelta(weeks=52)
+    assert last_occurrence_on_or_before(routine, next_due - timedelta(days=1)) == anchor
+    hidden_today = next_due - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS + 1)
+    assert select_home_occurrence(routine, hidden_today, completed_on(anchor)) is None
+    visible_today = next_due - timedelta(days=HOME_VISIBILITY_WINDOW_DAYS)
+    selection = select_home_occurrence(routine, visible_today, completed_on(anchor))
+    assert selection is not None
+    assert selection.occurrence_date == next_due
+    assert selection.priority == 2
 
 
 # --- CRUD and authorization -------------------------------------------------
@@ -530,6 +770,122 @@ async def test_home_keeps_same_day_completion_and_excludes_previous_day_completi
     assert "Put green bin out" in rows
     assert rows["Put green bin out"]["home_completed_by_display_name"] == "Megan"
     assert "Yesterday only" not in rows
+
+
+@pytest.mark.asyncio
+async def test_home_hides_occurrence_outside_visibility_window_end_to_end(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("windowfar"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+    far_due = today + timedelta(days=3)
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Change smoke alarm batteries",
+            "interval_weeks": 1,
+            "week_anchor_date": far_due.isoformat(),
+            "start_date": far_due.isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    home = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines?home=true")
+    assert home.status_code == 200, home.text
+    assert "Change smoke alarm batteries" not in {row["title"] for row in home.json()["items"]}
+
+
+@pytest.mark.asyncio
+async def test_home_shows_occurrence_two_days_before_due_end_to_end(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("windownear"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+    near_due = today + timedelta(days=2)
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Water the tomatoes",
+            "interval_weeks": 1,
+            "week_anchor_date": near_due.isoformat(),
+            "start_date": near_due.isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    home = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines?home=true")
+    assert home.status_code == 200, home.text
+    rows = {row["title"]: row for row in home.json()["items"]}
+    assert "Water the tomatoes" in rows
+    assert rows["Water the tomatoes"]["home_occurrence_date"] == near_due.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_home_orders_overdue_before_due_today_before_upcoming_before_completed(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("ordering"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+
+    async def add(title: str, anchor: date) -> None:
+        response = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/routines",
+            json={
+                "title": title,
+                "interval_weeks": 1,
+                "week_anchor_date": anchor.isoformat(),
+                "start_date": anchor.isoformat(),
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    # Overdue: anchored a few days ago on a date that is not itself an
+    # occurrence of "today" (an off-cycle offset).
+    await add("Overdue bins", today - timedelta(days=10))
+    # Due today.
+    await add("Due today walk the dog", today)
+    # Upcoming, within the 2-day window.
+    await add("Upcoming water plants", today + timedelta(days=2))
+    # Completed today.
+    completed_response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Completed feed cat",
+            "interval_weeks": 1,
+            "week_anchor_date": today.isoformat(),
+            "start_date": today.isoformat(),
+        },
+    )
+    assert completed_response.status_code == 201, completed_response.text
+    completed_id = completed_response.json()["id"]
+    completed = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines/{completed_id}/complete",
+        json={"occurrence_date": today.isoformat()},
+    )
+    assert completed.status_code == 200, completed.text
+
+    home = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines?home=true")
+    assert home.status_code == 200, home.text
+    titles = [row["title"] for row in home.json()["items"]]
+    assert titles == [
+        "Overdue bins",
+        "Due today walk the dog",
+        "Upcoming water plants",
+        "Completed feed cat",
+    ]
 
 
 @pytest.mark.asyncio

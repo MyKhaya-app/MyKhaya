@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, func, select, text
@@ -25,7 +26,12 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.quiet_hours import home_timezone
-from mykhaya.notifications.routine_occurrences import is_occurrence_date, next_occurrence_date
+from mykhaya.notifications.routine_occurrences import (
+    HOME_LOOKBACK_DAYS,
+    is_occurrence_date,
+    next_occurrence_date,
+    select_home_occurrence,
+)
 from mykhaya.notifications.visibility import active_membership
 from mykhaya.schemas import (
     RoutineCompletionRequest,
@@ -172,54 +178,58 @@ async def list_routines(
     ]
     tz = await home_timezone(db, home_id, settings.default_timezone)
     today = datetime.now(UTC).astimezone(tz).date()
-    candidate_dates: dict[uuid.UUID, list[date]] = {}
-    for routine in routines:
-        start = today if routine.scope == RoutineScope.personal else today - timedelta(days=60)
-        candidate_dates[routine.id] = [
-            day
-            for offset in range((today + timedelta(days=1) - start).days + 1)
-            if is_occurrence_date(routine, day := start + timedelta(days=offset))
-        ]
-    routine_ids = list(candidate_dates)
+
+    # Home's "what needs attention now" view: each routine surfaces at most
+    # one occurrence — its current overdue/due-today occurrence if
+    # uncompleted, that occurrence still on its due date if just completed,
+    # or its next occurrence once that enters its own pre-due visibility
+    # window. See routine_occurrences.select_home_occurrence for the exact
+    # rules (the recurrence engine — is_occurrence_date/next_occurrence_date
+    # — remains the sole source of truth for occurrence dates themselves).
+    routine_ids = [routine.id for routine in routines]
     completions = (
-        await db.scalars(
-            select(HouseholdRoutineCompletion).where(
-                HouseholdRoutineCompletion.routine_id.in_(routine_ids),
-                HouseholdRoutineCompletion.occurrence_date >= today - timedelta(days=60),
-                HouseholdRoutineCompletion.occurrence_date <= today + timedelta(days=1),
+        (
+            await db.scalars(
+                select(HouseholdRoutineCompletion).where(
+                    HouseholdRoutineCompletion.routine_id.in_(routine_ids),
+                    HouseholdRoutineCompletion.occurrence_date
+                    >= today - timedelta(days=HOME_LOOKBACK_DAYS),
+                    HouseholdRoutineCompletion.occurrence_date <= today,
+                )
             )
-        )
-    ).all() if routine_ids else []
+        ).all()
+        if routine_ids
+        else []
+    )
     completion_by_key = {(row.routine_id, row.occurrence_date): row for row in completions}
     completed_by_ids = {row.completed_by for row in completions if row.completed_by}
-    completed_by_users = {
-        user.id: user.display_name
-        for user in (
-            await db.scalars(select(User).where(User.id.in_(completed_by_ids)))
-        ).all()
-    } if completed_by_ids else {}
+    completed_by_users = (
+        {
+            user.id: user.display_name
+            for user in (await db.scalars(select(User).where(User.id.in_(completed_by_ids)))).all()
+        }
+        if completed_by_ids
+        else {}
+    )
+
+    def _is_completed(routine_id: uuid.UUID, occurrence_date: date) -> bool:
+        return (routine_id, occurrence_date) in completion_by_key
 
     selected: list[tuple[int, date, HouseholdRoutine, HouseholdRoutineCompletion | None]] = []
     for routine in routines:
-        # Keep a completion for the Home's current local day visible for the
-        # whole day.  Older completions are deliberately not selected, while
-        # the next uncompleted occurrence continues to use the existing
-        # overdue/today/tomorrow prioritisation.
-        today_completion = completion_by_key.get((routine.id, today))
-        if today_completion is not None:
-            selected.append((4, today, routine, today_completion))
+        selection = select_home_occurrence(
+            routine,
+            today,
+            partial(_is_completed, routine.id),
+        )
+        if selection is None:
             continue
-        for occurrence_date in reversed(candidate_dates[routine.id]):
-            completion = completion_by_key.get((routine.id, occurrence_date))
-            if completion is None:
-                if occurrence_date < today:
-                    priority = 0
-                elif occurrence_date == today:
-                    priority = 2 if routine.scope == RoutineScope.personal else 1
-                else:
-                    priority = 3
-                selected.append((priority, occurrence_date, routine, None))
-                break
+        completion = (
+            completion_by_key.get((routine.id, selection.occurrence_date))
+            if selection.is_completed
+            else None
+        )
+        selected.append((selection.priority, selection.occurrence_date, routine, completion))
     selected.sort(key=lambda item: (item[0], item[1], item[2].title.casefold(), str(item[2].id)))
     items = [
         await _to_response(
@@ -228,7 +238,9 @@ async def list_routines(
             home_occurrence_date=occurrence_date,
             home_completion=completion,
             home_completed_by_display_name=(
-                completed_by_users.get(completion.completed_by) if completion else None
+                completed_by_users.get(completion.completed_by)
+                if completion and completion.completed_by
+                else None
             ),
         )
         for _priority, occurrence_date, routine, completion in selected

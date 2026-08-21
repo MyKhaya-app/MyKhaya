@@ -1150,8 +1150,8 @@ textarea {
   margin: 0;
 }
 .home-todo-section {
-  padding-bottom: 12px;
-  padding-top: 16px;
+  padding-bottom: 8px;
+  padding-top: 12px;
 }
 .home-routine-list {
   display: grid;
@@ -1162,14 +1162,19 @@ textarea {
   min-height: 40px;
   padding: 0.45rem 0.6rem;
 }
+/* Lighter, more compact than a regular list row (see Meals/Coming up) —
+   the "To do" card was visually the most dominant thing on Home relative to
+   its actual importance. The 40px check column is a touch-target minimum,
+   not a visual size — home-routine-check-dot below draws a much smaller
+   circle/tick inside that same tappable area. */
 .home-routine-row {
   align-items: center;
   border-bottom: 1px solid #f1ece1;
   display: grid;
   gap: 0.7rem;
   grid-template-columns: 40px minmax(0, 1fr);
-  min-height: 58px;
-  padding: 0.45rem 0.1rem;
+  min-height: 42px;
+  padding: 0.3rem 0.1rem;
 }
 .home-routine-row:last-child {
   border-bottom: 0;
@@ -1186,30 +1191,50 @@ textarea {
   padding: 0;
   width: 40px;
 }
-.home-routine-check:hover,
-.home-routine-check:focus-visible {
-  background: var(--colour-cream-light);
+.home-routine-check-dot {
+  align-items: center;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  box-sizing: border-box;
+  color: inherit;
+  display: inline-flex;
+  height: 16px;
+  justify-content: center;
+  transition: background 0.15s ease, height 0.15s ease, width 0.15s ease;
+  width: 16px;
+}
+.home-routine-check:hover .home-routine-check-dot,
+.home-routine-check:focus-visible .home-routine-check-dot {
   color: var(--colour-forest);
 }
-.home-routine-check:disabled {
+/* Completed: significantly smaller than the outstanding dot, filled solid
+   rather than outlined — a quiet confirmation, not a second focal point. */
+.home-routine-check:disabled .home-routine-check-dot {
   background: var(--colour-sage);
+  border-color: var(--colour-sage);
   color: var(--colour-white);
+  height: 12px;
+  width: 12px;
 }
 .home-routine-copy {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.1rem;
   min-width: 0;
   text-decoration: none;
 }
 .home-routine-copy strong {
+  font-size: var(--font-small);
   overflow-wrap: anywhere;
 }
 .home-routine-copy small {
   color: var(--colour-muted);
-  font-size: var(--font-micro);
+  font-size: 0.625rem;
 }
+/* Completed rows recede — smaller/muted text on top of the already-smaller
+   completed dot above, so an outstanding item is always the visual anchor. */
 .home-routine-row.is-complete .home-routine-copy strong {
   color: var(--colour-muted);
+  font-size: 0.75rem;
   text-decoration: line-through;
 }
 /* "Around the house" is two independent rows (QuickActionsRow in
@@ -4894,7 +4919,11 @@ select.plan-meal-field-input {
   line-height: 1.6;
   white-space: pre-wrap;
 }
-.meal-tonight-summary {
+.meal-today-list {
+  display: grid;
+  gap: 0.4rem;
+}
+.meal-today-summary {
   align-items: center;
   color: var(--colour-muted);
   display: flex;
@@ -4902,7 +4931,7 @@ select.plan-meal-field-input {
   gap: 0.2rem 0.6rem;
   margin: 0;
 }
-.meal-tonight-summary strong {
+.meal-today-summary strong {
   color: var(--colour-slate);
 }
 
