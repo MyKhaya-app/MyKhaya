@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from datetime import date, datetime, time
+from decimal import Decimal
 from datetime import time as clock_time
 from enum import StrEnum
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Time,
@@ -1494,6 +1496,194 @@ class HouseholdListItem(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+# --- Wishlists ---------------------------------------------------------------
+# A per-person module, not shared household structure like Meals/Lists: each
+# Wishlist has exactly one owner (owner_user_id), and the owner must never be
+# able to learn whether one of their own items has been reserved or bought —
+# see routers.wishlists for the server-side enforcement of that rule. Other
+# household members (and people outside the Home, via WishlistShare) can view
+# and reserve/buy items but cannot edit the owner's wishlist/items unless
+# they are the owner or a home_admin.
+
+
+class WishlistOccasion(StrEnum):
+    birthday = "birthday"
+    christmas = "christmas"
+    general = "general"
+    other = "other"
+
+
+class WishlistReservationStatus(StrEnum):
+    reserved = "reserved"
+    bought = "bought"
+
+
+class WishlistReservationActorType(StrEnum):
+    # A signed-in MyKhaya user — either a fellow member of the same Home, or
+    # someone the wishlist was explicitly shared with from another Home.
+    member = "member"
+    # Someone accessing via a guest WishlistShare link + PIN, with no
+    # MyKhaya account at all.
+    guest = "guest"
+
+
+class WishlistShareType(StrEnum):
+    mykhaya_user = "mykhaya_user"
+    guest = "guest"
+
+
+class Wishlist(UuidTimeMixin, Base):
+    __tablename__ = "wishlists"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_wishlist_title_nonempty"),
+        Index("ix_wishlist_home_owner", "home_id", "owner_user_id"),
+        Index("ix_wishlist_home_active", "home_id", "deleted_at"),
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    # A User, not a Membership — matches the existing convention for "which
+    # person" references elsewhere (e.g. MealPlanEntry.cook_member_id,
+    # HouseholdListItem.assigned_member_id both target users.id). A managed
+    # Child is a normal User row, so this works for a Child-owned wishlist
+    # too (see routers.wishlists for who may create one on a Child's behalf).
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    occasion: Mapped[WishlistOccasion] = mapped_column(
+        Enum(
+            WishlistOccasion,
+            name="wishlist_occasion",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    occasion_date: Mapped[date | None] = mapped_column(Date)
+    description: Mapped[str | None] = mapped_column(String(1000))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistItem(UuidTimeMixin, Base):
+    __tablename__ = "wishlist_items"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_wishlist_item_name_nonempty"),
+        CheckConstraint("quantity >= 1", name="ck_wishlist_item_quantity_positive"),
+        Index("ix_wishlist_item_wishlist_position", "wishlist_id", "sort_order"),
+    )
+    wishlist_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlists.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str | None] = mapped_column(String(2000))
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    note: Mapped[str | None] = mapped_column(String(500))
+    image_url: Mapped[str | None] = mapped_column(String(2000))
+    quantity: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistShare(UuidTimeMixin, Base):
+    """One recipient's access to a wishlist — never a single global public
+    link (see routers.wishlists' link generation, which is always scoped to
+    one WishlistShare row). The share's own `id` is what the public/guest
+    token is derived from (security.derived_token, the same HMAC-signed,
+    non-sequential scheme invitation links already use) rather than storing
+    a second token column — decoding the token yields this row's id and
+    nothing else, so a compromised token exposes no wishlist/home/member id."""
+
+    __tablename__ = "wishlist_shares"
+    __table_args__ = (
+        Index("ix_wishlist_share_wishlist_active", "wishlist_id", "revoked_at"),
+        Index("ix_wishlist_share_recipient_user", "recipient_user_id"),
+    )
+    wishlist_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlists.id", ondelete="CASCADE"), index=True
+    )
+    recipient_name: Mapped[str] = mapped_column(String(100))
+    recipient_email: Mapped[str | None] = mapped_column(String(320))
+    # Populated only for share_type == mykhaya_user, once the sharer confirms
+    # sharing with that existing MyKhaya account (see routers.wishlists'
+    # lookup-by-email step, which never auto-shares just because an account
+    # was found).
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    share_type: Mapped[WishlistShareType] = mapped_column(
+        Enum(
+            WishlistShareType,
+            name="wishlist_share_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    # Guest shares only — a short numeric PIN, hashed with the same pwdlib
+    # hasher used for managed-Child sign-in PINs (security.password_hash),
+    # never stored in plaintext. Rate-limited at the verification endpoint,
+    # not compensated for by a stronger hash — see routers.wishlists.
+    pin_hash: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistGuestSession(UuidTimeMixin, Base):
+    """A short-lived, revocable access grant for one guest browser, issued
+    after successful link + PIN verification — deliberately not a normal
+    MyKhaya Session (that table is keyed to a real User; a guest has none).
+    Mirrors the same shape/spirit (hashed bearer token in an HttpOnly/Secure
+    cookie, a expiry, immediate revocation by deleting the row) without
+    reusing a table built around a different identity model."""
+
+    __tablename__ = "wishlist_guest_sessions"
+    __table_args__ = (Index("ix_wishlist_guest_session_share", "share_id"),)
+    share_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlist_shares.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistItemReservation(UuidTimeMixin, Base):
+    """At most one row per item (uq_wishlist_item_reservation) — "Available"
+    is simply the absence of a row, and releasing a reservation deletes it
+    outright rather than soft-marking it, so re-reservation is a plain
+    insert. Never joined into any response the wishlist's own owner can
+    read — see routers.wishlists' privacy filtering, applied at the query/
+    serialization layer, not hidden client-side."""
+
+    __tablename__ = "wishlist_item_reservations"
+    __table_args__ = (UniqueConstraint("wishlist_item_id", name="uq_wishlist_item_reservation"),)
+    wishlist_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlist_items.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[WishlistReservationStatus] = mapped_column(
+        Enum(
+            WishlistReservationStatus,
+            name="wishlist_reservation_status",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    actor_type: Mapped[WishlistReservationActorType] = mapped_column(
+        Enum(
+            WishlistReservationActorType,
+            name="wishlist_reservation_actor_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_share_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("wishlist_shares.id", ondelete="SET NULL")
+    )
+    # A display name captured at reservation time ("Grandad", "Megan") —
+    # kept even if the underlying share/user later changes, so "Reserved by
+    # ..." never has to re-resolve a live identity to render.
+    buyer_display_name: Mapped[str] = mapped_column(String(100))
 
 
 class PlatformPushSettings(UuidTimeMixin, Base):

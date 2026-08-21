@@ -112,6 +112,7 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
     external_invites_enabled: false,
     meals_enabled: false,
     lists_enabled: false,
+    wishlists_enabled: false,
     ...overrides,
   };
 }

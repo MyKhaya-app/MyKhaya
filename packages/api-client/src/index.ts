@@ -6,7 +6,20 @@ export class MyKhayaClient {
   constructor(private readonly baseUrl = "/api/v1") {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const csrfCookieName = path === "/auth/renew" ? "mk_device_csrf" : "mk_csrf";
+    // Guest wishlist endpoints (`/wishlist/share/...verify`, `/wishlist/guest/...`)
+    // use a separate, lower-privileged cookie pair (mk_wishlist_guest /
+    // mk_wishlist_guest_csrf, see wishlist_guest.py) that is never the normal
+    // mk_session/mk_csrf pair a signed-in member's requests use — a guest never
+    // has a MyKhaya session at all. Branching on the path here (rather than a
+    // second client class) keeps every wishlist call, guest or member, going
+    // through the same request()/error-handling/credentials logic; the only
+    // thing that differs for guest paths is which CSRF cookie is read.
+    const csrfCookieName =
+      path === "/auth/renew"
+        ? "mk_device_csrf"
+        : path.startsWith("/wishlist/guest") || path.startsWith("/wishlist/share")
+          ? "mk_wishlist_guest_csrf"
+          : "mk_csrf";
     const csrf =
       typeof document === "undefined"
         ? undefined
@@ -579,6 +592,145 @@ export class MyKhayaClient {
   clearCompletedListItems = (homeId: string, listId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/clear-completed`,
+      { method: "POST" },
+    );
+  // --- Wishlists (Family-only) ---------------------------------------------
+  wishlists = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists`,
+    );
+  createWishlist = (
+    homeId: string,
+    body: import("@mykhaya/shared-types").WishlistCreatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  wishlist = (
+    homeId: string,
+    wishlistId: string,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}`,
+    );
+  updateWishlist = (
+    homeId: string,
+    wishlistId: string,
+    body: import("@mykhaya/shared-types").WishlistUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteWishlist = (homeId: string, wishlistId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}`,
+      { method: "DELETE" },
+    );
+  addWishlistItem = (
+    homeId: string,
+    wishlistId: string,
+    body: import("@mykhaya/shared-types").WishlistItemCreatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/items`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateWishlistItem = (
+    homeId: string,
+    wishlistId: string,
+    itemId: string,
+    body: import("@mykhaya/shared-types").WishlistItemUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/items/${encodeURIComponent(itemId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  removeWishlistItem = (homeId: string, wishlistId: string, itemId: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/items/${encodeURIComponent(itemId)}`,
+      { method: "DELETE" },
+    );
+  reorderWishlistItems = (homeId: string, wishlistId: string, itemIds: string[]) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/items/reorder`,
+      { method: "POST", body: JSON.stringify({ item_ids: itemIds }) },
+    );
+  lookupShareRecipient = (homeId: string, wishlistId: string, email: string) =>
+    this.request<import("@mykhaya/shared-types").ShareRecipientLookupResponse>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/shares/lookup`,
+      { method: "POST", body: JSON.stringify({ email }) },
+    );
+  createShare = (
+    homeId: string,
+    wishlistId: string,
+    body: import("@mykhaya/shared-types").ShareCreatePayload,
+  ) =>
+    this.request<
+      | import("@mykhaya/shared-types").ShareResponse
+      | import("@mykhaya/shared-types").GuestShareCreateResponse
+    >(`/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/shares`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  shares = (homeId: string, wishlistId: string) =>
+    this.request<import("@mykhaya/shared-types").ShareListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/shares`,
+    );
+  revokeShare = (homeId: string, wishlistId: string, shareId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/shares/${encodeURIComponent(shareId)}/revoke`,
+      { method: "POST" },
+    );
+  regenerateGuestShare = (homeId: string, wishlistId: string, shareId: string) =>
+    this.request<import("@mykhaya/shared-types").GuestShareCreateResponse>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/shares/${encodeURIComponent(shareId)}/regenerate-guest-pin`,
+      { method: "POST" },
+    );
+  sharedWithMe = () =>
+    this.request<import("@mykhaya/shared-types").WishlistListResponse>("/wishlists/shared-with-me");
+  wishlistTopLevel = (wishlistId: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistDetail>(
+      `/wishlists/${encodeURIComponent(wishlistId)}`,
+    );
+  reserveWishlistItem = (wishlistId: string, itemId: string, buyerDisplayName?: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlists/${encodeURIComponent(wishlistId)}/items/${encodeURIComponent(itemId)}/reserve`,
+      { method: "POST", body: JSON.stringify({ buyer_display_name: buyerDisplayName ?? null }) },
+    );
+  markWishlistItemBought = (wishlistId: string, itemId: string, buyerDisplayName?: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlists/${encodeURIComponent(wishlistId)}/items/${encodeURIComponent(itemId)}/mark-bought`,
+      { method: "POST", body: JSON.stringify({ buyer_display_name: buyerDisplayName ?? null }) },
+    );
+  releaseWishlistItem = (wishlistId: string, itemId: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlists/${encodeURIComponent(wishlistId)}/items/${encodeURIComponent(itemId)}/release`,
+      { method: "POST" },
+    );
+  // --- Wishlists: guest flow (link + PIN, separate cookie session) --------
+  verifyGuestShare = (token: string, pin: string) =>
+    this.request<import("@mykhaya/shared-types").GuestVerifyResponse>(
+      `/wishlist/share/${encodeURIComponent(token)}/verify`,
+      { method: "POST", body: JSON.stringify({ pin }) },
+    );
+  guestLogout = () => this.request<void>("/wishlist/guest/logout", { method: "POST" });
+  guestWishlist = () =>
+    this.request<import("@mykhaya/shared-types").WishlistViewerDetail>("/wishlist/guest/wishlist");
+  guestReserveItem = (itemId: string, buyerDisplayName?: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlist/guest/items/${encodeURIComponent(itemId)}/reserve`,
+      { method: "POST", body: JSON.stringify({ buyer_display_name: buyerDisplayName ?? null }) },
+    );
+  guestMarkItemBought = (itemId: string, buyerDisplayName?: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlist/guest/items/${encodeURIComponent(itemId)}/mark-bought`,
+      { method: "POST", body: JSON.stringify({ buyer_display_name: buyerDisplayName ?? null }) },
+    );
+  guestReleaseItem = (itemId: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistItemViewer>(
+      `/wishlist/guest/items/${encodeURIComponent(itemId)}/release`,
       { method: "POST" },
     );
   billingStatus = (homeId: string) =>

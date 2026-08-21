@@ -26,6 +26,7 @@ from mykhaya.routers import (
     notifications,
     platform,
     users,
+    wishlists,
 )
 from mykhaya.routers import (
     status as status_router,
@@ -110,6 +111,9 @@ for router in (
     household_routines.router,
     meal_plans.router,
     lists.router,
+    wishlists.router,
+    wishlists.shared_router,
+    wishlists.guest_router,
     birthdays.router,
     notifications.router,
     platform.router,

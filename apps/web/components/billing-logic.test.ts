@@ -106,6 +106,7 @@ function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
     external_invites_enabled: false,
     meals_enabled: false,
     lists_enabled: false,
+    wishlists_enabled: false,
     ...overrides,
   };
 }

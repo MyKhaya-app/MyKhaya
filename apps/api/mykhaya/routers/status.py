@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,11 +63,16 @@ def _incident_summary(
 
 @router.get("")
 async def public_status(
-    request: Request, db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     enforce_status_host(request, settings)
     if not settings.status_public_enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
 
     now = datetime.now(UTC)
     rows = (
@@ -92,7 +97,11 @@ async def public_status(
             updates_by_incident[update_row.incident_id].append(update_row)
 
     active_rows = [
-        row for row in rows if is_incident_active(row.starts_at, row.resolved_at, now=now)
+        row
+        for row in rows
+        if is_incident_active(
+            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
+        )
     ]
     active_impacts = [
         (entry.service, entry.impact)

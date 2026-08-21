@@ -713,6 +713,7 @@ export interface BillingStatus {
   external_invites_enabled: boolean;
   meals_enabled: boolean;
   lists_enabled: boolean;
+  wishlists_enabled: boolean;
 }
 
 export interface PricingOption {
@@ -746,4 +747,183 @@ export interface PlanComparisonRow {
 
 export interface PlanComparison {
   rows: PlanComparisonRow[];
+}
+
+// --- Wishlists (Family-only) -----------------------------------------------
+// Mirrors mykhaya.wishlist_schemas exactly, field for field. The
+// owner/viewer item-response split is deliberate and load-bearing: see that
+// module's docstring. WishlistItemOwner has NO reservation fields at all —
+// not even optional ones — so reading item.reservation_status on an owner
+// item is a compile error, matching the backend guarantee that the owner's
+// response literally cannot carry that data. See docs/product/wishlists.md.
+
+export type WishlistOccasion = "birthday" | "christmas" | "general" | "other";
+export type WishlistReservationStatus = "available" | "reserved" | "bought";
+export type WishlistShareType = "mykhaya_user" | "guest";
+
+export interface WishlistSummary {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  owner_display_name: string;
+  item_count: number;
+  is_owner: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WishlistListResponse {
+  items: WishlistSummary[];
+}
+
+// No reservation fields at all — see module note above.
+export interface WishlistItemOwner {
+  id: string;
+  name: string;
+  url: string | null;
+  price: string | null;
+  currency: string | null;
+  note: string | null;
+  image_url: string | null;
+  quantity: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WishlistItemViewer {
+  id: string;
+  name: string;
+  url: string | null;
+  price: string | null;
+  currency: string | null;
+  note: string | null;
+  image_url: string | null;
+  quantity: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  reservation_status: WishlistReservationStatus;
+  reserved_by_display_name: string | null;
+}
+
+export interface WishlistOwnerDetail {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+  items: WishlistItemOwner[];
+}
+
+export interface WishlistViewerDetail {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  owner_display_name: string;
+  created_at: string;
+  updated_at: string;
+  items: WishlistItemViewer[];
+}
+
+// The backend returns one shape or the other with no discriminant field
+// (response_model=None) — callers must branch on
+// `wishlist.owner_user_id === currentUserId`, never on field presence alone.
+export type WishlistDetail = WishlistOwnerDetail | WishlistViewerDetail;
+
+export interface WishlistCreatePayload {
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date?: string | null;
+  description?: string | null;
+  owner_user_id?: string | null;
+}
+
+export interface WishlistUpdatePayload {
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date?: string | null;
+  description?: string | null;
+  expected_updated_at: string;
+}
+
+export interface WishlistItemCreatePayload {
+  name: string;
+  url?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  note?: string | null;
+  image_url?: string | null;
+  quantity?: number;
+}
+
+export interface WishlistItemUpdatePayload {
+  name?: string;
+  url?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  note?: string | null;
+  image_url?: string | null;
+  quantity?: number;
+}
+
+export interface ShareRecipientLookupResponse {
+  existing_user_id: string | null;
+  existing_user_display_name: string | null;
+}
+
+export interface ShareCreatePayload {
+  recipient_name: string;
+  recipient_email?: string | null;
+  share_type: WishlistShareType;
+  confirmed_user_id?: string | null;
+}
+
+export interface ShareResponse {
+  id: string;
+  recipient_name: string;
+  share_type: WishlistShareType;
+  created_at: string;
+}
+
+// The plaintext PIN/link token are returned exactly once, at creation or
+// regeneration time only — never persisted client-side beyond the one-time
+// reveal UI, and never returned again by any other endpoint.
+export interface GuestShareCreateResponse extends ShareResponse {
+  link_token: string;
+  pin: string;
+}
+
+export interface ShareListItem {
+  id: string;
+  recipient_name: string;
+  recipient_email: string | null;
+  share_type: WishlistShareType;
+  created_at: string;
+  last_accessed_at: string | null;
+  revoked: boolean;
+}
+
+export interface ShareListResponse {
+  items: ShareListItem[];
+}
+
+export interface GuestVerifyPayload {
+  pin: string;
+}
+
+export interface GuestVerifyResponse {
+  recipient_name: string;
 }

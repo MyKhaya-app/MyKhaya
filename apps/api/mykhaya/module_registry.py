@@ -133,13 +133,14 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ),
     ModuleDefinition(
         FeatureKey.wish_lists.value,
-        "Wish lists",
-        "Gift ideas shared with selected people.",
+        "Wishlists",
+        "Gift ideas for birthdays and Christmas, shared with selected people without spoiling the surprise.",
         "Family",
-        ReleaseState.hidden,
+        ReleaseState.released,
         False,
-        None,
+        "0.3.0",
         dependencies=("household_members",),
+        permissions=("wishlists.view", "wishlists.manage"),
         route="/wish-lists",
     ),
     ModuleDefinition(

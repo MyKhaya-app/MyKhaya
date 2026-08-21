@@ -52,6 +52,7 @@ function billing(overrides: Record<string, unknown> = {}) {
     member_usage: { count: 1, limit: 1, over_limit: false },
     meals_enabled: false,
     lists_enabled: false,
+    wishlists_enabled: false,
     ...overrides,
   };
 }
@@ -145,6 +146,62 @@ describe("Home — Lists shortcut", () => {
 
     await screen.findByText(/around the house/i);
     expect(screen.queryByRole("link", { name: /^lists$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("Home — Wishlists shortcut", () => {
+  beforeEach(() => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "meals", enabled: true },
+        { feature: "shopping", enabled: true },
+        { feature: "wish_lists", enabled: true },
+      ],
+    });
+  });
+
+  it("links to Wishlists with no lock treatment on a Family Home", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ wishlists_enabled: true }),
+    );
+
+    render(<HomePage />);
+
+    const link = await screen.findByRole("link", { name: /^wishlists$/i });
+    expect(link).toHaveAttribute("href", "/wish-lists");
+    expect(link.className).not.toMatch(/quick-action-locked/);
+  });
+
+  it("shows the locked treatment but still links through on a Free Home", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ wishlists_enabled: false }),
+    );
+
+    render(<HomePage />);
+
+    const link = await screen.findByRole("link", { name: /^wishlists$/i });
+    expect(link).toHaveAttribute("href", "/wish-lists");
+    expect(link.className).toMatch(/quick-action-locked/);
+  });
+
+  it("hides the shortcut entirely when the module isn't released for this Home", async () => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "meals", enabled: false },
+        { feature: "shopping", enabled: false },
+        { feature: "wish_lists", enabled: false },
+      ],
+    });
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ wishlists_enabled: true }),
+    );
+
+    render(<HomePage />);
+
+    await screen.findByText(/around the house/i);
+    expect(screen.queryByRole("link", { name: /^wishlists$/i })).not.toBeInTheDocument();
   });
 });
 

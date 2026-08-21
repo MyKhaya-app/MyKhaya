@@ -179,6 +179,8 @@ export default function HomePage() {
   const [mealsEnabled, setMealsEnabled] = useState(false);
   const [listsFeatureOn, setListsFeatureOn] = useState(false);
   const [listsEnabled, setListsEnabled] = useState(false);
+  const [wishlistsFeatureOn, setWishlistsFeatureOn] = useState(false);
+  const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
@@ -209,11 +211,13 @@ export default function HomePage() {
         setCanInviteMore(canAddMember(billing.member_usage));
         setMealsEnabled(billing.meals_enabled);
         setListsEnabled(billing.lists_enabled);
+        setWishlistsEnabled(billing.wishlists_enabled);
       })
       .catch(() => {
         setCanInviteMore(false);
         setMealsEnabled(false);
         setListsEnabled(false);
+        setWishlistsEnabled(false);
       });
     Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
       .then(async ([matrix, memberRows]) => {
@@ -227,6 +231,9 @@ export default function HomePage() {
         );
         setListsFeatureOn(
           matrix.features.some((feature) => feature.feature === "shopping" && feature.enabled),
+        );
+        setWishlistsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "wish_lists" && feature.enabled),
         );
         const notificationsEnabled = matrix.features.some(
           (feature) => feature.feature === "notifications" && feature.enabled,
@@ -575,6 +582,20 @@ export default function HomePage() {
                   )}
                   <ListChecks size={20} aria-hidden="true" />
                   Lists
+                </Link>
+              )}
+              {wishlistsFeatureOn && (
+                <Link
+                  className={`quick-action${wishlistsEnabled ? "" : " quick-action-locked"}`}
+                  href="/wish-lists"
+                >
+                  {!wishlistsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <Gift size={20} aria-hidden="true" />
+                  Wishlists
                 </Link>
               )}
             </QuickActionsRow>

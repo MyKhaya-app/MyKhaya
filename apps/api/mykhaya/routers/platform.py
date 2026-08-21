@@ -56,6 +56,7 @@ from mykhaya.models import (
     HomeSubscription,
     HomeSubscriptionEvent,
     HouseholdRelationship,
+    IncidentLifecycleState,
     Invitation,
     Membership,
     NotificationChannel,
@@ -5328,7 +5329,9 @@ async def incidents(
     active_impacts = [
         (entry.service, entry.impact)
         for row in rows
-        if is_incident_active(row.starts_at, row.resolved_at, now=now)
+        if is_incident_active(
+            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
+        )
         for entry in services_by_incident[row.id]
     ]
     service_states = service_states_from_impacts(active_impacts)
@@ -5418,6 +5421,7 @@ async def create_incident(
         state=primary.impact,
         lifecycle_state=body.lifecycle_state,
         starts_at=starts_at,
+        resolved_at=starts_at if body.lifecycle_state == IncidentLifecycleState.resolved else None,
         internal_notes=body.internal_notes.strip() if body.internal_notes else None,
         created_by=context.administrator.id,
     )
@@ -5477,8 +5481,9 @@ async def create_incident_update(
     row.lifecycle_state = body.lifecycle_state
     if body.internal_notes is not None:
         row.internal_notes = body.internal_notes.strip() or None
-    newly_resolved = body.resolved and row.resolved_at is None
-    if body.resolved:
+    resolving = body.resolved or body.lifecycle_state == IncidentLifecycleState.resolved
+    newly_resolved = resolving and row.resolved_at is None
+    if resolving:
         row.resolved_at = row.resolved_at or datetime.now(UTC)
     else:
         row.resolved_at = None

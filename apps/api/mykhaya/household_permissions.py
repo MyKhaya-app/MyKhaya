@@ -52,6 +52,15 @@ class Capability(StrEnum):
     # entitlements.PLAN_DEFINITIONS) rather than adding a new feature key.
     lists_view = "lists.view"
     lists_manage = "lists.manage"
+    # Wishlists (mykhaya.routers.wishlists) — "view" is the household-wide
+    # capability that lets a member see the module and other members'
+    # wishlists at all; "manage" lets them create/edit/delete wishlists —
+    # but every create/edit/delete endpoint *also* requires the caller to be
+    # that wishlist's own owner (or home_admin), since unlike Meals/Lists
+    # this is a per-person module, not shared household structure. See
+    # routers.wishlists._require_owner_or_admin.
+    wishlists_view = "wishlists.view"
+    wishlists_manage = "wishlists.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
@@ -71,6 +80,8 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.meals_manage,
             Capability.lists_view,
             Capability.lists_manage,
+            Capability.wishlists_view,
+            Capability.wishlists_manage,
         }
     ),
     PermissionProfile.child_restricted: frozenset(),

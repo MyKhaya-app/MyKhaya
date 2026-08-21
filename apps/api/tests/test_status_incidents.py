@@ -16,15 +16,36 @@ from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
+    IncidentLifecycleState,
     PlatformAdministrator,
     PlatformRole,
     PublicIncident,
 )
 from mykhaya.security import password_hash
+from mykhaya.status_aggregation import is_incident_active
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
 STATUS_ORIGIN = "http://status.localhost:8080"
 PASSWORD = "A separate operator password!"
+
+
+@pytest.mark.parametrize(
+    "lifecycle_state, expected",
+    [
+        (IncidentLifecycleState.investigating, True),
+        (IncidentLifecycleState.identified, True),
+        (IncidentLifecycleState.monitoring, True),
+        (IncidentLifecycleState.resolved, False),
+    ],
+)
+def test_incident_activity_respects_lifecycle_state(
+    lifecycle_state: IncidentLifecycleState, expected: bool
+) -> None:
+    assert is_incident_active(
+        datetime.now(UTC) - timedelta(minutes=1),
+        None,
+        lifecycle_state=lifecycle_state,
+    ) is expected
 
 
 @pytest.fixture

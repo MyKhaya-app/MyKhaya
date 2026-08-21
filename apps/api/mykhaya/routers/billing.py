@@ -292,6 +292,7 @@ async def billing_status(
         ),
         meals_enabled=await has_entitlement(db, group_id, "meals.enabled"),
         lists_enabled=await has_entitlement(db, group_id, "lists.enabled"),
+        wishlists_enabled=await has_entitlement(db, group_id, "wishlists.enabled"),
     )
 
 

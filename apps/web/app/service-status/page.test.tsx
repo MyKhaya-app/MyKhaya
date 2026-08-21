@@ -84,7 +84,7 @@ describe("Public Status page — overall banner wording", () => {
     await screen.findByText("No current incidents.");
     const banner = container.querySelector(".status-banner");
     expect(banner).not.toBeNull();
-    expect(within(banner!).getByText("Operational")).toBeInTheDocument();
+    expect(within(banner as HTMLElement).getByText("Operational")).toBeInTheDocument();
   });
 
   it("shows the degraded wording when a service is degraded", async () => {

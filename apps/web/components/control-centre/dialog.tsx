@@ -32,9 +32,11 @@ export function CcDialog({
   useEffect(() => {
     if (!open) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const node = dialogRef.current;
     const focusable = node?.querySelector<HTMLElement>(
-      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+      "button:not([data-dialog-close]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
     );
     (focusable ?? node)?.focus();
     function onKeyDown(event: KeyboardEvent) {
@@ -43,6 +45,7 @@ export function CcDialog({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
       previouslyFocused.current?.focus();
     };
   }, [open, onClose]);
@@ -60,7 +63,18 @@ export function CcDialog({
         ref={dialogRef}
         onClick={(event) => event.stopPropagation()}
       >
-        <h2 id={titleId}>{title}</h2>
+        <div className="cc-dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="secondary cc-dialog-close"
+            onClick={onClose}
+            aria-label="Close dialog"
+            data-dialog-close
+          >
+            ×
+          </button>
+        </div>
         {children}
       </div>
     </div>
@@ -102,18 +116,21 @@ export function CcConfirmDialog({
 }) {
   return (
     <CcDialog open={open} onClose={onClose} title={title}>
-      {description && <p>{description}</p>}
       <form
+        className="cc-dialog-form"
         onSubmit={(event: FormEvent<HTMLFormElement>) => {
           event.preventDefault();
           void onConfirm(new FormData(event.currentTarget));
         }}
       >
-        {extraFields}
-        <label>
-          Reason for this administrative action (at least 10 characters)
-          <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
-        </label>
+        <div className="cc-dialog-scroll">
+          {description && <p>{description}</p>}
+          {extraFields}
+          <label>
+            Reason for this administrative action (at least 10 characters)
+            <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+          </label>
+        </div>
         <CcDialogActions>
           <button type="button" className="secondary" onClick={onClose}>
             Cancel

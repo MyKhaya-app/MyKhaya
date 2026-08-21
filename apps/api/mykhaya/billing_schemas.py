@@ -133,6 +133,9 @@ class BillingStatusResponse(BaseModel):
     # (Lists is a separate entitlement from meals.enabled, even though both
     # currently match Free/Family 1:1). See routers.lists.
     lists_enabled: bool
+    # Whether this Home's plan currently includes Wishlists. See
+    # routers.wishlists' wishlists.enabled enforcement.
+    wishlists_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):

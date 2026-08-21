@@ -1,0 +1,917 @@
+"use client";
+
+import { FormEvent, use, useEffect, useState } from "react";
+import Link from "next/link";
+import { ChevronLeft, Copy, MoreVertical, Plus, Share2, Trash2 } from "lucide-react";
+import type {
+  GuestShareCreateResponse,
+  ShareCreatePayload,
+  ShareListItem,
+  User,
+  WishlistDetail,
+  WishlistItemCreatePayload,
+  WishlistItemOwner,
+  WishlistItemUpdatePayload,
+  WishlistItemViewer,
+  WishlistOccasion,
+  WishlistOwnerDetail,
+  WishlistUpdatePayload,
+  WishlistViewerDetail,
+} from "@mykhaya/shared-types";
+import { ApiError, api } from "@mykhaya/api-client";
+import { AppShell } from "@/components/app-shell";
+import { BottomSheet } from "@/components/bottom-sheet";
+import { FormStatus } from "@/components/form-status";
+import { useActiveHome } from "@/components/use-active-home";
+import { WISHLIST_OCCASION_OPTIONS, occasionGlyph, occasionLabel } from "../occasion";
+
+// Wishlist detail — the one non-negotiable rule for this whole page: an
+// owner must never see, anywhere in this component tree, whether their own
+// items are reserved/bought or by whom. `isOwnerDetail` below is the single
+// place that decides which of the two response shapes (owner vs viewer) is
+// in play; every render path downstream of it either has zero access to
+// reservation fields (owner shape has none at all, so it's a compile error
+// to reference them) or renders the viewer shape, never both. See
+// wishlist_schemas.py's module docstring for the backend half of this
+// guarantee.
+
+function isOwnerDetail(detail: WishlistDetail, currentUserId: string): detail is WishlistOwnerDetail {
+  return detail.owner_user_id === currentUserId;
+}
+
+function loadErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof ApiError && cause.status === 404) {
+    return "That wishlist could not be found.";
+  }
+  return cause instanceof ApiError ? cause.message : fallback;
+}
+
+function formatPrice(price: string | null, currency: string | null): string | null {
+  if (!price) return null;
+  return currency ? `${currency} ${price}` : price;
+}
+
+export default function WishlistDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: wishlistId } = use(params);
+  const { activeHomeId } = useActiveHome();
+  const [me, setMe] = useState<User | null>(null);
+  const [detail, setDetail] = useState<WishlistDetail | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState("");
+  const [showActions, setShowActions] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
+  const [editingItem, setEditingItem] = useState<WishlistItemOwner | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [managingShares, setManagingShares] = useState(false);
+
+  async function load() {
+    try {
+      const result = await api.wishlistTopLevel(wishlistId);
+      setDetail(result);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 404) setNotFound(true);
+      else setError(loadErrorMessage(cause, "Could not load this wishlist."));
+    }
+  }
+
+  useEffect(() => {
+    api.me().then(setMe).catch(() => setMe(null));
+    void load();
+  }, [wishlistId]);
+
+  async function act(action: () => Promise<void>, fallback: string) {
+    try {
+      await action();
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : fallback);
+    }
+  }
+
+  async function reserve(item: WishlistItemViewer) {
+    await act(async () => {
+      const updated = await api.reserveWishlistItem(wishlistId, item.id);
+      applyItemUpdate(updated);
+    }, "Could not reserve that item.");
+  }
+
+  async function markBought(item: WishlistItemViewer) {
+    await act(async () => {
+      const updated = await api.markWishlistItemBought(wishlistId, item.id);
+      applyItemUpdate(updated);
+    }, "Could not mark that item as bought.");
+  }
+
+  async function release(item: WishlistItemViewer) {
+    await act(async () => {
+      const updated = await api.releaseWishlistItem(wishlistId, item.id);
+      applyItemUpdate(updated);
+    }, "Could not release that item.");
+  }
+
+  function applyItemUpdate(updated: WishlistItemViewer) {
+    setDetail((current) => {
+      if (!current || !("owner_display_name" in current)) return current;
+      return {
+        ...current,
+        items: current.items.map((row) => (row.id === updated.id ? updated : row)),
+      };
+    });
+  }
+
+  if (notFound) {
+    return (
+      <AppShell>
+        <main className="standard-page">
+          <Link className="tertiary" href="/wish-lists">
+            <ChevronLeft size={16} aria-hidden="true" /> Wishlists
+          </Link>
+          <p className="empty-mini">That wishlist could not be found.</p>
+        </main>
+      </AppShell>
+    );
+  }
+
+  if (!me || !detail) {
+    return (
+      <AppShell>
+        <main className="standard-page">
+          <p role="status">Loading wishlist…</p>
+        </main>
+      </AppShell>
+    );
+  }
+
+  const owner = isOwnerDetail(detail, me.id);
+  const Glyph = occasionGlyph(detail.occasion);
+
+  return (
+    <AppShell>
+      <main className="standard-page wishlists-detail-page">
+        <Link className="tertiary wishlists-back-link" href="/wish-lists">
+          <ChevronLeft size={16} aria-hidden="true" /> Wishlists
+        </Link>
+        <div className="page-heading">
+          <div>
+            <p className="eyebrow">
+              <Glyph size={14} aria-hidden="true" /> {occasionLabel(detail.occasion)}
+            </p>
+            <h1>{detail.title}</h1>
+            {!owner && (
+              <p className="quiet-state">{(detail as WishlistViewerDetail).owner_display_name}'s wishlist</p>
+            )}
+          </div>
+          {owner && (
+            <button
+              type="button"
+              className="icon-button secondary"
+              aria-label="Wishlist actions"
+              onClick={() => setShowActions(true)}
+            >
+              <MoreVertical size={18} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        {detail.description && <p className="muted">{detail.description}</p>}
+        <FormStatus error={error} />
+
+        {owner && (
+          <div className="wishlists-toolbar">
+            <button type="button" onClick={() => setAddingItem(true)}>
+              <Plus size={16} aria-hidden="true" /> Add item
+            </button>
+            <button type="button" className="secondary" onClick={() => setSharing(true)}>
+              <Share2 size={16} aria-hidden="true" /> Share wishlist
+            </button>
+          </div>
+        )}
+
+        {detail.items.length === 0 ? (
+          <p className="empty-mini">
+            {owner ? "Add the first item to this wishlist." : "This wishlist has no items yet."}
+          </p>
+        ) : owner ? (
+          <div className="wishlists-item-list">
+            {(detail as WishlistOwnerDetail).items.map((item) => (
+              <button
+                type="button"
+                className="wishlists-item-row"
+                key={item.id}
+                onClick={() => setEditingItem(item)}
+              >
+                <span className="wishlists-item-copy">
+                  <strong>{item.name}</strong>
+                  <span className="quiet-state">
+                    {[
+                      item.quantity > 1 ? `Qty ${item.quantity}` : null,
+                      formatPrice(item.price, item.currency),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="wishlists-item-list">
+            {(detail as WishlistViewerDetail).items.map((item) => (
+              <div className="wishlists-item-row wishlists-item-row-viewer" key={item.id}>
+                <span className="wishlists-item-copy">
+                  <strong>{item.name}</strong>
+                  <span className="quiet-state">
+                    {[
+                      item.quantity > 1 ? `Qty ${item.quantity}` : null,
+                      formatPrice(item.price, item.currency),
+                      item.note,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  {item.url && (
+                    <a className="wishlists-item-link" href={item.url} target="_blank" rel="noreferrer">
+                      View item
+                    </a>
+                  )}
+                  <span className={`wishlists-status wishlists-status-${item.reservation_status}`}>
+                    {item.reservation_status === "available" && "Available"}
+                    {item.reservation_status === "reserved" && "Reserved"}
+                    {item.reservation_status === "bought" && "Bought"}
+                    {item.reservation_status !== "available" &&
+                      item.reserved_by_display_name &&
+                      ` by ${item.reserved_by_display_name}`}
+                  </span>
+                </span>
+                <span className="wishlists-item-actions">
+                  {item.reservation_status === "available" ? (
+                    <>
+                      <button type="button" className="secondary" onClick={() => void reserve(item)}>
+                        Reserve
+                      </button>
+                      <button type="button" className="secondary" onClick={() => void markBought(item)}>
+                        Mark as bought
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="secondary" onClick={() => void release(item)}>
+                      Release
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {owner && showActions && (
+          <BottomSheet title="Wishlist actions" onDismiss={() => setShowActions(false)}>
+            <div className="meal-actions-sheet">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setEditing(true);
+                  setShowActions(false);
+                }}
+              >
+                Edit wishlist
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setManagingShares(true);
+                  setShowActions(false);
+                }}
+              >
+                Manage sharing
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  void act(async () => {
+                    if (!activeHomeId) return;
+                    if (!window.confirm(`Delete "${detail.title}"? This will remove the wishlist and its items.`))
+                      return;
+                    await api.deleteWishlist(activeHomeId, wishlistId);
+                    window.location.href = "/wish-lists";
+                  }, "Could not delete this wishlist.")
+                }
+              >
+                <Trash2 size={16} aria-hidden="true" /> Delete wishlist
+              </button>
+            </div>
+          </BottomSheet>
+        )}
+
+        {owner && activeHomeId && editing && (
+          <EditWishlistSheet
+            homeId={activeHomeId}
+            detail={detail as WishlistOwnerDetail}
+            onClose={() => setEditing(false)}
+            onSaved={(updated) => {
+              setDetail(updated);
+              setEditing(false);
+            }}
+          />
+        )}
+
+        {owner && activeHomeId && addingItem && (
+          <AddItemSheet
+            homeId={activeHomeId}
+            wishlistId={wishlistId}
+            onClose={() => setAddingItem(false)}
+            onSaved={(updated) => {
+              setDetail(updated);
+              setAddingItem(false);
+            }}
+          />
+        )}
+
+        {owner && activeHomeId && editingItem && (
+          <EditItemSheet
+            homeId={activeHomeId}
+            wishlistId={wishlistId}
+            item={editingItem}
+            onClose={() => setEditingItem(null)}
+            onSaved={(updated) => {
+              setDetail(updated);
+              setEditingItem(null);
+            }}
+            onDeleted={(updated) => {
+              setDetail(updated);
+              setEditingItem(null);
+            }}
+          />
+        )}
+
+        {owner && activeHomeId && sharing && (
+          <ShareWishlistSheet
+            homeId={activeHomeId}
+            wishlistId={wishlistId}
+            onClose={() => setSharing(false)}
+          />
+        )}
+
+        {owner && activeHomeId && managingShares && (
+          <ManageSharesSheet
+            homeId={activeHomeId}
+            wishlistId={wishlistId}
+            onClose={() => setManagingShares(false)}
+          />
+        )}
+      </main>
+    </AppShell>
+  );
+}
+
+function EditWishlistSheet({
+  homeId,
+  detail,
+  onClose,
+  onSaved,
+}: {
+  homeId: string;
+  detail: WishlistOwnerDetail;
+  onClose: () => void;
+  onSaved: (detail: WishlistOwnerDetail) => void;
+}) {
+  const [title, setTitle] = useState(detail.title);
+  const [occasion, setOccasion] = useState<WishlistOccasion>(detail.occasion);
+  const [occasionDate, setOccasionDate] = useState(detail.occasion_date ?? "");
+  const [description, setDescription] = useState(detail.description ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim()) {
+      setError("Give this wishlist a title.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload: WishlistUpdatePayload = {
+        title: title.trim(),
+        occasion,
+        occasion_date: occasionDate || null,
+        description: description.trim() || null,
+        expected_updated_at: detail.updated_at,
+      };
+      const updated = await api.updateWishlist(homeId, detail.id, payload);
+      onSaved(updated);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not save this wishlist.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <BottomSheet title="Edit wishlist" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          Title
+          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} required />
+        </label>
+        <div className="meal-time-row">
+          <label>
+            Occasion
+            <select value={occasion} onChange={(event) => setOccasion(event.target.value as WishlistOccasion)}>
+              {WISHLIST_OCCASION_OPTIONS.map((row) => (
+                <option key={row.key} value={row.key}>
+                  {row.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Date (optional)
+            <input type="date" value={occasionDate} onChange={(event) => setOccasionDate(event.target.value)} />
+          </label>
+        </div>
+        <label>
+          Description (optional)
+          <input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} />
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function AddItemSheet({
+  homeId,
+  wishlistId,
+  onClose,
+  onSaved,
+}: {
+  homeId: string;
+  wishlistId: string;
+  onClose: () => void;
+  onSaved: (detail: WishlistOwnerDetail) => void;
+}) {
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [price, setPrice] = useState("");
+  const [note, setNote] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Give this item a name.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload: WishlistItemCreatePayload = {
+        name: name.trim(),
+        url: url.trim() || null,
+        price: price.trim() || null,
+        note: note.trim() || null,
+        quantity,
+      };
+      const updated = await api.addWishlistItem(homeId, wishlistId, payload);
+      onSaved(updated);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not add that item.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <BottomSheet title="Add item" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          Item name
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} autoFocus required />
+        </label>
+        <label>
+          Link (optional)
+          <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
+        </label>
+        <div className="meal-time-row">
+          <label>
+            Price (optional)
+            <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
+          </label>
+          <label>
+            Quantity
+            <input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
+            />
+          </label>
+        </div>
+        <label>
+          Note (optional)
+          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Adding…" : "Add item"}
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function EditItemSheet({
+  homeId,
+  wishlistId,
+  item,
+  onClose,
+  onSaved,
+  onDeleted,
+}: {
+  homeId: string;
+  wishlistId: string;
+  item: WishlistItemOwner;
+  onClose: () => void;
+  onSaved: (detail: WishlistOwnerDetail) => void;
+  onDeleted: (detail: WishlistOwnerDetail) => void;
+}) {
+  const [name, setName] = useState(item.name);
+  const [url, setUrl] = useState(item.url ?? "");
+  const [price, setPrice] = useState(item.price ?? "");
+  const [note, setNote] = useState(item.note ?? "");
+  const [quantity, setQuantity] = useState(item.quantity);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Give this item a name.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload: WishlistItemUpdatePayload = {
+        name: name.trim(),
+        url: url.trim() || null,
+        price: price.trim() || null,
+        note: note.trim() || null,
+        quantity,
+      };
+      const updated = await api.updateWishlistItem(homeId, wishlistId, item.id, payload);
+      onSaved(updated);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not save this item.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    try {
+      const updated = await api.removeWishlistItem(homeId, wishlistId, item.id);
+      onDeleted(updated);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not remove this item.");
+    }
+  }
+
+  return (
+    <BottomSheet title="Edit item" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          Item name
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required />
+        </label>
+        <label>
+          Link (optional)
+          <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
+        </label>
+        <div className="meal-time-row">
+          <label>
+            Price (optional)
+            <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
+          </label>
+          <label>
+            Quantity
+            <input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
+            />
+          </label>
+        </div>
+        <label>
+          Note (optional)
+          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" className="secondary" onClick={() => void remove()}>
+          <Trash2 size={16} aria-hidden="true" /> Remove item
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function ShareWishlistSheet({
+  homeId,
+  wishlistId,
+  onClose,
+}: {
+  homeId: string;
+  wishlistId: string;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [matchedUser, setMatchedUser] = useState<{ id: string; displayName: string } | null>(null);
+  const [checkedEmail, setCheckedEmail] = useState(false);
+  const [guestReveal, setGuestReveal] = useState<GuestShareCreateResponse | null>(null);
+  const [copied, setCopied] = useState<"link" | "pin" | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Add a name for whoever you're sharing with.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      if (email.trim() && !checkedEmail) {
+        const result = await api.lookupShareRecipient(homeId, wishlistId, email.trim());
+        if (result.existing_user_id && result.existing_user_display_name) {
+          setMatchedUser({ id: result.existing_user_id, displayName: result.existing_user_display_name });
+          setCheckedEmail(true);
+          setBusy(false);
+          return;
+        }
+        setCheckedEmail(true);
+      }
+      await createShare(false);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not share this wishlist.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createShare(confirmMykhayaUser: boolean) {
+    const payload: ShareCreatePayload = confirmMykhayaUser
+      ? {
+          recipient_name: name.trim(),
+          recipient_email: email.trim(),
+          share_type: "mykhaya_user",
+          confirmed_user_id: matchedUser?.id,
+        }
+      : {
+          recipient_name: name.trim(),
+          recipient_email: email.trim() || null,
+          share_type: "guest",
+        };
+    const result = await api.createShare(homeId, wishlistId, payload);
+    if ("link_token" in result) {
+      setGuestReveal(result);
+    } else {
+      onClose();
+    }
+  }
+
+  async function copy(kind: "link" | "pin", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+    } catch {
+      // Clipboard access can fail silently (permissions/older browsers) —
+      // the value stays selectable on screen either way.
+    }
+  }
+
+  if (guestReveal) {
+    const link = `${typeof window === "undefined" ? "" : window.location.origin}/wishlist/share/${guestReveal.link_token}`;
+    return (
+      <BottomSheet title="Share link created" onDismiss={onClose}>
+        <p className="muted">
+          This link and PIN are shown once. Copy them now and share them with {guestReveal.recipient_name} —
+          MyKhaya won't show them again.
+        </p>
+        <label>
+          Link
+          <input value={link} readOnly />
+        </label>
+        <button type="button" className="secondary" onClick={() => void copy("link", link)}>
+          <Copy size={14} aria-hidden="true" /> {copied === "link" ? "Copied" : "Copy link"}
+        </button>
+        <label>
+          PIN
+          <input value={guestReveal.pin} readOnly />
+        </label>
+        <button type="button" className="secondary" onClick={() => void copy("pin", guestReveal.pin)}>
+          <Copy size={14} aria-hidden="true" /> {copied === "pin" ? "Copied" : "Copy PIN"}
+        </button>
+        <button className="sheet-primary" type="button" onClick={onClose}>
+          Done
+        </button>
+      </BottomSheet>
+    );
+  }
+
+  if (matchedUser) {
+    return (
+      <BottomSheet title="Share wishlist" onDismiss={onClose}>
+        <p>
+          {matchedUser.displayName} already uses MyKhaya — share directly with their account?
+        </p>
+        <FormStatus error={error} />
+        <button
+          className="sheet-primary"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void (async () => {
+              setBusy(true);
+              try {
+                await createShare(true);
+              } catch (cause) {
+                setError(cause instanceof ApiError ? cause.message : "Could not share this wishlist.");
+              } finally {
+                setBusy(false);
+              }
+            })()
+          }
+        >
+          Share with their account
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() =>
+            void (async () => {
+              setBusy(true);
+              try {
+                await createShare(false);
+              } catch (cause) {
+                setError(cause instanceof ApiError ? cause.message : "Could not share this wishlist.");
+              } finally {
+                setBusy(false);
+              }
+            })()
+          }
+        >
+          Send a guest link instead
+        </button>
+      </BottomSheet>
+    );
+  }
+
+  return (
+    <BottomSheet title="Share wishlist" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          Name
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} autoFocus required />
+        </label>
+        <label>
+          Email (optional — checks for a MyKhaya account)
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              setCheckedEmail(false);
+            }}
+          />
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Sharing…" : "Share wishlist"}
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function ManageSharesSheet({
+  homeId,
+  wishlistId,
+  onClose,
+}: {
+  homeId: string;
+  wishlistId: string;
+  onClose: () => void;
+}) {
+  const [shares, setShares] = useState<ShareListItem[] | null>(null);
+  const [error, setError] = useState("");
+  const [reveal, setReveal] = useState<GuestShareCreateResponse | null>(null);
+
+  async function load() {
+    try {
+      const result = await api.shares(homeId, wishlistId);
+      setShares(result.items);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not load sharing.");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function revoke(share: ShareListItem) {
+    try {
+      await api.revokeShare(homeId, wishlistId, share.id);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not revoke access.");
+    }
+  }
+
+  async function regenerate(share: ShareListItem) {
+    try {
+      const result = await api.regenerateGuestShare(homeId, wishlistId, share.id);
+      setReveal(result);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not generate a new PIN.");
+    }
+  }
+
+  if (reveal) {
+    return (
+      <BottomSheet title="New PIN created" onDismiss={onClose}>
+        <p className="muted">
+          This link and PIN are shown once — copy them now for {reveal.recipient_name}.
+        </p>
+        <label>
+          Link
+          <input
+            readOnly
+            value={`${typeof window === "undefined" ? "" : window.location.origin}/wishlist/share/${reveal.link_token}`}
+          />
+        </label>
+        <label>
+          PIN
+          <input readOnly value={reveal.pin} />
+        </label>
+        <button className="sheet-primary" type="button" onClick={onClose}>
+          Done
+        </button>
+      </BottomSheet>
+    );
+  }
+
+  return (
+    <BottomSheet title="Manage sharing" onDismiss={onClose}>
+      <FormStatus error={error} />
+      {shares === null ? (
+        <p role="status">Loading…</p>
+      ) : shares.length === 0 ? (
+        <p className="empty-mini">Not shared with anyone yet.</p>
+      ) : (
+        <div className="wishlists-share-list">
+          {shares.map((share) => (
+            <div className="wishlists-share-row" key={share.id}>
+              <span className="wishlists-share-copy">
+                <strong>{share.recipient_name}</strong>
+                <span className="quiet-state">
+                  {share.share_type === "guest" ? "Guest link" : "MyKhaya account"}
+                  {share.revoked ? " · Revoked" : ""}
+                </span>
+              </span>
+              {!share.revoked && (
+                <span className="wishlists-share-actions">
+                  {share.share_type === "guest" && (
+                    <button type="button" className="secondary" onClick={() => void regenerate(share)}>
+                      Generate new PIN
+                    </button>
+                  )}
+                  <button type="button" className="secondary" onClick={() => void revoke(share)}>
+                    Revoke access
+                  </button>
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </BottomSheet>
+  );
+}

@@ -182,23 +182,30 @@ export default function IncidentsPage() {
             </label>
             <fieldset>
               <legend>Affected services</legend>
-              {PUBLIC_SERVICE_OPTIONS.map((option) => (
-                <div key={option.key} className="cc-toolbar">
-                  <label className="check-row">
-                    <input type="checkbox" name={`service_included_${option.key}`} />
-                    {option.name}
-                  </label>
-                  <label>
-                    Impact
-                    <select name={`service_impact_${option.key}`} defaultValue="partial_outage">
-                      <option value="degraded_performance">Degraded Performance</option>
-                      <option value="partial_outage">Partial Outage</option>
-                      <option value="major_outage">Major Outage</option>
-                      <option value="maintenance">Maintenance</option>
-                    </select>
-                  </label>
+              <div className="cc-service-grid" role="table" aria-label="Affected services">
+                <div className="cc-service-grid-header" role="row">
+                  <span role="columnheader">Affected</span>
+                  <span role="columnheader">Service</span>
+                  <span role="columnheader">Impact</span>
                 </div>
-              ))}
+                {PUBLIC_SERVICE_OPTIONS.map((option) => (
+                  <div key={option.key} className="cc-service-grid-row" role="row">
+                    <label role="cell" className="cc-service-checkbox">
+                      <input type="checkbox" name={`service_included_${option.key}`} />
+                    </label>
+                    <span role="cell" className="cc-service-name">{option.name}</span>
+                    <label role="cell" className="cc-service-impact">
+                      <span className="sr-only">Impact for {option.name}</span>
+                      <select name={`service_impact_${option.key}`} defaultValue="partial_outage">
+                        <option value="degraded_performance">Degraded Performance</option>
+                        <option value="partial_outage">Partial Outage</option>
+                        <option value="major_outage">Major Outage</option>
+                        <option value="maintenance">Maintenance</option>
+                      </select>
+                    </label>
+                  </div>
+                ))}
+              </div>
             </fieldset>
             <label>
               Initial lifecycle state

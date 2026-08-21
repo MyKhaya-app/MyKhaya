@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from mykhaya.models import ServiceState
+from mykhaya.models import IncidentLifecycleState, ServiceState
 
 # The fixed catalogue of monitored, customer-facing services shown on the
 # public Status page and selectable when creating/updating a status
@@ -97,7 +97,15 @@ def service_states_from_impacts(
 
 
 def is_incident_active(
-    starts_at: datetime, resolved_at: datetime | None, *, now: datetime | None = None
+    starts_at: datetime,
+    resolved_at: datetime | None,
+    *,
+    lifecycle_state: IncidentLifecycleState | None = None,
+    now: datetime | None = None,
 ) -> bool:
     now = now or datetime.now(UTC)
-    return resolved_at is None and starts_at <= now
+    return (
+        lifecycle_state != IncidentLifecycleState.resolved
+        and resolved_at is None
+        and starts_at <= now
+    )
