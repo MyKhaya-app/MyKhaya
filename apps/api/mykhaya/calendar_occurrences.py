@@ -86,6 +86,11 @@ def expand_occurrences(
     )
     generated = 0
     while current_start < limit_end_local:
+        if (
+            event.recurrence_end_date is not None
+            and current_start.date() > event.recurrence_end_date
+        ):
+            break
         current_end = current_start + duration
         if current_end > range_start_local and current_start < limit_end_local:
             occurrences.append((current_start.astimezone(UTC), current_end.astimezone(UTC)))

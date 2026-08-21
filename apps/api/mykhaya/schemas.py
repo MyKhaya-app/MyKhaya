@@ -554,6 +554,7 @@ class EventCreate(StrictModel):
     recurrence: RecurrencePattern = RecurrencePattern.none
     recurrence_interval: int = Field(default=1, ge=1, le=365)
     recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
 
     @field_validator("start_at", "end_at", "recurrence_until")
@@ -576,6 +577,7 @@ class EventUpdate(StrictModel):
     recurrence: RecurrencePattern = RecurrencePattern.none
     recurrence_interval: int = Field(default=1, ge=1, le=365)
     recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
     expected_updated_at: datetime
 
@@ -607,6 +609,7 @@ class EventOccurrence(BaseModel):
     calendar_color: ColourToken
     member_ids: list[uuid.UUID]
     recurrence: RecurrencePattern
+    recurrence_end_date: date | None
     reminder_minutes: int | None
     created_by: uuid.UUID
     updated_at: datetime

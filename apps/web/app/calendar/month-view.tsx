@@ -208,7 +208,6 @@ export function MonthView({
                     aria-label={`${eventTime(event, timeZone)} ${event.title}`}
                     title={event.title}
                   >
-                    {!isMultiDay && <span aria-hidden="true" />}
                     {showTitle ? `${isContinuation ? "↳ " : ""}${event.title}` : ""}
                   </button>
                 );

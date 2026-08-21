@@ -31,6 +31,7 @@ function filterGroup(relationship: HouseholdRelationship): FamilyFilter {
 const relationshipLabels: Record<HouseholdRelationship, string> = {
   home_admin: "Home Admin",
   partner: "Partner",
+  adult: "Adult",
   child: "Child",
   extended_family: "Extended Family",
   friend: "Friend",
@@ -43,6 +44,12 @@ const relationshipHelp: Record<
 > = {
   home_admin: "Full household administration, security and feature controls.",
   partner:
+    "Shared calendars and household content, without automatic system-level control.",
+  // Same default access as Partner (see mykhaya.household_permissions
+  // .default_profile) — Adult is for another genuine household member who
+  // isn't the Home Admin's partner: an older child living at home, a
+  // housemate, a sibling, another adult relative.
+  adult:
     "Shared calendars and household content, without automatic system-level control.",
   child: "A managed profile with restrictive defaults and explicit guardians.",
   extended_family: "Only resources explicitly shared with this person.",
@@ -110,6 +117,7 @@ export default function People() {
       [
         "home_admin",
         "partner",
+        "adult",
         "extended_family",
         "friend",
       ] as HouseholdRelationship[],
@@ -322,6 +330,7 @@ export default function People() {
                 >
                   <option value="home_admin">Home Admin</option>
                   <option value="partner">Partner</option>
+                  <option value="adult">Adult</option>
                   <option value="child">Child</option>
                   <option value="extended_family" disabled={!externalInvitesEnabled}>
                     Extended Family{!externalInvitesEnabled ? " (Family)" : ""}

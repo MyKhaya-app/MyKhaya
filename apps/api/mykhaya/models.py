@@ -62,6 +62,15 @@ class Role(StrEnum):
 class HouseholdRelationship(StrEnum):
     home_admin = "home_admin"
     partner = "partner"
+    # A genuine adult household member who isn't the Home Admin's partner —
+    # an older child living at home, a housemate, a sibling, another adult
+    # relative. Reuses Partner's default PermissionProfile/Role (see
+    # household_permissions.default_profile/legacy_role) since relationship
+    # only describes *who someone is*; what they can do stays governed by
+    # permission_profile/permission_overrides, same as every other
+    # relationship. Deliberately its own enum value, not merged into
+    # partner — see migration 0038_household_adult.
+    adult = "adult"
     child = "child"
     extended_family = "extended_family"
     friend = "friend"
@@ -431,6 +440,9 @@ class CalendarEvent(UuidTimeMixin, Base):
     )
     recurrence_interval: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     recurrence_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # User-facing inclusive calendar date for the final recurrence occurrence.
+    # NULL preserves the existing indefinite recurrence behaviour.
+    recurrence_end_date: Mapped[date | None] = mapped_column(Date)
     recurrence_count: Mapped[int | None] = mapped_column(Integer)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     last_edited_by: Mapped[uuid.UUID | None] = mapped_column(

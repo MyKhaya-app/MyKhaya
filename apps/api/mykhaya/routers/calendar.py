@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -40,6 +40,7 @@ from mykhaya.models import (
     HouseholdRelationship,
     Invitation,
     Membership,
+    RecurrencePattern,
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
@@ -97,6 +98,24 @@ def _validate_timezone(value: str) -> None:
         ZoneInfo(value)
     except ZoneInfoNotFoundError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid timezone") from exc
+
+
+def _validated_recurrence_end_date(
+    recurrence: RecurrencePattern,
+    recurrence_end_date: date | None,
+    start_at: datetime,
+    timezone: str,
+    is_all_day: bool,
+) -> date | None:
+    if recurrence == RecurrencePattern.none or recurrence_end_date is None:
+        return None
+    start_date = start_at.date() if is_all_day else start_at.astimezone(ZoneInfo(timezone)).date()
+    if recurrence_end_date < start_date:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Recurrence end date must be on or after the event start date",
+        )
+    return recurrence_end_date
 
 
 def _all_day_midnight(value: datetime) -> datetime:
@@ -520,6 +539,7 @@ def _occurrence(
         calendar_color=calendar_color,
         member_ids=member_ids,
         recurrence=event.recurrence,
+        recurrence_end_date=event.recurrence_end_date,
         reminder_minutes=event.reminder_minutes,
         created_by=event.created_by,
         updated_at=event.updated_at,
@@ -934,6 +954,13 @@ async def create_event(
     start_at, end_at = body.start_at, body.end_at
     if body.is_all_day:
         start_at, end_at = _normalize_all_day_bounds(start_at, end_at)
+    recurrence_end_date = _validated_recurrence_end_date(
+        body.recurrence,
+        body.recurrence_end_date,
+        start_at,
+        body.timezone,
+        body.is_all_day,
+    )
 
     calendar_row = await _ensure_home_calendar(db, home_id)
     if body.calendar_id is not None and body.calendar_id != calendar_row.id:
@@ -1019,6 +1046,7 @@ async def create_event(
         recurrence=body.recurrence,
         recurrence_interval=body.recurrence_interval,
         recurrence_until=body.recurrence_until,
+        recurrence_end_date=recurrence_end_date,
         recurrence_count=body.recurrence_count,
         created_by=auth.user.id,
         last_edited_by=auth.user.id,
@@ -1131,6 +1159,13 @@ async def update_event(
     start_at, end_at = body.start_at, body.end_at
     if body.is_all_day:
         start_at, end_at = _normalize_all_day_bounds(start_at, end_at)
+    recurrence_end_date = _validated_recurrence_end_date(
+        body.recurrence,
+        body.recurrence_end_date,
+        start_at,
+        body.timezone,
+        body.is_all_day,
+    )
 
     event = await db.scalar(
         select(CalendarEvent)
@@ -1247,6 +1282,7 @@ async def update_event(
     event.recurrence = body.recurrence
     event.recurrence_interval = body.recurrence_interval
     event.recurrence_until = body.recurrence_until
+    event.recurrence_end_date = recurrence_end_date
     event.recurrence_count = body.recurrence_count
     event.last_edited_by = auth.user.id
     event.version += 1

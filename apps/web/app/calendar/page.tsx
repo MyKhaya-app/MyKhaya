@@ -236,6 +236,16 @@ function EventForm({
   const [endTime, setEndTime] = useState(initialWhen.endTime);
   const [multiDay, setMultiDay] = useState(initialWhen.multiDay);
   const [rangeNotice, setRangeNotice] = useState("");
+  const [recurrence, setRecurrence] = useState<RecurrencePattern>(
+    initial?.recurrence ?? "none",
+  );
+  const [recurrenceEndMode, setRecurrenceEndMode] = useState<"never" | "on_date">(
+    initial?.recurrence_end_date ? "on_date" : "never",
+  );
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState(
+    initial?.recurrence_end_date ?? initialWhen.startDate,
+  );
+  const [recurrenceNotice, setRecurrenceNotice] = useState("");
   // See WhenState.hasTimedValues — a ref, not state, because flipping it
   // must never itself trigger a render; it only gates what onToggleAllDay
   // does the next time the user actually turns All day off.
@@ -360,6 +370,13 @@ function EventForm({
     }
 
     const isPersonal = calendarSelection === PERSONAL_CALENDAR_VALUE;
+    const savedRecurrenceEndDate =
+      recurrence !== "none" && recurrenceEndMode === "on_date" ? recurrenceEndDate : null;
+    if (savedRecurrenceEndDate && savedRecurrenceEndDate < startDate) {
+      setRecurrenceNotice("End date must be on or after the event start date.");
+      return;
+    }
+    setRecurrenceNotice("");
     await onSubmit({
       title,
       start_at,
@@ -378,9 +395,10 @@ function EventForm({
       reminder_minutes: formText(data, "reminder")
         ? Number(formText(data, "reminder"))
         : null,
-      recurrence: (formText(data, "recurrence") || "none") as RecurrencePattern,
+      recurrence,
       recurrence_interval: 1,
       recurrence_until: null,
+      recurrence_end_date: savedRecurrenceEndDate,
       recurrence_count: null,
       description: formText(data, "notes") || null,
     });
@@ -634,7 +652,16 @@ function EventForm({
             Repeat
             <select
               name="recurrence"
-              defaultValue={initial?.recurrence ?? "none"}
+              value={recurrence}
+              onChange={(event) => {
+                const next = event.target.value as RecurrencePattern;
+                setRecurrence(next);
+                if (next === "none") {
+                  setRecurrenceEndMode("never");
+                  setRecurrenceEndDate("");
+                  setRecurrenceNotice("");
+                }
+              }}
             >
               <option value="none">Does not repeat</option>
               <option value="daily">Daily</option>
@@ -644,6 +671,53 @@ function EventForm({
               <option value="weekdays">Weekdays</option>
             </select>
           </label>
+          {recurrence !== "none" && (
+            <>
+              <label>
+                Ends
+                <select
+                  name="recurrence_end_mode"
+                  value={recurrenceEndMode}
+                  onChange={(event) => {
+                    const next = event.target.value as "never" | "on_date";
+                    setRecurrenceEndMode(next);
+                    if (next === "never") {
+                      setRecurrenceEndDate("");
+                      setRecurrenceNotice("");
+                    } else if (!recurrenceEndDate) {
+                      setRecurrenceEndDate(startDate);
+                    }
+                  }}
+                >
+                  <option value="never">Never</option>
+                  <option value="on_date">On date</option>
+                </select>
+              </label>
+              {recurrenceEndMode === "on_date" && (
+                <label className="form-wide datetime-card recurrence-end-date-field">
+                  <span className="datetime-card-icon" aria-hidden="true">
+                    <CalendarDays size={18} />
+                  </span>
+                  <span className="datetime-card-body">
+                    <span className="datetime-card-caption">End date</span>
+                    <input
+                      className="datetime-card-input"
+                      type="date"
+                      value={recurrenceEndDate}
+                      min={startDate}
+                      onChange={(event) => {
+                        setRecurrenceEndDate(event.target.value);
+                        setRecurrenceNotice("");
+                      }}
+                      required
+                    />
+                  </span>
+                  <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
+                </label>
+              )}
+              {recurrenceNotice && <p className="quiet-state form-wide">{recurrenceNotice}</p>}
+            </>
+          )}
           <label className="form-wide">
             Notes
             <textarea
@@ -763,6 +837,9 @@ function EventDetails({
         <div className="event-view-section">
           <span className="eyebrow">Repeat</span>
           <p>{repeat}</p>
+          {event.recurrence_end_date && (
+            <p>Ends {displayDate(`${event.recurrence_end_date}T00:00:00Z`, { dateStyle: "long" }, "UTC")}</p>
+          )}
         </div>
       )}
 

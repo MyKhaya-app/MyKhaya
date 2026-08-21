@@ -1045,4 +1045,14 @@ describe("toEventUpdatePayload", () => {
       expected_updated_at: "2026-08-01T00:00:00+00:00",
     });
   });
+
+  it("carries a recurrence end date through event updates", () => {
+    const payload = eventPayload({
+      recurrence: "weekly",
+      recurrence_end_date: "2026-09-18",
+    });
+    expect(toEventUpdatePayload(payload, "2026-08-01T00:00:00+00:00").recurrence_end_date).toBe(
+      "2026-09-18",
+    );
+  });
 });

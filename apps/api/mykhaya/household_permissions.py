@@ -110,6 +110,12 @@ def default_profile(relationship: HouseholdRelationship) -> PermissionProfile:
     return {
         HouseholdRelationship.home_admin: PermissionProfile.home_admin,
         HouseholdRelationship.partner: PermissionProfile.standard_partner,
+        # Adult reuses Partner's default profile — relationship describes who
+        # someone is, not what they can do (see HouseholdRelationship.adult's
+        # docstring). They stay a distinct relationship value; only the
+        # *default* PermissionProfile is shared, and Advanced permissions
+        # (permission_overrides) still apply independently per member.
+        HouseholdRelationship.adult: PermissionProfile.standard_partner,
         HouseholdRelationship.child: PermissionProfile.child_restricted,
         HouseholdRelationship.extended_family: PermissionProfile.explicit_sharing,
         HouseholdRelationship.friend: PermissionProfile.explicit_sharing,
@@ -121,6 +127,7 @@ def legacy_role(relationship: HouseholdRelationship) -> Role:
     return {
         HouseholdRelationship.home_admin: Role.administrator,
         HouseholdRelationship.partner: Role.adult_member,
+        HouseholdRelationship.adult: Role.adult_member,
         HouseholdRelationship.child: Role.member,
         HouseholdRelationship.extended_family: Role.guest,
         HouseholdRelationship.friend: Role.guest,

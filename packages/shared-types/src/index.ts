@@ -9,6 +9,7 @@ export type MembershipRole =
 export type HouseholdRelationship =
   | "home_admin"
   | "partner"
+  | "adult"
   | "child"
   | "extended_family"
   | "friend"
@@ -110,6 +111,7 @@ export interface EventOccurrence {
   calendar_color: string;
   member_ids: string[];
   recurrence: RecurrencePattern;
+  recurrence_end_date?: string | null;
   reminder_minutes: number | null;
   created_by: string;
   updated_at: string;
@@ -133,6 +135,7 @@ export interface EventPayload {
   recurrence?: RecurrencePattern;
   recurrence_interval?: number;
   recurrence_until?: string | null;
+  recurrence_end_date?: string | null;
   recurrence_count?: number | null;
 }
 

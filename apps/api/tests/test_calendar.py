@@ -1,24 +1,27 @@
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from mykhaya.calendar_occurrences import expand_occurrences
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    CalendarEvent,
     FeatureKey,
     FeatureOverride,
     HouseholdRelationship,
     Invitation,
     Membership,
     PermissionProfile,
+    RecurrencePattern,
     Role,
     SubscriptionPlan,
     TokenPurpose,
@@ -336,6 +339,90 @@ async def test_weekly_recurrence_survives_dst_transition(client: AsyncClient) ->
         f"expected 09:00 local time after DST, got {local_start.isoformat()} "
         "— weekly recurrence is drifting across the clock change"
     )
+
+
+def test_recurrence_end_date_is_inclusive() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 8, 21, 9, tzinfo=UTC),
+        end_at=datetime(2026, 8, 21, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+        recurrence_end_date=date(2026, 9, 18),
+    )
+    occurrences = expand_occurrences(
+        event,
+        datetime(2026, 8, 20, tzinfo=UTC),
+        datetime(2026, 9, 26, tzinfo=UTC),
+    )
+    assert [start.date() for start, _end in occurrences] == [
+        date(2026, 8, 21),
+        date(2026, 8, 28),
+        date(2026, 9, 4),
+        date(2026, 9, 11),
+        date(2026, 9, 18),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_event_recurrence_end_date_create_update_remove_and_validation(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"recur-end-{suffix}@example.com", "Recurrence Owner")
+    home_id = await _home_with_calendar(client, "Recurrence End Home")
+    start = datetime(2026, 8, 21, 9, tzinfo=UTC)
+    end = datetime(2026, 8, 21, 10, tzinfo=UTC)
+    body = {
+        "title": "Weekly series",
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat(),
+        "timezone": "UTC",
+        "recurrence": "weekly",
+        "recurrence_interval": 1,
+        "recurrence_end_date": "2026-09-18",
+    }
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()["recurrence_end_date"] == "2026-09-18"
+
+    updated_body = {
+        **body,
+        "recurrence_end_date": "2026-09-25",
+        "expected_updated_at": created.json()["updated_at"],
+    }
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{created.json()['event_id']}",
+        json=updated_body,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["recurrence_end_date"] == "2026-09-25"
+
+    cleared_body = {
+        **updated_body,
+        "recurrence": "none",
+        "recurrence_end_date": None,
+        "expected_updated_at": updated.json()["updated_at"],
+    }
+    cleared = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{created.json()['event_id']}",
+        json=cleared_body,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["recurrence"] == "none"
+    assert cleared.json()["recurrence_end_date"] is None
+
+    invalid = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={**body, "recurrence_end_date": "2026-08-20"},
+    )
+    assert invalid.status_code == 422
 
 
 async def _home_with_calendar(client: AsyncClient, name: str) -> str:

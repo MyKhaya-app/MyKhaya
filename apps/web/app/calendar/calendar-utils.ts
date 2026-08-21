@@ -652,6 +652,9 @@ export function toEventUpdatePayload(
     recurrence: payload.recurrence,
     recurrence_interval: payload.recurrence_interval,
     recurrence_until: payload.recurrence_until,
+    ...(payload.recurrence_end_date !== undefined
+      ? { recurrence_end_date: payload.recurrence_end_date }
+      : {}),
     recurrence_count: payload.recurrence_count,
     expected_updated_at: expectedUpdatedAt,
   };

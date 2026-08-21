@@ -2147,21 +2147,17 @@ textarea {
   line-height: 1.15;
   min-height: 22px;
   overflow: hidden;
-  padding: 0.15rem 0.4rem;
+  /* No leading category dot (see month-view.tsx) — the tinted/solid chip
+     background already carries the colour, so this space goes straight to
+     the title instead. ~5.6px horizontal, near the top of the ~5-6px target
+     since this is the base/desktop size; the <800px override below keeps
+     its own already-tighter value. */
+  padding: 0.15rem 0.35rem;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
   width: calc(100% - 0.1rem);
   z-index: 4;
-}
-.calendar-week .month-event > span {
-  background: var(--event-color);
-  border-radius: 50%;
-  display: inline-block;
-  flex: none;
-  height: 6px;
-  margin-right: 0.3rem;
-  width: 6px;
 }
 /* Multi-day spans render as a continuous solid-fill bar (TimeTree's "schedule bar"
    look) rather than the lighter tinted chip used for single-day events, so a span
@@ -2353,6 +2349,15 @@ body.sheet-open {
   background: var(--colour-white);
   border-radius: 1.1rem 1.1rem 0 0;
   box-shadow: 0 -18px 60px rgb(23 33 43 / 24%);
+  /* Flex column so .sheet-content (flex: 1 1 auto below) always gets exactly
+     the space left over from the handle/header, and can therefore always
+     scroll its own overflow — see .sheet-content for why this replaced a
+     fixed "100% - 70px" height that only worked when the header happened to
+     be exactly 70px tall, and silently let the outer overflow:hidden here
+     hard-clip content (with no scrollbar at all) whenever a sheet without
+     `full-height` grew taller than its max-height. */
+  display: flex;
+  flex-direction: column;
   max-height: min(88dvh, 820px);
   max-width: 720px;
   overflow: hidden;
@@ -2365,6 +2370,7 @@ body.sheet-open {
   align-items: center;
   border-bottom: 1px solid #ebe4da;
   display: flex;
+  flex: none;
   gap: 0.5rem;
   justify-content: space-between;
   padding: 0.5rem 1rem 0.8rem;
@@ -2393,15 +2399,28 @@ body.sheet-open {
 .sheet-handle {
   background: #c9cbc7;
   border-radius: 999px;
+  flex: none;
   height: 4px;
   margin: 0.5rem auto 0;
   width: 36px;
 }
+/* The scrollable body: flex: 1 1 auto (with min-height: 0, required so a
+   flex item's automatic min-height:auto doesn't override it and prevent
+   shrinking) lets it exactly fill whatever space the handle/header didn't
+   use, in both a content-sized sheet (max-height clamps .bottom-sheet) and
+   a `full-height` one (explicit height) — so overflow-y: auto always has a
+   real, definite box to scroll within instead of silently growing past the
+   sheet's own clipped edge. Horizontal padding (~21px) and a safe-area-aware
+   bottom padding keep content off both the side edges and the iPhone home
+   indicator, and live inside the scrollport so the last field/button
+   scrolls comfortably clear of it rather than being cut off outside it. */
 .sheet-content {
-  height: calc(100% - 70px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.8rem 1rem calc(0.8rem + env(safe-area-inset-bottom));
+  padding: 0.8rem 1.3125rem calc(1.5rem + env(safe-area-inset-bottom));
+  width: 100%;
 }
 .sheet-primary {
   margin-top: 1rem;
@@ -3145,11 +3164,6 @@ select.icon-row-control {
   }
   .calendar-week .month-event.month-event-span {
     font-weight: 600;
-  }
-  .calendar-week .month-event > span {
-    height: 5px;
-    margin-right: 0.2rem;
-    width: 5px;
   }
   .calendar-week .overflow-events {
     font-size: 0.59rem;
@@ -4683,6 +4697,21 @@ button.danger,
   display: grid;
   gap: 0.65rem;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+/* Grid items default to min-width: auto, which floors at their content's
+   min-content size — a native <input type="time"> especially on iOS/Safari
+   has a wide intrinsic min-content width that can exceed half of a narrow
+   viewport, so the minmax(0, 1fr) tracks above never actually get to shrink
+   below it and the row overflows its container instead of wrapping. Same
+   fix as .event-when-grid in Calendar's event form: zero min-width on both
+   the grid item (the <label>) and the select/input itself. */
+.meal-time-row > label {
+  min-width: 0;
+}
+.meal-time-row select,
+.meal-time-row input[type="time"] {
+  min-width: 0;
+  width: 100%;
 }
 @media (max-width: 340px) {
   .meal-time-row {
