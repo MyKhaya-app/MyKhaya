@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import socket
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -78,6 +79,30 @@ _BLOCKED_HOSTNAMES = frozenset(
         "api.mykhaya.app",
     }
 )
+
+# Known interstitial/bot-check phrasing, for honest-failure detection only —
+# we are not attempting to defeat these protections. A page's ONLY signal
+# being a bare fallback <title> (no og:title, no JSON-LD Product name) that
+# contains one of these phrases almost certainly means the request landed on
+# a block/interstitial page rather than a genuine product page, so it must
+# not be reported to the caller as a "found" title — that would be lying
+# about success. Deliberately short and generic (not retailer-specific
+# scraping logic of any kind).
+_INTERSTITIAL_TITLE_PHRASES = (
+    "robot check",
+    "captcha",
+    "are you a human",
+    "verify you are human",
+    "access denied",
+    "just a moment",  # Cloudflare's interstitial title
+    "enter the characters you see",
+    "unusual traffic",
+)
+
+
+def _looks_like_interstitial_title(title: str) -> bool:
+    lowered = title.lower()
+    return any(phrase in lowered for phrase in _INTERSTITIAL_TITLE_PHRASES)
 
 
 @dataclass(frozen=True)
@@ -157,6 +182,16 @@ def _validate_target(url: str) -> str | None:
     return None
 
 
+def _safe_host(url: str) -> str | None:
+    """Best-effort hostname extraction for logging only — never raises, and
+    the result is a bare hostname (no path/query), so it can't leak a PIN,
+    token, or full query string into logs."""
+    try:
+        return httpx.URL(url).host or None
+    except Exception:
+        return None
+
+
 # --- Layer 2: the actual (SSRF-safe) fetch --------------------------------
 
 
@@ -174,9 +209,21 @@ async def _fetch_safely(
     regression tests can exercise this exact code path — redirect handling,
     size cap, content-type check — against a scripted response without any
     real network access. Production call sites never pass it, so the real
-    fetch always uses httpx's normal transport."""
+    fetch always uses httpx's normal transport.
+
+    A `<meta http-equiv="refresh">` client-side redirect found in an
+    otherwise-successful (200, right content-type) response is treated as
+    one more hop of the SAME redirect chain: the target is resolved and
+    re-validated through `_validate_target` exactly like a real HTTP 3xx
+    Location header, and it is counted against the same `_MAX_REDIRECTS`
+    budget (both kinds of hop share the one `for hop in ...` loop below) —
+    it deliberately does not get its own separate allowance that could be
+    combined with real redirects to exceed the intended total hop limit.
+    This is the standards-based fix for link shorteners that redirect via an
+    HTML/JS meta-refresh instead of (or in addition to) a real HTTP 3xx."""
     timeout = httpx.Timeout(_TOTAL_TIMEOUT_SECONDS, connect=_CONNECT_TIMEOUT_SECONDS)
     current_url = url
+    original_host = _safe_host(url)
     try:
         async with httpx.AsyncClient(
             follow_redirects=False, timeout=timeout, transport=transport
@@ -184,7 +231,15 @@ async def _fetch_safely(
             for hop in range(_MAX_REDIRECTS + 1):
                 reason = _validate_target(current_url)
                 if reason is not None:
-                    log.info("wishlist_link_preview.blocked", reason=reason, hop=hop)
+                    log.info(
+                        "wishlist_link_preview.blocked",
+                        reason=reason,
+                        category=("redirect_blocked" if hop > 0 else "blocked_address")
+                        if reason in ("blocked_hostname", "blocked_ip", "resolution_failed")
+                        else "invalid_url",
+                        hop=hop,
+                        original_host=original_host,
+                    )
                     return None
                 async with client.stream(
                     "GET", current_url, headers={"User-Agent": _USER_AGENT}
@@ -203,7 +258,9 @@ async def _fetch_safely(
                     if content_type not in _ALLOWED_CONTENT_TYPES:
                         log.info(
                             "wishlist_link_preview.unsupported_content_type",
+                            category="unsupported_content_type",
                             content_type=content_type,
+                            original_host=original_host,
                         )
                         return None
 
@@ -222,14 +279,37 @@ async def _fetch_safely(
                         if len(body) > _MAX_BODY_BYTES:
                             log.info("wishlist_link_preview.body_too_large")
                             return None
+
+                    if content_type in ("text/html", "application/xhtml+xml"):
+                        text = body.decode("utf-8", errors="replace")
+                        refresh_target = _extract_meta_refresh_target(text)
+                        if refresh_target:
+                            current_url = str(httpx.URL(current_url).join(refresh_target))
+                            log.info(
+                                "wishlist_link_preview.meta_refresh",
+                                hop=hop,
+                                original_host=original_host,
+                            )
+                            continue
                     return bytes(body)
-            log.info("wishlist_link_preview.too_many_redirects")
+            log.info(
+                "wishlist_link_preview.too_many_redirects",
+                category="redirect_blocked",
+                original_host=original_host,
+            )
             return None
     except httpx.TimeoutException:
-        log.info("wishlist_link_preview.timeout")
+        log.info(
+            "wishlist_link_preview.timeout", category="timeout", original_host=original_host
+        )
         return None
     except httpx.HTTPError as exc:
-        log.info("wishlist_link_preview.fetch_failed", error=str(exc))
+        log.info(
+            "wishlist_link_preview.fetch_failed",
+            category="upstream_http_error",
+            error=str(exc),
+            original_host=original_host,
+        )
         return None
 
 
@@ -251,7 +331,13 @@ class _MetaExtractor(HTMLParser):
         if tag == "title":
             self._in_title = True
         elif tag == "meta":
-            key = attrs_dict.get("property") or attrs_dict.get("name")
+            # http-equiv is only consulted as a last-resort key (after
+            # property/name) so this doesn't change og:*/twitter:* lookups
+            # at all — it exists solely so `refresh` (client-side redirect)
+            # can be read via the same self.meta dict as everything else.
+            key = (
+                attrs_dict.get("property") or attrs_dict.get("name") or attrs_dict.get("http-equiv")
+            )
             content = attrs_dict.get("content")
             if key and content is not None:
                 normalised = key.strip().lower()
@@ -298,34 +384,100 @@ def _iter_json_ld_products(data: object) -> list[dict]:
     return products
 
 
-def _extract_price_currency(json_ld_blocks: list[str]) -> tuple[Decimal | None, str | None]:
+def _extract_json_ld_image(value: object) -> str | None:
+    """A JSON-LD Product's `image` is commonly a bare URL string, but schema.org
+    also permits an array of strings, a single ImageObject (`{"url": ...}`),
+    or an array of ImageObjects — all handled here, defensively (anything
+    else is silently skipped, never raised)."""
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    if isinstance(value, dict):
+        url = value.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+        return None
+    if isinstance(value, list):
+        for item in value:
+            found = _extract_json_ld_image(item)
+            if found:
+                return found
+    return None
+
+
+_META_REFRESH_URL_RE = re.compile(r"url\s*=\s*(.+)$", re.IGNORECASE)
+
+
+def _extract_meta_refresh_target(html_text: str) -> str | None:
+    """Looks for `<meta http-equiv="refresh" content="0;url=...">` — a
+    client-side redirect some link shorteners use instead of (or alongside)
+    a real HTTP 3xx. The caller is responsible for re-validating the
+    returned target through `_validate_target` and counting it against the
+    shared redirect-hop budget, exactly like a real redirect — this function
+    only ever returns the raw target string, it never fetches anything."""
+    try:
+        parser = _MetaExtractor()
+        parser.feed(html_text)
+    except Exception:
+        return None
+    content = parser.meta.get("refresh")
+    if not content:
+        return None
+    match = _META_REFRESH_URL_RE.search(content)
+    if not match:
+        return None
+    target = match.group(1).strip().strip("'\"")
+    return target or None
+
+
+def _extract_json_ld_product_fields(
+    json_ld_blocks: list[str],
+) -> tuple[str | None, str | None, Decimal | None, str | None]:
+    """One pass over every JSON-LD Product block, pulling name/image/
+    price/currency together — deliberately not re-walking the JSON-LD
+    separately per field. The first non-null value found for each field
+    (scanning blocks/products in document order) wins; scanning stops early
+    once all four fields are filled."""
+    name: str | None = None
+    image: str | None = None
+    price: Decimal | None = None
+    currency: str | None = None
     for raw in json_ld_blocks:
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, ValueError, TypeError):
             continue
         for product in _iter_json_ld_products(data):
-            offers = product.get("offers")
-            if isinstance(offers, list):
-                offers = offers[0] if offers else None
-            if not isinstance(offers, dict):
-                continue
-            price = None
-            price_raw = offers.get("price")
-            if price_raw is not None:
-                try:
-                    price = Decimal(str(price_raw).strip())
-                    if not price.is_finite() or price < 0:
-                        price = None
-                except (InvalidOperation, ValueError):
-                    price = None
-            currency = None
-            currency_raw = offers.get("priceCurrency")
-            if isinstance(currency_raw, str) and len(currency_raw.strip()) == 3:
-                currency = currency_raw.strip().upper()
-            if price is not None or currency is not None:
-                return price, currency
-    return None, None
+            if name is None:
+                candidate = product.get("name")
+                if isinstance(candidate, str) and candidate.strip():
+                    name = candidate.strip()
+            if image is None:
+                image = _extract_json_ld_image(product.get("image"))
+            if price is None and currency is None:
+                offers = product.get("offers")
+                if isinstance(offers, list):
+                    offers = offers[0] if offers else None
+                if isinstance(offers, dict):
+                    price_raw = offers.get("price")
+                    if price_raw is None:
+                        # schema.org AggregateOffer-style fallback — a
+                        # price range with no single "price" still gives a
+                        # usable figure.
+                        price_raw = offers.get("lowPrice")
+                    if price_raw is not None:
+                        try:
+                            candidate_price = Decimal(str(price_raw).strip())
+                            if candidate_price.is_finite() and candidate_price >= 0:
+                                price = candidate_price
+                        except (InvalidOperation, ValueError):
+                            pass
+                    currency_raw = offers.get("priceCurrency")
+                    if isinstance(currency_raw, str) and len(currency_raw.strip()) == 3:
+                        currency = currency_raw.strip().upper()
+        if name is not None and image is not None and price is not None and currency is not None:
+            break
+    return name, image, price, currency
 
 
 def _extract_metadata(html_text: str) -> LinkPreviewResult:
@@ -337,14 +489,39 @@ def _extract_metadata(html_text: str) -> LinkPreviewResult:
         log.info("wishlist_link_preview.html_parse_failed", error=str(exc))
         return LinkPreviewResult()
 
-    title = parser.meta.get("og:title") or parser.title
-    image = parser.meta.get("og:image") or parser.meta.get("twitter:image")
-    description = parser.meta.get("og:description") or parser.meta.get("description")
     try:
-        price, currency = _extract_price_currency(parser.json_ld_blocks)
+        json_ld_name, json_ld_image, price, currency = _extract_json_ld_product_fields(
+            parser.json_ld_blocks
+        )
     except Exception as exc:
         log.info("wishlist_link_preview.json_ld_parse_failed", error=str(exc))
-        price, currency = None, None
+        json_ld_name, json_ld_image, price, currency = None, None, None, None
+
+    # Title preference: JSON-LD Product.name > og:title > <title> — but a
+    # bare fallback <title> that looks like a bot-check/interstitial page
+    # (see _looks_like_interstitial_title) is deliberately NOT treated as a
+    # useful title on its own. JSON-LD name and og:title are curated,
+    # explicit signals a site chose to publish, so they're trusted as-is;
+    # only the last-resort <title> fallback gets the interstitial check.
+    og_title = parser.meta.get("og:title")
+    if json_ld_name:
+        title: str | None = json_ld_name
+    elif og_title:
+        title = og_title
+    elif parser.title and not _looks_like_interstitial_title(parser.title):
+        title = parser.title
+    else:
+        title = None
+
+    # Image preference: JSON-LD Product.image > og:image > og:image:secure_url
+    # > twitter:image.
+    image = (
+        json_ld_image
+        or parser.meta.get("og:image")
+        or parser.meta.get("og:image:secure_url")
+        or parser.meta.get("twitter:image")
+    )
+    description = parser.meta.get("og:description") or parser.meta.get("description")
 
     return LinkPreviewResult(
         title=(title.strip() or None) if title else None,
@@ -369,16 +546,58 @@ async def fetch_link_preview(
     explicitly to outbound-call helpers rather than reading get_settings()
     internally. `transport` is the same test-only hook as _fetch_safely's."""
     del settings  # reserved for future tuning; the fetch uses fixed, tight limits today
+    original_host = _safe_host(url)
     try:
         body = await _fetch_safely(url, transport=transport)
     except Exception as exc:  # belt-and-braces: this function must never raise
         log.warning("wishlist_link_preview.unexpected_fetch_error", error=str(exc))
+        log.info(
+            "wishlist_link_preview.result",
+            original_host=original_host,
+            category="unexpected_error",
+            fields_found=[],
+        )
         return LinkPreviewResult()
     if body is None:
+        # The specific reason (invalid_url / blocked_address / redirect_blocked
+        # / timeout / unsupported_content_type / upstream_http_error) was
+        # already logged inside _fetch_safely — this summary line is the one
+        # place that logs a single, clear outcome per call, regardless of
+        # which layer produced it.
+        log.info(
+            "wishlist_link_preview.result",
+            original_host=original_host,
+            category="fetch_failed",
+            fields_found=[],
+        )
         return LinkPreviewResult()
     try:
         html_text = body.decode("utf-8", errors="replace")
     except Exception as exc:
         log.warning("wishlist_link_preview.decode_failed", error=str(exc))
+        log.info(
+            "wishlist_link_preview.result",
+            original_host=original_host,
+            category="decode_failed",
+            fields_found=[],
+        )
         return LinkPreviewResult()
-    return _extract_metadata(html_text)
+    result = _extract_metadata(html_text)
+    fields_found = [
+        field_name
+        for field_name, value in (
+            ("title", result.title),
+            ("image_url", result.image_url),
+            ("description", result.description),
+            ("price", result.price),
+            ("currency", result.currency),
+        )
+        if value is not None
+    ]
+    log.info(
+        "wishlist_link_preview.result",
+        original_host=original_host,
+        category="metadata_found" if fields_found else "no_metadata",
+        fields_found=fields_found,
+    )
+    return result

@@ -59,9 +59,27 @@ function domainFor(url: string): string {
   }
 }
 
+// Below this, a "loaded" image is still treated as unusable and the icon
+// fallback is shown instead — some retailers serve a genuine-but-blank
+// lazy-load stand-in graphic (a 1x1 tracking pixel, or a small blank/grey
+// placeholder swapped for the real photo only after client-side JS runs) as
+// their static og:image/JSON-LD image. Such an image loads successfully (no
+// onError) but, stretched via object-fit: cover across the 76px box, reads
+// as a flat pale rectangle — exactly the "blank placeholder bar" symptom.
+// naturalWidth/naturalHeight below the size a real product photo would ever
+// be is the cheapest reliable signal that this happened.
+const _MIN_USABLE_IMAGE_DIMENSION_PX = 8;
+
 function WishlistImage({ src, alt }: { src: string | null; alt: string }) {
-  const [failed, setFailed] = useState(false);
-  if (!src || failed) {
+  const [status, setStatus] = useState<"loading" | "loaded" | "unusable">("loading");
+
+  // A new src (including going back to null) always starts a fresh
+  // loading/settle cycle rather than keeping a stale prior status around.
+  useEffect(() => {
+    setStatus(src ? "loading" : "unusable");
+  }, [src]);
+
+  if (!src || status === "unusable") {
     return (
       <span className="wishlists-item-image wishlists-item-image-placeholder" aria-hidden="true">
         <ImageIcon size={24} />
@@ -69,9 +87,142 @@ function WishlistImage({ src, alt }: { src: string | null; alt: string }) {
     );
   }
   return (
-    <span className="wishlists-item-image">
-      <img src={src} alt={alt} onError={() => setFailed(true)} />
+    <span className={`wishlists-item-image${status === "loading" ? " wishlists-item-image-loading" : ""}`}>
+      <img
+        src={src}
+        alt={alt}
+        style={status === "loading" ? { visibility: "hidden" } : undefined}
+        onLoad={(event) => {
+          const img = event.currentTarget;
+          if (
+            img.naturalWidth < _MIN_USABLE_IMAGE_DIMENSION_PX ||
+            img.naturalHeight < _MIN_USABLE_IMAGE_DIMENSION_PX
+          ) {
+            setStatus("unusable");
+            return;
+          }
+          setStatus("loaded");
+        }}
+        onError={() => setStatus("unusable")}
+      />
     </span>
+  );
+}
+
+// --- Link preview: shared between AddItemSheet and EditItemSheet ----------
+//
+// "Found" means ANY of title/image_url/price/description came back non-null
+// — checking only image_url/title (as this used to) silently under-reported
+// a price-only or description-only result as "No preview details were
+// available", which is just as dishonest in the other direction as claiming
+// success for nothing useful. previewState is a real, distinct state
+// (idle/loading/found/empty/error) rather than one message string standing
+// in for two different outcomes, so callers (and tests) can target each
+// state unambiguously.
+
+type LinkPreviewState = "idle" | "loading" | "found" | "empty" | "error";
+
+function useLinkPreview(args: {
+  homeId: string;
+  name: string;
+  setName: (value: string) => void;
+  imageUrl: string;
+  setImageUrl: (value: string) => void;
+  price: string;
+  setPrice: (value: string) => void;
+  currency: string;
+  setCurrency: (value: string) => void;
+}) {
+  const { homeId, name, setName, imageUrl, setImageUrl, price, setPrice, currency, setCurrency } = args;
+  const [previewState, setPreviewState] = useState<LinkPreviewState>("idle");
+  const [previewResult, setPreviewResult] = useState<WishlistLinkPreview | null>(null);
+
+  async function previewLink(url: string) {
+    if (!url.trim()) return;
+    setPreviewState("loading");
+    setPreviewResult(null);
+    try {
+      const result: WishlistLinkPreview = await api.wishlistLinkPreview(homeId, url.trim());
+      // Retrieved metadata is genuinely applied to the item's own fields
+      // here — never overwriting something the user already typed — the
+      // preview block below is additive confirmation of that, not a
+      // replacement for actually populating the form.
+      if (!name.trim() && result.title) setName(result.title);
+      if (!imageUrl.trim() && result.image_url) setImageUrl(result.image_url);
+      if (!price.trim() && result.price) setPrice(result.price);
+      if (!currency.trim() && result.currency) setCurrency(result.currency);
+
+      const foundSomething = Boolean(result.title || result.image_url || result.price || result.description);
+      if (foundSomething) {
+        setPreviewResult(result);
+        setPreviewState("found");
+      } else {
+        setPreviewState("empty");
+      }
+    } catch {
+      setPreviewState("error");
+    }
+  }
+
+  return { previewState, previewResult, previewLink };
+}
+
+function LinkPreviewField({
+  url,
+  onUrlChange,
+  imageUrl,
+  previewState,
+  previewResult,
+  onFindDetails,
+}: {
+  url: string;
+  onUrlChange: (value: string) => void;
+  imageUrl: string;
+  previewState: LinkPreviewState;
+  previewResult: WishlistLinkPreview | null;
+  onFindDetails: () => void;
+}) {
+  return (
+    <>
+      <label>
+        Link (optional)
+        <input value={url} onChange={(event) => onUrlChange(event.target.value)} maxLength={2000} placeholder="https://…" />
+      </label>
+      <button
+        type="button"
+        className="secondary wishlists-preview-button"
+        onClick={onFindDetails}
+        disabled={previewState === "loading" || !url.trim()}
+      >
+        {previewState === "loading" ? "Finding preview…" : "Find product details"}
+      </button>
+      {previewState === "found" && previewResult && (
+        <div className="wishlists-preview-result">
+          <p className="wishlists-preview-result-heading">Product details found</p>
+          <div className="wishlists-preview-line">
+            <WishlistImage src={previewResult.image_url} alt="" />
+            <span className="wishlists-preview-result-copy">
+              {previewResult.title && <strong>{previewResult.title}</strong>}
+              {previewResult.price && (
+                <span className="quiet-state">{formatPrice(previewResult.price, previewResult.currency)}</span>
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+      {previewState === "empty" && (
+        <p className="muted">We couldn't find product details for this link. You can still add the item manually.</p>
+      )}
+      {previewState === "error" && <p className="muted">Preview unavailable; you can still save this item.</p>}
+      {/* An image already on this item (e.g. from a prior save, on the Edit
+          sheet) that the current previewState "found" block above isn't
+          already showing — keeps that feedback without duplicating it. */}
+      {previewState !== "found" && imageUrl && (
+        <p className="wishlists-preview-line">
+          <WishlistImage src={imageUrl} alt="" /> Image ready
+        </p>
+      )}
+    </>
   );
 }
 
@@ -242,7 +393,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                 onClick={() => setEditingItem(item)}
                 aria-label={`Edit ${item.name}`}
               >
-                <WishlistImage src={item.image_url} alt="" />
+                {item.image_url && <WishlistImage src={item.image_url} alt="" />}
                 <span className="wishlists-item-copy">
                   <strong>{item.name}</strong>
                   <span className="quiet-state">
@@ -264,7 +415,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
           <div className="wishlists-item-list">
             {detail.items.map((item) => (
               <div className="wishlists-item-row wishlists-item-row-viewer" key={item.id}>
-                <WishlistImage src={item.image_url} alt="" />
+                {item.image_url && <WishlistImage src={item.image_url} alt="" />}
                 <span className="wishlists-item-copy">
                   <strong>{item.name}</strong>
                   <span className="quiet-state">
@@ -518,9 +669,18 @@ function AddItemSheet({
   const [note, setNote] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [busy, setBusy] = useState(false);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewMessage, setPreviewMessage] = useState("");
   const [error, setError] = useState("");
+  const { previewState, previewResult, previewLink } = useLinkPreview({
+    homeId,
+    name,
+    setName,
+    imageUrl,
+    setImageUrl,
+    price,
+    setPrice,
+    currency,
+    setCurrency,
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -549,39 +709,21 @@ function AddItemSheet({
     }
   }
 
-  async function previewLink() {
-    if (!url.trim()) return;
-    setPreviewBusy(true);
-    setPreviewMessage("");
-    try {
-      const result: WishlistLinkPreview = await api.wishlistLinkPreview(homeId, url.trim());
-      if (!name.trim() && result.title) setName(result.title);
-      if (!imageUrl.trim() && result.image_url) setImageUrl(result.image_url);
-      if (!price.trim() && result.price) setPrice(result.price);
-      if (!currency.trim() && result.currency) setCurrency(result.currency);
-      setPreviewMessage(result.image_url || result.title ? "Preview details found — review them before saving." : "No preview details were available.");
-    } catch {
-      setPreviewMessage("Preview unavailable; you can still save this item.");
-    } finally {
-      setPreviewBusy(false);
-    }
-  }
-
   return (
     <BottomSheet title="Add item" onDismiss={onClose}>
-      <form onSubmit={submit}>
+      <form onSubmit={submit} className="wishlists-item-form">
         <label>
           Item name
           <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} autoFocus required />
         </label>
-        <label>
-          Link (optional)
-          <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
-        </label>
-        <button type="button" className="secondary wishlists-preview-button" onClick={() => void previewLink()} disabled={previewBusy || !url.trim()}>
-          {previewBusy ? "Finding preview…" : "Find product details"}
-        </button>
-        {previewMessage && <p className="muted">{previewMessage}</p>}
+        <LinkPreviewField
+          url={url}
+          onUrlChange={setUrl}
+          imageUrl={imageUrl}
+          previewState={previewState}
+          previewResult={previewResult}
+          onFindDetails={() => void previewLink(url)}
+        />
         <div className="meal-time-row">
           <label>
             Price (optional)
@@ -601,7 +743,6 @@ function AddItemSheet({
             />
           </label>
         </div>
-        {imageUrl && <p className="wishlists-preview-line"><WishlistImage src={imageUrl} alt="Preview" /> Image preview ready</p>}
         <label>
           Note (optional)
           <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
@@ -638,9 +779,18 @@ function EditItemSheet({
   const [note, setNote] = useState(item.note ?? "");
   const [quantity, setQuantity] = useState(item.quantity);
   const [busy, setBusy] = useState(false);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewMessage, setPreviewMessage] = useState("");
   const [error, setError] = useState("");
+  const { previewState, previewResult, previewLink } = useLinkPreview({
+    homeId,
+    name,
+    setName,
+    imageUrl,
+    setImageUrl,
+    price,
+    setPrice,
+    currency,
+    setCurrency,
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -669,24 +819,6 @@ function EditItemSheet({
     }
   }
 
-  async function previewLink() {
-    if (!url.trim()) return;
-    setPreviewBusy(true);
-    setPreviewMessage("");
-    try {
-      const result: WishlistLinkPreview = await api.wishlistLinkPreview(homeId, url.trim());
-      if (!name.trim() && result.title) setName(result.title);
-      if (!imageUrl.trim() && result.image_url) setImageUrl(result.image_url);
-      if (!price.trim() && result.price) setPrice(result.price);
-      if (!currency.trim() && result.currency) setCurrency(result.currency);
-      setPreviewMessage(result.image_url || result.title ? "Preview details found — review them before saving." : "No preview details were available.");
-    } catch {
-      setPreviewMessage("Preview unavailable; you can still save this item.");
-    } finally {
-      setPreviewBusy(false);
-    }
-  }
-
   async function remove() {
     try {
       const updated = await api.removeWishlistItem(homeId, wishlistId, item.id);
@@ -698,19 +830,19 @@ function EditItemSheet({
 
   return (
     <BottomSheet title="Edit item" onDismiss={onClose}>
-      <form onSubmit={submit}>
+      <form onSubmit={submit} className="wishlists-item-form">
         <label>
           Item name
           <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required />
         </label>
-        <label>
-          Link (optional)
-          <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
-        </label>
-        <button type="button" className="secondary wishlists-preview-button" onClick={() => void previewLink()} disabled={previewBusy || !url.trim()}>
-          {previewBusy ? "Finding preview…" : "Find product details"}
-        </button>
-        {previewMessage && <p className="muted">{previewMessage}</p>}
+        <LinkPreviewField
+          url={url}
+          onUrlChange={setUrl}
+          imageUrl={imageUrl}
+          previewState={previewState}
+          previewResult={previewResult}
+          onFindDetails={() => void previewLink(url)}
+        />
         <div className="meal-time-row">
           <label>
             Price (optional)
@@ -730,7 +862,6 @@ function EditItemSheet({
             />
           </label>
         </div>
-        {imageUrl && <p className="wishlists-preview-line"><WishlistImage src={imageUrl} alt="Preview" /> Image preview ready</p>}
         <label>
           Note (optional)
           <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />

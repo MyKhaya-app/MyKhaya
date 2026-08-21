@@ -5468,6 +5468,20 @@ select.plan-meal-field-input {
 .wishlists-item-image-placeholder {
   color: var(--colour-sage-dark);
 }
+/* Brief, self-resolving skeleton state while an <img> is actually loading —
+   never a static/stuck-forever look, since WishlistImage's onLoad/onError
+   always moves status on to "loaded" or "unusable" (icon placeholder). */
+.wishlists-item-image-loading {
+  animation: wishlists-image-skeleton-pulse 1.1s ease-in-out infinite;
+}
+@keyframes wishlists-image-skeleton-pulse {
+  0%, 100% {
+    background-color: var(--colour-cream-light);
+  }
+  50% {
+    background-color: #efe9dd;
+  }
+}
 .wishlists-item-copy {
   display: grid;
   gap: 0.25rem;
@@ -5539,16 +5553,48 @@ select.plan-meal-field-input {
   background: var(--colour-sage-dark);
   color: white;
 }
+/* Tighter than the default `form { gap: 1rem }` — the Add/Edit item sheets
+   have more fields than most bottom-sheet forms (name, link, price,
+   currency, quantity, note), so a slightly smaller gap plus the link/
+   preview block being visually grouped together (no gap between the link
+   input, its button, and its result) keeps Save reachable without
+   excessive scrolling while still reading as organised, not cramped. */
+.wishlists-item-form {
+  gap: 0.75rem;
+}
 .wishlists-preview-button {
   align-self: flex-start;
-  margin-bottom: 0.75rem;
+  margin: -0.3rem 0 0;
+}
+.wishlists-preview-result {
+  background: var(--colour-cream-light);
+  border: 1px solid #efe9dd;
+  border-radius: 0.65rem;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+}
+.wishlists-preview-result-heading {
+  color: var(--colour-sage-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wishlists-preview-result-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
 }
 .wishlists-preview-line {
   align-items: center;
   display: flex;
   gap: 0.55rem;
 }
-.wishlists-preview-line .wishlists-item-image {
+.wishlists-preview-line .wishlists-item-image,
+.wishlists-preview-result .wishlists-item-image {
   flex-basis: 36px;
   height: 36px;
   width: 36px;

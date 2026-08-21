@@ -202,6 +202,109 @@ def test_completely_empty_html_yields_all_none_result() -> None:
     assert result == LinkPreviewResult()
 
 
+def test_json_ld_product_name_and_string_image_are_preferred_over_og_and_title() -> None:
+    html = """
+    <html><head>
+      <title>Fallback Title</title>
+      <meta property="og:title" content="OG Title" />
+      <meta property="og:image" content="https://shop.example.com/og.jpg" />
+      <script type="application/ld+json">
+      {
+        "@type": "Product",
+        "name": "JSON-LD Product Name",
+        "image": "https://shop.example.com/json-ld.jpg"
+      }
+      </script>
+    </head><body></body></html>
+    """
+    result = _extract_metadata(html)
+    assert result.title == "JSON-LD Product Name"
+    assert result.image_url == "https://shop.example.com/json-ld.jpg"
+
+
+def test_json_ld_image_as_array_of_strings() -> None:
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@type": "Product", "image": ["https://shop.example.com/one.jpg", "https://shop.example.com/two.jpg"]}
+      </script>
+    </head></html>
+    """
+    result = _extract_metadata(html)
+    assert result.image_url == "https://shop.example.com/one.jpg"
+
+
+def test_json_ld_image_as_image_object_and_array_of_image_objects() -> None:
+    html_single = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@type": "Product", "image": {"@type": "ImageObject", "url": "https://shop.example.com/obj.jpg"}}
+      </script>
+    </head></html>
+    """
+    assert _extract_metadata(html_single).image_url == "https://shop.example.com/obj.jpg"
+
+    html_array = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@type": "Product", "image": [{"@type": "ImageObject", "url": "https://shop.example.com/arr.jpg"}]}
+      </script>
+    </head></html>
+    """
+    assert _extract_metadata(html_array).image_url == "https://shop.example.com/arr.jpg"
+
+
+def test_og_image_secure_url_used_when_og_image_missing() -> None:
+    html = """
+    <html><head>
+      <meta property="og:title" content="Secure Image Item" />
+      <meta property="og:image:secure_url" content="https://shop.example.com/secure.jpg" />
+    </head></html>
+    """
+    result = _extract_metadata(html)
+    assert result.image_url == "https://shop.example.com/secure.jpg"
+
+
+def test_offers_low_price_used_when_price_absent() -> None:
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@type": "Product", "offers": {"lowPrice": "12.50", "priceCurrency": "GBP"}}
+      </script>
+    </head></html>
+    """
+    result = _extract_metadata(html)
+    assert result.price == Decimal("12.50")
+    assert result.currency == "GBP"
+
+
+def test_bot_check_title_alone_is_not_reported_as_a_found_title() -> None:
+    html = "<html><head><title>Robot Check - Please verify you are a human</title></head></html>"
+    result = _extract_metadata(html)
+    assert result.title is None
+    assert result == LinkPreviewResult()
+
+
+def test_cloudflare_interstitial_title_alone_is_not_reported() -> None:
+    html = "<html><head><title>Just a moment...</title></head></html>"
+    result = _extract_metadata(html)
+    assert result.title is None
+
+
+def test_interstitial_phrase_does_not_suppress_a_trusted_og_title() -> None:
+    # The interstitial check only applies to the bare <title> fallback — an
+    # explicit og:title is trusted even if it happens to contain one of the
+    # generic phrases (extremely unlikely for a real product, but the rule
+    # must not accidentally apply to curated signals).
+    html = """
+    <html><head>
+      <meta property="og:title" content="Are You a Human? The Board Game" />
+    </head></html>
+    """
+    result = _extract_metadata(html)
+    assert result.title == "Are You a Human? The Board Game"
+
+
 # ---------------------------------------------------------------------------
 # SSRF target validation — reject before any request is made
 # ---------------------------------------------------------------------------
@@ -335,6 +438,77 @@ async def test_fetch_safely_returns_body_for_a_normal_allowed_response() -> None
 
     body = await _fetch_safely("http://93.184.216.34/", transport=httpx.MockTransport(handler))
     assert body == html
+
+
+@pytest.mark.asyncio
+async def test_fetch_safely_follows_meta_refresh_and_extracts_from_final_page() -> None:
+    """A scripted 200 response whose body is only a
+    `<meta http-equiv="refresh">` redirect — the kind some link shorteners
+    use instead of (or alongside) a real HTTP 3xx — must be followed one
+    more hop, re-validated exactly like a real redirect, and the metadata
+    must come from the FINAL page, not the interim one."""
+    interim = b'<html><head><meta http-equiv="refresh" content="0;url=/final"></head></html>'
+    final = b"<html><head><title>Final Product Page</title></head></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=interim)
+        if request.url.path == "/final":
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=final)
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    body = await _fetch_safely(
+        "http://93.184.216.34/start", transport=httpx.MockTransport(handler)
+    )
+    assert body == final
+    result = _extract_metadata(body.decode("utf-8"))
+    assert result.title == "Final Product Page"
+
+
+@pytest.mark.asyncio
+async def test_fetch_safely_rejects_meta_refresh_to_a_blocked_target() -> None:
+    """Mirrors test_fetch_safely_follows_and_revalidates_redirect_to_blocked_ip
+    but for a client-side (meta-refresh) redirect instead of a real HTTP
+    3xx — the same SSRF-via-redirect bypass, via the standards-based
+    JS/meta-refresh path instead of a Location header."""
+    interim = (
+        b'<html><head><meta http-equiv="refresh" '
+        b'content="0;url=http://169.254.169.254/secret"></head></html>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "93.184.216.34":
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=interim)
+        raise AssertionError("must never follow through to the blocked meta-refresh target")
+
+    body = await _fetch_safely(
+        "http://93.184.216.34/start", transport=httpx.MockTransport(handler)
+    )
+    assert body is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_safely_meta_refresh_shares_the_redirect_budget_with_real_redirects() -> None:
+    """A chain that mixes a real HTTP redirect with meta-refresh hops must
+    still be capped by the one shared _MAX_REDIRECTS budget, not get extra
+    hops for switching redirect styles partway through."""
+    hops = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hops["count"] += 1
+        # Alternate a real 302 and a meta-refresh forever — must still stop
+        # after the configured hop limit rather than looping unboundedly.
+        if hops["count"] % 2 == 1:
+            return httpx.Response(302, headers={"location": "/next"})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b'<html><head><meta http-equiv="refresh" content="0;url=/next"></head></html>',
+        )
+
+    body = await _fetch_safely("http://93.184.216.34/", transport=httpx.MockTransport(handler))
+    assert body is None
+    assert hops["count"] <= 4  # initial + _MAX_REDIRECTS, never unbounded
 
 
 @pytest.mark.asyncio

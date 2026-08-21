@@ -40,6 +40,9 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       revokeShare: vi.fn(),
       createShare: vi.fn(),
       lookupShareRecipient: vi.fn(),
+      wishlistLinkPreview: vi.fn(),
+      addWishlistItem: vi.fn(),
+      updateWishlistItem: vi.fn(),
     },
   };
 });
@@ -296,5 +299,175 @@ describe("Wishlists — sharing", () => {
     await user.click(screen.getByRole("button", { name: /revoke access/i }));
 
     expect(api.revokeShare).toHaveBeenCalledWith("home-1", "wl-1", "share-1");
+  });
+});
+
+describe("Wishlists — link preview", () => {
+  beforeEach(() => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "u1",
+      display_name: "Megan",
+      principal_type: "adult",
+    });
+    (api.wishlistTopLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "wl-1",
+      home_id: "home-1",
+      title: "My birthday",
+      occasion: "birthday",
+      occasion_date: null,
+      description: null,
+      owner_user_id: "u1",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      items: [],
+    });
+  });
+
+  async function openAddItemSheet() {
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /^add item$/i }));
+    const dialog = screen.getByRole("dialog");
+    return { user, dialog };
+  }
+
+  async function runPreview(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, url = "https://shop.example.com/item") {
+    await user.type(within(dialog).getByLabelText(/link/i), url);
+    await user.click(within(dialog).getByRole("button", { name: /find product details/i }));
+  }
+
+  it("populates blank fields and shows the 'Product details found' block for useful metadata", async () => {
+    (api.wishlistLinkPreview as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: "Nice Lego Set",
+      image_url: "https://shop.example.com/lego.jpg",
+      description: null,
+      price: "49.99",
+      currency: "GBP",
+    });
+    const { user, dialog } = await openAddItemSheet();
+    await runPreview(user, dialog);
+
+    expect(await within(dialog).findByText(/product details found/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/item name/i)).toHaveValue("Nice Lego Set");
+    expect(within(dialog).getByLabelText(/^price/i)).toHaveValue("49.99");
+    expect(within(dialog).getByLabelText(/^currency/i)).toHaveValue("GBP");
+    // The found value is genuinely applied to the form field, not merely
+    // displayed in a sentence.
+    expect(within(dialog).getByText("Nice Lego Set", { selector: "strong" })).toBeInTheDocument();
+  });
+
+  it("does not overwrite a name the user already typed", async () => {
+    (api.wishlistLinkPreview as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: "Nice Lego Set",
+      image_url: null,
+      description: null,
+      price: null,
+      currency: null,
+    });
+    const { user, dialog } = await openAddItemSheet();
+    await user.type(within(dialog).getByLabelText(/item name/i), "My own name");
+    await runPreview(user, dialog);
+
+    await within(dialog).findByText(/product details found/i);
+    expect(within(dialog).getByLabelText(/item name/i)).toHaveValue("My own name");
+  });
+
+  it("shows an honest 'couldn't find product details' state — not 'found' — when metadata is entirely empty", async () => {
+    (api.wishlistLinkPreview as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: null,
+      image_url: null,
+      description: null,
+      price: null,
+      currency: null,
+    });
+    const { user, dialog } = await openAddItemSheet();
+    await runPreview(user, dialog);
+
+    expect(await within(dialog).findByText(/couldn't find product details/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/product details found/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a distinct error message when the preview request itself fails, and no fields change", async () => {
+    (api.wishlistLinkPreview as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+    const { user, dialog } = await openAddItemSheet();
+    await runPreview(user, dialog);
+
+    expect(await within(dialog).findByText(/preview unavailable/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/product details found/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/couldn't find product details/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/item name/i)).toHaveValue("");
+  });
+
+  it.each([
+    ["title-only", { title: "Just A Title", image_url: null, description: null, price: null, currency: null }],
+    ["image-only", { title: null, image_url: "https://shop.example.com/x.jpg", description: null, price: null, currency: null }],
+    ["price-only", { title: null, image_url: null, description: null, price: "9.99", currency: "GBP" }],
+  ])("treats %s metadata as found, not empty", async (_label, metadata) => {
+    (api.wishlistLinkPreview as ReturnType<typeof vi.fn>).mockResolvedValue(metadata);
+    const { user, dialog } = await openAddItemSheet();
+    await runPreview(user, dialog);
+
+    expect(await within(dialog).findByText(/product details found/i)).toBeInTheDocument();
+  });
+});
+
+describe("Wishlists — item card images", () => {
+  beforeEach(() => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "u1",
+      display_name: "Megan",
+      principal_type: "adult",
+    });
+  });
+
+  function ownerDetailWithItem(imageUrl: string | null) {
+    return {
+      id: "wl-1",
+      home_id: "home-1",
+      title: "My birthday",
+      occasion: "birthday",
+      occasion_date: null,
+      description: null,
+      owner_user_id: "u1",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      items: [
+        {
+          id: "item-1",
+          name: "Board game",
+          url: null,
+          price: null,
+          currency: null,
+          note: null,
+          image_url: imageUrl,
+          quantity: 1,
+          sort_order: 0,
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    };
+  }
+
+  it("renders no image box at all (no <img>, no placeholder bar) when an item has no image — the row's text uses the full width instead", async () => {
+    (api.wishlistTopLevel as ReturnType<typeof vi.fn>).mockResolvedValue(ownerDetailWithItem(null));
+    renderPage();
+
+    const row = await screen.findByRole("button", { name: /edit board game/i });
+    expect(row.querySelector("img")).toBeNull();
+    expect(row.querySelector(".wishlists-item-image")).toBeNull();
+    expect(row.querySelector(".wishlists-item-image-placeholder")).toBeNull();
+  });
+
+  it("renders a thumbnail <img> when the item has an image_url", async () => {
+    (api.wishlistTopLevel as ReturnType<typeof vi.fn>).mockResolvedValue(
+      ownerDetailWithItem("https://shop.example.com/lego.jpg"),
+    );
+    renderPage();
+
+    const row = await screen.findByRole("button", { name: /edit board game/i });
+    const img = row.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", "https://shop.example.com/lego.jpg");
   });
 });

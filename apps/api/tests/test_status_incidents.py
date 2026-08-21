@@ -476,6 +476,137 @@ async def test_resolving_incident_preserves_history_moves_lists_and_returns_serv
     assert "status.incident_resolved" in actions
 
 
+@pytest.mark.asyncio
+async def test_dedicated_resolve_appends_final_update_and_preserves_remaining_impact(
+    admin_client: AsyncClient,
+    status_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    incident_cleanup: list[uuid.UUID],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    first = await create_incident(
+        admin_client,
+        incident_cleanup,
+        title=unique_title("Dedicated resolve outage"),
+        message="The web application is unavailable.",
+        services=[{"service": "web_application", "impact": "major_outage"}],
+    )
+    second = await create_incident(
+        admin_client,
+        incident_cleanup,
+        title=unique_title("Remaining web degradation"),
+        message="The web application is degraded.",
+        services=[{"service": "web_application", "impact": "degraded_performance"}],
+    )
+    resolved_at = datetime.now(UTC) - timedelta(minutes=1)
+    response = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/incidents/{first['id']}/resolve",
+        json={
+            "message": "The web application has returned to normal.",
+            "resolved_at": resolved_at.isoformat(),
+            "reason": "Closing the verified customer-facing outage",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["lifecycle_state"] == "resolved"
+    assert response.json()["resolved_at"] is not None
+
+    public = (await status_client.get("/api/v1/status")).json()
+    assert not any(row["id"] == first["id"] for row in public["current_incidents"])
+    resolved = next(row for row in public["recent_incidents"] if row["id"] == first["id"])
+    assert resolved["updates"][-1]["lifecycle_state"] == "resolved"
+    assert resolved["updates"][-1]["message"] == "The web application has returned to normal."
+    assert next(row for row in public["services"] if row["key"] == "web_application")["state"] == (
+        "degraded_performance"
+    )
+    assert any(row["id"] == second["id"] for row in public["current_incidents"])
+
+
+@pytest.mark.asyncio
+async def test_delete_incident_removes_public_history_children_and_recalculates(
+    admin_client: AsyncClient,
+    status_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    incident_cleanup: list[uuid.UUID],
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    title = unique_title("Mistaken test incident")
+    created = await create_incident(
+        admin_client,
+        incident_cleanup,
+        title=title,
+        message="This test incident should be removed.",
+        services=[{"service": "authentication", "impact": "partial_outage"}],
+    )
+    deleted = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/incidents/{created['id']}",
+        json={"reason": "Duplicate test incident entered in error", "confirmed": True},
+    )
+    assert deleted.status_code == 204, deleted.text
+    assert (
+        await unsafe(admin_client, "GET", f"/api/v1/platform/incidents/{created['id']}")
+    ).status_code == 404
+    public = (await status_client.get("/api/v1/status")).json()
+    assert not any(row["id"] == created["id"] for row in public["current_incidents"])
+    assert not any(row["id"] == created["id"] for row in public["recent_incidents"])
+    assert next(row for row in public["services"] if row["key"] == "authentication")["state"] == (
+        "operational"
+    )
+    async with SessionFactory() as db:
+        events = (
+            await db.scalars(
+                select(AdministrativeAuditEvent).where(
+                    AdministrativeAuditEvent.target_id == uuid.UUID(created["id"]),
+                    AdministrativeAuditEvent.action == "status.incident_deleted",
+                )
+            )
+        ).all()
+    assert len(events) == 1
+    assert events[0].reason == "Duplicate test incident entered in error"
+
+
+@pytest.mark.asyncio
+async def test_readonly_admin_cannot_resolve_or_delete_incident(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    incident_cleanup: list[uuid.UUID],
+) -> None:
+    owner = await admin_factory(PlatformRole.owner)
+    await login(admin_client, owner)
+    created = await create_incident(
+        admin_client,
+        incident_cleanup,
+        title=unique_title("Protected incident"),
+        message="Only an operator can manage this.",
+        services=[{"service": "api", "impact": "degraded_performance"}],
+    )
+    await unsafe(admin_client, "POST", "/api/v1/platform/auth/logout")
+    readonly = await admin_factory(PlatformRole.readonly)
+    await login(admin_client, readonly)
+    body = {"reason": "This readonly action must be rejected", "confirmed": True}
+    resolve = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/incidents/{created['id']}/resolve",
+        json={**body, "message": "Should not resolve."},
+    )
+    delete_response = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/incidents/{created['id']}",
+        json=body,
+    )
+    assert resolve.status_code == 403
+    assert delete_response.status_code == 403
+
+
 # --- Public/private information boundary -----------------------------------
 
 

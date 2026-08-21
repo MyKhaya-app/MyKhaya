@@ -34,6 +34,8 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [showUpdateForm, setShowUpdateForm] = useState(false);
+  const [showResolveDialog, setShowResolveDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const { guarded, modal } = useReauthGuard();
 
   const load = useCallback(async () => {
@@ -81,6 +83,38 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
     }
   });
 
+  const resolveIncident = guarded(async (formData: FormData) => {
+    setError("");
+    try {
+      await platformApi.post(`/incidents/${encodeURIComponent(id)}/resolve`, {
+        message: formData.get("message"),
+        resolved_at: formData.get("resolved_at"),
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage("Incident resolved.");
+      setShowResolveDialog(false);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(cause instanceof ApiError ? cause.message : "Could not resolve this incident.");
+    }
+  });
+
+  const deleteIncident = guarded(async (formData: FormData) => {
+    setError("");
+    try {
+      await platformApi.delete(`/incidents/${encodeURIComponent(id)}`, {
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      window.location.href = "/incidents";
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(cause instanceof ApiError ? cause.message : "Could not delete this incident.");
+    }
+  });
+
   return (
     <PlatformShell>
       <CcPage>
@@ -104,7 +138,10 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
                 Refresh
               </button>
               {data && data.lifecycle_state !== "resolved" && (
-                <button onClick={() => setShowUpdateForm(true)}>Add update</button>
+                <>
+                  <button onClick={() => setShowUpdateForm(true)}>Add update</button>
+                  <button onClick={() => setShowResolveDialog(true)}>Resolve incident</button>
+                </>
               )}
             </>
           }
@@ -162,6 +199,14 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
                   ))}
                 </div>
               )}
+            </CcSection>
+
+            <CcSection title="Danger zone" description="Delete only test, duplicate, or mistakenly created incidents. Resolve genuine customer-facing incidents instead.">
+              <CcCard>
+                <button className="danger" type="button" onClick={() => setShowDeleteDialog(true)}>
+                  Delete incident
+                </button>
+              </CcCard>
             </CcSection>
           </>
         )}
@@ -225,7 +270,68 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
         />
       )}
 
+      {data && data.lifecycle_state !== "resolved" && (
+        <CcConfirmDialog
+          open={showResolveDialog}
+          onClose={() => setShowResolveDialog(false)}
+          title="Resolve incident"
+          description="This appends a final public Resolved update and removes the incident from Current incidents while preserving its history."
+          confirmLabel="Resolve incident"
+          onConfirm={resolveIncident}
+          extraFields={
+            <>
+              <p>
+                <strong>{data.title}</strong>
+                <br />
+                {data.services.map((entry) => `${serviceStateLabel(entry.impact)}: ${entry.service}`).join(" · ")}
+              </p>
+              <label>
+                Final public update
+                <textarea
+                  name="message"
+                  required
+                  minLength={3}
+                  maxLength={1000}
+                  defaultValue="This incident has been resolved and services have returned to normal."
+                />
+              </label>
+              <label>
+                Resolved date and time
+                <input name="resolved_at" type="datetime-local" required defaultValue={datetimeLocalNow()} />
+              </label>
+            </>
+          }
+        />
+      )}
+
+      {data && (
+        <CcConfirmDialog
+          open={showDeleteDialog}
+          onClose={() => setShowDeleteDialog(false)}
+          title="Delete incident permanently?"
+          description="This permanently removes the incident and its update timeline. Use this for test incidents, duplicates, or incidents created in error; resolve genuine historical incidents instead."
+          confirmLabel="Delete permanently"
+          variant="destructive"
+          onConfirm={deleteIncident}
+          extraFields={
+            <p>
+              <strong>{data.title}</strong>
+              <br />
+              Started {readableDate(data.starts_at)} · {lifecycleStateLabel(data.lifecycle_state)}
+              <br />
+              {data.services.map((entry) => `${serviceStateLabel(entry.impact)}: ${entry.service}`).join(" · ")}
+            </p>
+          }
+        />
+      )}
+
       {modal}
     </PlatformShell>
   );
+}
+
+function datetimeLocalNow(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
