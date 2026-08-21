@@ -1156,6 +1156,12 @@ textarea {
 .home-routine-list {
   display: grid;
 }
+.home-routine-expand {
+  justify-self: end;
+  margin-top: 0.4rem;
+  min-height: 40px;
+  padding: 0.45rem 0.6rem;
+}
 .home-routine-row {
   align-items: center;
   border-bottom: 1px solid #f1ece1;
@@ -1206,16 +1212,32 @@ textarea {
   color: var(--colour-muted);
   text-decoration: line-through;
 }
-/* A 2-column grid rather than flex-wrap: with up to 4 shortcuts now
-   (calendar/invite/meal plans/lists), flex-wrap's fixed 84px chips either
-   overflow to an orphan card on their own row at narrow widths, or crowd
-   together at 390px+ — a 2x2 grid stays intentional at every width,
-   including the 2- and 3-item cases (a lone third item simply takes the
-   left half of its own row, not a jarring failure state). */
+/* "Around the house" is two independent rows (QuickActionsRow in
+   home/page.tsx) — a primary-actions row (Add event/Invite family) and a
+   feature-shortcuts row (Routines/Meal plans/Lists) — rather than one flat
+   grid, so a lone third feature never leaves a blank placeholder tile at the
+   end of a 2x2 grid. Each row's column count is generic (driven by however
+   many of its children actually render), not hard-coded to any one
+   shortcut. */
 .quick-actions {
   display: grid;
   gap: 0.6rem;
+}
+.quick-actions-row {
+  display: grid;
+  gap: 0.6rem;
+}
+.quick-actions-row-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+.quick-actions-row-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.quick-actions-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.quick-actions-row-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .quick-action {
   align-items: center;
@@ -4635,6 +4657,62 @@ button.danger,
   display: grid;
   gap: 0.75rem;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+/* "Plan meal" sheet (PlanFromMealSheet): Date + Meal as two clearly separate,
+   evenly sized fields — same bordered-row language as Calendar's
+   datetime-card/icon-row controls, just single-line (icon/value on one row,
+   no stacked caption) so the pair reads compactly instead of stretching the
+   sheet tall. Stacks below ~360px so neither field gets cramped. */
+.plan-meal-form {
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.plan-meal-fields {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+@media (max-width: 360px) {
+  .plan-meal-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.plan-meal-field {
+  align-items: center;
+  background: #fffefa;
+  border: 1px solid #d9d7d0;
+  border-radius: var(--radius-small);
+  display: flex;
+  gap: 0.5rem;
+  min-height: 54px;
+  padding: 0 0.75rem;
+}
+.plan-meal-field-icon {
+  color: var(--colour-muted);
+  flex: none;
+}
+.plan-meal-field-input {
+  background: none;
+  border: 0;
+  color: var(--colour-slate);
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 700;
+  min-height: auto;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+.plan-meal-field-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+}
+select.plan-meal-field-input {
+  appearance: none;
+}
+.plan-meal-field-chevron {
+  color: var(--colour-muted);
+  flex: none;
+  pointer-events: none;
 }
 .meal-library-toolbar {
   align-items: center;

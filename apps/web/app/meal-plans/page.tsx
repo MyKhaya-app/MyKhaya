@@ -3,7 +3,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  CalendarDays,
   ChefHat,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -1923,30 +1925,43 @@ function PlanFromMealSheet({
           {meal.name} was added to your plan.
         </p>
       ) : (
-        <form onSubmit={submit}>
-          <div className="meal-form-row">
+        <form className="plan-meal-form" onSubmit={submit}>
+          <div className="plan-meal-fields">
             <label>
               Date
-              <input
-                type="date"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-                required
-              />
+              <span className="plan-meal-field">
+                <CalendarDays className="plan-meal-field-icon" size={18} aria-hidden="true" />
+                <input
+                  className="plan-meal-field-input"
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  required
+                />
+              </span>
             </label>
             <label>
               Meal
-              <select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)}>
-                {SLOTS.map((row) => (
-                  <option key={row.key} value={row.key}>
-                    {row.label}
-                  </option>
-                ))}
-              </select>
+              <span className="plan-meal-field">
+                <select
+                  className="plan-meal-field-input"
+                  value={slot}
+                  onChange={(event) => setSlot(event.target.value as MealSlot)}
+                >
+                  {SLOTS.map((row) => (
+                    <option key={row.key} value={row.key}>
+                      {row.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="plan-meal-field-chevron" size={16} aria-hidden="true" />
+              </span>
             </label>
           </div>
-          <FormStatus error={error} />
-          <button disabled={busy}>{busy ? "Adding…" : "Add to plan"}</button>
+          {error && <FormStatus error={error} />}
+          <button className="sheet-primary" disabled={busy}>
+            {busy ? "Adding…" : "Add to plan"}
+          </button>
         </form>
       )}
     </BottomSheet>

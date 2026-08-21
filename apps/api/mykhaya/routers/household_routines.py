@@ -200,8 +200,15 @@ async def list_routines(
     } if completed_by_ids else {}
 
     selected: list[tuple[int, date, HouseholdRoutine, HouseholdRoutineCompletion | None]] = []
-    now = datetime.now(UTC)
     for routine in routines:
+        # Keep a completion for the Home's current local day visible for the
+        # whole day.  Older completions are deliberately not selected, while
+        # the next uncompleted occurrence continues to use the existing
+        # overdue/today/tomorrow prioritisation.
+        today_completion = completion_by_key.get((routine.id, today))
+        if today_completion is not None:
+            selected.append((4, today, routine, today_completion))
+            continue
         for occurrence_date in reversed(candidate_dates[routine.id]):
             completion = completion_by_key.get((routine.id, occurrence_date))
             if completion is None:
@@ -212,13 +219,6 @@ async def list_routines(
                 else:
                     priority = 3
                 selected.append((priority, occurrence_date, routine, None))
-                break
-            if (
-                occurrence_date == today
-                and completion.completed_at is not None
-                and completion.completed_at >= now - timedelta(minutes=15)
-            ):
-                selected.append((4, occurrence_date, routine, completion))
                 break
     selected.sort(key=lambda item: (item[0], item[1], item[2].title.casefold(), str(item[2].id)))
     items = [
@@ -231,7 +231,7 @@ async def list_routines(
                 completed_by_users.get(completion.completed_by) if completion else None
             ),
         )
-        for _priority, occurrence_date, routine, completion in selected[:3]
+        for _priority, occurrence_date, routine, completion in selected
     ]
     return RoutineListResponse(items=items)
 

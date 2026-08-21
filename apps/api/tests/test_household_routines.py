@@ -474,6 +474,65 @@ async def test_complete_and_uncomplete_routine(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_home_keeps_same_day_completion_and_excludes_previous_day_completion(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("homecompletion"), "Megan")
+    home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+
+    current = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Put green bin out",
+            "scope": "household",
+            "interval_weeks": 1,
+            "repeat_unit": "daily",
+            "week_anchor_date": today.isoformat(),
+            "start_date": today.isoformat(),
+        },
+    )
+    old = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={
+            "title": "Yesterday only",
+            "interval_weeks": 1,
+            "week_anchor_date": yesterday.isoformat(),
+            "start_date": yesterday.isoformat(),
+        },
+    )
+    assert current.status_code == 201, current.text
+    assert old.status_code == 201, old.text
+
+    completed_current = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines/{current.json()['id']}/complete",
+        json={"occurrence_date": today.isoformat()},
+    )
+    completed_old = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines/{old.json()['id']}/complete",
+        json={"occurrence_date": yesterday.isoformat()},
+    )
+    assert completed_current.status_code == 200, completed_current.text
+    assert completed_old.status_code == 200, completed_old.text
+
+    home = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines?home=true")
+    assert home.status_code == 200, home.text
+    rows = {row["title"]: row for row in home.json()["items"]}
+    assert "Put green bin out" in rows
+    assert rows["Put green bin out"]["home_completed_by_display_name"] == "Megan"
+    assert "Yesterday only" not in rows
+
+
+@pytest.mark.asyncio
 async def test_complete_rejects_non_occurrence_date(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("badcomplete"), "Owner")
     home_id = await create_home_with_notifications(client)

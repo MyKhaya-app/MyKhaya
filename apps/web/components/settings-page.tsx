@@ -11,6 +11,7 @@ const links = [
   ["Profile", "Your name and account details", "/settings/profile"],
   ["Notifications", "Push, reminders and your daily briefing", "/settings/notifications"],
   ["Routines", "Bins, medication and other recurring reminders", "/settings/routines"],
+  ["Lists", "Shopping, chores and shared household lists", "/lists"],
   ["Meal Plans", "Plan meals together and save family favourites", "/meal-plans"],
   ["Security", "Password, biometric sign-in and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],

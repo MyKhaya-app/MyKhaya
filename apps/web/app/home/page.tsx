@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Children, useEffect, useMemo, useState } from "react";
 import {
   Bell,
   CalendarPlus,
   Check,
   Circle,
+  ClipboardList,
   Gift,
   ListChecks,
   Lock,
@@ -157,6 +158,18 @@ function EventRow({
   );
 }
 
+// A row within "Around the house" that sizes its own columns to however
+// many shortcuts actually render into it (children are conditional on
+// entitlements/feature flags) — so a row never shows a blank placeholder
+// tile, and adding/removing a shortcut from either row doesn't require any
+// layout math elsewhere. Generic over the number of shortcuts, not tied to
+// any specific one.
+function QuickActionsRow({ children }: { children: React.ReactNode }) {
+  const items = Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
+  return <div className={`quick-actions-row quick-actions-row-${items.length}`}>{items}</div>;
+}
+
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null);
   const [summary, setSummary] = useState<HomeSummary | null>(null);
@@ -169,6 +182,7 @@ export default function HomePage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [routinesExpanded, setRoutinesExpanded] = useState(false);
   const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
@@ -258,6 +272,7 @@ export default function HomePage() {
           setUpcoming([]);
         }
         setRoutines(routineData?.items ?? []);
+        setRoutinesExpanded(false);
       })
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
@@ -297,9 +312,6 @@ export default function HomePage() {
     );
     try {
       await api.completeRoutine(activeHomeId, routine.id, routine.home_occurrence_date);
-      window.setTimeout(() => {
-        setRoutines((current) => current.filter((item) => item.id !== routine.id));
-      }, 1500);
     } catch (cause) {
       setRoutines(previous);
       setError((cause as Error).message);
@@ -326,6 +338,14 @@ export default function HomePage() {
   const showInstallFirstNotice =
     notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
+  const orderedRoutines = useMemo(
+    () => [
+      ...routines.filter((routine) => !routine.home_completed_at),
+      ...routines.filter((routine) => Boolean(routine.home_completed_at)),
+    ],
+    [routines],
+  );
+  const visibleRoutines = routinesExpanded ? orderedRoutines : orderedRoutines.slice(0, 3);
 
   return (
     <AppShell
@@ -434,8 +454,8 @@ export default function HomePage() {
                 See all
               </Link>
             </div>
-            <div className="home-routine-list">
-              {routines.map((routine) => {
+            <div className="home-routine-list" id="home-routine-list">
+              {visibleRoutines.map((routine) => {
                 const completed = Boolean(routine.home_completed_at);
                 return (
                   <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={routine.id}>
@@ -452,8 +472,10 @@ export default function HomePage() {
                     <Link className="home-routine-copy" href="/settings/routines">
                       <strong>{routine.title}</strong>
                       <small>
-                        {completed && routine.home_completed_by_display_name
-                          ? `Done by ${routine.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
+                        {completed
+                          ? routine.scope === "household" && routine.home_completed_by_display_name
+                            ? `Done by ${routine.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
+                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
                           : `${routineDueLabel(routine)} · ${routine.scope === "household" ? "Household" : "Personal"}`}
                       </small>
                     </Link>
@@ -461,6 +483,17 @@ export default function HomePage() {
                 );
               })}
             </div>
+            {orderedRoutines.length > 3 && (
+              <button
+                className="home-routine-expand tertiary"
+                type="button"
+                aria-expanded={routinesExpanded}
+                aria-controls="home-routine-list"
+                onClick={() => setRoutinesExpanded((expanded) => !expanded)}
+              >
+                {routinesExpanded ? "Show less" : "Show more"}
+              </button>
+            )}
           </section>
         )}
 
@@ -506,46 +539,58 @@ export default function HomePage() {
             <h2>Around the house</h2>
           </div>
           <div className="quick-actions">
-            {calendarEnabled && (
-              <Link className="quick-action" href="/calendar">
-                <CalendarPlus size={20} aria-hidden="true" />
-                Add event
+            <QuickActionsRow>
+              {calendarEnabled && (
+                <Link className="quick-action" href="/calendar">
+                  <CalendarPlus size={20} aria-hidden="true" />
+                  Add event
+                </Link>
+              )}
+              {canInviteMore && (
+                <Link className="quick-action" href="/people">
+                  <UserPlus size={20} aria-hidden="true" />
+                  Invite family
+                </Link>
+              )}
+            </QuickActionsRow>
+            {/* Routines has no feature flag of its own — same as its More →
+                Settings entry, the shortcut always links through to
+                /settings/routines, which owns the personal-vs-household
+                (Free vs Family) gating itself. */}
+            <QuickActionsRow>
+              <Link className="quick-action" href="/settings/routines">
+                <ClipboardList size={20} aria-hidden="true" />
+                Routines
               </Link>
-            )}
-            {canInviteMore && (
-              <Link className="quick-action" href="/people">
-                <UserPlus size={20} aria-hidden="true" />
-                Invite family
-              </Link>
-            )}
-            {mealsFeatureOn && (
-              <Link
-                className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}
-                href="/meal-plans"
-              >
-                {!mealsEnabled && (
-                  <span className="quick-action-lock" aria-hidden="true">
-                    <Lock size={11} />
-                  </span>
-                )}
-                <UtensilsCrossed size={20} aria-hidden="true" />
-                Meal plans
-              </Link>
-            )}
-            {listsFeatureOn && (
-              <Link
-                className={`quick-action${listsEnabled ? "" : " quick-action-locked"}`}
-                href="/lists"
-              >
-                {!listsEnabled && (
-                  <span className="quick-action-lock" aria-hidden="true">
-                    <Lock size={11} />
-                  </span>
-                )}
-                <ListChecks size={20} aria-hidden="true" />
-                Lists
-              </Link>
-            )}
+              {mealsFeatureOn && (
+                <Link
+                  className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}
+                  href="/meal-plans"
+                >
+                  {!mealsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <UtensilsCrossed size={20} aria-hidden="true" />
+                  Meal plans
+                </Link>
+              )}
+              {listsFeatureOn && (
+                <Link
+                  className={`quick-action${listsEnabled ? "" : " quick-action-locked"}`}
+                  href="/lists"
+                >
+                  {!listsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <ListChecks size={20} aria-hidden="true" />
+                  Lists
+                </Link>
+              )}
+            </QuickActionsRow>
           </div>
         </section>
 
