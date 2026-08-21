@@ -47,6 +47,42 @@ export function dateKey(value: Date | string): string {
   return (typeof value === "string" ? value : value.toISOString()).slice(0, 10);
 }
 
+// The one place a Date/instant becomes user-facing text — always given an
+// explicit IANA zone: either the Home's primary calendar timezone (headers,
+// day labels), an individual event's own governing timezone
+// (event.timezone), or literal "UTC" for a plain calendar-date label. Never
+// the browser's local zone, never a silent default — see the timed-vs-all-day
+// note above for why that distinction matters here too.
+export function displayDate(
+  value: Date | string,
+  options: Intl.DateTimeFormatOptions,
+  timeZone: string,
+) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    ...options,
+  }).format(typeof value === "string" ? new Date(value) : value);
+}
+
+export function eventTime(event: EventOccurrence, timeZone: string) {
+  if (event.is_all_day) return "All day";
+  return displayDate(
+    event.start_at,
+    { hour: "2-digit", minute: "2-digit" },
+    event.timezone || timeZone,
+  );
+}
+
+// The one place month-to-month date arithmetic happens — used both by the
+// Previous/Next month controls and by the month-view swipe gesture's
+// prev/next preview panels, so the two can never drift into two different
+// ideas of "next month".
+export function addMonths(base: Date, delta: number): Date {
+  const next = new Date(base);
+  next.setUTCMonth(next.getUTCMonth() + delta);
+  return next;
+}
+
 export function monthRange(base: Date) {
   return {
     start: new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1)),

@@ -2006,6 +2006,33 @@ textarea {
 .calendar-month {
   min-width: 0;
 }
+/* Swipe-to-navigate track for Month view (MonthSwipeView in
+   calendar/page.tsx): three MonthView panels (previous/current/next) laid
+   out in a row, clipped to one month's width. Resting position shows the
+   centre panel; useMonthSwipe drives the track's transform directly via
+   ref during a drag, then hands off to the same onNavigate the
+   Previous/Next buttons use once the gesture commits. touch-action: pan-y
+   is what actually protects vertical scrolling — the browser keeps
+   handling vertical panning natively and only cedes horizontal movement to
+   JS, so this never needs to fight the page scroll with preventDefault. */
+.calendar-month-swipe {
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.calendar-month-swipe-track {
+  display: flex;
+  transform: translateX(-33.3333%);
+  width: 300%;
+}
+.calendar-month-swipe-panel {
+  flex: 0 0 33.3333%;
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .calendar-month-swipe-track {
+    transition: none !important;
+  }
+}
 .calendar-selector {
   align-items: center;
   display: inline-flex;

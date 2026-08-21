@@ -33,7 +33,9 @@ import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
+import { MonthSwipeView } from "./month-view";
 import {
+  addMonths,
   agendaRange,
   applyAllDayToggle,
   canDeleteEvent,
@@ -42,9 +44,10 @@ import {
   DEFAULT_EVENT_DURATION_MINUTES,
   dateKey,
   dayRange,
+  displayDate,
   emptyStateMessage,
-  eventDateBounds,
   eventsForDay,
+  eventTime,
   FALLBACK_TIMEZONE,
   filterVisibleEvents,
   groupEventsByDay,
@@ -80,26 +83,6 @@ function formText(data: FormData, name: string) {
 // formatting that event's time. Never the browser's local zone, never a
 // hardcoded UTC default: the server/browser timezone must never leak into
 // what a user sees.
-function displayDate(
-  value: Date | string,
-  options: Intl.DateTimeFormatOptions,
-  timeZone: string,
-) {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    ...options,
-  }).format(typeof value === "string" ? new Date(value) : value);
-}
-
-function eventTime(event: EventOccurrence, timeZone: string) {
-  if (event.is_all_day) return "All day";
-  return displayDate(
-    event.start_at,
-    { hour: "2-digit", minute: "2-digit" },
-    event.timezone || timeZone,
-  );
-}
-
 function relativeDayHeading(key: string, timeZone: string) {
   const now = new Date();
   const tomorrow = new Date(now);
@@ -1069,10 +1052,12 @@ export default function CalendarPage() {
 
   function move(direction: -1 | 1) {
     hasNavigated.current = true;
+    if (view === "month") {
+      setFocusDate(addMonths(focusDate, direction));
+      return;
+    }
     const next = new Date(focusDate);
-    if (view === "month") next.setUTCMonth(next.getUTCMonth() + direction);
-    else if (view === "week")
-      next.setUTCDate(next.getUTCDate() + direction * 7);
+    if (view === "week") next.setUTCDate(next.getUTCDate() + direction * 7);
     else next.setUTCDate(next.getUTCDate() + direction);
     setFocusDate(next);
   }
@@ -1328,13 +1313,14 @@ export default function CalendarPage() {
         )}
 
         {view === "month" && (
-          <MonthView
+          <MonthSwipeView
             cells={cells}
             events={visibleEvents}
             focusDate={focusDate}
             timeZone={calendarTimezone}
             onDay={openDay}
             onEvent={openEvent}
+            onNavigate={move}
           />
         )}
 
@@ -1530,134 +1516,6 @@ export default function CalendarPage() {
         })()}
       </main>
     </AppShell>
-  );
-}
-
-// Show at most this many event bars per week before collapsing the rest into a
-// "+N more" indicator — a week with nothing more than this stays compact instead of
-// reserving space for events it doesn't have.
-const MONTH_VISIBLE_ROW_CAP = 3;
-
-function MonthView({
-  cells,
-  events,
-  focusDate,
-  timeZone,
-  onDay,
-  onEvent,
-}: {
-  cells: Date[];
-  events: EventOccurrence[];
-  focusDate: Date;
-  timeZone: string;
-  onDay: (day: Date) => void;
-  onEvent: (event: EventOccurrence) => void;
-}) {
-  const todayKey = zonedDateKey(new Date(), timeZone);
-  const bounds = useMemo(
-    () => new Map(events.map((event) => [event.occurrence_id, eventDateBounds(event, timeZone)])),
-    [events, timeZone],
-  );
-  return (
-    <section className="calendar-month" aria-label="Month view">
-      <div className="calendar-weekdays" aria-hidden="true">
-        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => <span key={label}>{label}</span>)}
-      </div>
-      <div className="calendar-weeks">
-        {Array.from({ length: 6 }, (_, weekIndex) => {
-          const days = cells.slice(weekIndex * 7, weekIndex * 7 + 7);
-          const weekStart = dateKey(days[0]!);
-          const weekEnd = dateKey(days[6]!);
-          const rows: { event: EventOccurrence; start: number; end: number; row: number }[] = [];
-          const rowIntervals: { start: number; end: number }[][] = [];
-          events
-            .filter((event) => {
-              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-              return endKey >= weekStart && startKey <= weekEnd;
-            })
-            .sort((a, b) => bounds.get(a.occurrence_id)!.startKey.localeCompare(bounds.get(b.occurrence_id)!.startKey) || a.title.localeCompare(b.title))
-            .forEach((event) => {
-              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-              const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
-              const end = Math.min(6, days.reduce((last, day, index) => dateKey(day) <= endKey ? index : last, -1));
-              if (end < start) return;
-              let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
-              if (row === -1) row = rowIntervals.length;
-              (rowIntervals[row] ??= []).push({ start, end });
-              rows.push({ event, start, end, row });
-            });
-          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= MONTH_VISIBLE_ROW_CAP && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
-          // The whole point: a week with 0-1 events only reserves 0-1 event-row
-          // tracks, not a fixed 4-row block every week gets regardless of content.
-          const visibleRowCount = Math.min(rowIntervals.length, MONTH_VISIBLE_ROW_CAP);
-          return (
-            <div
-              className="calendar-week"
-              key={weekStart}
-              style={{ gridTemplateRows: `var(--month-day-number-h) repeat(${visibleRowCount}, var(--month-event-row-h))` }}
-            >
-              {days.map((day, index) => {
-                const key = dateKey(day);
-                const count = events.filter((event) => {
-                  const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-                  return startKey <= key && endKey >= key;
-                }).length;
-                const hidden = hiddenByDay[index] ?? 0;
-                return (
-                  <article
-                    className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
-                    key={key}
-                    style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
-                  >
-                    <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events`}>
-                      <span>{day.getUTCDate()}</span>
-                    </button>
-                    {hidden > 0 && <button className="overflow-events" type="button" onClick={() => onDay(day)}>+{hidden} more</button>}
-                  </article>
-                );
-              })}
-              {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => {
-                // A multi-day event keeps the same solid-bar treatment on every week
-                // segment it touches, even a segment that only covers one day of that
-                // week (e.g. an event ending on a week's first day) — styling must key
-                // off the event's own duration, not how much of it happens to fall in
-                // this particular week, or a continuation segment would silently revert
-                // to the lighter single-day chip look and read as a different event.
-                const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-                const isMultiDay = endKey !== startKey;
-                const segmentDays = end - start + 1;
-                const isContinuation = startKey < weekStart;
-                // A segment too narrow for its title to read as anything but a
-                // meaningless fragment ("Te…", "0…") shows no text at all — a blank
-                // coloured bar still communicates "this event continues here," which a
-                // squeezed fragment does not.
-                const showTitle = !isMultiDay || segmentDays >= 2;
-                return (
-                  <button
-                    key={`${event.occurrence_id}-${weekStart}`}
-                    type="button"
-                    className={`month-event${isMultiDay ? " month-event-span" : ""}`}
-                    style={
-                      {
-                        "--event-color": resolveColour(event.label?.color ?? event.calendar_color),
-                        gridColumn: `${start + 1} / ${end + 2}`,
-                        gridRow: row + 2,
-                      } as React.CSSProperties
-                    }
-                    onClick={() => onEvent(event)}
-                    aria-label={`${eventTime(event, timeZone)} ${event.title}`}
-                    title={event.title}
-                  >
-                    {!isMultiDay && <span aria-hidden="true" />}
-                    {showTitle ? `${isContinuation ? "↳ " : ""}${event.title}` : ""}
-                  </button>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-    </section>
   );
 }
 
