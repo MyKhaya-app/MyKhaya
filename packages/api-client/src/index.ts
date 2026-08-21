@@ -628,6 +628,20 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}`,
       { method: "DELETE" },
     );
+  setWishlistHomeVisibility = (
+    homeId: string,
+    wishlistId: string,
+    body: import("@mykhaya/shared-types").WishlistVisibilityUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").WishlistOwnerDetail>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/${encodeURIComponent(wishlistId)}/home-visibility`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  wishlistLinkPreview = (homeId: string, url: string) =>
+    this.request<import("@mykhaya/shared-types").WishlistLinkPreview>(
+      `/homes/${encodeURIComponent(homeId)}/wishlists/link-preview`,
+      { method: "POST", body: JSON.stringify({ url }) },
+    );
   addWishlistItem = (
     homeId: string,
     wishlistId: string,

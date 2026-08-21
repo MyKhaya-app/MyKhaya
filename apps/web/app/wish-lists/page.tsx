@@ -2,16 +2,15 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { Gift, Plus } from "lucide-react";
+import { Gift, LockKeyhole, Plus, Users } from "lucide-react";
 import type { WishlistCreatePayload, WishlistOccasion, WishlistSummary } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
-import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
-import { WISHLIST_OCCASION_OPTIONS, occasionGlyph, occasionLabel } from "./occasion";
+import { WISHLIST_OCCASION_OPTIONS, occasionLabel } from "./occasion";
 
 // Wishlists is a Family-plan, per-person module — every member can keep
 // their own wishlists, other Home members see them automatically, and the
@@ -28,33 +27,9 @@ function loadErrorMessage(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
-interface OwnerGroup {
-  ownerId: string;
-  ownerName: string;
-  lists: WishlistSummary[];
-}
-
-function groupByOwner(lists: WishlistSummary[]): OwnerGroup[] {
-  const groups = new Map<string, OwnerGroup>();
-  for (const list of lists) {
-    const existing = groups.get(list.owner_user_id);
-    if (existing) {
-      existing.lists.push(list);
-    } else {
-      groups.set(list.owner_user_id, {
-        ownerId: list.owner_user_id,
-        ownerName: list.owner_display_name,
-        lists: [list],
-      });
-    }
-  }
-  // Owner's own wishlists first, then alphabetically by owner name.
-  return Array.from(groups.values()).sort((a, b) => {
-    const aMine = a.lists[0]?.is_owner ? 0 : 1;
-    const bMine = b.lists[0]?.is_owner ? 0 : 1;
-    if (aMine !== bMine) return aMine - bMine;
-    return a.ownerName.localeCompare(b.ownerName);
-  });
+function visibilityLabel(list: WishlistSummary): string {
+  if (list.is_owner) return list.home_visible ? "Shared with Home" : "Private";
+  return "Shared with Home";
 }
 
 export default function WishListsPage() {
@@ -143,7 +118,30 @@ export default function WishListsPage() {
     );
   }
 
-  const groups = groupByOwner(homeLists);
+  const mine = homeLists.filter((list) => list.is_owner);
+  const homeVisible = homeLists.filter((list) => !list.is_owner);
+
+  function renderCard(list: WishlistSummary) {
+    return (
+      <Link className="card wishlists-card" href={`/wish-lists/${list.id}`} key={list.id}>
+        <span className="wishlists-card-icon" aria-hidden="true">
+          {list.home_visible ? <Users size={20} /> : <LockKeyhole size={18} />}
+        </span>
+        <span className="wishlists-card-copy">
+          <strong>{list.title}</strong>
+          <span className="quiet-state">
+            {!list.is_owner && (
+              <>
+                <span className="wishlists-card-owner">{list.owner_display_name}</span> ·{" "}
+              </>
+            )}
+            {visibilityLabel(list)} · {occasionLabel(list.occasion)} · {list.item_count} item
+            {list.item_count === 1 ? "" : "s"}
+          </span>
+        </span>
+      </Link>
+    );
+  }
 
   return (
     <AppShell>
@@ -162,8 +160,8 @@ export default function WishListsPage() {
         <FormStatus error={error} />
 
         <section>
-          <h2 className="wishlists-section-heading">Your Home</h2>
-          {groups.length === 0 ? (
+          <h2 className="wishlists-section-heading">My wishlists</h2>
+          {mine.length === 0 ? (
             <div className="meal-empty-state">
               <p>
                 <strong>No wishlists yet</strong>
@@ -174,57 +172,24 @@ export default function WishListsPage() {
               </button>
             </div>
           ) : (
-            <div className="wishlists-owner-groups">
-              {groups.map((group) => (
-                <div className="wishlists-owner-group" key={group.ownerId}>
-                  <div className="wishlists-owner-heading">
-                    <Avatar id={group.ownerId} name={group.ownerName} size="sm" />
-                    <strong>{group.lists[0]?.is_owner ? "Your wishlists" : group.ownerName}</strong>
-                  </div>
-                  <div className="wishlists-grid">
-                    {group.lists.map((list) => {
-                      const Glyph = occasionGlyph(list.occasion);
-                      return (
-                        <Link className="card wishlists-card" href={`/wish-lists/${list.id}`} key={list.id}>
-                          <span className="wishlists-card-icon" aria-hidden="true">
-                            <Glyph size={20} />
-                          </span>
-                          <span className="wishlists-card-copy">
-                            <strong>{list.title}</strong>
-                            <span className="quiet-state">
-                              {occasionLabel(list.occasion)} · {list.item_count} item
-                              {list.item_count === 1 ? "" : "s"}
-                            </span>
-                          </span>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <div className="wishlists-grid">{mine.map(renderCard)}</div>
           )}
         </section>
+
+        {homeVisible.length > 0 && (
+          <section>
+            <h2 className="wishlists-section-heading">Home wishlists</h2>
+            <p className="muted">Only lists their owners have chosen to share with the Home appear here.</p>
+            <div className="wishlists-grid">{homeVisible.map(renderCard)}</div>
+          </section>
+        )}
 
         {sharedLists.length > 0 && (
           <section>
             <h2 className="wishlists-section-heading">Shared with me</h2>
             <div className="wishlists-grid">
               {sharedLists.map((list) => {
-                const Glyph = occasionGlyph(list.occasion);
-                return (
-                  <Link className="card wishlists-card" href={`/wish-lists/${list.id}`} key={list.id}>
-                    <span className="wishlists-card-icon" aria-hidden="true">
-                      <Glyph size={20} />
-                    </span>
-                    <span className="wishlists-card-copy">
-                      <strong>{list.title}</strong>
-                      <span className="quiet-state">
-                        {list.owner_display_name} · {occasionLabel(list.occasion)}
-                      </span>
-                    </span>
-                  </Link>
-                );
+                return renderCard(list);
               })}
             </div>
           </section>

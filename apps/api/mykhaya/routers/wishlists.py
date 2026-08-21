@@ -73,10 +73,13 @@ from mykhaya.wishlist_guest import (
     set_guest_cookies,
     wishlist_guest_context,
 )
+from mykhaya.wishlist_link_preview import fetch_link_preview
 from mykhaya.wishlist_schemas import (
     GuestShareCreateResponse,
     GuestVerifyRequest,
     GuestVerifyResponse,
+    LinkPreviewRequest,
+    LinkPreviewResponse,
     MarkBoughtRequest,
     ReserveItemRequest,
     ShareCreateRequest,
@@ -96,6 +99,7 @@ from mykhaya.wishlist_schemas import (
     WishlistSummaryResponse,
     WishlistUpdateRequest,
     WishlistViewerDetailResponse,
+    WishlistVisibilityUpdateRequest,
 )
 
 WishlistDetailResponse = WishlistOwnerDetailResponse | WishlistViewerDetailResponse
@@ -111,6 +115,13 @@ _GUEST_PIN_RATE_WINDOW = 300
 # session churning out guest links would otherwise be unbounded.
 _SHARE_CREATE_RATE_LIMIT = 20
 _SHARE_CREATE_RATE_WINDOW = 300
+# Link-preview is SSRF-adjacent (mykhaya.wishlist_link_preview already
+# blocks internal targets, but rate limiting keeps this from also being
+# usable as a cheap anonymising probe against arbitrary public hosts) —
+# generous enough for someone pasting a handful of product links in a
+# session, tight enough to not be a useful proxy.
+_LINK_PREVIEW_RATE_LIMIT = 20
+_LINK_PREVIEW_RATE_WINDOW = 300
 
 
 async def require_wishlists_feature(home_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
@@ -203,6 +214,34 @@ async def _wishlist_items(db: AsyncSession, wishlist_id: uuid.UUID) -> list[Wish
     )
 
 
+async def _share_count(db: AsyncSession, wishlist_id: uuid.UUID) -> int:
+    return int(
+        await db.scalar(
+            select(func.count())
+            .select_from(WishlistShare)
+            .where(WishlistShare.wishlist_id == wishlist_id, WishlistShare.revoked_at.is_(None))
+        )
+        or 0
+    )
+
+
+async def _share_counts(db: AsyncSession, wishlist_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    if not wishlist_ids:
+        return {}
+    return dict(
+        (
+            await db.execute(
+                select(WishlistShare.wishlist_id, func.count())
+                .where(
+                    WishlistShare.wishlist_id.in_(wishlist_ids),
+                    WishlistShare.revoked_at.is_(None),
+                )
+                .group_by(WishlistShare.wishlist_id)
+            )
+        ).all()
+    )
+
+
 async def _next_sort_order(db: AsyncSession, wishlist_id: uuid.UUID) -> int:
     return int(
         await db.scalar(
@@ -271,6 +310,7 @@ async def _owner_detail_response(db: AsyncSession, wishlist: Wishlist) -> Wishli
     # accidentally leak because the reservation table is simply absent from
     # this function's dataflow.
     items = await _wishlist_items(db, wishlist.id)
+    share_count = await _share_count(db, wishlist.id)
     return WishlistOwnerDetailResponse(
         id=wishlist.id,
         home_id=wishlist.home_id,
@@ -279,6 +319,8 @@ async def _owner_detail_response(db: AsyncSession, wishlist: Wishlist) -> Wishli
         occasion_date=wishlist.occasion_date,
         description=wishlist.description,
         owner_user_id=wishlist.owner_user_id,
+        home_visible=wishlist.home_visible,
+        share_count=share_count,
         created_at=wishlist.created_at,
         updated_at=wishlist.updated_at,
         items=[_owner_item_response(item) for item in items],
@@ -315,8 +357,14 @@ async def _detail_response(
 
 
 async def _summary_response(
-    db: AsyncSession, wishlist: Wishlist, item_count: int, owner_name: str, caller_id: uuid.UUID
+    db: AsyncSession,
+    wishlist: Wishlist,
+    item_count: int,
+    owner_name: str,
+    caller_id: uuid.UUID,
+    share_count: int = 0,
 ) -> WishlistSummaryResponse:
+    is_owner = wishlist.owner_user_id == caller_id
     return WishlistSummaryResponse(
         id=wishlist.id,
         home_id=wishlist.home_id,
@@ -327,7 +375,11 @@ async def _summary_response(
         owner_user_id=wishlist.owner_user_id,
         owner_display_name=owner_name,
         item_count=item_count,
-        is_owner=wishlist.owner_user_id == caller_id,
+        is_owner=is_owner,
+        home_visible=wishlist.home_visible,
+        # Never exposed for a wishlist that isn't the caller's own — see
+        # WishlistSummaryResponse's docstring.
+        share_count=share_count if is_owner else 0,
         created_at=wishlist.created_at,
         updated_at=wishlist.updated_at,
     )
@@ -347,10 +399,32 @@ class _ViewerAccess:
 async def _resolve_non_owner_access(
     db: AsyncSession, wishlist: Wishlist, auth: AuthContext
 ) -> _ViewerAccess:
-    membership = await _membership_or_none(db, wishlist.home_id, auth)
-    if membership is not None:
-        if Capability.wishlists_view in await capabilities_for(db, membership):
-            return _ViewerAccess("member")
+    # Same-Home "member" access is now opt-in: a fellow Home member with
+    # wishlists_view only gets in if the *owner* has separately turned Home
+    # visibility on for this specific wishlist (Wishlist.home_visible).
+    # Private is the default (see models.Wishlist.home_visible's docstring)
+    # — without this check, any member with the capability could see every
+    # Home member's wishlist regardless of the owner's choice, which is
+    # exactly the behaviour this task removes.
+    #
+    # home_admin gets no special-case here on purpose: a Home Admin can
+    # still fully manage (edit/delete/reorder/add items to, share) ANY
+    # wishlist in their Home via the owner-or-admin-gated management
+    # endpoints regardless of home_visible (_require_owner_or_admin doesn't
+    # consult home_visible at all) — that's their "genuinely requires
+    # management access" path. But they don't get a passive, no-action-taken
+    # ability to browse another member's private wishlist's contents through
+    # the read-only view/reserve endpoints just by being an admin — that
+    # would be a quiet blanket surveillance capability inconsistent with
+    # this module's per-person, owner-controlled-visibility philosophy (the
+    # same philosophy that keeps the owner blind to their own item
+    # reservations). See the router module docstring / final report for the
+    # full reasoning.
+    if wishlist.home_visible:
+        membership = await _membership_or_none(db, wishlist.home_id, auth)
+        if membership is not None:
+            if Capability.wishlists_view in await capabilities_for(db, membership):
+                return _ViewerAccess("member")
     share = await _active_share_for_recipient(db, wishlist.id, auth.user.id)
     if share is not None:
         return _ViewerAccess("share", share)
@@ -419,10 +493,20 @@ async def list_wishlists(
     await require_capability(home_id, Capability.wishlists_view, auth, db)
     await require_entitlement(db, home_id, "wishlists.enabled")
 
+    # Own wishlists always included; other members' wishlists only when the
+    # owner has opted into Home visibility — this is the query-level
+    # enforcement of "must not show private wishlists belonging to other
+    # members" (never relying on the frontend to hide anything). A
+    # home_admin gets no broader filter here than anyone else with
+    # wishlists_view — see _resolve_non_owner_access's docstring for why.
     rows = (
         await db.scalars(
             select(Wishlist)
-            .where(Wishlist.home_id == home_id, Wishlist.deleted_at.is_(None))
+            .where(
+                Wishlist.home_id == home_id,
+                Wishlist.deleted_at.is_(None),
+                (Wishlist.owner_user_id == auth.user.id) | Wishlist.home_visible.is_(True),
+            )
             .order_by(Wishlist.updated_at.desc())
         )
     ).all()
@@ -440,6 +524,7 @@ async def list_wishlists(
             )
         ).all()
     )
+    share_counts = await _share_counts(db, [row.id for row in rows])
     owner_names = dict(
         (
             await db.execute(
@@ -452,7 +537,12 @@ async def list_wishlists(
     return WishlistListResponse(
         items=[
             await _summary_response(
-                db, row, counts.get(row.id, 0), owner_names.get(row.owner_user_id, ""), auth.user.id
+                db,
+                row,
+                counts.get(row.id, 0),
+                owner_names.get(row.owner_user_id, ""),
+                auth.user.id,
+                share_counts.get(row.id, 0),
             )
             for row in rows
         ]
@@ -469,6 +559,13 @@ async def get_wishlist(
     await require_capability(home_id, Capability.wishlists_view, auth, db)
     await require_entitlement(db, home_id, "wishlists.enabled")
     row = await _get_active_wishlist(db, home_id, wishlist_id)
+    if row.owner_user_id != auth.user.id and not row.home_visible:
+        # Same-Home membership + wishlists_view is no longer sufficient on
+        # its own once the owner has kept this wishlist Private — fall back
+        # to checking for a personal share, same as the top-level path.
+        share = await _active_share_for_recipient(db, row.id, auth.user.id)
+        if share is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That wishlist could not be found")
     return await _detail_response(db, row, auth)
 
 
@@ -514,6 +611,77 @@ async def delete_wishlist(
     row.deleted_at = datetime.now(tz=row.created_at.tzinfo)
     audit(db, request, "wishlists.wishlist.deleted", auth.user.id, home_id, "wishlist", row.id)
     await db.commit()
+
+
+@router.post(
+    "/{home_id}/wishlists/{wishlist_id}/home-visibility",
+    response_model=WishlistOwnerDetailResponse,
+)
+async def set_wishlist_home_visibility(
+    home_id: uuid.UUID,
+    wishlist_id: uuid.UUID,
+    body: WishlistVisibilityUpdateRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> WishlistOwnerDetailResponse:
+    """Toggles Wishlist.home_visible only — never creates, revokes, or
+    otherwise touches any WishlistShare row. Per-recipient sharing and Home
+    visibility are fully independent, in both directions: this endpoint has
+    no side effect on shares, and revoke_share has no side effect on
+    home_visible. See models.Wishlist.home_visible's docstring."""
+    membership = await require_capability(home_id, Capability.wishlists_manage, auth, db)
+    await require_entitlement(db, home_id, "wishlists.enabled")
+    row = await _get_active_wishlist(db, home_id, wishlist_id, for_update=True)
+    await _require_owner_or_admin(row, auth, membership)
+    row.home_visible = body.enabled
+    audit(
+        db,
+        request,
+        f"wishlists.home_visibility.{'enabled' if body.enabled else 'disabled'}",
+        auth.user.id,
+        home_id,
+        "wishlist",
+        row.id,
+    )
+    await db.commit()
+    await db.refresh(row)
+    return await _owner_detail_response(db, row)
+
+
+@router.post("/{home_id}/wishlists/link-preview", response_model=LinkPreviewResponse)
+async def wishlist_link_preview(
+    home_id: uuid.UUID,
+    body: LinkPreviewRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> LinkPreviewResponse:
+    """Stateless server-side metadata fetch for a pasted item URL — never
+    touches wishlist/item storage itself (see WishlistItemCreate/Update,
+    which already accept image_url/price/name as plain optional fields the
+    FRONTEND populates from this response before submitting its own
+    create/update call). Gated the same as any other wishlists_manage
+    action plus the module entitlement, so this can't be used as a free
+    arbitrary-URL-fetch proxy by a non-Family user or from an unrelated
+    Home. SSRF protections live in mykhaya.wishlist_link_preview — this
+    endpoint never sees a raw upstream error; any failure there already
+    resolves to the same empty LinkPreviewResponse as "reachable page with
+    no metadata"."""
+    await require_capability(home_id, Capability.wishlists_manage, auth, db)
+    await require_entitlement(db, home_id, "wishlists.enabled")
+    await enforce_rate_limit(
+        request, settings, "wishlist_link_preview", _LINK_PREVIEW_RATE_LIMIT, _LINK_PREVIEW_RATE_WINDOW
+    )
+    result = await fetch_link_preview(body.url, settings)
+    return LinkPreviewResponse(
+        title=result.title,
+        image_url=result.image_url,
+        description=result.description,
+        price=result.price,
+        currency=result.currency,
+    )
 
 
 # ---------------------------------------------------------------------------

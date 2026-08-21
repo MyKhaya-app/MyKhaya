@@ -140,6 +140,8 @@ from mykhaya.platform_schemas import (
     HomeAdministratorSummary,
     HomeSubscriptionResponse,
     IncidentCreate,
+    IncidentDeleteRequest,
+    IncidentResolveCreate,
     IncidentUpdateCreate,
     InvitationState,
     MfaPolicyResponse,
@@ -5458,6 +5460,92 @@ async def create_incident(
     )
     await db.commit()
     return {"id": row.id, "title": row.title, "lifecycle_state": row.lifecycle_state}
+
+
+@router.post("/incidents/{incident_id}/resolve")
+async def resolve_incident(
+    incident_id: uuid.UUID,
+    body: IncidentResolveCreate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = await db.get(PublicIncident, incident_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    if row.lifecycle_state == IncidentLifecycleState.resolved or row.resolved_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That incident is already resolved.")
+    resolved_at = body.resolved_at or datetime.now(UTC)
+    if resolved_at.tzinfo is None:
+        resolved_at = resolved_at.replace(tzinfo=UTC)
+    if resolved_at < row.starts_at:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Resolved time cannot precede start time.")
+    previous = {"lifecycle_state": row.lifecycle_state.value, "resolved": False}
+    row.lifecycle_state = IncidentLifecycleState.resolved
+    row.resolved_at = resolved_at
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=IncidentLifecycleState.resolved,
+            message=body.message.strip(),
+            occurred_at=resolved_at,
+            created_by=context.administrator.id,
+        )
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_resolved",
+        "incident",
+        row.id,
+        reason=body.reason,
+        previous=previous,
+        new={"title": row.title, "resolved_at": resolved_at.isoformat()},
+    )
+    await db.commit()
+    return {"id": row.id, "lifecycle_state": row.lifecycle_state, "resolved_at": row.resolved_at}
+
+
+@router.delete("/incidents/{incident_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_incident(
+    incident_id: uuid.UUID,
+    body: IncidentDeleteRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    require_recent_auth(context, settings)
+    row = await db.get(PublicIncident, incident_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    services = [
+        {"service": entry.service, "impact": entry.impact.value}
+        for entry in await db.scalars(
+            select(StatusIncidentService).where(StatusIncidentService.incident_id == row.id)
+        )
+    ]
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_deleted",
+        "incident",
+        row.id,
+        reason=body.reason,
+        previous={
+            "title": row.title,
+            "lifecycle_state": row.lifecycle_state.value,
+            "services": services,
+        },
+        new={"deleted_at": datetime.now(UTC).isoformat()},
+    )
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/incidents/{incident_id}/updates", status_code=status.HTTP_201_CREATED)

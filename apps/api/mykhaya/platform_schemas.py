@@ -557,6 +557,17 @@ class IncidentUpdateCreate(SensitiveActionRequest):
     internal_notes: str | None = Field(default=None, max_length=2000)
 
 
+class IncidentResolveCreate(SensitiveActionRequest):
+    """Completes an incident with one required final public timeline entry."""
+
+    message: str = Field(min_length=3, max_length=1000)
+    resolved_at: datetime | None = None
+
+
+class IncidentDeleteRequest(SensitiveActionRequest):
+    """Audited confirmation for permanently removing test/error incidents."""
+
+
 class PageResponse(BaseModel):
     items: list[dict[str, Any]]
     page: int

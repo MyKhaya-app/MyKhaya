@@ -1540,6 +1540,7 @@ class Wishlist(UuidTimeMixin, Base):
         CheckConstraint("char_length(title) >= 1", name="ck_wishlist_title_nonempty"),
         Index("ix_wishlist_home_owner", "home_id", "owner_user_id"),
         Index("ix_wishlist_home_active", "home_id", "deleted_at"),
+        Index("ix_wishlist_home_visible", "home_id", "home_visible"),
     )
     home_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
@@ -1563,6 +1564,14 @@ class Wishlist(UuidTimeMixin, Base):
     occasion_date: Mapped[date | None] = mapped_column(Date)
     description: Mapped[str | None] = mapped_column(String(1000))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Private by default (non-negotiable — see routers.wishlists' module
+    # docstring and the product brief this implements). Only when the owner
+    # explicitly flips this on does "any same-Home member with
+    # wishlists_view" become a valid access path (routers.wishlists'
+    # _resolve_non_owner_access) — fully independent of, and combinable
+    # with, per-recipient WishlistShare rows: toggling this never revokes a
+    # share, and revoking a share never touches this.
+    home_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

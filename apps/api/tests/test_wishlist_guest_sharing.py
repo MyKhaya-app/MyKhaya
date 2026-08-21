@@ -402,3 +402,36 @@ async def test_owner_remains_blind_to_a_guest_made_reservation(client: AsyncClie
     owner_item = next(i for i in owner_view.json()["items"] if i["id"] == item_id)
     assert "reservation_status" not in owner_item
     assert "reserved_by_display_name" not in owner_item
+
+
+@pytest.mark.asyncio
+async def test_guest_link_and_pin_work_regardless_of_home_visibility(client: AsyncClient) -> None:
+    """Guest access (WishlistShare, share_type=guest) is an independent
+    access path from the Home-visibility toggle — it must keep working
+    whether the wishlist is Private (the default) or Home-visible."""
+    await create_verified_user(client, unique_email("guestowner8"), "Guest Owner 8")
+    home_id = await create_home(client, "Guest Visibility Home")
+    wishlist = await create_wishlist(client, home_id)
+    share = await create_guest_share(client, home_id, wishlist["id"])
+
+    for enabled in (False, True, False):
+        toggled = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/wishlists/{wishlist['id']}/home-visibility",
+            json={"enabled": enabled},
+        )
+        assert toggled.status_code == 200
+        assert toggled.json()["home_visible"] is enabled
+
+        async with await fresh_client() as guest_client:
+            verify = await unsafe(
+                guest_client,
+                "POST",
+                f"/api/v1/wishlist/share/{share['link_token']}/verify",
+                json={"pin": share["pin"]},
+            )
+            assert verify.status_code == 200, verify.text
+            detail = await guest_client.get("/api/v1/wishlist/guest/wishlist")
+            assert detail.status_code == 200
+            assert detail.json()["id"] == wishlist["id"]

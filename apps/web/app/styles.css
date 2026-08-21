@@ -5433,6 +5433,11 @@ select.plan-meal-field-input {
   background: var(--colour-cream-light);
   border: 1px solid #efe9dd;
   border-radius: 0.85rem;
+  /* .wishlists-item-row is rendered as a <button> for the owner's own
+     items (tappable to edit) — without this, the global `button { color:
+     white }` rule silently wins here since this selector never previously
+     re-asserted a text colour, leaving white text on a cream card. */
+  color: var(--colour-slate);
   display: flex;
   gap: 0.6rem;
   justify-content: space-between;
@@ -5440,18 +5445,118 @@ select.plan-meal-field-input {
   text-align: left;
   width: 100%;
 }
+.wishlists-item-row {
+  align-items: stretch;
+  text-align: left;
+}
+.wishlists-item-image {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border-radius: 0.65rem;
+  display: flex;
+  flex: 0 0 76px;
+  height: 76px;
+  justify-content: center;
+  overflow: hidden;
+  width: 76px;
+}
+.wishlists-item-image img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.wishlists-item-image-placeholder {
+  color: var(--colour-sage-dark);
+}
 .wishlists-item-copy {
   display: grid;
   gap: 0.25rem;
   min-width: 0;
 }
 .wishlists-item-copy strong {
+  color: var(--colour-slate);
   overflow-wrap: break-word;
   word-break: break-word;
+}
+.wishlists-item-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.wishlists-item-copy strong,
+.wishlists-item-note,
+.wishlists-item-domain {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.wishlists-item-note,
+.wishlists-item-domain {
+  color: var(--colour-slate-muted);
+  font-size: 0.82rem;
+}
+.wishlists-item-domain {
+  color: var(--colour-sage-dark);
+}
+.wishlists-item-row-viewer {
+  display: flex;
+}
+.wishlists-item-row-viewer > .wishlists-item-copy {
+  min-width: 0;
+}
+.wishlists-visibility-indicator {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.45rem;
+  margin: 0.75rem 0;
+}
+.wishlists-share-section {
+  align-items: flex-start;
+  border: 1px solid var(--colour-sand);
+  border-radius: 0.85rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.9rem;
+}
+.wishlists-share-toggle-copy {
+  min-width: 0;
+}
+.wishlists-share-toggle-copy p {
+  margin: 0.3rem 0 0;
+}
+.wishlists-share-section .toggle {
+  background: var(--colour-sage-soft);
+  border: 1px solid var(--colour-sage);
+  border-radius: 999px;
+  color: var(--colour-slate);
+  flex: 0 0 auto;
+  min-width: 4.2rem;
+  padding: 0.45rem 0.7rem;
+}
+.wishlists-share-section .toggle.is-on {
+  background: var(--colour-sage-dark);
+  color: white;
+}
+.wishlists-preview-button {
+  align-self: flex-start;
+  margin-bottom: 0.75rem;
+}
+.wishlists-preview-line {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+}
+.wishlists-preview-line .wishlists-item-image {
+  flex-basis: 36px;
+  height: 36px;
+  width: 36px;
 }
 /* Long product URLs must wrap rather than force horizontal scroll on a
    narrow item card — see .wishlists-item-row's own overflow-x-free layout. */
 .wishlists-item-link {
+  color: var(--colour-sage-dark);
   overflow-wrap: anywhere;
   word-break: break-word;
 }

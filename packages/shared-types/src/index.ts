@@ -772,6 +772,8 @@ export interface WishlistSummary {
   owner_display_name: string;
   item_count: number;
   is_owner: boolean;
+  home_visible: boolean;
+  share_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -819,6 +821,8 @@ export interface WishlistOwnerDetail {
   occasion_date: string | null;
   description: string | null;
   owner_user_id: string;
+  home_visible: boolean;
+  share_count: number;
   created_at: string;
   updated_at: string;
   items: WishlistItemOwner[];
@@ -849,6 +853,18 @@ export interface WishlistCreatePayload {
   occasion_date?: string | null;
   description?: string | null;
   owner_user_id?: string | null;
+}
+
+export interface WishlistVisibilityUpdatePayload {
+  enabled: boolean;
+}
+
+export interface WishlistLinkPreview {
+  title: string | null;
+  image_url: string | null;
+  description: string | null;
+  price: string | null;
+  currency: string | null;
 }
 
 export interface WishlistUpdatePayload {

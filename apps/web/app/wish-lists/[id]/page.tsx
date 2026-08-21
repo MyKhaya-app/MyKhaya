@@ -2,7 +2,7 @@
 
 import { FormEvent, use, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, Copy, MoreVertical, Plus, Share2, Trash2 } from "lucide-react";
+import { ChevronLeft, Copy, ExternalLink, Image as ImageIcon, LockKeyhole, MoreVertical, Plus, Share2, Trash2, Users } from "lucide-react";
 import type {
   GuestShareCreateResponse,
   ShareCreatePayload,
@@ -13,10 +13,10 @@ import type {
   WishlistItemOwner,
   WishlistItemUpdatePayload,
   WishlistItemViewer,
+  WishlistLinkPreview,
   WishlistOccasion,
   WishlistOwnerDetail,
   WishlistUpdatePayload,
-  WishlistViewerDetail,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
@@ -49,6 +49,41 @@ function loadErrorMessage(cause: unknown, fallback: string): string {
 function formatPrice(price: string | null, currency: string | null): string | null {
   if (!price) return null;
   return currency ? `${currency} ${price}` : price;
+}
+
+function domainFor(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function WishlistImage({ src, alt }: { src: string | null; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <span className="wishlists-item-image wishlists-item-image-placeholder" aria-hidden="true">
+        <ImageIcon size={24} />
+      </span>
+    );
+  }
+  return (
+    <span className="wishlists-item-image">
+      <img src={src} alt={alt} onError={() => setFailed(true)} />
+    </span>
+  );
+}
+
+function WishlistSharingLabel({ detail }: { detail: WishlistOwnerDetail }) {
+  if (detail.home_visible && detail.share_count > 0) {
+    return `Shared with Home + ${detail.share_count} ${detail.share_count === 1 ? "person" : "people"}`;
+  }
+  if (detail.home_visible) return "Shared with Home";
+  if (detail.share_count > 0) {
+    return `Shared with ${detail.share_count} ${detail.share_count === 1 ? "person" : "people"}`;
+  }
+  return "Private";
 }
 
 export default function WishlistDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -159,7 +194,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
             </p>
             <h1>{detail.title}</h1>
             {!owner && (
-              <p className="quiet-state">{(detail as WishlistViewerDetail).owner_display_name}'s wishlist</p>
+              <p className="quiet-state">{detail.owner_display_name}'s wishlist</p>
             )}
           </div>
           {owner && (
@@ -174,6 +209,12 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
           )}
         </div>
         {detail.description && <p className="muted">{detail.description}</p>}
+        {owner && (
+          <button type="button" className="wishlists-visibility-indicator secondary" onClick={() => setSharing(true)}>
+            {detail.home_visible ? <Users size={15} aria-hidden="true" /> : <LockKeyhole size={15} aria-hidden="true" />}
+            <span>{WishlistSharingLabel({ detail })}</span>
+          </button>
+        )}
         <FormStatus error={error} />
 
         {owner && (
@@ -193,13 +234,15 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
           </p>
         ) : owner ? (
           <div className="wishlists-item-list">
-            {(detail as WishlistOwnerDetail).items.map((item) => (
+            {detail.items.map((item) => (
               <button
                 type="button"
                 className="wishlists-item-row"
                 key={item.id}
                 onClick={() => setEditingItem(item)}
+                aria-label={`Edit ${item.name}`}
               >
+                <WishlistImage src={item.image_url} alt="" />
                 <span className="wishlists-item-copy">
                   <strong>{item.name}</strong>
                   <span className="quiet-state">
@@ -210,14 +253,18 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
+                  {item.note && <span className="wishlists-item-note">{item.note}</span>}
+                  {item.url && <span className="wishlists-item-domain">{domainFor(item.url)}</span>}
                 </span>
+                <ExternalLink size={16} aria-hidden="true" />
               </button>
             ))}
           </div>
         ) : (
           <div className="wishlists-item-list">
-            {(detail as WishlistViewerDetail).items.map((item) => (
+            {detail.items.map((item) => (
               <div className="wishlists-item-row wishlists-item-row-viewer" key={item.id}>
+                <WishlistImage src={item.image_url} alt="" />
                 <span className="wishlists-item-copy">
                   <strong>{item.name}</strong>
                   <span className="quiet-state">
@@ -231,7 +278,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                   </span>
                   {item.url && (
                     <a className="wishlists-item-link" href={item.url} target="_blank" rel="noreferrer">
-                      View item
+                      <ExternalLink size={14} aria-hidden="true" /> View item
                     </a>
                   )}
                   <span className={`wishlists-status wishlists-status-${item.reservation_status}`}>
@@ -246,7 +293,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                 <span className="wishlists-item-actions">
                   {item.reservation_status === "available" ? (
                     <>
-                      <button type="button" className="secondary" onClick={() => void reserve(item)}>
+                    <button type="button" className="secondary" onClick={() => void reserve(item)}>
                         Reserve
                       </button>
                       <button type="button" className="secondary" onClick={() => void markBought(item)}>
@@ -309,7 +356,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
         {owner && activeHomeId && editing && (
           <EditWishlistSheet
             homeId={activeHomeId}
-            detail={detail as WishlistOwnerDetail}
+            detail={detail}
             onClose={() => setEditing(false)}
             onSaved={(updated) => {
               setDetail(updated);
@@ -351,7 +398,13 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
           <ShareWishlistSheet
             homeId={activeHomeId}
             wishlistId={wishlistId}
+            detail={detail}
             onClose={() => setSharing(false)}
+            onUpdated={(updated) => setDetail(updated)}
+            onManagePeople={() => {
+              setSharing(false);
+              setManagingShares(true);
+            }}
           />
         )}
 
@@ -460,9 +513,13 @@ function AddItemSheet({
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [price, setPrice] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
   const [note, setNote] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewMessage, setPreviewMessage] = useState("");
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -478,7 +535,9 @@ function AddItemSheet({
         name: name.trim(),
         url: url.trim() || null,
         price: price.trim() || null,
+        currency: currency.trim() || null,
         note: note.trim() || null,
+        image_url: imageUrl.trim() || null,
         quantity,
       };
       const updated = await api.addWishlistItem(homeId, wishlistId, payload);
@@ -487,6 +546,24 @@ function AddItemSheet({
       setError(cause instanceof ApiError ? cause.message : "Could not add that item.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function previewLink() {
+    if (!url.trim()) return;
+    setPreviewBusy(true);
+    setPreviewMessage("");
+    try {
+      const result: WishlistLinkPreview = await api.wishlistLinkPreview(homeId, url.trim());
+      if (!name.trim() && result.title) setName(result.title);
+      if (!imageUrl.trim() && result.image_url) setImageUrl(result.image_url);
+      if (!price.trim() && result.price) setPrice(result.price);
+      if (!currency.trim() && result.currency) setCurrency(result.currency);
+      setPreviewMessage(result.image_url || result.title ? "Preview details found — review them before saving." : "No preview details were available.");
+    } catch {
+      setPreviewMessage("Preview unavailable; you can still save this item.");
+    } finally {
+      setPreviewBusy(false);
     }
   }
 
@@ -501,10 +578,18 @@ function AddItemSheet({
           Link (optional)
           <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
         </label>
+        <button type="button" className="secondary wishlists-preview-button" onClick={() => void previewLink()} disabled={previewBusy || !url.trim()}>
+          {previewBusy ? "Finding preview…" : "Find product details"}
+        </button>
+        {previewMessage && <p className="muted">{previewMessage}</p>}
         <div className="meal-time-row">
           <label>
             Price (optional)
             <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
+          </label>
+          <label>
+            Currency
+            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="GBP" />
           </label>
           <label>
             Quantity
@@ -516,6 +601,7 @@ function AddItemSheet({
             />
           </label>
         </div>
+        {imageUrl && <p className="wishlists-preview-line"><WishlistImage src={imageUrl} alt="Preview" /> Image preview ready</p>}
         <label>
           Note (optional)
           <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
@@ -547,9 +633,13 @@ function EditItemSheet({
   const [name, setName] = useState(item.name);
   const [url, setUrl] = useState(item.url ?? "");
   const [price, setPrice] = useState(item.price ?? "");
+  const [currency, setCurrency] = useState(item.currency ?? "");
+  const [imageUrl, setImageUrl] = useState(item.image_url ?? "");
   const [note, setNote] = useState(item.note ?? "");
   const [quantity, setQuantity] = useState(item.quantity);
   const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewMessage, setPreviewMessage] = useState("");
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -565,7 +655,9 @@ function EditItemSheet({
         name: name.trim(),
         url: url.trim() || null,
         price: price.trim() || null,
+        currency: currency.trim() || null,
         note: note.trim() || null,
+        image_url: imageUrl.trim() || null,
         quantity,
       };
       const updated = await api.updateWishlistItem(homeId, wishlistId, item.id, payload);
@@ -574,6 +666,24 @@ function EditItemSheet({
       setError(cause instanceof ApiError ? cause.message : "Could not save this item.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function previewLink() {
+    if (!url.trim()) return;
+    setPreviewBusy(true);
+    setPreviewMessage("");
+    try {
+      const result: WishlistLinkPreview = await api.wishlistLinkPreview(homeId, url.trim());
+      if (!name.trim() && result.title) setName(result.title);
+      if (!imageUrl.trim() && result.image_url) setImageUrl(result.image_url);
+      if (!price.trim() && result.price) setPrice(result.price);
+      if (!currency.trim() && result.currency) setCurrency(result.currency);
+      setPreviewMessage(result.image_url || result.title ? "Preview details found — review them before saving." : "No preview details were available.");
+    } catch {
+      setPreviewMessage("Preview unavailable; you can still save this item.");
+    } finally {
+      setPreviewBusy(false);
     }
   }
 
@@ -597,10 +707,18 @@ function EditItemSheet({
           Link (optional)
           <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2000} placeholder="https://…" />
         </label>
+        <button type="button" className="secondary wishlists-preview-button" onClick={() => void previewLink()} disabled={previewBusy || !url.trim()}>
+          {previewBusy ? "Finding preview…" : "Find product details"}
+        </button>
+        {previewMessage && <p className="muted">{previewMessage}</p>}
         <div className="meal-time-row">
           <label>
             Price (optional)
             <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
+          </label>
+          <label>
+            Currency
+            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="GBP" />
           </label>
           <label>
             Quantity
@@ -612,6 +730,7 @@ function EditItemSheet({
             />
           </label>
         </div>
+        {imageUrl && <p className="wishlists-preview-line"><WishlistImage src={imageUrl} alt="Preview" /> Image preview ready</p>}
         <label>
           Note (optional)
           <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
@@ -631,11 +750,17 @@ function EditItemSheet({
 function ShareWishlistSheet({
   homeId,
   wishlistId,
+  detail,
   onClose,
+  onUpdated,
+  onManagePeople,
 }: {
   homeId: string;
   wishlistId: string;
+  detail: WishlistOwnerDetail;
   onClose: () => void;
+  onUpdated: (detail: WishlistOwnerDetail) => void;
+  onManagePeople: () => void;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -645,6 +770,8 @@ function ShareWishlistSheet({
   const [checkedEmail, setCheckedEmail] = useState(false);
   const [guestReveal, setGuestReveal] = useState<GuestShareCreateResponse | null>(null);
   const [copied, setCopied] = useState<"link" | "pin" | null>(null);
+  const [homeVisible, setHomeVisible] = useState(detail.home_visible);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -691,6 +818,21 @@ function ShareWishlistSheet({
       setGuestReveal(result);
     } else {
       onClose();
+    }
+  }
+
+  async function toggleHomeVisibility() {
+    if (visibilityBusy) return;
+    setVisibilityBusy(true);
+    setError("");
+    try {
+      const updated = await api.setWishlistHomeVisibility(homeId, wishlistId, { enabled: !homeVisible });
+      setHomeVisible(updated.home_visible);
+      onUpdated(updated);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not update Home sharing.");
+    } finally {
+      setVisibilityBusy(false);
     }
   }
 
@@ -784,6 +926,18 @@ function ShareWishlistSheet({
 
   return (
     <BottomSheet title="Share wishlist" onDismiss={onClose}>
+      <section className="wishlists-share-section">
+        <div className="wishlists-share-toggle-copy">
+          <strong>Share with your Home</strong>
+          <p className="muted">Everyone in this Home with Wishlists access can view and shop this list. Your own reservation details stay private.</p>
+        </div>
+        <button type="button" className={`toggle ${homeVisible ? "is-on" : ""}`} role="switch" aria-checked={homeVisible} onClick={() => void toggleHomeVisibility()} disabled={visibilityBusy}>
+          <span>{homeVisible ? "On" : "Off"}</span>
+        </button>
+      </section>
+      <button type="button" className="secondary" onClick={onManagePeople}>
+        Manage people ({detail.share_count})
+      </button>
       <form onSubmit={submit}>
         <label>
           Name
