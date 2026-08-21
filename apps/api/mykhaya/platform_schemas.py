@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from mykhaya.models import (
     BillingInterval,
     FeatureKey,
+    IncidentLifecycleState,
     PlatformRole,
     ServiceState,
     SubscriptionPlan,
@@ -503,29 +504,57 @@ class PushTestRequest(SensitiveActionRequest):
     recipient: EmailStr
 
 
-class IncidentCreate(StrictModel):
+# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES's keys —
+# pydantic's Literal needs a statically-known value set, so this can't just
+# import the dict's keys directly.
+PublicServiceKey = Literal[
+    "web_application",
+    "authentication",
+    "api",
+    "email_delivery",
+    "notifications",
+    "background_processing",
+    "billing",
+]
+
+
+class IncidentServiceImpact(StrictModel):
+    service: PublicServiceKey
+    impact: ServiceState
+
+
+class IncidentCreate(SensitiveActionRequest):
     title: str = Field(min_length=3, max_length=160)
+    # The public text for this incident's first timeline update.
     message: str = Field(min_length=3, max_length=1000)
-    service: Literal[
-        "web_application",
-        "authentication",
-        "api",
-        "email_delivery",
-        "notifications",
-        "background_processing",
-    ]
-    state: ServiceState
+    services: list[IncidentServiceImpact] = Field(min_length=1, max_length=10)
+    lifecycle_state: IncidentLifecycleState = IncidentLifecycleState.investigating
     starts_at: datetime | None = None
-    reason: str = Field(min_length=10, max_length=500)
-    confirmed: Literal[True]
+    internal_notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("services")
+    @classmethod
+    def unique_services(cls, value: list[IncidentServiceImpact]) -> list[IncidentServiceImpact]:
+        seen = {row.service for row in value}
+        if len(seen) != len(value):
+            raise ValueError("Each affected service can only be listed once.")
+        return value
 
 
-class IncidentUpdate(StrictModel):
+class IncidentUpdateCreate(SensitiveActionRequest):
+    """Appends one entry to an incident's public timeline — see
+    StatusIncidentUpdate. Never overwrites a previous update; the append-only
+    history is what the public Recent history/Current incidents timeline is
+    built from."""
+
     message: str = Field(min_length=3, max_length=1000)
-    state: ServiceState
+    lifecycle_state: IncidentLifecycleState
+    occurred_at: datetime | None = None
+    # Optional: only services whose impact actually changed at this update
+    # need to be listed — omitted services keep their current impact.
+    service_impacts: list[IncidentServiceImpact] = Field(default_factory=list, max_length=10)
     resolved: bool = False
-    reason: str = Field(min_length=10, max_length=500)
-    confirmed: Literal[True]
+    internal_notes: str | None = Field(default=None, max_length=2000)
 
 
 class PageResponse(BaseModel):

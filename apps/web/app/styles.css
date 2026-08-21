@@ -3614,6 +3614,9 @@ select.icon-row-control {
   border-radius: 0.6rem;
   padding: 1rem;
 }
+.incident + .incident {
+  margin-top: 0.75rem;
+}
 .incident h3 {
   margin: 0;
 }
@@ -3624,15 +3627,116 @@ select.icon-row-control {
   color: #69766f;
   font-size: 0.75rem;
 }
-.history {
+.incident-meta {
   align-items: center;
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
 }
-.history span {
+.incident-state {
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.6rem;
+  text-transform: uppercase;
+}
+.incident-state.investigating,
+.incident-state.identified {
+  background: #f7e2df;
+  color: #973f34;
+}
+.incident-state.monitoring {
+  background: #fff3d8;
+  color: #8a6416;
+}
+.incident-state.resolved {
+  background: #e5f0e8;
+  color: #35664a;
+}
+.incident-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+.incident-services span {
+  background: #eef1ee;
+  border-radius: 999px;
+  color: #445048;
+  font-size: 0.7rem;
+  padding: 0.2rem 0.6rem;
+}
+.incident-timeline {
+  border-top: 1px solid #e4e9e5;
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+}
+.incident-timeline-entry strong {
+  display: block;
+  font-size: 0.78rem;
+}
+.incident-timeline-entry p {
+  color: #3c4741;
+  font-size: 0.85rem;
+  margin: 0.15rem 0 0;
+}
+/* Recent history: resolved incidents grouped by resolution date, each a
+   native <details> so the full public timeline stays out of the way until
+   asked for — keeps the calm-by-default page from turning into a long
+   engineering log by default. */
+.history-group + .history-group {
+  margin-top: 1rem;
+}
+.history-group-heading {
+  color: #64736b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+}
+.history {
+  display: block;
+  padding: 0;
+}
+.history + .history {
+  margin-top: 0.6rem;
+}
+.history summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+  list-style: none;
+  padding: 0.85rem 1rem;
+}
+.history summary::-webkit-details-marker {
+  display: none;
+}
+.history summary strong {
+  font-size: 0.86rem;
+}
+.history summary span {
   color: #64736b;
   font-size: 0.76rem;
+}
+.history[open] summary {
+  border-bottom: 1px solid #e4e9e5;
+}
+.history-body {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem 1rem;
+}
+.history-body p {
+  color: #64736b;
+  font-size: 0.78rem;
+  margin: 0;
 }
 .status-page footer {
   border-top: 1px solid #dfe5e0;

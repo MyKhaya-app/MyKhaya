@@ -16,7 +16,7 @@ const navigation = [
   ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
   ["Settings", "/settings"], ["Modules & Features", "/modules"],
   ["Administrators", "/administrators"], ["Security", "/security"], ["Audit", "/audit"],
-  ["Public Status", "/incidents"],
+  ["Status & Incidents", "/incidents"],
 ] as const;
 
 export function PlatformShell({ children }: { children: React.ReactNode }) {

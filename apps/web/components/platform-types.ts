@@ -346,3 +346,78 @@ export const PLATFORM_ROLES: { value: string; label: string }[] = [
   { value: "support_operator", label: "Support" },
   { value: "read_only_operator", label: "Read-only" },
 ];
+
+// Status & Incidents (Platform Control Centre's /incidents pages) — shared
+// between the list+create page and the detail+update page, mirroring
+// mykhaya.routers.platform's /platform/incidents* response shapes.
+
+export type ServiceState =
+  | "operational"
+  | "degraded_performance"
+  | "partial_outage"
+  | "major_outage"
+  | "maintenance";
+
+export type IncidentLifecycleState = "investigating" | "identified" | "monitoring" | "resolved";
+
+export type PublicServiceKey =
+  | "web_application"
+  | "authentication"
+  | "api"
+  | "email_delivery"
+  | "notifications"
+  | "background_processing"
+  | "billing";
+
+export const PUBLIC_SERVICE_OPTIONS: { key: PublicServiceKey; name: string }[] = [
+  { key: "web_application", name: "MyKhaya Web Application" },
+  { key: "authentication", name: "Authentication" },
+  { key: "api", name: "API" },
+  { key: "email_delivery", name: "Email Delivery" },
+  { key: "notifications", name: "Notifications" },
+  { key: "background_processing", name: "Background Processing" },
+  { key: "billing", name: "Billing & Subscriptions" },
+];
+
+export type IncidentServiceImpact = { service: string; impact: ServiceState };
+
+export type StatusServiceState = { key: string; name: string; state: ServiceState };
+
+export type StatusIncidentSummary = {
+  id: string;
+  title: string;
+  lifecycle_state: IncidentLifecycleState;
+  services: IncidentServiceImpact[];
+  starts_at: string;
+  resolved_at: string | null;
+  latest_update_message: string;
+  latest_update_at: string;
+};
+
+export type IncidentsListResponse = {
+  overall: ServiceState;
+  overall_message: string;
+  services: StatusServiceState[];
+  incidents: StatusIncidentSummary[];
+};
+
+export type StatusIncidentUpdateEntry = {
+  id: string;
+  lifecycle_state: IncidentLifecycleState;
+  message: string;
+  occurred_at: string;
+  created_by_display_name: string | null;
+  created_at: string;
+};
+
+export type StatusIncidentDetail = {
+  id: string;
+  title: string;
+  lifecycle_state: IncidentLifecycleState;
+  services: IncidentServiceImpact[];
+  starts_at: string;
+  resolved_at: string | null;
+  internal_notes: string | null;
+  created_at: string;
+  updates: StatusIncidentUpdateEntry[];
+};

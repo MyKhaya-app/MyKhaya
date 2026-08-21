@@ -79,6 +79,8 @@ from mykhaya.models import (
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    StatusIncidentService,
+    StatusIncidentUpdate,
     StripeBillingDiagnostic,
     StripeMode,
     StripeWebhookEvent,
@@ -137,7 +139,7 @@ from mykhaya.platform_schemas import (
     HomeAdministratorSummary,
     HomeSubscriptionResponse,
     IncidentCreate,
-    IncidentUpdate,
+    IncidentUpdateCreate,
     InvitationState,
     MfaPolicyResponse,
     MfaPolicyUpdate,
@@ -224,6 +226,13 @@ from mykhaya.security import (
     normalise_email,
     password_hash,
     verify_password,
+)
+from mykhaya.status_aggregation import (
+    PUBLIC_SERVICES,
+    highest_severity,
+    is_incident_active,
+    overall_message,
+    service_states_from_impacts,
 )
 
 router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
@@ -4762,7 +4771,7 @@ async def inspect_stripe_checkout(
         subscription_status = subscription.get("status")
         items = (subscription.get("items") or {}).get("data") or []
         if items:
-            price_id = ((items[0].get("price") or {}).get("id"))
+            price_id = (items[0].get("price") or {}).get("id")
     elif subscription_id:
         try:
             stripe_subscription = await call_stripe(
@@ -4782,7 +4791,7 @@ async def inspect_stripe_checkout(
         subscription_status = stripe_subscription.get("status")
         items = (stripe_subscription.get("items") or {}).get("data") or []
         if items:
-            price_id = ((items[0].get("price") or {}).get("id"))
+            price_id = (items[0].get("price") or {}).get("id")
     configured_prices = {config.family_monthly_price_id, config.family_annual_price_id}
     metadata_group = (session.get("metadata") or {}).get("mykhaya_group_id")
     reference_group = session.get("client_reference_id")
@@ -5265,27 +5274,126 @@ async def test_notification_template(
     return {"message": "Test email sent."}
 
 
+async def _incident_services_and_updates(
+    db: AsyncSession, incident_ids: list[uuid.UUID]
+) -> tuple[
+    dict[uuid.UUID, list[StatusIncidentService]], dict[uuid.UUID, list[StatusIncidentUpdate]]
+]:
+    services: dict[uuid.UUID, list[StatusIncidentService]] = {row_id: [] for row_id in incident_ids}
+    updates: dict[uuid.UUID, list[StatusIncidentUpdate]] = {row_id: [] for row_id in incident_ids}
+    if not incident_ids:
+        return services, updates
+    for service_row in await db.scalars(
+        select(StatusIncidentService).where(StatusIncidentService.incident_id.in_(incident_ids))
+    ):
+        services[service_row.incident_id].append(service_row)
+    for update_row in await db.scalars(
+        select(StatusIncidentUpdate)
+        .where(StatusIncidentUpdate.incident_id.in_(incident_ids))
+        .order_by(StatusIncidentUpdate.occurred_at)
+    ):
+        updates[update_row.incident_id].append(update_row)
+    return services, updates
+
+
+def _incident_list_item(
+    row: PublicIncident, services: list[StatusIncidentService], updates: list[StatusIncidentUpdate]
+) -> dict[str, Any]:
+    latest = updates[-1] if updates else None
+    return {
+        "id": row.id,
+        "title": row.title,
+        "lifecycle_state": row.lifecycle_state,
+        "services": [{"service": entry.service, "impact": entry.impact} for entry in services],
+        "starts_at": row.starts_at,
+        "resolved_at": row.resolved_at,
+        "latest_update_message": latest.message if latest else row.message,
+        "latest_update_at": latest.occurred_at if latest else row.starts_at,
+    }
+
+
 @router.get("/incidents")
 async def incidents(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     rows = (
         await db.scalars(
             select(PublicIncident).order_by(PublicIncident.starts_at.desc()).limit(100)
         )
     ).all()
-    return [
-        {
-            "id": row.id,
-            "title": row.title,
-            "message": row.message,
-            "service": row.service,
-            "state": row.state,
-            "starts_at": row.starts_at,
-            "resolved_at": row.resolved_at,
-        }
+    services_by_incident, updates_by_incident = await _incident_services_and_updates(
+        db, [row.id for row in rows]
+    )
+    now = datetime.now(UTC)
+    active_impacts = [
+        (entry.service, entry.impact)
         for row in rows
+        if is_incident_active(row.starts_at, row.resolved_at, now=now)
+        for entry in services_by_incident[row.id]
     ]
+    service_states = service_states_from_impacts(active_impacts)
+    overall = highest_severity(list(service_states.values()))
+    return {
+        "overall": overall,
+        "overall_message": overall_message(overall),
+        "services": [
+            {"key": key, "name": label, "state": service_states[key]}
+            for key, label in PUBLIC_SERVICES.items()
+        ],
+        "incidents": [
+            _incident_list_item(row, services_by_incident[row.id], updates_by_incident[row.id])
+            for row in rows
+        ],
+    }
+
+
+@router.get("/incidents/{incident_id}")
+async def incident_detail(
+    incident_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    row = await db.get(PublicIncident, incident_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    services_by_incident, updates_by_incident = await _incident_services_and_updates(db, [row.id])
+    updates = updates_by_incident[row.id]
+    authors = (
+        {
+            admin.id: admin.display_name
+            for admin in await db.scalars(
+                select(PlatformAdministrator).where(
+                    PlatformAdministrator.id.in_({update.created_by for update in updates})
+                )
+            )
+        }
+        if updates
+        else {}
+    )
+    return {
+        "id": row.id,
+        "title": row.title,
+        "lifecycle_state": row.lifecycle_state,
+        "services": [
+            {"service": entry.service, "impact": entry.impact}
+            for entry in services_by_incident[row.id]
+        ],
+        "starts_at": row.starts_at,
+        "resolved_at": row.resolved_at,
+        "internal_notes": row.internal_notes,
+        "created_at": row.created_at,
+        "updates": [
+            {
+                "id": update.id,
+                "lifecycle_state": update.lifecycle_state,
+                "message": update.message,
+                "occurred_at": update.occurred_at,
+                "created_by_display_name": authors.get(update.created_by),
+                "created_at": update.created_at,
+            }
+            for update in updates
+        ],
+    }
 
 
 @router.post("/incidents", status_code=status.HTTP_201_CREATED)
@@ -5297,16 +5405,37 @@ async def create_incident(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    starts_at = body.starts_at or datetime.now(UTC)
+    # The legacy single-service `service`/`state` columns are populated from
+    # the first affected service purely so any code still reading them
+    # (e.g. an older PCC build mid-deploy) sees a sane value — the real,
+    # authoritative multi-service data lives in StatusIncidentService.
+    primary = body.services[0]
     row = PublicIncident(
         title=body.title.strip(),
         message=body.message.strip(),
-        service=body.service,
-        state=body.state,
-        starts_at=body.starts_at or datetime.now(UTC),
+        service=primary.service,
+        state=primary.impact,
+        lifecycle_state=body.lifecycle_state,
+        starts_at=starts_at,
+        internal_notes=body.internal_notes.strip() if body.internal_notes else None,
         created_by=context.administrator.id,
     )
     db.add(row)
     await db.flush()
+    for entry in body.services:
+        db.add(
+            StatusIncidentService(incident_id=row.id, service=entry.service, impact=entry.impact)
+        )
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=body.lifecycle_state,
+            message=row.message,
+            occurred_at=starts_at,
+            created_by=context.administrator.id,
+        )
+    )
     platform_audit(
         db,
         request,
@@ -5315,16 +5444,22 @@ async def create_incident(
         "incident",
         row.id,
         reason=body.reason,
-        new={"title": row.title, "service": row.service, "state": row.state.value},
+        new={
+            "title": row.title,
+            "lifecycle_state": row.lifecycle_state.value,
+            "services": [
+                {"service": entry.service, "impact": entry.impact.value} for entry in body.services
+            ],
+        },
     )
     await db.commit()
-    return {"id": row.id, "title": row.title, "state": row.state}
+    return {"id": row.id, "title": row.title, "lifecycle_state": row.lifecycle_state}
 
 
-@router.patch("/incidents/{incident_id}")
-async def update_incident(
+@router.post("/incidents/{incident_id}/updates", status_code=status.HTTP_201_CREATED)
+async def create_incident_update(
     incident_id: uuid.UUID,
-    body: IncidentUpdate,
+    body: IncidentUpdateCreate,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
@@ -5335,23 +5470,77 @@ async def update_incident(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
     previous = {
-        "message": row.message,
-        "state": row.state.value,
+        "lifecycle_state": row.lifecycle_state.value,
         "resolved": row.resolved_at is not None,
     }
-    row.message = body.message.strip()
-    row.state = body.state
-    row.resolved_at = datetime.now(UTC) if body.resolved else None
+    occurred_at = body.occurred_at or datetime.now(UTC)
+    row.lifecycle_state = body.lifecycle_state
+    if body.internal_notes is not None:
+        row.internal_notes = body.internal_notes.strip() or None
+    newly_resolved = body.resolved and row.resolved_at is None
+    if body.resolved:
+        row.resolved_at = row.resolved_at or datetime.now(UTC)
+    else:
+        row.resolved_at = None
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=body.lifecycle_state,
+            message=body.message.strip(),
+            occurred_at=occurred_at,
+            created_by=context.administrator.id,
+        )
+    )
+    for impact_entry in body.service_impacts:
+        existing = await db.scalar(
+            select(StatusIncidentService).where(
+                StatusIncidentService.incident_id == row.id,
+                StatusIncidentService.service == impact_entry.service,
+            )
+        )
+        if existing is not None:
+            existing.impact = impact_entry.impact
+        else:
+            db.add(
+                StatusIncidentService(
+                    incident_id=row.id, service=impact_entry.service, impact=impact_entry.impact
+                )
+            )
+    # When an incident resolves, the services it affected return to their
+    # appropriate current state automatically — status_aggregation only
+    # ever derives a service's public state from *active* incidents (see
+    # is_incident_active), so simply setting resolved_at above is what
+    # takes this incident's impact out of the calculation. If another
+    # active incident still affects the same service, that incident's
+    # impact continues to apply — see status_aggregation.
     platform_audit(
         db,
         request,
         context,
-        "status.incident_updated",
+        "status.incident_update_created",
         "incident",
         row.id,
         reason=body.reason,
         previous=previous,
-        new={"message": row.message, "state": row.state.value, "resolved": body.resolved},
+        new={
+            "lifecycle_state": row.lifecycle_state.value,
+            "resolved": body.resolved,
+            "service_impacts": [
+                {"service": entry.service, "impact": entry.impact.value}
+                for entry in body.service_impacts
+            ],
+        },
     )
+    if newly_resolved:
+        platform_audit(
+            db,
+            request,
+            context,
+            "status.incident_resolved",
+            "incident",
+            row.id,
+            reason=body.reason,
+            new={"resolved_at": row.resolved_at.isoformat() if row.resolved_at else None},
+        )
     await db.commit()
-    return {"id": row.id, "state": row.state, "resolved_at": row.resolved_at}
+    return {"id": row.id, "lifecycle_state": row.lifecycle_state, "resolved_at": row.resolved_at}

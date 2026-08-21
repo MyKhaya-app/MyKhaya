@@ -660,9 +660,7 @@ class UserPasskey(UuidTimeMixin, Base):
     """
 
     __tablename__ = "user_passkeys"
-    __table_args__ = (
-        Index("ix_user_passkeys_user_active", "user_id", "revoked_at"),
-    )
+    __table_args__ = (Index("ix_user_passkeys_user_active", "user_id", "revoked_at"),)
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -901,20 +899,115 @@ class GuardianAssignment(UuidTimeMixin, Base):
     )
 
 
+class IncidentLifecycleState(StrEnum):
+    """Where a status incident sits in its own investigation/communication
+    process — distinct from ServiceState, which is the customer-facing
+    *impact* an incident (or one of its affected services) has. A single
+    incident's lifecycle_state changes over time via its
+    StatusIncidentUpdate timeline; each affected service's ServiceState
+    impact (StatusIncidentService.impact) can independently change
+    alongside it (e.g. Monitoring + Degraded, once a fix is deployed but
+    not yet fully confirmed)."""
+
+    investigating = "investigating"
+    identified = "identified"
+    monitoring = "monitoring"
+    resolved = "resolved"
+
+
 class PublicIncident(UuidTimeMixin, Base):
+    """A customer-facing status incident (Platform Control Centre's "Status
+    & Incidents"). `service`/`state` are the pre-timeline single-service
+    columns this table originally had — kept, now nullable, only so
+    pre-existing rows stay readable; new code reads affected services and
+    their impact from StatusIncidentService instead, and public/lifecycle
+    history from StatusIncidentUpdate. See migration
+    0040_status_incident_timeline for the additive change that introduced
+    multi-service support and the update timeline."""
+
     __tablename__ = "public_incidents"
     title: Mapped[str] = mapped_column(String(160))
+    # The ORIGINAL public message (the first StatusIncidentUpdate's message
+    # duplicates this) — kept as a quick-reference/legacy-compat column,
+    # not re-read by new incident-detail code, which sources public text
+    # from the update timeline.
     message: Mapped[str] = mapped_column(String(1000))
-    service: Mapped[str] = mapped_column(String(40))
-    state: Mapped[ServiceState] = mapped_column(
+    service: Mapped[str | None] = mapped_column(String(40))
+    state: Mapped[ServiceState | None] = mapped_column(
         Enum(
             ServiceState,
             name="service_state",
             values_callable=lambda enum: [item.value for item in enum],
         )
     )
+    lifecycle_state: Mapped[IncidentLifecycleState] = mapped_column(
+        Enum(
+            IncidentLifecycleState,
+            name="incident_lifecycle_state",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=IncidentLifecycleState.investigating,
+    )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Platform-Admin-only context (e.g. the real Stripe error behind a
+    # "Billing & Subscriptions — Degraded Performance" public incident) —
+    # never returned by the public /status endpoint. See
+    # routers.status/.platform for the enforced boundary.
+    internal_notes: Mapped[str | None] = mapped_column(String(2000))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="RESTRICT")
+    )
+
+
+class StatusIncidentService(UuidTimeMixin, Base):
+    """One monitored service an incident affects, and the customer-facing
+    impact (ServiceState) it has on that service specifically — an incident
+    can list several of these, so e.g. a Stripe outage can mark Billing &
+    Subscriptions "Major Outage" while leaving other services untouched.
+    See status_aggregation.service_states_from_impacts for how several
+    concurrently-active incidents against the same service combine (highest
+    severity wins)."""
+
+    __tablename__ = "status_incident_services"
+    __table_args__ = (UniqueConstraint("incident_id", "service", name="uq_incident_service"),)
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="CASCADE"), index=True
+    )
+    service: Mapped[str] = mapped_column(String(40))
+    impact: Mapped[ServiceState] = mapped_column(
+        Enum(
+            ServiceState,
+            name="service_state",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+
+
+class StatusIncidentUpdate(UuidTimeMixin, Base):
+    """One entry in an incident's append-only public timeline (see the
+    task's worked example: Investigating -> Identified -> Monitoring ->
+    Resolved, each with its own message and timestamp). `occurred_at` is
+    the publicly-displayed time of the update — administrator-editable
+    (e.g. to backdate an update recorded after the fact) — while
+    UuidTimeMixin's `created_at` is when the row itself was written, for
+    audit purposes only."""
+
+    __tablename__ = "status_incident_updates"
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="CASCADE"), index=True
+    )
+    lifecycle_state: Mapped[IncidentLifecycleState] = mapped_column(
+        Enum(
+            IncidentLifecycleState,
+            name="incident_lifecycle_state",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+    message: Mapped[str] = mapped_column(String(1000))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="RESTRICT")
     )
