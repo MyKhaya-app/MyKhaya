@@ -124,17 +124,21 @@ export function AppShell({
 
   useEffect(() => {
     // A Home-less user has a legitimate reason to be here: a brand-new Free
-    // account created solely to accept an externally shared calendar (see
-    // app/calendar-shares/accept/page.tsx) must land on that invitation, not
-    // get bounced into onboarding first — see docs on external Calendar
-    // Sharing, "signup preservation."
+    // account created solely to accept (or manage) an externally shared
+    // calendar (see app/calendar-shares/accept/page.tsx and
+    // app/calendar/shared/page.tsx) must be able to reach and use that
+    // invitation/list, not get bounced into onboarding first — see docs on
+    // external Calendar Sharing, "signup preservation" and "Home-less Free
+    // account UX." They may still choose "Create your own Home" from there;
+    // it's just never forced.
     if (
       authState === "ready" &&
       !homesError &&
       !loading &&
       !homes.length &&
       path !== "/onboarding" &&
-      path !== "/calendar-shares/accept"
+      path !== "/calendar-shares/accept" &&
+      path !== "/calendar/shared"
     )
       router.replace("/onboarding");
   }, [authState, homes, homesError, loading, path, router]);

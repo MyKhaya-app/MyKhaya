@@ -115,6 +115,14 @@ export interface EventOccurrence {
   reminder_minutes: number | null;
   created_by: string;
   updated_at: string;
+  // Present only on an occurrence merged in from an externally shared
+  // calendar (see app/calendar/page.tsx's load()) — the backend's own
+  // EventOccurrence schema never sets these; they're attached client-side
+  // from the CalendarShare the occurrence came from. Absent/undefined for
+  // every one of the signed-in user's own Home events.
+  share_id?: string;
+  share_permission?: CalendarSharePermission;
+  shared_by_home_name?: string;
 }
 
 export interface EventPayload {
@@ -189,6 +197,31 @@ export interface EventUpdatePayload extends Omit<EventPayload, "calendar_id"> {
   expected_updated_at: string;
 }
 
+// The narrower body an external "Can add & edit" recipient submits to
+// /calendar-shares/{share_id}/events — no member_ids, label_id or
+// calendar_id (StrictModel rejects them; a shared event can't be assigned
+// to Home members or a Home-owned category the recipient isn't authorised
+// to use — see mykhaya.schemas.SharedEventCreate/SharedEventUpdate).
+export interface SharedEventPayload {
+  title: string;
+  start_at: string;
+  end_at: string;
+  timezone: string;
+  is_all_day: boolean;
+  description?: string | null;
+  location_text?: string | null;
+  reminder_minutes?: number | null;
+  recurrence?: RecurrencePattern;
+  recurrence_interval?: number;
+  recurrence_until?: string | null;
+  recurrence_end_date?: string | null;
+  recurrence_count?: number | null;
+}
+
+export interface SharedEventUpdatePayload extends SharedEventPayload {
+  expected_updated_at: string;
+}
+
 export interface EventActivity {
   id: string;
   action: string;
@@ -251,6 +284,7 @@ export interface CalendarShare {
   id: string;
   calendar_id: string;
   calendar_name: string;
+  calendar_color: string | null;
   source_group_id: string;
   source_group_name: string;
   recipient_email: string;
@@ -265,6 +299,12 @@ export interface CalendarShare {
   revoked_at: string | null;
   notification_preference: "all" | "important" | "off";
   include_in_briefing: boolean;
+  // null = the entire calendar is shared (the default). A list of
+  // CalendarEventLabel ids = only events carrying one of those categories
+  // are exposed through this share — a filter over the same Home calendar,
+  // never a second calendar. See routers.calendar_sharing's
+  // category_ids/event_matches_share.
+  category_ids: string[] | null;
   created_at: string;
 }
 
@@ -275,6 +315,7 @@ export interface CalendarSharePreview {
   permission: CalendarSharePermission;
   recipient_email: string;
   expires_at: string;
+  category_names: string[] | null;
 }
 
 export interface HomeSummary {

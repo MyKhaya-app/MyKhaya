@@ -22,6 +22,7 @@ from mykhaya.config import Settings
 from mykhaya.models import CalendarEvent, CalendarShare, CalendarShareStatus
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.visibility import event_matches_share
 
 _TITLES = {
     "created": "New event",
@@ -90,6 +91,8 @@ async def notify_calendar_share_recipients(
         if share.notification_preference == "off":
             continue
         if share.notification_preference == "important" and action == "created":
+            continue
+        if not event_matches_share(event, share):
             continue
         await notify(
             db,

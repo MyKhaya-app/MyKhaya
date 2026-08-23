@@ -2214,6 +2214,12 @@ textarea {
      ellipsis` above guarantees the title always starts from its first
      character and only ever truncates at the right. */
 }
+.month-event-shared-icon {
+  flex-shrink: 0;
+  margin-right: 0.2rem;
+  opacity: 0.75;
+  vertical-align: -1px;
+}
 .calendar-day.outside {
   background: #f9f6f1;
   color: #a3aaa8;
@@ -2320,6 +2326,18 @@ textarea {
 .event-copy strong,
 .event-copy small {
   overflow-wrap: anywhere;
+}
+.shared-calendar-badge {
+  color: var(--colour-muted);
+  display: inline-flex;
+  margin-left: 0.35rem;
+  vertical-align: -2px;
+}
+.shared-calendar-attribution {
+  align-items: center;
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
 }
 .event-copy small,
 .hint,
@@ -2838,6 +2856,38 @@ select.icon-row-control {
 .colour-dot:hover {
   box-shadow: 0 0 0 1px #ddd8ce;
   transform: none;
+}
+.calendar-visibility-list {
+  display: grid;
+  gap: 1.25rem;
+}
+.calendar-visibility-group {
+  display: grid;
+  gap: 0.6rem;
+}
+.calendar-visibility-row {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+}
+.calendar-visibility-row .colour-dot {
+  height: 16px;
+  width: 16px;
+}
+.calendar-visibility-name {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.calendar-visibility-name small {
+  color: var(--colour-muted);
+  font-weight: 400;
+}
+.calendar-shared-home-cta {
+  margin-bottom: 1.25rem;
 }
 .label-name-button {
   background: none;

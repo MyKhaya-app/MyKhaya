@@ -4,7 +4,9 @@ import {
   agendaRange,
   applyAllDayToggle,
   canDeleteEvent,
+  canDeleteSharedEvent,
   canEditEvent,
+  canEditSharedEvent,
   computeInitialWhen,
   DEFAULT_EVENT_DURATION_MINUTES,
   DEFAULT_EVENT_END_TIME,
@@ -13,14 +15,18 @@ import {
   eventDateBounds,
   eventInDateWindow,
   eventsForDay,
+  filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
+  isCalendarVisible,
   monthCells,
   monthRange,
   parseLocalInputValue,
   resolveMemberFilter,
   shiftEndWithStart,
   toEventUpdatePayload,
+  toSharedEventPayload,
+  toSharedEventUpdatePayload,
   utcToZonedInputValue,
   zonedDateKey,
   zonedTimeToUtc,
@@ -1054,5 +1060,133 @@ describe("toEventUpdatePayload", () => {
     expect(toEventUpdatePayload(payload, "2026-08-01T00:00:00+00:00").recurrence_end_date).toBe(
       "2026-09-18",
     );
+  });
+});
+
+// External Calendar Sharing — an occurrence merged in from a shared calendar
+// (see CalendarPage.load in app/calendar/page.tsx) carries its own
+// share_id/share_permission/shared_by_home_name instead of relying on the
+// viewer's Home capabilities, since an external recipient may have none at
+// all (they're not a Home member). Mirrors
+// apps/api/mykhaya/routers/calendar_sharing.py's `_require_my_share(...,
+// need_manage=True)` exactly.
+describe("Shared-calendar permission and visibility helpers", () => {
+  function sharedEvent(overrides: Partial<EventOccurrence> = {}): EventOccurrence {
+    return {
+      occurrence_id: crypto.randomUUID(),
+      event_id: crypto.randomUUID(),
+      calendar_id: "shared-calendar-1",
+      title: "School play",
+      is_all_day: false,
+      start_at: "2026-08-20T08:00:00+00:00",
+      end_at: "2026-08-20T09:00:00+00:00",
+      timezone: "Europe/London",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: "teal",
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "someone-else",
+      updated_at: "2026-07-01T00:00:00+00:00",
+      share_id: "share-1",
+      share_permission: "view",
+      shared_by_home_name: "Smith Home",
+      ...overrides,
+    };
+  }
+
+  describe("canEditSharedEvent / canDeleteSharedEvent", () => {
+    it("a view-only share grants neither edit nor delete", () => {
+      const viewOnly = sharedEvent({ share_permission: "view" });
+      expect(canEditSharedEvent(viewOnly)).toBe(false);
+      expect(canDeleteSharedEvent(viewOnly)).toBe(false);
+    });
+
+    it("a manage share grants both edit and delete", () => {
+      const manage = sharedEvent({ share_permission: "manage" });
+      expect(canEditSharedEvent(manage)).toBe(true);
+      expect(canDeleteSharedEvent(manage)).toBe(true);
+    });
+  });
+
+  describe("isCalendarVisible / filterByVisibleCalendars", () => {
+    it("a shared event is visible unless its share_id is hidden — its calendar_id is irrelevant", () => {
+      const visible = sharedEvent({ share_id: "share-1", calendar_id: "cal-x" });
+      expect(isCalendarVisible(visible, new Set(["share-1"]))).toBe(false);
+      expect(isCalendarVisible(visible, new Set(["cal-x"]))).toBe(true);
+      expect(isCalendarVisible(visible, new Set())).toBe(true);
+    });
+
+    it("a Home's own event (no share_id) is keyed by calendar_id", () => {
+      const own = sharedEvent({ share_id: undefined, calendar_id: "home-cal-1" });
+      expect(isCalendarVisible(own, new Set(["home-cal-1"]))).toBe(false);
+      expect(isCalendarVisible(own, new Set(["some-other-id"]))).toBe(true);
+    });
+
+    it("filterByVisibleCalendars drops only the hidden ones, from a mixed list", () => {
+      const events = [
+        sharedEvent({ share_id: "share-1" }),
+        sharedEvent({ share_id: "share-2" }),
+        sharedEvent({ share_id: undefined, calendar_id: "home-cal-1" }),
+      ];
+      const result = filterByVisibleCalendars(events, new Set(["share-1"]));
+      expect(result.map((event) => event.share_id ?? event.calendar_id)).toEqual([
+        "share-2",
+        "home-cal-1",
+      ]);
+    });
+
+    it("an empty hidden set returns every event unchanged", () => {
+      const events = [sharedEvent(), sharedEvent({ share_id: undefined })];
+      expect(filterByVisibleCalendars(events, new Set())).toBe(events);
+    });
+  });
+
+  describe("toSharedEventPayload / toSharedEventUpdatePayload", () => {
+    it("drops member_ids, label_id and calendar_id — a shared event can't carry either", () => {
+      const payload: EventPayload = {
+        title: "Sports day",
+        start_at: "2026-08-20T08:00:00+00:00",
+        end_at: "2026-08-20T09:00:00+00:00",
+        timezone: "Europe/London",
+        is_all_day: false,
+        description: "Bring boots",
+        location_text: "Field",
+        label_id: "some-label-id",
+        calendar_id: "some-calendar-id",
+        member_ids: ["user-1", "user-2"],
+        reminder_minutes: 30,
+        recurrence: "none",
+        recurrence_interval: 1,
+        recurrence_until: null,
+        recurrence_end_date: null,
+        recurrence_count: null,
+      };
+      const result = toSharedEventPayload(payload);
+      expect(result).not.toHaveProperty("member_ids");
+      expect(result).not.toHaveProperty("label_id");
+      expect(result).not.toHaveProperty("calendar_id");
+      expect(result).toEqual({
+        title: "Sports day",
+        start_at: payload.start_at,
+        end_at: payload.end_at,
+        timezone: "Europe/London",
+        is_all_day: false,
+        description: "Bring boots",
+        location_text: "Field",
+        reminder_minutes: 30,
+        recurrence: "none",
+        recurrence_interval: 1,
+        recurrence_until: null,
+        recurrence_end_date: null,
+        recurrence_count: null,
+      });
+
+      const updatable = toSharedEventUpdatePayload(payload, "2026-08-01T00:00:00+00:00");
+      expect(updatable.expected_updated_at).toBe("2026-08-01T00:00:00+00:00");
+      expect(updatable).not.toHaveProperty("member_ids");
+    });
   });
 });

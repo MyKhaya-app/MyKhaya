@@ -1,5 +1,6 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { Lock } from "lucide-react";
 import type { CalendarUsage, EventLabel, Home, HomeCalendar } from "@mykhaya/shared-types";
 import { resolveColour, type ColourKey } from "@mykhaya/design-tokens";
@@ -154,10 +155,11 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
 
   return (
     <section className="card details">
-      <h2>Calendars &amp; categories</h2>
+      <h2>Categories</h2>
       <p className="muted">
-        Every event belongs to one of these — its colour, not who created it, is what
-        shows on Calendar.
+        Categories colour and tag events on your Home calendar — who it&rsquo;s mainly
+        for, or what type of event it is. They&rsquo;re not separate calendars; see{" "}
+        <Link href="/calendar/calendars">Home calendars</Link> for that.
       </p>
       <FormStatus
         message={status.kind === "success" ? status.message : undefined}
@@ -274,7 +276,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
       {canAddMore ? (
         <form className="label-create-form" onSubmit={createLabel}>
           <label>
-            New calendar or category
+            New category
             <input
               type="text"
               value={newName}
@@ -288,7 +290,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
               type="button"
               className="colour-dot"
               style={{ "--swatch-colour": resolveColour(newColour) } as React.CSSProperties}
-              aria-label="Change new calendar colour"
+              aria-label="Change new category colour"
               aria-expanded={newColourOpen}
               onClick={() => setNewColourOpen((open) => !open)}
             />
@@ -301,7 +303,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
                 setNewColour(colour);
                 setNewColourOpen(false);
               }}
-              groupLabel="New calendar colour"
+              groupLabel="New category colour"
               disabled={busy}
             />
           )}

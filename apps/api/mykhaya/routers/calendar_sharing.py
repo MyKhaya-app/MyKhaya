@@ -19,8 +19,14 @@ through routers.calendar's `/homes/{home_id}/...` endpoints (an external recipie
 no Membership row for that Home, so `require_capability`/`membership_for` there would
 always 404 them) — the `/calendar-shares/{share_id}/events...` endpoints below are the
 external recipient's narrower, share-scoped equivalent: no member assignment, no
-category/label selection, no calendar settings, and never any endpoint that lets them
-see another calendar or another Home's data.
+*creating/choosing* a category (a category is Home-owned structure the recipient isn't
+authorised to manage — see SharedEventCreate/Update), no calendar settings, and never
+any endpoint that lets them see another calendar or another Home's data. An existing
+event's category *is* shown read-only when the calendar sharing it wasn't
+category-scoped enough to already have filtered it out — see
+CalendarShare.category_ids for the "share only these categories" filter, applied by
+notifications.visibility.event_matches_share everywhere a shared event's visibility is
+decided (list, view/notify, briefing).
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
 from mykhaya.models import (
     CalendarEvent,
+    CalendarEventLabel,
     CalendarShare,
     CalendarSharePermission,
     CalendarShareStatus,
@@ -61,14 +68,16 @@ from mykhaya.notifications.calendar_shares import notify_calendar_share_recipien
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
+from mykhaya.notifications.visibility import event_matches_share
 from mykhaya.rate_limit import enforce_rate_limit
 
 # Reused, not duplicated: these are the exact same event-response/activity-logging
 # helpers routers.calendar's own event endpoints use — see that module's
 # docstrings on _occurrence/_record_activity.
-from mykhaya.routers.calendar import _occurrence, _record_activity
+from mykhaya.routers.calendar import _label_map, _occurrence, _record_activity
 from mykhaya.schemas import (
     CalendarShareAccept,
+    CalendarShareCategoriesUpdate,
     CalendarShareCreate,
     CalendarShareDecline,
     CalendarShareListResponse,
@@ -107,6 +116,42 @@ async def _get_calendar(
     if calendar is None or calendar.group_id != home_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
     return calendar
+
+
+async def _validate_category_ids(
+    db: AsyncSession,
+    home_id: uuid.UUID,
+    calendar: HomeCalendar,
+    category_ids: list[uuid.UUID] | None,
+) -> list[str] | None:
+    """`None` (share the whole calendar) always passes straight through. A
+    Personal Calendar has no categories at all, so any non-empty list there
+    is rejected outright — matching create_event's own "Personal Calendar
+    events are never categorised" rule. Otherwise every id must be a real,
+    active category belonging to *this* Home — never another Home's, and
+    never used to probe which ids exist elsewhere."""
+    if category_ids is None:
+        return None
+    if calendar.owner_user_id is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A Personal Calendar has no categories to choose from.",
+        )
+    if not category_ids:
+        return []
+    rows = (
+        await db.scalars(
+            select(CalendarEventLabel.id).where(
+                CalendarEventLabel.group_id == home_id,
+                CalendarEventLabel.id.in_(category_ids),
+            )
+        )
+    ).all()
+    if set(rows) != set(category_ids):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "That category could not be found"
+        )
+    return [str(value) for value in category_ids]
 
 
 def _has_authority_over_calendar(membership: Membership, calendar: HomeCalendar) -> bool:
@@ -158,6 +203,7 @@ async def _share_response(db: AsyncSession, share: CalendarShare) -> CalendarSha
         id=share.id,
         calendar_id=share.calendar_id,
         calendar_name=calendar.name if calendar is not None else "Deleted calendar",
+        calendar_color=calendar.color if calendar is not None else None,
         source_group_id=share.source_group_id,
         source_group_name=home.name if home is not None else "",
         recipient_email=share.recipient_email,
@@ -174,6 +220,9 @@ async def _share_response(db: AsyncSession, share: CalendarShare) -> CalendarSha
         revoked_at=share.revoked_at,
         notification_preference=share.notification_preference,
         include_in_briefing=share.include_in_briefing,
+        category_ids=[uuid.UUID(value) for value in share.category_ids]
+        if share.category_ids is not None
+        else None,
         created_at=share.created_at,
     )
 
@@ -261,6 +310,8 @@ async def create_share(
             "An active or pending share already exists for that address.",
         )
 
+    category_ids = await _validate_category_ids(db, home_id, calendar, body.category_ids)
+
     direct = _has_direct_send_authority(membership, calendar)
     share = CalendarShare(
         calendar_id=calendar.id,
@@ -274,6 +325,7 @@ async def create_share(
         else CalendarShareStatus.pending_admin_approval,
         token_hash=hash_secret(str(uuid.uuid4()), settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(days=7),
+        category_ids=category_ids,
     )
     db.add(share)
     await db.flush()
@@ -441,6 +493,47 @@ async def change_permission(
     return await _share_response(db, share)
 
 
+@router.post("/{share_id}/categories", response_model=CalendarShareResponse)
+async def change_categories(
+    home_id: uuid.UUID,
+    share_id: uuid.UUID,
+    body: CalendarShareCategoriesUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> CalendarShareResponse:
+    """Changes which categories a share exposes — takes effect immediately,
+    the same as change_permission, and never requires a new invitation."""
+    await _require_calendar_sharing_feature(home_id, db)
+    share = await db.scalar(
+        select(CalendarShare)
+        .where(CalendarShare.id == share_id, CalendarShare.source_group_id == home_id)
+        .with_for_update()
+    )
+    if share is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That share could not be found")
+    await _require_source_authority(db, share, auth)
+    if share.status in {CalendarShareStatus.declined, CalendarShareStatus.revoked}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This share is no longer active.")
+    calendar = await db.get(HomeCalendar, share.calendar_id)
+    if calendar is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+    old = share.category_ids
+    share.category_ids = await _validate_category_ids(db, home_id, calendar, body.category_ids)
+    audit(
+        db,
+        request,
+        "calendar_share.categories_changed",
+        auth.user.id,
+        home_id,
+        "calendar_share",
+        share.id,
+        {"old_category_ids": old, "new_category_ids": share.category_ids},
+    )
+    await db.commit()
+    return await _share_response(db, share)
+
+
 @router.post("/{share_id}/revoke", response_model=MessageResponse)
 async def revoke_share(
     home_id: uuid.UUID,
@@ -523,6 +616,14 @@ async def preview_share(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This invitation is invalid or has expired."
         )
+    category_names: list[str] | None = None
+    if share.category_ids is not None:
+        rows = (
+            await db.scalars(
+                select(CalendarEventLabel.name).where(CalendarEventLabel.id.in_(share.category_ids))
+            )
+        ).all()
+        category_names = list(rows)
     return CalendarSharePreview(
         calendar_name=calendar.name,
         source_group_name=home.name,
@@ -530,6 +631,7 @@ async def preview_share(
         permission=share.permission,
         recipient_email=share.recipient_email,
         expires_at=share.expires_at,
+        category_names=category_names,
     )
 
 
@@ -784,14 +886,23 @@ async def list_shared_events(
             )
         )
     ).all()
+    label_by_id = await _label_map(db, share.source_group_id)
     items: list[EventOccurrence] = []
     for event in events:
+        # The category-scoped sharing filter (see CalendarShare.category_ids'
+        # docstring) — a `None` filter (share the whole calendar) matches
+        # everything, unchanged from before this filter existed.
+        if not event_matches_share(event, share):
+            continue
         # No member assignment is ever shown/edited externally — an external
         # recipient sees the same events as a Home member with
-        # calendar_view_all, but never the Home's own member list.
+        # calendar_view_all, but never the Home's own member list. The
+        # category *is* shown, when one is set, matching the "Category:"
+        # line on the event-detail screen.
+        label = label_by_id.get(event.label_id) if event.label_id else None
         for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
             items.append(
-                _occurrence(event, occurrence_start, occurrence_end, None, [], calendar.color)
+                _occurrence(event, occurrence_start, occurrence_end, label, [], calendar.color)
             )
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=None)

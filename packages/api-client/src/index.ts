@@ -358,6 +358,9 @@ export class MyKhayaClient {
       calendar_id: string;
       recipient_email: string;
       permission: import("@mykhaya/shared-types").CalendarSharePermission;
+      // Omit/undefined = share the entire calendar. A list = only those
+      // categories — see CalendarShare.category_ids.
+      category_ids?: string[] | null;
     },
   ) =>
     this.request<import("@mykhaya/shared-types").CalendarShare>(
@@ -381,6 +384,11 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").CalendarShare>(
       `/homes/${encodeURIComponent(homeId)}/calendar-shares/${encodeURIComponent(shareId)}/permission`,
       { method: "POST", body: JSON.stringify({ permission }) },
+    );
+  changeCalendarShareCategories = (homeId: string, shareId: string, categoryIds: string[] | null) =>
+    this.request<import("@mykhaya/shared-types").CalendarShare>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares/${encodeURIComponent(shareId)}/categories`,
+      { method: "POST", body: JSON.stringify({ category_ids: categoryIds }) },
     );
   revokeCalendarShare = (homeId: string, shareId: string) =>
     this.request<{ message: string }>(
@@ -424,6 +432,28 @@ export class MyKhayaClient {
   listSharedEvents = (shareId: string, params: { start_at: string; end_at: string }) =>
     this.request<import("@mykhaya/shared-types").EventListResponse>(
       `/calendar-shares/${encodeURIComponent(shareId)}/events?${new URLSearchParams(params).toString()}`,
+    );
+  createSharedEvent = (
+    shareId: string,
+    body: import("@mykhaya/shared-types").SharedEventPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventOccurrence>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/events`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateSharedEvent = (
+    shareId: string,
+    eventId: string,
+    body: import("@mykhaya/shared-types").SharedEventUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventOccurrence>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/events/${encodeURIComponent(eventId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteSharedEvent = (shareId: string, eventId: string) =>
+    this.request<void>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/events/${encodeURIComponent(eventId)}`,
+      { method: "DELETE" },
     );
   previewInvitation = (token: string) =>
     this.request<import("@mykhaya/shared-types").InvitationPreview>(

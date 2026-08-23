@@ -21,11 +21,13 @@ from mykhaya.models import (
     FeatureOverride,
     HouseholdRelationship,
     Membership,
+    Notification,
     PermissionProfile,
     Role,
     SubscriptionPlan,
     User,
 )
+from mykhaya.notifications.briefing import _events_for_user_today
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -84,7 +86,7 @@ async def create_verified_user(client: AsyncClient, email: str, name: str) -> No
 
 async def _enable_home(home_id: str, *, family: bool = True) -> None:
     async with SessionFactory() as db:
-        for key in (FeatureKey.calendar, FeatureKey.external_sharing):
+        for key in (FeatureKey.calendar, FeatureKey.external_sharing, FeatureKey.notifications):
             db.add(FeatureOverride(feature_key=key, group_id=uuid.UUID(home_id), enabled=True))
         if family:
             subscription = await get_home_subscription(db, uuid.UUID(home_id))
@@ -588,3 +590,668 @@ async def test_existing_extended_family_membership_still_resolves_capabilities(
         capabilities = await capabilities_for(db, membership)
         assert Capability.calendar_view in capabilities
         assert Capability.calendar_view_all in capabilities
+
+
+async def _accept_as(email: str, name: str, share_id: str) -> AsyncClient:
+    recipient_client = AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    )
+    await recipient_client.__aenter__()
+    await create_verified_user(recipient_client, email, name)
+    token = await _share_token(share_id)
+    accept = await unsafe(
+        recipient_client,
+        "POST",
+        "/api/v1/calendar-shares/accept",
+        json={"token": token, "notification_preference": "all", "include_in_briefing": True},
+    )
+    assert accept.status_code == 200, accept.text
+    return recipient_client
+
+
+async def _notifications_for(recipient_id: uuid.UUID) -> list[Notification]:
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(
+                select(Notification).where(Notification.recipient_user_id == recipient_id)
+            )
+        ).all()
+        return list(rows)
+
+
+@pytest.mark.asyncio
+async def test_permission_downgrade_blocks_write_immediately_no_reinvite_needed_on_upgrade(
+    client: AsyncClient,
+) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("flexible")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Flexible Home")
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "manage",
+            },
+        )
+    ).json()
+    recipient_client = await _accept_as(recipient_email, "Flexible", share["id"])
+    try:
+        event_body = {
+            "title": "Practice",
+            "start_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+        }
+        created = await unsafe(
+            recipient_client,
+            "POST",
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            json=event_body,
+        )
+        assert created.status_code == 201, created.text
+
+        downgrade = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares/{share['id']}/permission",
+            json={"permission": "view"},
+        )
+        assert downgrade.status_code == 200, downgrade.text
+
+        # Same session, no new invitation — the downgrade must be visible on
+        # the very next request.
+        denied = await unsafe(
+            recipient_client,
+            "POST",
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            json=event_body,
+        )
+        assert denied.status_code == 403
+
+        upgrade = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares/{share['id']}/permission",
+            json={"permission": "manage"},
+        )
+        assert upgrade.status_code == 200, upgrade.text
+
+        allowed_again = await unsafe(
+            recipient_client,
+            "POST",
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            json=event_body,
+        )
+        assert allowed_again.status_code == 201, allowed_again.text
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_permission_change_never_alters_notification_or_briefing_preferences(
+    client: AsyncClient,
+) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("prefs")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Prefs Home")
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "view",
+            },
+        )
+    ).json()
+    recipient_client = await _accept_as(recipient_email, "Prefs", share["id"])
+    try:
+        prefs = await unsafe(
+            recipient_client,
+            "PATCH",
+            f"/api/v1/calendar-shares/{share['id']}",
+            json={"notification_preference": "important", "include_in_briefing": False},
+        )
+        assert prefs.status_code == 200, prefs.text
+
+        changed = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares/{share['id']}/permission",
+            json={"permission": "manage"},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["notification_preference"] == "important"
+        assert changed.json()["include_in_briefing"] is False
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_event_notifications_reach_active_share_recipients_and_respect_preference(
+    client: AsyncClient,
+) -> None:
+    owner_email = unique_email("owner")
+    all_email = unique_email("wantsall")
+    off_email = unique_email("wantsoff")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Notify Home")
+
+    share_all = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={"calendar_id": calendar_id, "recipient_email": all_email, "permission": "view"},
+        )
+    ).json()
+    share_off = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={"calendar_id": calendar_id, "recipient_email": off_email, "permission": "view"},
+        )
+    ).json()
+
+    async def _accept_with_pref(
+        email: str, name: str, share_id: str, preference: str
+    ) -> tuple[AsyncClient, str]:
+        recipient_client = AsyncClient(
+            transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+        )
+        await recipient_client.__aenter__()
+        await create_verified_user(recipient_client, email, name)
+        me = await recipient_client.get("/api/v1/users/me")
+        recipient_id = me.json()["id"]
+        token = await _share_token(share_id)
+        accept = await unsafe(
+            recipient_client,
+            "POST",
+            "/api/v1/calendar-shares/accept",
+            json={
+                "token": token,
+                "notification_preference": preference,
+                "include_in_briefing": True,
+            },
+        )
+        assert accept.status_code == 200, accept.text
+        return recipient_client, recipient_id
+
+    all_client, all_id = await _accept_with_pref(all_email, "Wants All", share_all["id"], "all")
+    off_client, off_id = await _accept_with_pref(off_email, "Wants Off", share_off["id"], "off")
+    try:
+        created = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/events",
+            json={
+                "title": "Sports day",
+                "start_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat(),
+                "timezone": "Europe/London",
+                "is_all_day": False,
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        all_notifications = await _notifications_for(uuid.UUID(all_id))
+        assert any(n.notification_type == "event_invitation" for n in all_notifications)
+        off_notifications = await _notifications_for(uuid.UUID(off_id))
+        assert not any(n.notification_type == "event_invitation" for n in off_notifications)
+    finally:
+        await all_client.__aexit__(None, None, None)
+        await off_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_revoked_share_stops_future_notifications(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("soon-revoked")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Stop Notify Home")
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "view",
+            },
+        )
+    ).json()
+
+    recipient_client = AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    )
+    await recipient_client.__aenter__()
+    try:
+        await create_verified_user(recipient_client, recipient_email, "Soon Revoked")
+        me = await recipient_client.get("/api/v1/users/me")
+        recipient_id = uuid.UUID(me.json()["id"])
+        token = await _share_token(share["id"])
+        await unsafe(
+            recipient_client,
+            "POST",
+            "/api/v1/calendar-shares/accept",
+            json={"token": token, "notification_preference": "all", "include_in_briefing": True},
+        )
+
+        revoke = await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/calendar-shares/{share['id']}/revoke"
+        )
+        assert revoke.status_code == 200, revoke.text
+
+        created = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/events",
+            json={
+                "title": "After revoke",
+                "start_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat(),
+                "timezone": "Europe/London",
+                "is_all_day": False,
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        notifications = await _notifications_for(recipient_id)
+        assert not any(n.notification_type == "event_invitation" for n in notifications)
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_briefing_respects_include_in_briefing_and_revocation(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    included_email = unique_email("included")
+    excluded_email = unique_email("excluded")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Briefing Home")
+
+    share_in = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": included_email,
+                "permission": "view",
+            },
+        )
+    ).json()
+    share_out = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": excluded_email,
+                "permission": "view",
+            },
+        )
+    ).json()
+
+    async def _accept_with_briefing(
+        email: str, name: str, share_id: str, include_in_briefing: bool
+    ) -> tuple[AsyncClient, uuid.UUID]:
+        recipient_client = AsyncClient(
+            transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+        )
+        await recipient_client.__aenter__()
+        await create_verified_user(recipient_client, email, name)
+        me = await recipient_client.get("/api/v1/users/me")
+        recipient_id = uuid.UUID(me.json()["id"])
+        token = await _share_token(share_id)
+        accept = await unsafe(
+            recipient_client,
+            "POST",
+            "/api/v1/calendar-shares/accept",
+            json={
+                "token": token,
+                "notification_preference": "all",
+                "include_in_briefing": include_in_briefing,
+            },
+        )
+        assert accept.status_code == 200, accept.text
+        return recipient_client, recipient_id
+
+    included_client, included_id = await _accept_with_briefing(
+        included_email, "Included", share_in["id"], True
+    )
+    excluded_client, excluded_id = await _accept_with_briefing(
+        excluded_email, "Excluded", share_out["id"], False
+    )
+    try:
+        today = datetime.now(UTC).date()
+        event_body = {
+            "title": "Briefing event",
+            "start_at": datetime.now(UTC)
+            .replace(hour=10, minute=0, second=0, microsecond=0)
+            .isoformat(),
+            "end_at": datetime.now(UTC)
+            .replace(hour=11, minute=0, second=0, microsecond=0)
+            .isoformat(),
+            "timezone": "UTC",
+            "is_all_day": False,
+        }
+        created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=event_body)
+        assert created.status_code == 201, created.text
+
+        async with SessionFactory() as db:
+            included_occurrences = await _events_for_user_today(db, included_id, today, UTC)
+            excluded_occurrences = await _events_for_user_today(db, excluded_id, today, UTC)
+        assert any(o.title == "Briefing event" for o in included_occurrences)
+        assert not any(o.title == "Briefing event" for o in excluded_occurrences)
+
+        # Revoke the included recipient's share — their next briefing must no
+        # longer include it either.
+        revoke = await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/calendar-shares/{share_in['id']}/revoke"
+        )
+        assert revoke.status_code == 200, revoke.text
+        async with SessionFactory() as db:
+            after_revoke = await _events_for_user_today(db, included_id, today, UTC)
+        assert not any(o.title == "Briefing event" for o in after_revoke)
+    finally:
+        await included_client.__aexit__(None, None, None)
+        await excluded_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_recipient_leaves_share_source_home_unaffected(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("leaver")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Leave Home")
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "view",
+            },
+        )
+    ).json()
+    recipient_client = await _accept_as(recipient_email, "Leaver", share["id"])
+    try:
+        leave = await unsafe(
+            recipient_client, "POST", f"/api/v1/calendar-shares/{share['id']}/leave"
+        )
+        assert leave.status_code == 200, leave.text
+
+        # Recipient loses access.
+        events = await unsafe(
+            recipient_client,
+            "GET",
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            params={
+                "start_at": datetime.now(UTC).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            },
+        )
+        assert events.status_code == 404
+
+        # Source Home's own calendar/events remain completely unaffected.
+        still_there = await client.get(f"/api/v1/homes/{home_id}/calendars")
+        assert still_there.status_code == 200
+
+        # Source-side sharing management correctly reflects "revoked" (the
+        # recipient-initiated terminal state reuses the same status).
+        listed = await client.get(f"/api/v1/homes/{home_id}/calendar-shares/calendar/{calendar_id}")
+        assert listed.status_code == 200
+        matching = next(item for item in listed.json()["items"] if item["id"] == share["id"])
+        assert matching["status"] == "revoked"
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Category-scoped Home calendar sharing — a share can optionally filter to
+# specific CalendarEventLabel categories instead of exposing the entire
+# calendar. See CalendarShare.category_ids and
+# notifications.visibility.event_matches_share.
+# ---------------------------------------------------------------------------
+
+
+async def _create_label(client: AsyncClient, home_id: str, name: str) -> str:
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": name, "color": "teal"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _create_event(
+    client: AsyncClient, home_id: str, title: str, label_id: str | None = None
+) -> str:
+    body = {
+        "title": title,
+        "start_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat(),
+        "timezone": "Europe/London",
+        "is_all_day": False,
+        "label_id": label_id,
+    }
+    response = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()["event_id"]
+
+
+@pytest.mark.asyncio
+async def test_category_scoped_share_exposes_only_selected_categories(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("category-scoped")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Category Home")
+
+    family_label = await _create_label(client, home_id, "Family Events")
+    private_label = await _create_label(client, home_id, "Private Adult Stuff")
+
+    family_event_id = await _create_event(client, home_id, "Family picnic", family_label)
+    private_event_id = await _create_event(client, home_id, "Adult only", private_label)
+    uncategorised_event_id = await _create_event(client, home_id, "No category")
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "view",
+                "category_ids": [family_label],
+            },
+        )
+    ).json()
+    assert share["category_ids"] == [family_label]
+
+    recipient_client = await _accept_as(recipient_email, "Category Scoped", share["id"])
+    try:
+        events = await recipient_client.get(
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            params={
+                "start_at": datetime.now(UTC).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            },
+        )
+        assert events.status_code == 200
+        event_ids = {item["event_id"] for item in events.json()["items"]}
+        assert family_event_id in event_ids
+        assert private_event_id not in event_ids
+        assert uncategorised_event_id not in event_ids
+
+        # Direct reads of the excluded categories' events are just as
+        # inaccessible as if they didn't exist — the boundary is enforced
+        # server-side, not by the list endpoint quietly omitting them.
+        from mykhaya.models import CalendarEvent
+        from mykhaya.notifications.visibility import can_view_event
+
+        async with SessionFactory() as db:
+            me = await recipient_client.get("/api/v1/users/me")
+            recipient_id = uuid.UUID(me.json()["id"])
+            private_event = await db.get(CalendarEvent, uuid.UUID(private_event_id))
+            assert private_event is not None
+            assert await can_view_event(db, private_event, recipient_id) is False
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_category_scoped_share_can_be_changed_without_reinvite(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("switching")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Switching Home")
+
+    family_label = await _create_label(client, home_id, "Family Events")
+    activity_label = await _create_label(client, home_id, "Football Club")
+    activity_event_id = await _create_event(client, home_id, "Football", activity_label)
+
+    share = (
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares",
+            json={
+                "calendar_id": calendar_id,
+                "recipient_email": recipient_email,
+                "permission": "view",
+                "category_ids": [family_label],
+            },
+        )
+    ).json()
+    recipient_client = await _accept_as(recipient_email, "Switching", share["id"])
+    try:
+        before = await recipient_client.get(
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            params={
+                "start_at": datetime.now(UTC).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            },
+        )
+        assert activity_event_id not in {item["event_id"] for item in before.json()["items"]}
+
+        changed = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/calendar-shares/{share['id']}/categories",
+            json={"category_ids": [family_label, activity_label]},
+        )
+        assert changed.status_code == 200, changed.text
+
+        after = await recipient_client.get(
+            f"/api/v1/calendar-shares/{share['id']}/events",
+            params={
+                "start_at": datetime.now(UTC).isoformat(),
+                "end_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            },
+        )
+        assert activity_event_id in {item["event_id"] for item in after.json()["items"]}
+    finally:
+        await recipient_client.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_personal_calendar_cannot_be_shared_with_category_filter(client: AsyncClient) -> None:
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("nopersonalcategories")
+    await create_verified_user(client, owner_email, "Owner")
+    home_id, _calendar_id = await _create_home_with_calendar(client, "Personal Category Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    personal_calendar_id = calendars.json()["personal_calendar"]["id"]
+
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/calendar-shares",
+        json={
+            "calendar_id": personal_calendar_id,
+            "recipient_email": recipient_email,
+            "permission": "view",
+            "category_ids": [],
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_home_admin_cannot_share_another_members_personal_calendar(
+    client: AsyncClient,
+) -> None:
+    """The Personal Calendar privacy boundary is absolute everywhere else in
+    the app (a Home Admin's calendar_view_all never reaches into it) —
+    sharing authority must respect that same boundary: only the calendar's
+    own owner may ever request/send/approve/revoke a share of it, Home
+    Admin status notwithstanding. See
+    routers.calendar_sharing._has_authority_over_calendar."""
+    admin_email = unique_email("admin")
+    partner_email = unique_email("partner")
+    outsider_email = unique_email("outsider")
+    await create_verified_user(client, admin_email, "Admin")
+    home_id, _calendar_id = await _create_home_with_calendar(client, "Boundary Home")
+
+    invite = await unsafe(
+        client,
+        "POST",
+        "/api/v1/invitations",
+        json={"group_id": home_id, "email": partner_email, "relationship": "partner"},
+    )
+    assert invite.status_code == 201, invite.text
+    invitation_token = derived_token(
+        uuid.UUID(invite.json()["id"]), "invitation", get_settings().secret_key.get_secret_value()
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        await create_verified_user(partner_client, partner_email, "Partner")
+        accepted = await unsafe(
+            partner_client, "POST", "/api/v1/invitations/accept", json={"token": invitation_token}
+        )
+        assert accepted.status_code == 200, accepted.text
+
+        calendars = await partner_client.get(f"/api/v1/homes/{home_id}/calendars")
+        partner_personal_calendar_id = calendars.json()["personal_calendar"]["id"]
+
+    # The Home Admin — not the Partner themselves — tries to share the
+    # Partner's Personal Calendar. Must 404 (behaves as if it doesn't
+    # exist), the same as every other cross-member Personal Calendar
+    # access attempt in this app.
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/calendar-shares",
+        json={
+            "calendar_id": partner_personal_calendar_id,
+            "recipient_email": outsider_email,
+            "permission": "view",
+        },
+    )
+    assert response.status_code == 404

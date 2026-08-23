@@ -601,6 +601,17 @@ class CalendarShare(UuidTimeMixin, Base):
         String(20), default="all", server_default="all"
     )
     include_in_briefing: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # NULL (the common case) = the entire calendar is shared. A JSON list of
+    # CalendarEventLabel id strings = only events carrying one of those
+    # categories are exposed through this share — a display/access *filter*
+    # layered on top of the same Home calendar, never a second calendar
+    # record (see docs on "category-scoped Home calendar sharing"). Only
+    # ever set when the shared calendar is the Home's own (owner_user_id
+    # IS NULL) — a Personal Calendar has no categories to filter by, see
+    # routers.calendar_sharing.create_share's validation. Checked by
+    # notifications.visibility._event_matches_share, the single place this
+    # filter is enforced (list, view, and notify all reuse it).
+    category_ids: Mapped[list[str] | None] = mapped_column(JSON)
 
 
 class AuditEvent(Base):

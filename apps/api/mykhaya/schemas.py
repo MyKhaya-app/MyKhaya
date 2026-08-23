@@ -349,10 +349,20 @@ class CalendarShareCreate(StrictModel):
     calendar_id: uuid.UUID
     recipient_email: EmailStr
     permission: CalendarSharePermission = CalendarSharePermission.view
+    # Omitted/None = share the entire calendar (unchanged default). A list =
+    # only events carrying one of these CalendarEventLabel ids are exposed —
+    # a filter over the Home calendar's own events, never a second calendar.
+    # Rejected (422) for a Personal Calendar, which has no categories — see
+    # create_share.
+    category_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
 
 
 class CalendarSharePermissionUpdate(StrictModel):
     permission: CalendarSharePermission
+
+
+class CalendarShareCategoriesUpdate(StrictModel):
+    category_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
 
 
 class CalendarSharePreferencesUpdate(StrictModel):
@@ -374,6 +384,13 @@ class CalendarShareResponse(BaseModel):
     id: uuid.UUID
     calendar_id: uuid.UUID
     calendar_name: str
+    # The shared calendar's own HomeCalendar.color — lets the recipient's
+    # "Shared with me" list and calendar selector render the same colour
+    # identity the source Home sees, without a second lookup. Null only if
+    # the source calendar has since been deleted (calendar_name falls back
+    # to "Deleted calendar" in that same case — see routers.calendar_sharing
+    # ._share_response).
+    calendar_color: ColourToken | None
     source_group_id: uuid.UUID
     source_group_name: str
     recipient_email: EmailStr
@@ -388,6 +405,7 @@ class CalendarShareResponse(BaseModel):
     revoked_at: datetime | None
     notification_preference: str
     include_in_briefing: bool
+    category_ids: list[uuid.UUID] | None
     created_at: datetime
 
 
@@ -398,6 +416,11 @@ class CalendarSharePreview(BaseModel):
     permission: CalendarSharePermission
     recipient_email: EmailStr
     expires_at: datetime
+    # None = the entire calendar. Names, not ids — a preview is shown before
+    # the recipient has accepted, so this is deliberately the only place
+    # category identity leaks pre-acceptance, and only the human-readable
+    # name of what's being offered, nothing else about the source Home.
+    category_names: list[str] | None = None
 
 
 class CalendarShareListResponse(BaseModel):

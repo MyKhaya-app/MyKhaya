@@ -36,7 +36,7 @@ from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
 from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
 from mykhaya.notifications.quiet_hours import effective_timezone
-from mykhaya.notifications.visibility import viewer_ids_for_event
+from mykhaya.notifications.visibility import event_matches_share, viewer_ids_for_event
 
 # Matches the reminder scan's cadence — short enough that the scan reliably catches each
 # user's chosen minute exactly once per day without needing sub-minute precision.
@@ -226,6 +226,8 @@ async def _events_for_user_today(
         for event in events:
             if event.id in seen_event_ids:
                 continue  # belt-and-braces: never double-count if ever also a Home member
+            if not event_matches_share(event, share):
+                continue
             for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
                 occurrences.append(
                     BriefingOccurrence(

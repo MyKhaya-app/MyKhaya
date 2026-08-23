@@ -3,6 +3,8 @@ import type {
   EventPayload,
   EventUpdatePayload,
   Member,
+  SharedEventPayload,
+  SharedEventUpdatePayload,
 } from "@mykhaya/shared-types";
 
 // Last-resort fallback only — used when no Home calendar timezone has loaded
@@ -624,6 +626,80 @@ export function canEditEvent(
  *  `calendar.delete` may delete any event in the Home (see delete_event). */
 export function canDeleteEvent(capabilities: string[]): boolean {
   return capabilities.includes("calendar.delete");
+}
+
+/** An externally shared occurrence's edit/delete authority comes from its
+ *  own CalendarShare.permission, never from the viewer's Home capabilities
+ *  (they may have none — they're not a Home member at all). Mirrors
+ *  routers.calendar_sharing's `_require_my_share(..., need_manage=True)`
+ *  exactly: "manage" can create/edit/delete, "view" can do neither. Only
+ *  meaningful for an occurrence carrying `share_id` — see EventOccurrence's
+ *  docstring in shared-types. */
+export function canEditSharedEvent(event: EventOccurrence): boolean {
+  return event.share_permission === "manage";
+}
+export function canDeleteSharedEvent(event: EventOccurrence): boolean {
+  return event.share_permission === "manage";
+}
+
+/** Builds the exact body POST/PATCH .../calendar-shares/{id}/events accepts
+ *  from the same EventPayload EventForm already produces — deliberately
+ *  drops member_ids/label_id/calendar_id (SharedEventCreate/Update are
+ *  StrictModel and 422 on any unrecognised field): an externally shared
+ *  event can never be assigned to Home members or a Home-owned category the
+ *  recipient isn't authorised to use. See EventForm's isSharedEvent branch,
+ *  which hides the People/Category controls that would otherwise produce
+ *  these fields in the first place. */
+export function toSharedEventPayload(payload: EventPayload): SharedEventPayload {
+  return {
+    title: payload.title,
+    start_at: payload.start_at,
+    end_at: payload.end_at,
+    timezone: payload.timezone,
+    is_all_day: payload.is_all_day,
+    description: payload.description,
+    location_text: payload.location_text,
+    reminder_minutes: payload.reminder_minutes,
+    recurrence: payload.recurrence,
+    recurrence_interval: payload.recurrence_interval,
+    recurrence_until: payload.recurrence_until,
+    recurrence_end_date: payload.recurrence_end_date,
+    recurrence_count: payload.recurrence_count,
+  };
+}
+
+export function toSharedEventUpdatePayload(
+  payload: EventPayload,
+  expectedUpdatedAt: string,
+): SharedEventUpdatePayload {
+  return { ...toSharedEventPayload(payload), expected_updated_at: expectedUpdatedAt };
+}
+
+// ---------------------------------------------------------------------------
+// Calendar selector visibility — a purely client-side, per-viewer show/hide
+// toggle (localStorage only, never sent to the backend) covering both a
+// Home's own calendars (keyed by HomeCalendar.id) and calendars shared with
+// the viewer (keyed by CalendarShare.id, via EventOccurrence.share_id) — see
+// CalendarSelector in app/calendar/page.tsx. Hiding a calendar here never
+// revokes/mutes anything server-side; it only affects what this browser
+// currently renders, exactly like muting is independent of access in the
+// backend model (CalendarShare.notification_preference/include_in_briefing).
+// ---------------------------------------------------------------------------
+
+export function isCalendarVisible(
+  event: EventOccurrence,
+  hiddenIds: ReadonlySet<string>,
+): boolean {
+  const key = event.share_id ?? event.calendar_id;
+  return !hiddenIds.has(key);
+}
+
+export function filterByVisibleCalendars(
+  events: EventOccurrence[],
+  hiddenIds: ReadonlySet<string>,
+): EventOccurrence[] {
+  if (hiddenIds.size === 0) return events;
+  return events.filter((event) => isCalendarVisible(event, hiddenIds));
 }
 
 /** Builds the exact body PATCH /events/{id} accepts from the same

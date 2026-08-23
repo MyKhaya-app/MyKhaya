@@ -20,11 +20,14 @@ import {
 } from "lucide-react";
 import type {
   BirthdayEntry,
+  CalendarShare,
   EventLabel,
   EventOccurrence,
   EventPayload,
+  HomeCalendar,
   Member,
   RecurrencePattern,
+  SharedEventPayload,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { resolveColour } from "@mykhaya/design-tokens";
@@ -40,7 +43,9 @@ import {
   agendaRange,
   applyAllDayToggle,
   canDeleteEvent,
+  canDeleteSharedEvent,
   canEditEvent,
+  canEditSharedEvent,
   computeInitialWhen,
   DEFAULT_EVENT_DURATION_MINUTES,
   dateKey,
@@ -50,6 +55,7 @@ import {
   eventsForDay,
   eventTime,
   FALLBACK_TIMEZONE,
+  filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
   monthCells,
@@ -59,6 +65,7 @@ import {
   shiftEndWithStart,
   splitZoned,
   toEventUpdatePayload,
+  toSharedEventUpdatePayload,
   weekRange,
   zonedDateKey,
   zonedTimeToUtc,
@@ -72,6 +79,12 @@ const LABEL_STORAGE = "mykhaya.calendar.label";
 // switching Home must never accidentally keep filtering by a member id that
 // only means something in the Home the user just left.
 const MEMBER_STORAGE_PREFIX = "mykhaya.calendar.member.";
+// Per-viewer only (never sent to the backend) — which calendars (Home's own,
+// keyed by HomeCalendar.id, or shared, keyed by CalendarShare.id) are
+// currently hidden from the calendar views. Not Home-scoped like
+// MEMBER_STORAGE_PREFIX: a shared calendar belongs to the *recipient*, not
+// to any one Home, so this key is global to the signed-in browser profile.
+const HIDDEN_CALENDARS_STORAGE = "mykhaya.calendar.hidden-calendars";
 
 function formText(data: FormData, name: string) {
   const value = data.get(name);
@@ -182,6 +195,13 @@ function utcMidnightOf(dateInput: string): Date {
 // CalendarEventLabel it's tagged with) without them ever colliding. Never
 // sent to the API as-is; submit() translates it into calendar_id.
 const PERSONAL_CALENDAR_VALUE = "__personal__";
+// Sentinel prefix for a writable (Can add & edit) externally shared
+// calendar, appended with its CalendarShare.id — same "one select, several
+// calendar concepts" trick as PERSONAL_CALENDAR_VALUE. Only ever offered
+// when *creating* a brand-new event (see writableShares below); an
+// existing event's calendar assignment never changes via edit, matching
+// the Home calendar's own "calendar_id is fixed at creation" rule.
+const SHARE_VALUE_PREFIX = "__share__:";
 
 function EventForm({
   labels,
@@ -190,10 +210,12 @@ function EventForm({
   initialDay,
   timeZone,
   personalCalendarId,
+  writableShares = [],
   busy,
   submitLabel,
   sharedEventsEnabled,
   onSubmit,
+  onSubmitShared,
   onCancel,
   onDelete,
 }: {
@@ -210,10 +232,18 @@ function EventForm({
    *  only in the brief window before it's loaded (see CalendarPage.load) or
    *  for a managed Child, who doesn't have one. */
   personalCalendarId: string | null;
+  /** Externally shared calendars the signed-in user may create events on
+   *  (permission "manage", accepted) — offered as extra targets in the
+   *  Calendar picker only when creating a brand-new event (initial is
+   *  undefined). Empty for the edit flow and whenever the user has none. */
+  writableShares?: CalendarShare[];
   busy: boolean;
   submitLabel: string;
   sharedEventsEnabled: boolean;
   onSubmit: (payload: EventPayload) => Promise<void>;
+  /** Called instead of onSubmit when the user picked a shared calendar as
+   *  the target for a *new* event — only relevant during creation. */
+  onSubmitShared?: (shareId: string, payload: SharedEventPayload) => Promise<void>;
   onCancel: () => void;
   onDelete?: () => Promise<void>;
 }) {
@@ -251,6 +281,14 @@ function EventForm({
   // must never itself trigger a render; it only gates what onToggleAllDay
   // does the next time the user actually turns All day off.
   const hasTimedValues = useRef(initialWhen.hasTimedValues);
+  // Editing an occurrence merged in from an externally shared calendar (see
+  // CalendarPage.load) — People and Calendar/category never apply: the
+  // recipient isn't a Home member (nothing to assign to) and categories are
+  // Home-owned structure they aren't authorised to use. onSubmit's payload
+  // still carries member_ids/label_id (unused fields, always empty/None
+  // here) but the parent strips them via toSharedEventPayload before this
+  // ever reaches the share-scoped endpoint — see calendar-utils.ts.
+  const isSharedEvent = Boolean(initial?.share_id);
   // The "Calendar or category" select's value — either a real
   // CalendarEventLabel id (unchanged existing behaviour), "" (the existing
   // default/no-label option), or PERSONAL_CALENDAR_VALUE. Controlled (not
@@ -371,6 +409,9 @@ function EventForm({
     }
 
     const isPersonal = calendarSelection === PERSONAL_CALENDAR_VALUE;
+    const sharedTargetId = calendarSelection.startsWith(SHARE_VALUE_PREFIX)
+      ? calendarSelection.slice(SHARE_VALUE_PREFIX.length)
+      : null;
     const savedRecurrenceEndDate =
       recurrence !== "none" && recurrenceEndMode === "on_date" ? recurrenceEndDate : null;
     if (savedRecurrenceEndDate && savedRecurrenceEndDate < startDate) {
@@ -378,6 +419,26 @@ function EventForm({
       return;
     }
     setRecurrenceNotice("");
+
+    if (sharedTargetId && onSubmitShared) {
+      await onSubmitShared(sharedTargetId, {
+        title,
+        start_at,
+        end_at,
+        timezone: eventTimeZone,
+        is_all_day: allDay,
+        location_text: formText(data, "location") || null,
+        reminder_minutes: formText(data, "reminder") ? Number(formText(data, "reminder")) : null,
+        recurrence,
+        recurrence_interval: 1,
+        recurrence_until: null,
+        recurrence_end_date: savedRecurrenceEndDate,
+        recurrence_count: null,
+        description: formText(data, "notes") || null,
+      });
+      return;
+    }
+
     await onSubmit({
       title,
       start_at,
@@ -525,8 +586,13 @@ function EventForm({
       </div>
       {/* A Personal Calendar event is never shared — see create_event's
           Personal-Calendar member check — so there is nothing for the
-          People section to offer while it's selected. */}
-      {members.length > 0 && calendarSelection !== PERSONAL_CALENDAR_VALUE && (
+          People section to offer while it's selected. Same reasoning for an
+          externally shared event: the recipient isn't a Home member, so
+          there's no household roster to assign it to. */}
+      {members.length > 0 &&
+        !isSharedEvent &&
+        calendarSelection !== PERSONAL_CALENDAR_VALUE &&
+        !calendarSelection.startsWith(SHARE_VALUE_PREFIX) && (
         <div className="form-wide event-section">
           <span className="eyebrow">People</span>
           <div className="member-list">
@@ -576,41 +642,81 @@ function EventForm({
           )}
         </div>
       )}
+      {isSharedEvent && (
+        <p className="form-wide icon-row">
+          <span className="icon-row-icon" aria-hidden="true">
+            <Layers size={16} />
+          </span>
+          <span className="icon-row-control quiet-state">
+            {initial?.shared_by_home_name
+              ? `Shared by ${initial.shared_by_home_name} — no category to choose here.`
+              : "Shared calendar — no category to choose here."}
+          </span>
+        </p>
+      )}
+      {!isSharedEvent && (
       <label className="form-wide icon-row">
         <span className="icon-row-icon" aria-hidden="true">
           <Layers size={16} />
         </span>
-        <span className="sr-only">Calendar or category</span>
+        <span className="sr-only">Calendar</span>
         <select
           className="icon-row-control"
           name="label"
           value={calendarSelection}
           onChange={(event) => setCalendarSelection(event.target.value)}
         >
-          <option value="">Home calendar</option>
+          {/* Categories only ever apply on the Home calendar itself — see
+              docs on Home/Personal/Shared calendars vs categories. Selecting
+              "Home calendar" or any category below both target the same
+              calendar; only the category tag differs. */}
+          <optgroup label="Home calendar">
+            <option value="">Home calendar</option>
+            {labels.map((label) => {
+              // Transition-safe, matching update_event's own check: a category
+              // already assigned to this event stays selectable (so resaving
+              // never breaks), but a different, over-the-plan-limit category
+              // preserved past a downgrade can't be newly assigned.
+              const locked =
+                label.commercial_access === "read_only_due_to_plan" &&
+                initial?.label?.id !== label.id;
+              return (
+                <option key={label.id} value={label.id} disabled={locked}>
+                  {label.name}
+                  {locked ? " (Family)" : ""}
+                </option>
+              );
+            })}
+          </optgroup>
           {personalCalendarId && (
             <option value={PERSONAL_CALENDAR_VALUE}>Personal calendar</option>
           )}
-          {labels.map((label) => {
-            // Transition-safe, matching update_event's own check: a category
-            // already assigned to this event stays selectable (so resaving
-            // never breaks), but a different, over-the-plan-limit category
-            // preserved past a downgrade can't be newly assigned.
-            const locked =
-              label.commercial_access === "read_only_due_to_plan" &&
-              initial?.label?.id !== label.id;
-            return (
-              <option key={label.id} value={label.id} disabled={locked}>
-                {label.name}
-                {locked ? " (Family)" : ""}
-              </option>
-            );
-          })}
+          {/* Only ever offered when creating a brand-new event — an
+              existing event's calendar assignment never changes via edit
+              (initial is undefined here whenever writableShares is
+              non-empty, since the parent only passes shares for the create
+              flow). */}
+          {writableShares.length > 0 && (
+            <optgroup label="Shared calendars">
+              {writableShares.map((share) => (
+                <option key={share.id} value={`${SHARE_VALUE_PREFIX}${share.id}`}>
+                  {share.calendar_name} · {share.source_group_name}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
       </label>
+      )}
       {calendarSelection === PERSONAL_CALENDAR_VALUE && (
         <p className="form-wide quiet-state">Only you can see events in this calendar.</p>
+      )}
+      {calendarSelection.startsWith(SHARE_VALUE_PREFIX) && (
+        <p className="form-wide quiet-state">
+          This event will be created on a calendar shared with you — everyone it's shared with
+          can see it.
+        </p>
       )}
       <label className="form-wide icon-row">
         <span className="icon-row-icon" aria-hidden="true">
@@ -757,6 +863,7 @@ function EventDetails({
   members,
   timeZone,
   personalCalendarId,
+  homeName,
   canDelete,
   onDelete,
 }: {
@@ -764,6 +871,12 @@ function EventDetails({
   members: Member[];
   timeZone: string;
   personalCalendarId: string | null;
+  /** The active Home's own name — "Calendar: {homeName}" for an event on
+   *  the Home calendar itself, matching how a Personal or Shared
+   *  calendar's own identity is shown. Never used for a Personal or Shared
+   *  event, which show their own identity instead — see the Calendar
+   *  section below. */
+  homeName: string;
   canDelete: boolean;
   onDelete: () => Promise<void>;
 }) {
@@ -816,16 +929,41 @@ function EventDetails({
         <div className="event-view-value">
           <span
             className="colour-dot"
-            style={
-              { "--swatch-colour": resolveColour(event.label?.color ?? event.calendar_color) } as React.CSSProperties
-            }
+            style={{ "--swatch-colour": resolveColour(event.calendar_color) } as React.CSSProperties}
             aria-hidden="true"
           />
-          {personalCalendarId && event.calendar_id === personalCalendarId
-            ? "Personal calendar"
-            : (event.label?.name ?? "Home calendar")}
+          {event.shared_by_home_name
+            ? event.shared_by_home_name
+            : personalCalendarId && event.calendar_id === personalCalendarId
+              ? "Personal calendar"
+              : homeName}
         </div>
+        {event.shared_by_home_name && (
+          <p className="quiet-state shared-calendar-attribution">
+            <Users size={13} aria-hidden="true" />
+            Shared calendar · {event.share_permission === "manage" ? "Can add & edit" : "Can view"}
+          </p>
+        )}
       </div>
+
+      {/* Category is a separate concept from Calendar (see docs on the
+          three calendar types vs categories) — this is a Home-calendar
+          category (CalendarEventLabel), never shown as if it were the
+          calendar's own identity. Absent for Personal/Shared events, which
+          have no categories. */}
+      {event.label && (
+        <div className="event-view-section">
+          <span className="eyebrow">Category</span>
+          <div className="event-view-value">
+            <span
+              className="colour-dot"
+              style={{ "--swatch-colour": resolveColour(event.label.color) } as React.CSSProperties}
+              aria-hidden="true"
+            />
+            {event.label.name}
+          </div>
+        </div>
+      )}
 
       {reminder && (
         <div className="event-view-section">
@@ -908,6 +1046,16 @@ export default function CalendarPage() {
   // null before the first load resolves, or for a managed Child (see
   // apps/api/mykhaya/calendar_provisioning.py). Never another member's.
   const [personalCalendarId, setPersonalCalendarId] = useState<string | null>(null);
+  const [personalCalendar, setPersonalCalendar] = useState<HomeCalendar | null>(null);
+  // "My calendars" (this Home's own, shared/Home + the viewer's Personal
+  // Calendar) and "Shared with me" (accepted external CalendarShares) — see
+  // CalendarSelector below. Both are always fetched regardless of visibility
+  // toggles, same convention as member/label filters: fetch everything,
+  // filter client-side (see visibleEvents/filterByVisibleCalendars).
+  const [homeCalendars, setHomeCalendars] = useState<HomeCalendar[]>([]);
+  const [sharedCalendars, setSharedCalendars] = useState<CalendarShare[]>([]);
+  const [hiddenCalendarIds, setHiddenCalendarIds] = useState<Set<string>>(new Set());
+  const [calendarSelectorOpen, setCalendarSelectorOpen] = useState(false);
   const agendaAnchorRef = useRef<HTMLElement | null>(null);
   const agendaEntryToken = useRef(0);
   const positionedAgendaToken = useRef(-1);
@@ -919,6 +1067,28 @@ export default function CalendarPage() {
   function chooseLabel(next: string) {
     setLabelFilter(next);
     window.localStorage.setItem(LABEL_STORAGE, next);
+  }
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(HIDDEN_CALENDARS_STORAGE);
+    if (!stored) return;
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed)) setHiddenCalendarIds(new Set(parsed.map(String)));
+    } catch {
+      // Corrupt/legacy value — fall back to "everything visible" rather than
+      // blocking the calendar from loading at all.
+    }
+  }, []);
+
+  function toggleCalendarVisibility(id: string) {
+    setHiddenCalendarIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      window.localStorage.setItem(HIDDEN_CALENDARS_STORAGE, JSON.stringify([...next]));
+      return next;
+    });
   }
 
   // Restore the previously selected household member for *this* Home as soon
@@ -992,7 +1162,7 @@ export default function CalendarPage() {
 
   const load = useCallback(async () => {
     if (!activeHomeId || !featureEnabled) return;
-    const [labelRows, eventRows, memberRows, calendarRows] = await Promise.all([
+    const [labelRows, eventRows, memberRows, calendarRows, shares] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
         start_at: fetchRange.start.toISOString(),
@@ -1001,17 +1171,49 @@ export default function CalendarPage() {
       }),
       api.members(activeHomeId).catch(() => []),
       api.listCalendars(activeHomeId).catch(() => null),
+      api.sharedCalendars().catch(() => ({ items: [] })),
     ]);
     setLabels(labelRows);
-    setEvents(eventRows.items);
     setMembers(memberRows);
+    setHomeCalendars(calendarRows?.items ?? []);
+    setSharedCalendars(shares.items);
     const primaryCalendar = calendarRows?.items.find((row) => row.is_primary);
     if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
     setPersonalCalendarId(calendarRows?.personal_calendar?.id ?? null);
+    setPersonalCalendar(calendarRows?.personal_calendar ?? null);
     api
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
+
+    // Merge in every accepted external share's events for the same visible
+    // range, tagged with where they came from — see EventOccurrence's
+    // share_id/share_permission/shared_by_home_name docstring in
+    // shared-types. Fetched regardless of the calendar-selector's hide/show
+    // toggle (same "fetch everything, filter client-side" convention as
+    // member/label filters — see filterByVisibleCalendars), so toggling
+    // visibility back on never needs a fresh network round trip.
+    const sharedEventLists = await Promise.all(
+      shares.items.map((share) =>
+        api
+          .listSharedEvents(share.id, {
+            start_at: fetchRange.start.toISOString(),
+            end_at: fetchRange.end.toISOString(),
+          })
+          .then((response) =>
+            response.items.map(
+              (item): EventOccurrence => ({
+                ...item,
+                share_id: share.id,
+                share_permission: share.permission,
+                shared_by_home_name: share.source_group_name,
+              }),
+            ),
+          )
+          .catch(() => []),
+      ),
+    );
+    setEvents([...eventRows.items, ...sharedEventLists.flat()]);
   }, [activeHomeId, featureEnabled, fetchRange.end, fetchRange.start]);
 
   useEffect(() => {
@@ -1083,9 +1285,23 @@ export default function CalendarPage() {
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
 
+  // Calendars the signed-in user may create *new* events on, beyond their
+  // own Home calendar/Personal calendar — offered in EventForm's Calendar
+  // picker only when creating (see writableShares there). "view"-only
+  // shares are deliberately excluded; per-event write authority is
+  // re-checked server-side regardless (see calendar-utils.canEditSharedEvent).
+  const writableShares = useMemo(
+    () => sharedCalendars.filter((share) => share.permission === "manage"),
+    [sharedCalendars],
+  );
+
   const visibleEvents = useMemo(
-    () => filterVisibleEvents(events, memberFilter, labelFilter, query),
-    [events, memberFilter, labelFilter, query],
+    () =>
+      filterByVisibleCalendars(
+        filterVisibleEvents(events, memberFilter, labelFilter, query),
+        hiddenCalendarIds,
+      ),
+    [events, memberFilter, labelFilter, query, hiddenCalendarIds],
   );
   const byDay = useMemo(
     () => groupEventsByDay(visibleEvents, calendarTimezone),
@@ -1164,6 +1380,25 @@ export default function CalendarPage() {
     }
   }
 
+  async function createShared(shareId: string, payload: SharedEventPayload) {
+    if (new Date(payload.end_at) <= new Date(payload.start_at)) {
+      setError("End must be after start.");
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createSharedEvent(shareId, payload);
+      setEditorDay(null);
+      setSelectedDay(null);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "We could not save your event.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function update(payload: EventPayload) {
     if (!activeHomeId || !selectedEvent) return;
     if (new Date(payload.end_at) <= new Date(payload.start_at)) {
@@ -1173,12 +1408,37 @@ export default function CalendarPage() {
     setError("");
     setBusy(true);
     try {
-      const updatable = toEventUpdatePayload(payload, selectedEvent.updated_at);
-      const updated = await api.updateEvent(activeHomeId, selectedEvent.event_id, updatable);
+      // An occurrence merged in from an externally shared calendar (see
+      // load()) is never edited through the Home-scoped endpoint — the
+      // viewer may have no Membership in that Home at all. Its own
+      // share-scoped endpoint enforces "manage" permission independently
+      // (see routers.calendar_sharing.update_shared_event); canEdit already
+      // hid the Edit action entirely for a "view"-only share, this is the
+      // request-shape branch, not a second permission check.
+      const updated = selectedEvent.share_id
+        ? await api.updateSharedEvent(
+            selectedEvent.share_id,
+            selectedEvent.event_id,
+            toSharedEventUpdatePayload(payload, selectedEvent.updated_at),
+          )
+        : await api.updateEvent(
+            activeHomeId,
+            selectedEvent.event_id,
+            toEventUpdatePayload(payload, selectedEvent.updated_at),
+          );
       // Return to View mode showing the newly persisted values, rather than
       // closing the sheet — the freshly returned event (not a stale local
       // copy) is what View then renders.
-      setSelectedEvent(updated);
+      setSelectedEvent(
+        selectedEvent.share_id
+          ? {
+              ...updated,
+              share_id: selectedEvent.share_id,
+              share_permission: selectedEvent.share_permission,
+              shared_by_home_name: selectedEvent.shared_by_home_name,
+            }
+          : updated,
+      );
       setEditingSelected(false);
       await load();
     } catch (cause) {
@@ -1200,7 +1460,11 @@ export default function CalendarPage() {
     )
       return;
     try {
-      await api.deleteEvent(activeHomeId, selectedEvent.event_id);
+      if (selectedEvent.share_id) {
+        await api.deleteSharedEvent(selectedEvent.share_id, selectedEvent.event_id);
+      } else {
+        await api.deleteEvent(activeHomeId, selectedEvent.event_id);
+      }
       closeEventSheet();
       await load();
     } catch (cause) {
@@ -1287,14 +1551,15 @@ export default function CalendarPage() {
               >
                 <Layers size={16} aria-hidden="true" />
               </Link>
-              <Link
+              <button
                 className="icon-button secondary"
-                href="/calendar/shared"
-                aria-label="Shared with me"
-                title="Shared with me"
+                type="button"
+                onClick={() => setCalendarSelectorOpen(true)}
+                aria-label="Calendars"
+                title="Calendars"
               >
                 <Users size={16} aria-hidden="true" />
-              </Link>
+              </button>
               <button className="calendar-add-desktop" type="button" onClick={() => setEditorDay(focusDate)}>
                 <Plus size={16} aria-hidden="true" />
                 Add
@@ -1527,6 +1792,75 @@ export default function CalendarPage() {
           </BottomSheet>
         )}
 
+        {calendarSelectorOpen && (
+          <BottomSheet title="Calendars" onDismiss={() => setCalendarSelectorOpen(false)}>
+            <div className="calendar-visibility-list">
+              <div className="calendar-visibility-group">
+                <span className="eyebrow">My calendars</span>
+                {[...homeCalendars, ...(personalCalendar ? [personalCalendar] : [])].map(
+                  (calendar) => (
+                    <label className="calendar-visibility-row" key={calendar.id}>
+                      <span
+                        className="colour-dot"
+                        style={
+                          { "--swatch-colour": resolveColour(calendar.color) } as React.CSSProperties
+                        }
+                        aria-hidden="true"
+                      />
+                      <span className="calendar-visibility-name">
+                        {calendar.owner_user_id ? "Personal calendar" : calendar.name}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCalendarIds.has(calendar.id)}
+                        onChange={() => toggleCalendarVisibility(calendar.id)}
+                        aria-label={`Show ${calendar.owner_user_id ? "Personal calendar" : calendar.name}`}
+                      />
+                    </label>
+                  ),
+                )}
+              </div>
+
+              {sharedCalendars.length > 0 && (
+                <div className="calendar-visibility-group">
+                  <span className="eyebrow">Shared with me</span>
+                  {sharedCalendars.map((share) => (
+                    <label className="calendar-visibility-row" key={share.id}>
+                      <span
+                        className="colour-dot"
+                        style={
+                          {
+                            "--swatch-colour": resolveColour(share.calendar_color ?? "teal"),
+                          } as React.CSSProperties
+                        }
+                        aria-hidden="true"
+                      />
+                      <span className="calendar-visibility-name">
+                        {share.calendar_name}
+                        <small>{share.source_group_name}</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCalendarIds.has(share.id)}
+                        onChange={() => toggleCalendarVisibility(share.id)}
+                        aria-label={`Show ${share.calendar_name}, shared by ${share.source_group_name}`}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              <Link
+                className="tertiary"
+                href="/calendar/shared"
+                onClick={() => setCalendarSelectorOpen(false)}
+              >
+                Manage sharing
+              </Link>
+            </div>
+          </BottomSheet>
+        )}
+
         {editorDay && (
           <BottomSheet
             title="Add event"
@@ -1539,22 +1873,29 @@ export default function CalendarPage() {
               initialDay={editorDay}
               timeZone={calendarTimezone}
               personalCalendarId={personalCalendarId}
+              writableShares={writableShares}
               busy={busy}
               submitLabel="Save event"
               sharedEventsEnabled={sharedEventsEnabled}
               onSubmit={create}
+              onSubmitShared={createShared}
               onCancel={() => setEditorDay(null)}
             />
           </BottomSheet>
         )}
 
         {selectedEvent && (() => {
-          const canEdit = canEditEvent(
-            activeHome?.capabilities ?? [],
-            selectedEvent,
-            currentUserId,
-          );
-          const canDelete = canDeleteEvent(activeHome?.capabilities ?? []);
+          // An occurrence merged in from an externally shared calendar has
+          // its own authority (CalendarShare.permission), independent of —
+          // and usually entirely absent from — the viewer's Home
+          // capabilities (see canEditSharedEvent/canDeleteSharedEvent's
+          // docstring in calendar-utils.ts).
+          const canEdit = selectedEvent.share_id
+            ? canEditSharedEvent(selectedEvent)
+            : canEditEvent(activeHome?.capabilities ?? [], selectedEvent, currentUserId);
+          const canDelete = selectedEvent.share_id
+            ? canDeleteSharedEvent(selectedEvent)
+            : canDeleteEvent(activeHome?.capabilities ?? []);
           return (
             <BottomSheet
               title={editingSelected ? "Edit event" : selectedEvent.title}
@@ -1593,6 +1934,7 @@ export default function CalendarPage() {
                   members={members}
                   timeZone={calendarTimezone}
                   personalCalendarId={personalCalendarId}
+                  homeName={activeHome?.name ?? "Home calendar"}
                   canDelete={canDelete}
                   onDelete={remove}
                 />
@@ -1642,9 +1984,25 @@ function EventList({
             />
             <span className="event-time">{eventTime(event, timeZone)}</span>
             <span className="event-copy">
-              <strong>{event.title}</strong>
+              <strong>
+                {event.title}
+                {event.shared_by_home_name && (
+                  <span
+                    className="shared-calendar-badge"
+                    title={`Shared by ${event.shared_by_home_name}`}
+                  >
+                    <Users size={12} aria-hidden="true" />
+                  </span>
+                )}
+              </strong>
               <small>
-                {[people.join(", "), event.label?.name, event.location_text, event.reminder_minutes !== null ? "Reminder set" : ""]
+                {[
+                  people.join(", "),
+                  event.label?.name,
+                  event.location_text,
+                  event.reminder_minutes !== null ? "Reminder set" : "",
+                  event.shared_by_home_name ? `Shared by ${event.shared_by_home_name}` : "",
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </small>

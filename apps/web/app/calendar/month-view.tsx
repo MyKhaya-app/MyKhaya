@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Users } from "lucide-react";
 import type { EventOccurrence } from "@mykhaya/shared-types";
 import { resolveColour } from "@mykhaya/design-tokens";
 import { usePrefersReducedMotion, useMonthSwipe } from "./use-month-swipe";
@@ -205,10 +206,30 @@ export function MonthView({
                       } as React.CSSProperties
                     }
                     onClick={() => onEvent(event)}
-                    aria-label={`${eventTime(event, timeZone)} ${event.title}`}
-                    title={event.title}
+                    aria-label={`${eventTime(event, timeZone)} ${event.title}${
+                      event.shared_by_home_name ? `, shared by ${event.shared_by_home_name}` : ""
+                    }`}
+                    title={
+                      event.shared_by_home_name
+                        ? `${event.title} · Shared by ${event.shared_by_home_name}`
+                        : event.title
+                    }
                   >
-                    {showTitle ? `${isContinuation ? "↳ " : ""}${event.title}` : ""}
+                    {showTitle ? (
+                      <>
+                        {isContinuation ? "↳ " : ""}
+                        {event.shared_by_home_name && (
+                          <Users
+                            className="month-event-shared-icon"
+                            size={10}
+                            aria-hidden="true"
+                          />
+                        )}
+                        {event.title}
+                      </>
+                    ) : (
+                      ""
+                    )}
                   </button>
                 );
               })}

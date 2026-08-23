@@ -4,9 +4,9 @@ import userEvent from "@testing-library/user-event";
 import type { EventLabel, Home } from "@mykhaya/shared-types";
 import HomeSettings from "./page";
 
-// Locked-state coverage for the exact "Calendars & categories" screen a
-// Free user could previously see with every seeded default (Family/School/
-// Work/Appointment/Birthday/...) shown as fully active and manageable. See
+// Locked-state coverage for the "Categories" screen a Free user could
+// previously see with every seeded default (Family/School/Work/
+// Appointment/Birthday/...) shown as fully active and manageable. See
 // docs/architecture/commercial-entitlements.md "Event categories are
 // CalendarEventLabel, not HomeCalendar".
 
@@ -122,7 +122,7 @@ beforeEach(() => {
   });
 });
 
-describe("Home settings — Calendars & categories locked states", () => {
+describe("Home settings — Categories locked states", () => {
   it("shows only one category as Active/manageable on Free, the rest locked", async () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue(sevenSeededLabels);
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -131,7 +131,7 @@ describe("Home settings — Calendars & categories locked states", () => {
 
     render(<HomeSettings />);
 
-    await screen.findByRole("heading", { name: /calendars & categories/i });
+    await screen.findByRole("heading", { name: /categories/i });
 
     // Exactly one interactive "Active" checkbox — the rest render as
     // locked rows with no toggle at all.
@@ -163,7 +163,7 @@ describe("Home settings — Calendars & categories locked states", () => {
 
     render(<HomeSettings />);
 
-    await screen.findByRole("heading", { name: /calendars & categories/i });
+    await screen.findByRole("heading", { name: /categories/i });
 
     const activeCheckboxes = await screen.findAllByRole("checkbox", { name: /active/i });
     expect(activeCheckboxes).toHaveLength(5);
@@ -187,7 +187,7 @@ describe("Home settings — Home calendar colour", () => {
   it("shows the Home calendar with its current colour and no rename control", async () => {
     render(<HomeSettings />);
 
-    await screen.findByRole("heading", { name: /calendars & categories/i });
+    await screen.findByRole("heading", { name: /categories/i });
 
     // A colour-dot toggle button exists, but never a text input for its name.
     await screen.findByRole("button", { name: /change home calendar colour/i });
@@ -211,7 +211,7 @@ describe("Home settings — Home calendar colour", () => {
     const user = userEvent.setup();
 
     render(<HomeSettings />);
-    await screen.findByRole("heading", { name: /calendars & categories/i });
+    await screen.findByRole("heading", { name: /categories/i });
 
     await user.click(await screen.findByRole("button", { name: /change home calendar colour/i }));
     const picker = screen.getByRole("radiogroup", { name: /home calendar colour/i });
