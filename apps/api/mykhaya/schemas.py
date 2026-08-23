@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 
 from mykhaya.colour_palette import ColourToken
 from mykhaya.models import (
+    CalendarSharePermission,
+    CalendarShareStatus,
     ChildAgeBand,
     ChildTransitionStatus,
     HouseholdRelationship,
@@ -341,6 +343,90 @@ class InvitationRevoke(StrictModel):
 
 class InvitationAccept(StrictModel):
     token: str = Field(min_length=30, max_length=500)
+
+
+class CalendarShareCreate(StrictModel):
+    calendar_id: uuid.UUID
+    recipient_email: EmailStr
+    permission: CalendarSharePermission = CalendarSharePermission.view
+
+
+class CalendarSharePermissionUpdate(StrictModel):
+    permission: CalendarSharePermission
+
+
+class CalendarSharePreferencesUpdate(StrictModel):
+    notification_preference: Literal["all", "important", "off"] | None = None
+    include_in_briefing: bool | None = None
+
+
+class CalendarShareAccept(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+    notification_preference: Literal["all", "important", "off"] = "all"
+    include_in_briefing: bool = True
+
+
+class CalendarShareDecline(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+
+
+class CalendarShareResponse(BaseModel):
+    id: uuid.UUID
+    calendar_id: uuid.UUID
+    calendar_name: str
+    source_group_id: uuid.UUID
+    source_group_name: str
+    recipient_email: EmailStr
+    recipient_user_id: uuid.UUID | None
+    permission: CalendarSharePermission
+    status: CalendarShareStatus
+    expired: bool
+    requested_by_display_name: str
+    expires_at: datetime
+    accepted_at: datetime | None
+    declined_at: datetime | None
+    revoked_at: datetime | None
+    notification_preference: str
+    include_in_briefing: bool
+    created_at: datetime
+
+
+class CalendarSharePreview(BaseModel):
+    calendar_name: str
+    source_group_name: str
+    invited_by_display_name: str
+    permission: CalendarSharePermission
+    recipient_email: EmailStr
+    expires_at: datetime
+
+
+class CalendarShareListResponse(BaseModel):
+    items: list[CalendarShareResponse]
+
+
+class SharedEventCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=180)
+    start_at: datetime
+    end_at: datetime
+    timezone: str = Field(min_length=1, max_length=100)
+    is_all_day: bool = False
+    description: str | None = Field(default=None, max_length=2000)
+    location_text: str | None = Field(default=None, max_length=200)
+    reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
+    recurrence: RecurrencePattern = RecurrencePattern.none
+    recurrence_interval: int = Field(default=1, ge=1, le=365)
+    recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
+    recurrence_count: int | None = Field(default=None, ge=1, le=1000)
+
+    @field_validator("start_at", "end_at", "recurrence_until")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
+
+
+class SharedEventUpdate(SharedEventCreate):
+    expected_updated_at: datetime
 
 
 class SessionResponse(BaseModel):

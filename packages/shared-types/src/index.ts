@@ -235,6 +235,48 @@ export interface InvitationPreview {
   expires_at: string;
 }
 
+// External Calendar Sharing — see apps/api/mykhaya/routers/calendar_sharing.py.
+// A CalendarShare never creates a Membership; it's a standalone per-recipient
+// access grant to exactly one calendar, resolvable from either side (source
+// Home or recipient) without either party seeing the other's unrelated data.
+export type CalendarSharePermission = "view" | "manage";
+export type CalendarShareStatus =
+  | "pending_admin_approval"
+  | "pending_recipient"
+  | "accepted"
+  | "declined"
+  | "revoked";
+
+export interface CalendarShare {
+  id: string;
+  calendar_id: string;
+  calendar_name: string;
+  source_group_id: string;
+  source_group_name: string;
+  recipient_email: string;
+  recipient_user_id: string | null;
+  permission: CalendarSharePermission;
+  status: CalendarShareStatus;
+  expired: boolean;
+  requested_by_display_name: string;
+  expires_at: string;
+  accepted_at: string | null;
+  declined_at: string | null;
+  revoked_at: string | null;
+  notification_preference: "all" | "important" | "off";
+  include_in_briefing: boolean;
+  created_at: string;
+}
+
+export interface CalendarSharePreview {
+  calendar_name: string;
+  source_group_name: string;
+  invited_by_display_name: string;
+  permission: CalendarSharePermission;
+  recipient_email: string;
+  expires_at: string;
+}
+
 export interface HomeSummary {
   home_name: string;
   member_count: number;

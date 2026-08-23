@@ -118,11 +118,12 @@ class BillingStatusResponse(BaseModel):
     # checkboxes before submission rather than only after a 403. See
     # routers.calendar's events.shared.enabled enforcement.
     shared_events_enabled: bool
-    # Whether this Home's plan currently includes inviting an Extended
-    # Family/Friend (explicit-sharing) member — lets the People page hide
-    # those relationship options before submission. See
-    # routers.invitations/routers.groups's members.external_invites.enabled
-    # enforcement.
+    # Whether this Home's plan currently includes creating an external
+    # Calendar Share (mykhaya.routers.calendar_sharing) — lets the calendar
+    # settings page show the Family-only upsell before submission rather
+    # than only after a 403. Extended Family/Friend Home-member invitations
+    # are retired (see routers.invitations); this key's name is unchanged
+    # from that era, but what it gates is not.
     external_invites_enabled: bool
     # Whether this Home's plan currently includes Meal Plans — lets the
     # module entry show its locked state before the user ever taps in and

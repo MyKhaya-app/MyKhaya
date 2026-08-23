@@ -82,6 +82,12 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.lists_manage,
             Capability.wishlists_view,
             Capability.wishlists_manage,
+            # A Partner/Adult may request an external calendar share (see
+            # routers.calendar_sharing) — sending it outright vs. requiring
+            # Home Admin approval is decided per-request there (whether the
+            # caller is home_admin or the calendar's own personal owner),
+            # not by this capability alone.
+            Capability.sharing_external,
         }
     ),
     PermissionProfile.child_restricted: frozenset(),

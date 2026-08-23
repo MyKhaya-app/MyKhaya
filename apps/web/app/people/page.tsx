@@ -76,6 +76,7 @@ export default function People() {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<InvitationListItem[]>([]);
   const [open, setOpen] = useState(false);
+  const [livesInHome, setLivesInHome] = useState<boolean | null>(null);
   const [relationship, setRelationship] =
     useState<HouseholdRelationship>("partner");
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
@@ -172,10 +173,6 @@ export default function People() {
         group_id: activeHomeId,
         email: data.get("email"),
         relationship,
-        shared_resources:
-          relationship === "extended_family" || relationship === "friend"
-            ? data.getAll("shared_resources")
-            : [],
       });
       // The email send itself happens asynchronously (worker + outbox, so a slow or
       // temporarily-down mail provider never blocks this request) — this only
@@ -184,6 +181,7 @@ export default function People() {
       // status, and Resend if it doesn't arrive.
       setStatus({ kind: "success", message: "Invitation created — sending the email now." });
       setOpen(false);
+      setLivesInHome(null);
       form.reset();
       await load();
     } catch (cause) {
@@ -307,110 +305,149 @@ export default function People() {
               <div>
                 <h2>Add someone to this Home</h2>
                 <p>
-                  Choose the relationship first; advanced permissions remain
-                  separate.
+                  {livesInHome === null
+                    ? "First, tell us how they connect to your household."
+                    : "Choose the relationship first; advanced permissions remain separate."}
                 </p>
               </div>
               <button
                 className="secondary"
                 type="button"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  setLivesInHome(null);
+                }}
               >
                 Close
               </button>
             </div>
-            <form onSubmit={invite}>
-              <label>
-                Relationship
-                <select
-                  value={relationship}
-                  onChange={(event) =>
-                    setRelationship(event.target.value as HouseholdRelationship)
-                  }
-                >
-                  <option value="home_admin">Home Admin</option>
-                  <option value="partner">Partner</option>
-                  <option value="adult">Adult</option>
-                  <option value="child">Child</option>
-                  <option value="extended_family" disabled={!externalInvitesEnabled}>
-                    Extended Family{!externalInvitesEnabled ? " (Family)" : ""}
-                  </option>
-                  <option value="friend" disabled={!externalInvitesEnabled}>
-                    Friend{!externalInvitesEnabled ? " (Family)" : ""}
-                  </option>
-                </select>
-              </label>
-              {!externalInvitesEnabled && (
-                <p className="quiet-state">
-                  Inviting Extended Family or Friends is available with MyKhaya Family.
+
+            {livesInHome === null && (
+              <div className="lives-in-home-question">
+                <p>Does this person live in your household?</p>
+                <p className="muted">
+                  Home members can participate across household features —
+                  calendars, routines, lists and more. People outside the
+                  household (grandparents, other relatives, friends, another
+                  family) should be connected instead, with access only to
+                  what you choose to share.
                 </p>
-              )}
-              <p className="relationship-help">
-                {
-                  relationshipHelp[
-                    relationship as Exclude<
-                      HouseholdRelationship,
-                      "review_required"
-                    >
-                  ]
-                }
-              </p>
-              {relationship === "child" ? (
-                <div className="child-flow-callout">
-                  <p>
-                    Children use a managed profile with an age band, explicit
-                    guardians and restrictive permissions. No adult invitation
-                    will be sent.
-                  </p>
-                  <Link
-                    className="button"
-                    href="/khaya-control-centre/children"
-                  >
-                    Open child setup
-                  </Link>
-                </div>
-              ) : (
-                <>
-                  <label>
-                    Email
-                    <input
-                      name="email"
-                      type="email"
-                      autoComplete="email"
-                      required
-                    />
-                  </label>
-                  {(relationship === "extended_family" ||
-                    relationship === "friend") && (
-                    <fieldset>
-                      <legend>Share initially</legend>
-                      <label className="check-row">
-                        <input
-                          name="shared_resources"
-                          type="checkbox"
-                          value="calendar"
-                        />
-                        Calendar
-                      </label>
-                      <small>
-                        No wider household access is granted automatically.
-                      </small>
-                    </fieldset>
-                  )}
-                  <details>
-                    <summary>Advanced permissions</summary>
-                    <p>
-                      Custom capability overrides will be available here in a
-                      later administration release. The selected relationship’s
-                      safe default profile will be used now.
-                    </p>
-                  </details>
-                  <button disabled={sending}>
-                    {sending ? "Sending…" : "Send invitation"}
+                <div className="actions">
+                  <button type="button" onClick={() => setLivesInHome(true)}>
+                    Yes, they live here
                   </button>
-                </>
-              )}
-            </form>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => setLivesInHome(false)}
+                  >
+                    No, they&rsquo;re outside the household
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {livesInHome === false && (
+              <div className="child-flow-callout">
+                <p>
+                  Give them access to specific calendars instead — they&rsquo;ll
+                  see only what you share, and they never become a member of
+                  this Home.
+                </p>
+                {!externalInvitesEnabled && (
+                  <p className="quiet-state">
+                    Sharing a calendar outside the Home is available with
+                    MyKhaya Family.
+                  </p>
+                )}
+                <div className="actions">
+                  <Link className="button" href="/calendar/calendars">
+                    Share a calendar
+                  </Link>
+                  <button
+                    className="tertiary"
+                    type="button"
+                    onClick={() => setLivesInHome(null)}
+                  >
+                    Back
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {livesInHome === true && (
+              <form onSubmit={invite}>
+                <label>
+                  Relationship
+                  <select
+                    value={relationship}
+                    onChange={(event) =>
+                      setRelationship(event.target.value as HouseholdRelationship)
+                    }
+                  >
+                    <option value="home_admin">Home Admin</option>
+                    <option value="partner">Partner</option>
+                    <option value="adult">Adult</option>
+                    <option value="child">Child</option>
+                  </select>
+                </label>
+                <p className="relationship-help">
+                  {
+                    relationshipHelp[
+                      relationship as Exclude<
+                        HouseholdRelationship,
+                        "review_required" | "extended_family" | "friend"
+                      >
+                    ]
+                  }
+                </p>
+                {relationship === "child" ? (
+                  <div className="child-flow-callout">
+                    <p>
+                      Children use a managed profile with an age band, explicit
+                      guardians and restrictive permissions. No adult invitation
+                      will be sent.
+                    </p>
+                    <Link
+                      className="button"
+                      href="/khaya-control-centre/children"
+                    >
+                      Open child setup
+                    </Link>
+                  </div>
+                ) : (
+                  <>
+                    <label>
+                      Email
+                      <input
+                        name="email"
+                        type="email"
+                        autoComplete="email"
+                        required
+                      />
+                    </label>
+                    <details>
+                      <summary>Advanced permissions</summary>
+                      <p>
+                        Custom capability overrides will be available here in a
+                        later administration release. The selected relationship’s
+                        safe default profile will be used now.
+                      </p>
+                    </details>
+                    <button disabled={sending}>
+                      {sending ? "Sending…" : "Send invitation"}
+                    </button>
+                  </>
+                )}
+                <button
+                  className="tertiary"
+                  type="button"
+                  onClick={() => setLivesInHome(null)}
+                >
+                  Back
+                </button>
+              </form>
+            )}
           </section>
         )}
 
@@ -514,19 +551,18 @@ export default function People() {
                         >
                           {nonChildRelationships.map((value) => {
                             const isExternal = value === "extended_family" || value === "friend";
-                            // Transition-safe, matching the backend: a member
-                            // already Extended Family/Friend can stay that
-                            // way (their own current option always stays
-                            // selectable) — only a *new* transition into it
-                            // is locked on Free.
-                            const locked =
-                              isExternal &&
-                              !externalInvitesEnabled &&
-                              member.relationship !== value;
+                            // Extended Family/Friend is retired as a Home-member
+                            // relationship (see routers.groups.update_member) —
+                            // a member who already holds it keeps their own
+                            // current option selectable (transition-safe), but
+                            // no one can be moved *into* it any more, on any
+                            // plan. New external access goes through calendar
+                            // sharing instead.
+                            const locked = isExternal && member.relationship !== value;
                             return (
                               <option key={value} value={value} disabled={locked}>
                                 {relationshipLabels[value]}
-                                {locked ? " (Family)" : ""}
+                                {locked ? " (retired)" : ""}
                               </option>
                             );
                           })}

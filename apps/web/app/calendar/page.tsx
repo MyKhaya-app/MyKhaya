@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import type {
@@ -1285,6 +1286,14 @@ export default function CalendarPage() {
                 title="Event categories"
               >
                 <Layers size={16} aria-hidden="true" />
+              </Link>
+              <Link
+                className="icon-button secondary"
+                href="/calendar/shared"
+                aria-label="Shared with me"
+                title="Shared with me"
+              >
+                <Users size={16} aria-hidden="true" />
               </Link>
               <button className="calendar-add-desktop" type="button" onClick={() => setEditorDay(focusDate)}>
                 <Plus size={16} aria-hidden="true" />

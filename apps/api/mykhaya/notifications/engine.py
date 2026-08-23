@@ -54,6 +54,9 @@ MANDATORY_EMAIL_TYPES = {
     "password_reset",
     "household_invitation",
     "platform_administrator_invitation",
+    # An external calendar-share invitation is exactly as action-required as
+    # a household_invitation — the recipient can't accept/decline without it.
+    "calendar_share_invitation",
 }
 
 

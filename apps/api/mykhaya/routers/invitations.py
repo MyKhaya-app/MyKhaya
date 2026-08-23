@@ -12,7 +12,7 @@ from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
-from mykhaya.entitlements import require_entitlement, require_within_limit
+from mykhaya.entitlements import require_within_limit
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
@@ -58,15 +58,19 @@ async def invite(
     if body.relationship == HouseholdRelationship.review_required:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a relationship.")
 
-    # Extended Family / Friend is the real, reachable "invite an external
-    # member" capability (PermissionProfile.explicit_sharing — zero default
-    # capabilities, selectively granted via shared_resources). Checked
-    # independently of home.max_members below: today Free's member limit
-    # (1) already blocks any invite, but this entitlement is what actually
-    # governs *this specific relationship type* and must keep doing so even
-    # if a future plan ever allows more than one Free member.
+    # Extended Family / Friend as a *Home member* relationship is retired in
+    # favour of external Calendar Sharing (mykhaya.routers.calendar_sharing)
+    # — see docs on the Connections/external-sharing model. This blocks only
+    # *new* invitations; existing accepted Memberships with either
+    # relationship (and their shared_resources) keep working completely
+    # unchanged — capabilities_for() and default_profile() are untouched for
+    # them. No migration/backfill is needed or attempted here.
     if body.relationship in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}:
-        await require_entitlement(db, body.group_id, "members.external_invites.enabled")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Extended Family and Friends are no longer added as Home members. "
+            "Use calendar sharing to give someone outside the Home access instead.",
+        )
 
     # Race-safe Free-Home member limit — same per-Home advisory-lock pattern
     # as routers.calendar's calendar-creation endpoint (see

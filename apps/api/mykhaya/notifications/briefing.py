@@ -22,6 +22,8 @@ from mykhaya.household_permissions import Capability, capabilities_for
 from mykhaya.models import (
     BriefingDays,
     CalendarEvent,
+    CalendarShare,
+    CalendarShareStatus,
     ChildProfile,
     FeatureKey,
     Membership,
@@ -181,6 +183,49 @@ async def _events_for_user_today(
                     db, event
                 ):
                     continue
+            for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
+                occurrences.append(
+                    BriefingOccurrence(
+                        event_id=event.id,
+                        title=event.title,
+                        start_at=occurrence_start,
+                        is_all_day=event.is_all_day,
+                    )
+                )
+
+    # Externally shared calendars: a share recipient has no Membership in the
+    # source Home, so the loop above never considers them — this is the
+    # separate path spec'd for shared-calendar events, gated by the
+    # recipient's own include_in_briefing toggle (independent of
+    # notification_preference, which only governs push/email/in-app).
+    seen_event_ids = {occurrence.event_id for occurrence in occurrences}
+    shares = (
+        await db.scalars(
+            select(CalendarShare).where(
+                CalendarShare.recipient_user_id == user_id,
+                CalendarShare.status == CalendarShareStatus.accepted,
+                CalendarShare.revoked_at.is_(None),
+                CalendarShare.include_in_briefing.is_(True),
+            )
+        )
+    ).all()
+    for share in shares:
+        if not await is_feature_enabled(db, FeatureKey.calendar, share.source_group_id):
+            continue
+        if not await is_feature_enabled(db, FeatureKey.notifications, share.source_group_id):
+            continue
+        events = (
+            await db.scalars(
+                select(CalendarEvent).where(
+                    CalendarEvent.calendar_id == share.calendar_id,
+                    CalendarEvent.deleted_at.is_(None),
+                    recurrence_candidate_filter(day_start, day_end),
+                )
+            )
+        ).all()
+        for event in events:
+            if event.id in seen_event_ids:
+                continue  # belt-and-braces: never double-count if ever also a Home member
             for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
                 occurrences.append(
                     BriefingOccurrence(

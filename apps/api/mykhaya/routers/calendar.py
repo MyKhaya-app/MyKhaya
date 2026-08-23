@@ -42,6 +42,7 @@ from mykhaya.models import (
     Membership,
     RecurrencePattern,
 )
+from mykhaya.notifications.calendar_shares import notify_calendar_share_recipients
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.schemas import (
@@ -1068,6 +1069,15 @@ async def create_event(
         set(requested_members),
         event.version,
     )
+    await notify_calendar_share_recipients(
+        db,
+        settings,
+        event,
+        actor_user_id=auth.user.id,
+        actor_name=auth.user.display_name,
+        action="created",
+        version_marker=event.version,
+    )
     await db.commit()
     await db.refresh(event)
 
@@ -1319,6 +1329,15 @@ async def update_event(
             unchanged_member_ids,
             event.version,
         )
+        await notify_calendar_share_recipients(
+            db,
+            settings,
+            event,
+            actor_user_id=auth.user.id,
+            actor_name=auth.user.display_name,
+            action="updated",
+            version_marker=event.version,
+        )
 
     await db.commit()
     # Async SQLAlchemy expires every attribute on commit; touching one
@@ -1380,6 +1399,14 @@ async def delete_event(
     audit(db, request, "calendar.event.deleted", auth.user.id, home_id, "event", event.id)
     await _notify_members_event_cancelled(
         db, settings, event, auth.user.id, auth.user.display_name, member_ids
+    )
+    await notify_calendar_share_recipients(
+        db,
+        settings,
+        event,
+        actor_user_id=auth.user.id,
+        actor_name=auth.user.display_name,
+        action="cancelled",
     )
     await db.commit()
 
@@ -1447,8 +1474,7 @@ async def home_summary(
     capabilities = await capabilities_for(db, membership)
     now = datetime.now(UTC)
     primary_calendar = await db.scalar(
-        select(HomeCalendar)
-        .where(
+        select(HomeCalendar).where(
             HomeCalendar.group_id == home_id,
             HomeCalendar.is_primary.is_(True),
         )

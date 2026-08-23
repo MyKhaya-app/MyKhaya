@@ -15,6 +15,7 @@ from typing import Any, Literal, TypedDict
 DeepLinkType = Literal[
     "calendar_event",
     "calendar_today",
+    "calendar_share",
     "meal_plan",
     "member",
     "routine",
@@ -50,6 +51,8 @@ def resolve_path(link: dict[str, Any] | None) -> str:
         return f"/calendar?event={entity_id}"
     if kind == "calendar_today":
         return "/calendar"
+    if kind == "calendar_share":
+        return "/calendar/shared"
     if kind == "meal_plan":
         return "/meal-plans"
     if kind == "routine" and entity_id:

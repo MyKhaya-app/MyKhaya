@@ -111,6 +111,7 @@ def test_mandatory_email_types_are_registered() -> None:
         "email_verification",
         "password_reset",
         "household_invitation",
+        "calendar_share_invitation",
         "platform_administrator_invitation",
     } == (MANDATORY_EMAIL_TYPES)
 

@@ -10,7 +10,7 @@ from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
-from mykhaya.entitlements import ensure_home_subscription, require_entitlement
+from mykhaya.entitlements import ensure_home_subscription
 from mykhaya.household_permissions import (
     Capability,
     capabilities_for,
@@ -253,11 +253,13 @@ async def update_member(
             status.HTTP_409_CONFLICT,
             "Assign another Home Admin before changing the final Home Admin.",
         )
-    # Converting an ordinary member INTO Extended Family/Friend is a new
-    # grant of the explicit-sharing capability, not a re-save — mirrors
-    # events.shared.enabled's "genuinely new" test. An existing external
-    # member keeps working normally (transition-safe); this only blocks a
-    # fresh transition into that state on Free.
+    # Extended Family/Friend as a Home-member relationship is retired in
+    # favour of external Calendar Sharing (mykhaya.routers.calendar_sharing)
+    # — see routers.invitations' matching block. An existing external member
+    # keeps working normally (transition-safe, untouched by this check); this
+    # only blocks a *fresh* transition of some other member into that state,
+    # the PATCH-endpoint equivalent of invitations.py no longer accepting it
+    # for new invitations.
     was_external = target.relationship in {
         HouseholdRelationship.extended_family,
         HouseholdRelationship.friend,
@@ -267,7 +269,11 @@ async def update_member(
         HouseholdRelationship.friend,
     }
     if will_be_external and not was_external:
-        await require_entitlement(db, group_id, "members.external_invites.enabled")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Extended Family and Friends are no longer added as Home members. "
+            "Use calendar sharing to give someone outside the Home access instead.",
+        )
 
     previous = {
         "relationship": target.relationship.value,

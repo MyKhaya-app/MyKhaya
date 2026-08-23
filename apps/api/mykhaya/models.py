@@ -1,8 +1,8 @@
 import secrets
 import uuid
 from datetime import date, datetime, time
-from decimal import Decimal
 from datetime import time as clock_time
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -102,6 +102,24 @@ class ChildTransitionStatus(StrEnum):
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
+
+
+class CalendarSharePermission(StrEnum):
+    view = "view"
+    manage = "manage"
+
+
+class CalendarShareStatus(StrEnum):
+    # A non-admin, non-owner Home member requested this share; a Home Admin
+    # (or, for a Personal Calendar, its owner — see CalendarShare's
+    # docstring) must approve before any invitation is sent.
+    pending_admin_approval = "pending_admin_approval"
+    # Approved (or Home-Admin/owner-initiated, where approval is implicit) —
+    # an invitation has been sent and awaits the recipient's decision.
+    pending_recipient = "pending_recipient"
+    accepted = "accepted"
+    declined = "declined"
+    revoked = "revoked"
 
 
 class SessionKind(StrEnum):
@@ -506,6 +524,83 @@ class Invitation(UuidTimeMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CalendarShare(UuidTimeMixin, Base):
+    """One recipient's access to one calendar, outside the calendar's own Home —
+    the external-sharing analogue of WishlistShare (see routers.wishlists), not
+    of Membership: accepting a CalendarShare never creates a Membership row and
+    never grants any capability beyond this one calendar. `resource_type` exists
+    so a future Wishlist/List external-share can reuse this table rather than
+    inventing a parallel one (see docs — "Connections foundation"), even though
+    "calendar" is the only value used today.
+
+    Unlike WishlistShare (access granted the instant the sharer confirms a
+    recipient), this carries the fuller Invitation-style token/expiry/accept
+    lifecycle plus an approval step, because product requirements call for an
+    explicit recipient accept/decline and, for non-admin-initiated requests, a
+    Home Admin approval gate — see docs/product and household_permissions
+    .Capability.sharing_external.
+
+    The public/email token is derived from this row's id (security.derived_token,
+    purpose "calendar_share") exactly like Invitation.token_hash and
+    WishlistShare's link token — decoding it yields only this row's id.
+
+    No unique constraint on (calendar_id, recipient_email): declined/revoked
+    history rows are kept for audit, so "no other active share exists for this
+    pair" is enforced in code under a per-(calendar, recipient) advisory lock
+    (mykhaya.routers.calendar_sharing), the same pattern routers.invitations
+    uses for home.max_members.
+    """
+
+    __tablename__ = "calendar_shares"
+    __table_args__ = (
+        Index("ix_calendar_share_calendar_status", "calendar_id", "status"),
+        Index("ix_calendar_share_recipient_email", "recipient_email"),
+        Index("ix_calendar_share_recipient_user", "recipient_user_id"),
+    )
+    resource_type: Mapped[str] = mapped_column(
+        String(20), default="calendar", server_default="calendar"
+    )
+    calendar_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalised: lets "shared by this Home"/notification copy show the
+    # source Home's name without a join through calendar_id, and survives
+    # even if the calendar itself is later deleted (FK is SET NULL, not
+    # CASCADE, unlike calendar_id above — deleting a shared calendar revokes
+    # access via calendar_id but this row, and its audit trail, persist).
+    source_group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    recipient_email: Mapped[str] = mapped_column(String(320))
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    permission: Mapped[CalendarSharePermission] = mapped_column(
+        Enum(CalendarSharePermission, name="calendar_share_permission")
+    )
+    status: Mapped[CalendarShareStatus] = mapped_column(
+        Enum(CalendarShareStatus, name="calendar_share_status"),
+        default=CalendarShareStatus.pending_recipient,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    declined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Recipient-owned, editable only by the recipient after acceptance — see
+    # spec's "muting a shared calendar must not revoke access."
+    notification_preference: Mapped[str] = mapped_column(
+        String(20), default="all", server_default="all"
+    )
+    include_in_briefing: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
 class AuditEvent(Base):

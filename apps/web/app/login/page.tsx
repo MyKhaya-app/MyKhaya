@@ -22,6 +22,7 @@ export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
+  const calendarShare = params.get("calendar_share");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [biometricBusy, setBiometricBusy] = useState(false),
@@ -38,6 +39,10 @@ export default function Login() {
       group_name: string;
       invited_by_display_name: string;
       email: string;
+    } | null>(null),
+    [shareContext, setShareContext] = useState<{
+      calendar_name: string;
+      source_group_name: string;
     } | null>(null);
 
   const hint = getBiometricHint();
@@ -68,6 +73,14 @@ export default function Login() {
       .catch((reason: ApiError) => setError(reason.message));
   }, [invitation]);
 
+  useEffect(() => {
+    if (!calendarShare) return;
+    api
+      .previewCalendarShare(calendarShare)
+      .then((result) => setShareContext(result))
+      .catch((reason: ApiError) => setError(reason.message));
+  }, [calendarShare]);
+
   async function afterSignedIn(user: User) {
     setBiometricHint({
       userId: user.id,
@@ -75,6 +88,14 @@ export default function Login() {
       avatarVersion: user.avatar_version,
     });
     if (invitation) await api.post("/invitations/accept", { token: invitation });
+    // A calendar share, unlike a household invitation, isn't auto-accepted
+    // here — the recipient chooses notification/briefing preferences as
+    // part of accepting (see app/calendar-shares/accept/page.tsx), so this
+    // sends them straight there instead of the Home dashboard.
+    if (calendarShare) {
+      router.push(`/calendar-shares/accept?token=${encodeURIComponent(calendarShare)}`);
+      return;
+    }
     router.push((await api.homes()).length ? "/home" : "/onboarding");
   }
 
@@ -171,7 +192,9 @@ export default function Login() {
               href={
                 invitation
                   ? `/register?invitation=${encodeURIComponent(invitation)}`
-                  : "/register"
+                  : calendarShare
+                    ? `/register?calendar_share=${encodeURIComponent(calendarShare)}`
+                    : "/register"
               }
             >
               Create an account
@@ -186,6 +209,12 @@ export default function Login() {
       {inviteContext && (
         <p className="notice success">
           Continue signing in to join {inviteContext.group_name}.
+        </p>
+      )}
+      {shareContext && (
+        <p className="notice success">
+          Continue signing in to view &ldquo;{shareContext.calendar_name}&rdquo;, shared by{" "}
+          {shareContext.source_group_name}.
         </p>
       )}
       <form onSubmit={submit}>

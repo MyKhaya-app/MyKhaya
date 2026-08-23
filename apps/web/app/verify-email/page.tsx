@@ -9,7 +9,8 @@ import { FormStatus } from "@/components/form-status";
 export default function VerifyEmail() {
   const params = useSearchParams(),
     token = params.get("token"),
-    invitation = params.get("invitation");
+    invitation = params.get("invitation"),
+    calendarShare = params.get("calendar_share");
   const [message, setMessage] = useState(
       token
         ? "Verifying your email…"
@@ -44,7 +45,9 @@ export default function VerifyEmail() {
         href={
           invitation
             ? `/login?invitation=${encodeURIComponent(invitation)}`
-            : "/login"
+            : calendarShare
+              ? `/login?calendar_share=${encodeURIComponent(calendarShare)}`
+              : "/login"
         }
       >
         Continue to sign in

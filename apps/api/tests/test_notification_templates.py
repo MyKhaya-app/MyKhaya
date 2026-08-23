@@ -135,6 +135,10 @@ def test_registry_matches_migration_version() -> None:
         "email_verification",
         "password_reset",
         "household_invitation",
+        "calendar_share_invitation",
+        "calendar_share_accepted",
+        "calendar_share_declined",
+        "calendar_share_revoked",
         "platform_administrator_invitation",
     }
 

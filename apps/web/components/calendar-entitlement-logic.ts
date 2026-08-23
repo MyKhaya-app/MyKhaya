@@ -36,6 +36,16 @@ export function atLimitMessage(usage: CalendarUsage): string | null {
  * more event categories than its plan allows (almost always the result of a
  * downgrade — see docs/architecture/commercial-entitlements.md#event-categories).
  * Never shown for a Home within its limit. */
+/** Whether this Home's plan currently allows creating a new external
+ * Calendar Share (mykhaya.routers.calendar_sharing) — the calendars page
+ * uses this to show the Family upsell before submission rather than only
+ * after a 403. Receiving/accepting a share is never gated this way — see
+ * BillingStatus.external_invites_enabled's docstring on why the name
+ * predates this feature. */
+export function canShareCalendar(externalInvitesEnabled: boolean): boolean {
+  return externalInvitesEnabled;
+}
+
 export function overLimitExplanation(usage: CalendarUsage): string | null {
   if (!usage.over_limit) return null;
   const planWord = usage.limit === 1 ? "category" : "categories";

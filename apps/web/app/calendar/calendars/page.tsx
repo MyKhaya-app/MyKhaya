@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { HomeCalendar } from "@mykhaya/shared-types";
+import type { CalendarShare, HomeCalendar } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { FormStatus } from "@/components/form-status";
@@ -11,7 +11,16 @@ import {
   atLimitMessage,
   calendarBadgeLabel,
   canCreateCalendar,
+  canShareCalendar,
 } from "@/components/calendar-entitlement-logic";
+
+const shareStatusLabels: Record<CalendarShare["status"], string> = {
+  pending_admin_approval: "Awaiting Home Admin approval",
+  pending_recipient: "Invitation sent",
+  accepted: "Active",
+  declined: "Declined",
+  revoked: "Revoked",
+};
 
 // Calendar management (Phase 6) — deliberately its own small page rather
 // than woven into the month/week/day/agenda calendar view, so the existing
@@ -27,6 +36,21 @@ export default function CalendarsPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
+  const [sharePanel, setSharePanel] = useState<string | null>(null);
+  const [shareEmail, setShareEmail] = useState("");
+  const [sharePermission, setSharePermission] = useState<"view" | "manage">("view");
+  const [shares, setShares] = useState<Record<string, CalendarShare[]>>({});
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setExternalInvitesEnabled(billing.external_invites_enabled))
+      .catch(() => setExternalInvitesEnabled(false));
+  }, [activeHomeId]);
 
   const load = useCallback(async () => {
     if (!activeHomeId) return;
@@ -61,6 +85,81 @@ export default function CalendarsPage() {
       setError(cause instanceof ApiError ? cause.message : "Could not create that category.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadShares(calendarId: string) {
+    if (!activeHomeId) return;
+    try {
+      const result = await api.listSharesForCalendar(activeHomeId, calendarId);
+      setShares((current) => ({ ...current, [calendarId]: result.items }));
+    } catch (cause) {
+      setShareError(
+        cause instanceof ApiError ? cause.message : "Could not load calendar sharing.",
+      );
+    }
+  }
+
+  function toggleSharePanel(calendarId: string) {
+    setShareError("");
+    setShareEmail("");
+    setSharePermission("view");
+    setSharePanel((current) => {
+      const next = current === calendarId ? null : calendarId;
+      if (next) void loadShares(next);
+      return next;
+    });
+  }
+
+  async function shareCalendar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId || !sharePanel || shareBusy || !shareEmail.trim()) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.createCalendarShare(activeHomeId, {
+        calendar_id: sharePanel,
+        recipient_email: shareEmail.trim(),
+        permission: sharePermission,
+      });
+      setShareEmail("");
+      setSharePermission("view");
+      await loadShares(sharePanel);
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not share that calendar.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function changeSharePermission(calendarId: string, shareId: string, permission: "view" | "manage") {
+    if (!activeHomeId || shareBusy) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.changeCalendarSharePermission(activeHomeId, shareId, permission);
+      await loadShares(calendarId);
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not change that permission.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeShare(calendarId: string, shareId: string) {
+    if (!activeHomeId || shareBusy) return;
+    if (!window.confirm("Turn off sharing for this person? They'll lose access immediately.")) {
+      return;
+    }
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.revokeCalendarShare(activeHomeId, shareId);
+      await loadShares(calendarId);
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not revoke that share.");
+    } finally {
+      setShareBusy(false);
     }
   }
 
@@ -102,28 +201,143 @@ export default function CalendarsPage() {
             <div className="settings-list">
               {items.map((calendar) => {
                 const badge = calendarBadgeLabel(calendar);
+                const calendarShares = shares[calendar.id] ?? [];
                 return (
                   <div className="card" key={calendar.id}>
-                    <div>
-                      <h2>
-                        {calendar.name}
-                        {calendar.is_primary ? " · Primary" : ""}
-                      </h2>
-                      {badge && (
-                        <p className="quiet-state">
-                          {badge} — events here can be viewed but not created, edited or deleted.
-                        </p>
-                      )}
+                    <div className="settings-list-row">
+                      <div>
+                        <h2>
+                          {calendar.name}
+                          {calendar.is_primary ? " · Primary" : ""}
+                        </h2>
+                        {badge && (
+                          <p className="quiet-state">
+                            {badge} — events here can be viewed but not created, edited or deleted.
+                          </p>
+                        )}
+                      </div>
+                      <div className="actions compact-actions">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => toggleSharePanel(calendar.id)}
+                        >
+                          {sharePanel === calendar.id ? "Close" : "Share calendar"}
+                        </button>
+                        {!calendar.is_primary && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() => deleteCalendar(calendar.id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    {!calendar.is_primary && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() => deleteCalendar(calendar.id)}
-                      >
-                        Delete
-                      </button>
+
+                    {sharePanel === calendar.id && (
+                      <div className="calendar-sharing-panel">
+                        <FormStatus error={shareError} />
+                        {canShareCalendar(externalInvitesEnabled) ? (
+                          <form onSubmit={shareCalendar}>
+                            <label>
+                              Email address
+                              <input
+                                type="email"
+                                value={shareEmail}
+                                onChange={(event) => setShareEmail(event.target.value)}
+                                placeholder="grandma@example.com"
+                                required
+                              />
+                            </label>
+                            <label>
+                              Access
+                              <select
+                                value={sharePermission}
+                                onChange={(event) =>
+                                  setSharePermission(event.target.value as "view" | "manage")
+                                }
+                              >
+                                <option value="view">Can view</option>
+                                <option value="manage">Can add &amp; edit</option>
+                              </select>
+                            </label>
+                            <button disabled={shareBusy}>
+                              {shareBusy ? "Sending…" : "Send invitation"}
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <p>Sharing a calendar outside the Home is included with MyKhaya Family.</p>
+                            <Link className="button secondary" href="/settings/billing">
+                              Upgrade to Family
+                            </Link>
+                          </>
+                        )}
+
+                        {calendarShares.length > 0 && (
+                          <div className="calendar-share-list">
+                            {calendarShares.map((share) => (
+                              <div className="calendar-share-row" key={share.id}>
+                                <div>
+                                  <strong>{share.recipient_email}</strong>
+                                  <small>
+                                    {share.permission === "manage" ? "Can add & edit" : "Can view"} ·{" "}
+                                    {shareStatusLabels[share.status]}
+                                    {share.accepted_at
+                                      ? ` · Accepted ${new Date(share.accepted_at).toLocaleDateString(
+                                          "en-GB",
+                                          { day: "numeric", month: "long", year: "numeric" },
+                                        )}`
+                                      : ""}
+                                  </small>
+                                </div>
+                                {share.status === "accepted" && (
+                                  <div className="actions compact-actions">
+                                    <select
+                                      value={share.permission}
+                                      disabled={shareBusy}
+                                      onChange={(event) =>
+                                        changeSharePermission(
+                                          calendar.id,
+                                          share.id,
+                                          event.target.value as "view" | "manage",
+                                        )
+                                      }
+                                    >
+                                      <option value="view">Can view</option>
+                                      <option value="manage">Can add &amp; edit</option>
+                                    </select>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={shareBusy}
+                                      onClick={() => revokeShare(calendar.id, share.id)}
+                                    >
+                                      Revoke
+                                    </button>
+                                  </div>
+                                )}
+                                {(share.status === "pending_recipient" ||
+                                  share.status === "pending_admin_approval") && (
+                                  <div className="actions compact-actions">
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={shareBusy}
+                                      onClick={() => revokeShare(calendar.id, share.id)}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 );

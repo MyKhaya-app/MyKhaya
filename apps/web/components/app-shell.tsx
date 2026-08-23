@@ -123,7 +123,19 @@ export function AppShell({
   }, [bootstrap]);
 
   useEffect(() => {
-    if (authState === "ready" && !homesError && !loading && !homes.length && path !== "/onboarding")
+    // A Home-less user has a legitimate reason to be here: a brand-new Free
+    // account created solely to accept an externally shared calendar (see
+    // app/calendar-shares/accept/page.tsx) must land on that invitation, not
+    // get bounced into onboarding first — see docs on external Calendar
+    // Sharing, "signup preservation."
+    if (
+      authState === "ready" &&
+      !homesError &&
+      !loading &&
+      !homes.length &&
+      path !== "/onboarding" &&
+      path !== "/calendar-shares/accept"
+    )
       router.replace("/onboarding");
   }, [authState, homes, homesError, loading, path, router]);
 

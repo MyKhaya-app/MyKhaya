@@ -81,14 +81,17 @@ class PlanDefinition:
 # routines.personal.max_active, routines.household.enabled, meals.enabled,
 # lists.enabled (mykhaya.routers.lists, reusing FeatureKey.shopping's
 # release slot — see docs/architecture/meal-plans.md "Lists integration").
+# members.external_invites.enabled now also gates creating an external
+# Calendar Share (mykhaya.routers.calendar_sharing.create_share) — the
+# source Home's plan, never the recipient's, per the "Deferred enforcement"
+# design this resolves.
 #
 # Declared as commercial data only — no live enforcement, because either the
 # underlying module doesn't exist/isn't released yet (chores/wishlists/
 # notes — see mykhaya.module_registry), or the correct enforcement design is
 # a deliberate follow-up task rather than something to improvise here
-# (events.shared.enabled, members.external_invites.enabled,
-# family_plans.enabled, support.priority.enabled — see "Deferred enforcement"
-# in docs/architecture/commercial-entitlements.md):
+# (events.shared.enabled, family_plans.enabled, support.priority.enabled —
+# see "Deferred enforcement" in docs/architecture/commercial-entitlements.md):
 PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
     SubscriptionPlan.free: PlanDefinition(
         plan=SubscriptionPlan.free,

@@ -62,6 +62,56 @@ TEMPLATES: dict[str, TemplateDefault] = {
         allowed_variables=frozenset({"inviter_display_name", "home_name", "link", "expires_at"}),
         description="Sent when a household admin or partner invites someone to join.",
     ),
+    "calendar_share_invitation": TemplateDefault(
+        subject="{{home_name}} wants to share a calendar with you",
+        body=(
+            "{{inviter_display_name}} from {{home_name}} wants to share the "
+            '"{{calendar_name}}" calendar with you on MyKhaya ({{permission}}).\n\n'
+            "Use this secure link to view the invitation and accept or decline:\n\n"
+            "{{link}}\n\n"
+            "This invitation expires on {{expires_at}}. You don't need MyKhaya Family "
+            "to accept — a free account is enough.\n\n"
+            "If you were not expecting this invitation, you can ignore this email."
+        ),
+        allowed_variables=frozenset(
+            {
+                "inviter_display_name",
+                "home_name",
+                "calendar_name",
+                "permission",
+                "link",
+                "expires_at",
+            }
+        ),
+        description="Sent when a Home shares one of its calendars with someone outside the Home.",
+    ),
+    "calendar_share_accepted": TemplateDefault(
+        subject="{{recipient_display_name}} accepted your calendar share",
+        body=(
+            "{{recipient_display_name}} accepted your invitation to share the "
+            '"{{calendar_name}}" calendar.'
+        ),
+        allowed_variables=frozenset({"recipient_display_name", "calendar_name"}),
+        description="Sent to the sharer when an external calendar-share invitation is accepted.",
+    ),
+    "calendar_share_declined": TemplateDefault(
+        subject="{{recipient_display_name}} declined your calendar share",
+        body=(
+            "{{recipient_display_name}} declined your invitation to share the "
+            '"{{calendar_name}}" calendar.'
+        ),
+        allowed_variables=frozenset({"recipient_display_name", "calendar_name"}),
+        description="Sent to the sharer when an external calendar-share invitation is declined.",
+    ),
+    "calendar_share_revoked": TemplateDefault(
+        subject='Your access to "{{calendar_name}}" has been removed',
+        body=(
+            '{{home_name}} has removed your access to the "{{calendar_name}}" calendar. '
+            "You will no longer see its events or receive notifications for it."
+        ),
+        allowed_variables=frozenset({"home_name", "calendar_name"}),
+        description="Sent to the recipient when a Home revokes an external calendar share.",
+    ),
     "platform_administrator_invitation": TemplateDefault(
         subject="You are invited to administer MyKhaya",
         body=(
@@ -96,5 +146,25 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "role": "Platform Administrator",
         "link": "https://admin.example.com/accept-invitation?token=SAMPLE-TOKEN",
         "expires_at": "2026-12-31",
+    },
+    "calendar_share_invitation": {
+        "inviter_display_name": "Jamie Example",
+        "home_name": "The Example Family",
+        "calendar_name": "School",
+        "permission": "Can view",
+        "link": "https://example.com/calendar-shares/accept?token=SAMPLE-TOKEN",
+        "expires_at": "2026-12-31",
+    },
+    "calendar_share_accepted": {
+        "recipient_display_name": "Margaret Example",
+        "calendar_name": "School",
+    },
+    "calendar_share_declined": {
+        "recipient_display_name": "Margaret Example",
+        "calendar_name": "School",
+    },
+    "calendar_share_revoked": {
+        "home_name": "The Example Family",
+        "calendar_name": "School",
     },
 }

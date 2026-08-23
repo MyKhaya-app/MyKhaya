@@ -217,6 +217,7 @@ describe("People page — Adult relationship", () => {
     render(<People />);
     await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /add member/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
     return screen.getByLabelText("Relationship");
   }
 
@@ -335,5 +336,55 @@ describe("People page — Adult relationship", () => {
 
     const childrenButton = screen.getByRole("button", { name: /^children \d+$/i });
     expect(within(childrenButton).getByText("1")).toBeInTheDocument();
+  });
+});
+
+// External Calendar Sharing replaces Extended Family/Friend as a Home-member
+// relationship (see mykhaya.routers.calendar_sharing) — new invitations must
+// ask "does this person live in your household?" first, route "no" to
+// calendar sharing instead of sending an invitation, and never offer
+// Extended Family/Friend as a fresh Add-member option any more.
+describe("People page — external sharing replaces Extended Family/Friend", () => {
+  beforeEach(() => {
+    setActiveHomeForTest(familyHomeWithGrowthRoom());
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
+  });
+
+  async function openAddMemberSheet() {
+    render(<People />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
+  }
+
+  it("asks whether the person lives in the household before showing any relationship picker", async () => {
+    await openAddMemberSheet();
+    expect(
+      screen.getByText(/does this person live in your household/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Relationship")).not.toBeInTheDocument();
+  });
+
+  it("routes 'outside the household' to calendar sharing instead of sending an invitation", async () => {
+    await openAddMemberSheet();
+    fireEvent.click(screen.getByRole("button", { name: /no, they.?re outside the household/i }));
+
+    expect(screen.queryByLabelText("Relationship")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /share a calendar/i }),
+    ).toHaveAttribute("href", "/calendar/calendars");
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("never offers Extended Family or Friend as a new relationship option", async () => {
+    await openAddMemberSheet();
+    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
+
+    const select = screen.getByLabelText("Relationship");
+    const optionLabels = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(optionLabels).not.toContain("Extended Family");
+    expect(optionLabels).not.toContain("Friend");
   });
 });

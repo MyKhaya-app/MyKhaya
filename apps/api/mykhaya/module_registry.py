@@ -157,13 +157,15 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         FeatureKey.external_sharing.value,
         "External sharing",
-        "Share selected resources outside the Home.",
+        "Share a calendar with people outside the Home — grandparents, "
+        "friends, other families — without adding them as a Home member.",
         "Experimental",
-        ReleaseState.hidden,
+        ReleaseState.beta,
         False,
-        None,
-        dependencies=("household_members",),
+        "0.4.0",
+        dependencies=("household_members", "calendar"),
         permissions=("sharing.external",),
+        route="/calendar/calendars",
     ),
 )
 

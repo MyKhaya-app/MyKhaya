@@ -12,18 +12,30 @@ export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
+  const calendarShare = params.get("calendar_share");
   // Plan/interval carried from the public pricing section (or a direct
   // /signup?plan=family&interval=year link) are untrusted onboarding intent
   // only — see components/onboarding-intent.ts. An invited member joins an
   // existing Home and never gets asked to choose a plan for it, so intent is
-  // ignored entirely on the invite path.
-  const intent = invitation ? null : parseIntentFromParams(params.get("plan"), params.get("interval"));
+  // ignored entirely on the invite path. Same reasoning for a calendar-share
+  // recipient: a free account is all that's needed to accept one — see
+  // docs on external Calendar Sharing.
+  const intent =
+    invitation || calendarShare
+      ? null
+      : parseIntentFromParams(params.get("plan"), params.get("interval"));
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
       invited_by_display_name: string;
       email: string;
+    } | null>(null),
+    [shareContext, setShareContext] = useState<{
+      calendar_name: string;
+      source_group_name: string;
+      invited_by_display_name: string;
+      recipient_email: string;
     } | null>(null);
   useEffect(() => {
     if (!invitation) return;
@@ -32,6 +44,13 @@ export default function Register() {
       .then((result) => setInviteContext(result))
       .catch((reason: ApiError) => setError(reason.message));
   }, [invitation]);
+  useEffect(() => {
+    if (!calendarShare) return;
+    api
+      .previewCalendarShare(calendarShare)
+      .then((result) => setShareContext(result))
+      .catch((reason: ApiError) => setError(reason.message));
+  }, [calendarShare]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -53,13 +72,18 @@ export default function Register() {
         invitation_token: invitation,
       });
       if (intent && intent.plan === "family") saveOnboardingIntent(intent);
+      const carry = invitation
+        ? `invitation=${encodeURIComponent(invitation)}`
+        : calendarShare
+          ? `calendar_share=${encodeURIComponent(calendarShare)}`
+          : "";
       router.push(
         result.verification_required
-          ? invitation
-            ? `/verify-email?invitation=${encodeURIComponent(invitation)}`
+          ? carry
+            ? `/verify-email?${carry}`
             : "/verify-email"
-          : invitation
-            ? `/login?invitation=${encodeURIComponent(invitation)}`
+          : carry
+            ? `/login?${carry}`
             : "/login",
       );
     } catch (err) {
@@ -83,7 +107,9 @@ export default function Register() {
             href={
               invitation
                 ? `/login?invitation=${encodeURIComponent(invitation)}`
-                : "/login"
+                : calendarShare
+                  ? `/login?calendar_share=${encodeURIComponent(calendarShare)}`
+                  : "/login"
             }
           >
             Sign in
@@ -96,7 +122,13 @@ export default function Register() {
           {inviteContext.invited_by_display_name} invited you to join {inviteContext.group_name}.
         </p>
       )}
-      {!inviteContext && intent?.plan === "family" && (
+      {shareContext && (
+        <p className="notice success">
+          {shareContext.source_group_name} wants to share the &ldquo;{shareContext.calendar_name}
+          &rdquo; calendar with you. Create a free account to view it — Family isn&rsquo;t needed.
+        </p>
+      )}
+      {!inviteContext && !shareContext && intent?.plan === "family" && (
         <p className="notice success">
           You selected Family ({intervalName(intent.interval)} billing) — you&rsquo;ll confirm this
           after creating your Home.
@@ -112,7 +144,7 @@ export default function Register() {
           <input
             name="email"
             type="email"
-            defaultValue={inviteContext?.email ?? ""}
+            defaultValue={inviteContext?.email ?? shareContext?.recipient_email ?? ""}
             autoComplete="email"
             required
             maxLength={320}

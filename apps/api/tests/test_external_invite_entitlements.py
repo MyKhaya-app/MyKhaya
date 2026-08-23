@@ -1,10 +1,12 @@
-"""members.external_invites.enabled: Extended Family/Friend is a genuinely
-reachable capability (PermissionProfile.explicit_sharing, selectively
-granted shared_resources) — not a placeholder — so it gets real enforcement,
-independent of home.max_members, at both invitation creation and the
-member-relationship-change endpoint. See
-docs/architecture/commercial-entitlements.md "Free plan enforcement pass,
-part 2".
+"""Extended Family/Friend as a *Home member* relationship is retired in favour of
+external Calendar Sharing (mykhaya.routers.calendar_sharing) — see
+routers.invitations and routers.groups. New invitations/relationship-changes into
+either relationship are now rejected outright (422), regardless of plan; this
+supersedes the old members.external_invites.enabled-gated creation path (that
+entitlement now gates creating a Calendar Share instead — see
+tests/test_calendar_sharing.py). Existing rows with either relationship keep
+working completely unchanged (see `test_downgraded_home_can_still_edit_an_existing
+_external_member` below), which is exactly what this file now exists to prove.
 """
 
 import uuid
@@ -141,10 +143,7 @@ async def test_free_home_cannot_invite_an_extended_family_member(client: AsyncCl
             "relationship": "extended_family",
         },
     )
-    assert response.status_code == 403
-    detail = response.json()["detail"]
-    assert detail["code"] == "plan_feature_unavailable"
-    assert detail["entitlement"] == "members.external_invites.enabled"
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -160,12 +159,15 @@ async def test_free_home_cannot_invite_a_friend(client: AsyncClient) -> None:
             "relationship": "friend",
         },
     )
-    assert response.status_code == 403
-    assert response.json()["detail"]["entitlement"] == "members.external_invites.enabled"
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_family_home_can_invite_an_extended_family_member(client: AsyncClient) -> None:
+    """Even a Family Home — this relationship is retired for new invitations
+    regardless of plan, since Family no longer buys "add someone outside the
+    Home as a member"; it buys the ability to create Calendar Shares
+    instead (see tests/test_calendar_sharing.py)."""
     home_id = await _make_home(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
     response = await unsafe(
@@ -179,7 +181,7 @@ async def test_family_home_can_invite_an_extended_family_member(client: AsyncCli
             "shared_resources": ["calendar"],
         },
     )
-    assert response.status_code == 201
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -206,10 +208,7 @@ async def test_downgraded_home_cannot_convert_an_existing_member_to_extended_fam
             "confirmed": True,
         },
     )
-    assert convert.status_code == 403
-    detail = convert.json()["detail"]
-    assert detail["code"] == "plan_feature_unavailable"
-    assert detail["entitlement"] == "members.external_invites.enabled"
+    assert convert.status_code == 422
 
 
 @pytest.mark.asyncio

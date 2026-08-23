@@ -10,12 +10,20 @@ data leakage.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.household_permissions import Capability, capabilities_for
-from mykhaya.models import CalendarEvent, CalendarEventMember, HomeCalendar, Membership
+from mykhaya.models import (
+    CalendarEvent,
+    CalendarEventMember,
+    CalendarShare,
+    CalendarShareStatus,
+    HomeCalendar,
+    Membership,
+)
 
 
 async def active_membership(
@@ -31,10 +39,35 @@ async def active_membership(
     return membership
 
 
+async def active_calendar_share(
+    db: AsyncSession, calendar_id: uuid.UUID, user_id: uuid.UUID
+) -> CalendarShare | None:
+    """The one place external-sharing access is decided for calendar/event
+    visibility — reused by can_view_event/viewer_ids_for_event below so
+    reminders and the daily briefing inherit it automatically, and by
+    routers.calendar_sharing's own write-permission check. Never trust a
+    cached/stale result: revoked_at, status, and expires_at are re-checked on
+    every call, so a revocation takes effect on the very next read."""
+    share: CalendarShare | None = await db.scalar(
+        select(CalendarShare).where(
+            CalendarShare.calendar_id == calendar_id,
+            CalendarShare.recipient_user_id == user_id,
+            CalendarShare.status == CalendarShareStatus.accepted,
+            CalendarShare.revoked_at.is_(None),
+            CalendarShare.expires_at > datetime.now(UTC),
+        )
+    )
+    return share
+
+
 async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.UUID) -> bool:
     membership = await active_membership(db, event.group_id, user_id)
     if membership is None:
-        return False
+        # Not a Home member — the only other legitimate way to see this
+        # event is an active external CalendarShare on its specific
+        # calendar. This never reaches into any *other* calendar in the
+        # Home, and is fully independent of Membership/capabilities.
+        return await active_calendar_share(db, event.calendar_id, user_id) is not None
     capabilities = await capabilities_for(db, membership)
     if Capability.calendar_view not in capabilities:
         return False
@@ -64,13 +97,29 @@ async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.U
 
 
 async def viewer_ids_for_event(db: AsyncSession, event: CalendarEvent) -> set[uuid.UUID]:
-    """Members explicitly attached to the event — the natural reminder recipient set.
-    (Not the same as "everyone who *could* view it" via calendar_view_all — a household
-    admin with blanket visibility should not get reminded about an event they aren't
-    actually part of.)"""
+    """Members explicitly attached to the event, plus any active external
+    CalendarShare recipient for its calendar whose notification_preference
+    isn't "off" — the natural reminder recipient set. (Not the same as
+    "everyone who *could* view it" via calendar_view_all — a household admin
+    with blanket visibility should not get reminded about an event they
+    aren't actually part of; an external share recipient is different: the
+    whole point of sharing a calendar is to see everything on it.)"""
     rows = (
         await db.scalars(
             select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == event.id)
         )
     ).all()
-    return set(rows)
+    viewer_ids = set(rows)
+    for share in (
+        await db.scalars(
+            select(CalendarShare).where(
+                CalendarShare.calendar_id == event.calendar_id,
+                CalendarShare.status == CalendarShareStatus.accepted,
+                CalendarShare.revoked_at.is_(None),
+                CalendarShare.expires_at > datetime.now(UTC),
+            )
+        )
+    ).all():
+        if share.recipient_user_id is not None and share.notification_preference != "off":
+            viewer_ids.add(share.recipient_user_id)
+    return viewer_ids

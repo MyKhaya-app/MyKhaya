@@ -351,6 +351,80 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").EventDetailResponse>(
       `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
     );
+  // External Calendar Sharing — see apps/api/mykhaya/routers/calendar_sharing.py.
+  createCalendarShare = (
+    homeId: string,
+    body: {
+      calendar_id: string;
+      recipient_email: string;
+      permission: import("@mykhaya/shared-types").CalendarSharePermission;
+    },
+  ) =>
+    this.request<import("@mykhaya/shared-types").CalendarShare>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  approveCalendarShare = (homeId: string, shareId: string) =>
+    this.request<import("@mykhaya/shared-types").CalendarShare>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares/${encodeURIComponent(shareId)}/approve`,
+      { method: "POST", body: "{}" },
+    );
+  listSharesForCalendar = (homeId: string, calendarId: string) =>
+    this.request<{ items: import("@mykhaya/shared-types").CalendarShare[] }>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares/calendar/${encodeURIComponent(calendarId)}`,
+    );
+  changeCalendarSharePermission = (
+    homeId: string,
+    shareId: string,
+    permission: import("@mykhaya/shared-types").CalendarSharePermission,
+  ) =>
+    this.request<import("@mykhaya/shared-types").CalendarShare>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares/${encodeURIComponent(shareId)}/permission`,
+      { method: "POST", body: JSON.stringify({ permission }) },
+    );
+  revokeCalendarShare = (homeId: string, shareId: string) =>
+    this.request<{ message: string }>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-shares/${encodeURIComponent(shareId)}/revoke`,
+      { method: "POST", body: "{}" },
+    );
+  previewCalendarShare = (token: string) =>
+    this.request<import("@mykhaya/shared-types").CalendarSharePreview>(
+      `/calendar-shares/preview?token=${encodeURIComponent(token)}`,
+    );
+  acceptCalendarShare = (
+    token: string,
+    body: { notification_preference: "all" | "important" | "off"; include_in_briefing: boolean },
+  ) =>
+    this.request<{ message: string }>("/calendar-shares/accept", {
+      method: "POST",
+      body: JSON.stringify({ token, ...body }),
+    });
+  declineCalendarShare = (token: string) =>
+    this.request<{ message: string }>("/calendar-shares/decline", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  sharedCalendars = () =>
+    this.request<{ items: import("@mykhaya/shared-types").CalendarShare[] }>(
+      "/calendar-shares/mine",
+    );
+  updateCalendarSharePreferences = (
+    shareId: string,
+    body: { notification_preference?: "all" | "important" | "off"; include_in_briefing?: boolean },
+  ) =>
+    this.request<import("@mykhaya/shared-types").CalendarShare>(
+      `/calendar-shares/${encodeURIComponent(shareId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  leaveCalendarShare = (shareId: string) =>
+    this.request<{ message: string }>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/leave`,
+      { method: "POST", body: "{}" },
+    );
+  listSharedEvents = (shareId: string, params: { start_at: string; end_at: string }) =>
+    this.request<import("@mykhaya/shared-types").EventListResponse>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/events?${new URLSearchParams(params).toString()}`,
+    );
   previewInvitation = (token: string) =>
     this.request<import("@mykhaya/shared-types").InvitationPreview>(
       `/invitations/preview?token=${encodeURIComponent(token)}`,
