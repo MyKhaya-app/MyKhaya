@@ -1654,12 +1654,6 @@ textarea {
   gap: 1rem;
   padding: 1.3rem;
 }
-.calendar-sharing-panel form {
-  align-items: flex-end;
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: 1fr 180px auto;
-}
 .calendar-share-list {
   display: grid;
   gap: 0.6rem;
@@ -1677,6 +1671,65 @@ textarea {
   color: var(--colour-muted);
   display: block;
   margin-top: 0.2rem;
+}
+/* Calendar management (apps/web/app/calendar/calendars/page.tsx): each Home
+   calendar is a compact, content-height row — name/status on the left, a
+   single "Manage sharing" action on the right, nothing fighting for
+   attention next to the calendar's name. */
+.calendar-list-card {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 1.1rem 1.3rem;
+}
+/* The "Manage sharing" BottomSheet's contents. Deliberately no grid/column
+   layout here beyond the base single-column `form` rule (see line ~109) —
+   that mobile-unsafe 3-column grid this used to have (`1fr 180px auto`) is
+   what caused the invite form to overflow/squeeze on narrow screens; every
+   field here now simply stacks full-width like any other MyKhaya form. */
+.calendar-sharing-sheet {
+  display: grid;
+  gap: 1.5rem;
+}
+.calendar-sharing-section {
+  display: grid;
+  gap: 0.75rem;
+}
+.calendar-share-form .check-row {
+  align-items: flex-start;
+}
+.share-scope-fieldset,
+.share-category-list {
+  border: 0;
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+}
+.share-scope-fieldset legend,
+.share-category-list legend {
+  color: #344047;
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+  padding: 0;
+}
+.share-category-list {
+  border-left: 2px solid #eee8df;
+  margin-left: 0.6rem;
+  padding-left: 0.9rem;
+}
+/* A small, field-adjacent error — the counterpart to .cc-field-error for
+   the consumer app (that one is Control Centre-scoped). Deliberately not
+   the boxed .notice.error banner: a wrong-format email or "already shared"
+   message belongs directly under the field it concerns, not in a large
+   disconnected banner at the top of the form. */
+.field-error {
+  color: #8d342d;
+  font-size: 0.82rem;
+  margin: 0;
 }
 .routine-form {
   display: grid;
@@ -2857,34 +2910,82 @@ select.icon-row-control {
   box-shadow: 0 0 0 1px #ddd8ce;
   transform: none;
 }
+/* The Calendars visibility/filter sheet (app/calendar/page.tsx) — three
+   fixed-vs-flexible columns per row (colour dot, name, switch), the classic
+   "avatar / flexible label / fixed control" list-row shape used throughout
+   the app (see .event-row, .family-member). The name column previously used
+   `overflow-wrap: anywhere` intending to handle a long shared-calendar name
+   gracefully — but `anywhere` also changes the element's *min-content*
+   contribution to "can break between any two characters", so a flex item
+   sized from content (no explicit flex-basis) could be laid out at close to
+   one character wide instead of growing to fill the row. Single-line
+   ellipsis truncation (below) is what "genuinely long names truncate
+   gracefully" actually calls for, and it can't collapse this way — there is
+   no wrap/break calculation involved at all. */
 .calendar-visibility-list {
   display: grid;
-  gap: 1.25rem;
+  gap: 1.5rem;
 }
 .calendar-visibility-group {
   display: grid;
-  gap: 0.6rem;
+}
+.calendar-visibility-heading {
+  display: block;
+  margin-bottom: 0.5rem;
 }
 .calendar-visibility-row {
   align-items: center;
+  border-top: 1px solid #eee8df;
   display: flex;
-  gap: 0.6rem;
+  gap: 0.75rem;
+  padding: 0.65rem 0.1rem;
 }
-.calendar-visibility-row .colour-dot {
-  height: 16px;
-  width: 16px;
+.calendar-visibility-row:first-child {
+  border-top: 0;
+  padding-top: 0.1rem;
 }
+.calendar-visibility-row:last-child {
+  padding-bottom: 0.1rem;
+}
+/* Fixed-size column — never grows or shrinks, so it can never eat into the
+   name column's space. */
+.calendar-visibility-dot {
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+/* Flexible column — flex-basis 0 (not the default `auto`) means its share of
+   the row's width comes purely from flex-grow, not from its own content
+   size, so it can never be measured wider (or, per the bug above,
+   narrower) than the row actually has room for. */
 .calendar-visibility-name {
   display: flex;
+  flex: 1 1 0%;
   flex-direction: column;
-  flex-grow: 1;
-  font-weight: 600;
   min-width: 0;
-  overflow-wrap: anywhere;
+}
+.calendar-visibility-name-primary {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .calendar-visibility-name small {
   color: var(--colour-muted);
   font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Fixed-size column, reusing the app's existing switch control (see
+   EventForm's "All day" toggle) instead of a bare native checkbox — same
+   size everywhere, never dominates the row. */
+.calendar-visibility-row .switch {
+  flex: 0 0 auto;
+}
+.calendar-visibility-manage-link {
+  margin-top: 1.75rem;
+  width: 100%;
 }
 .calendar-shared-home-cta {
   margin-bottom: 1.25rem;

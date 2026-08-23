@@ -1796,62 +1796,77 @@ export default function CalendarPage() {
           <BottomSheet title="Calendars" onDismiss={() => setCalendarSelectorOpen(false)}>
             <div className="calendar-visibility-list">
               <div className="calendar-visibility-group">
-                <span className="eyebrow">My calendars</span>
+                <span className="eyebrow calendar-visibility-heading">My calendars</span>
                 {[...homeCalendars, ...(personalCalendar ? [personalCalendar] : [])].map(
-                  (calendar) => (
-                    <label className="calendar-visibility-row" key={calendar.id}>
-                      <span
-                        className="colour-dot"
-                        style={
-                          { "--swatch-colour": resolveColour(calendar.color) } as React.CSSProperties
-                        }
-                        aria-hidden="true"
-                      />
-                      <span className="calendar-visibility-name">
-                        {calendar.owner_user_id ? "Personal calendar" : calendar.name}
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={!hiddenCalendarIds.has(calendar.id)}
-                        onChange={() => toggleCalendarVisibility(calendar.id)}
-                        aria-label={`Show ${calendar.owner_user_id ? "Personal calendar" : calendar.name}`}
-                      />
-                    </label>
-                  ),
+                  (calendar) => {
+                    const name = calendar.owner_user_id ? "Personal calendar" : calendar.name;
+                    const visible = !hiddenCalendarIds.has(calendar.id);
+                    return (
+                      <label className="calendar-visibility-row" key={calendar.id}>
+                        <span
+                          className="colour-dot calendar-visibility-dot"
+                          style={
+                            { "--swatch-colour": resolveColour(calendar.color) } as React.CSSProperties
+                          }
+                          aria-hidden="true"
+                        />
+                        <span className="calendar-visibility-name">
+                          <span className="calendar-visibility-name-primary">{name}</span>
+                        </span>
+                        <input
+                          className="switch"
+                          type="checkbox"
+                          role="switch"
+                          checked={visible}
+                          aria-checked={visible}
+                          onChange={() => toggleCalendarVisibility(calendar.id)}
+                          aria-label={`Show ${name}`}
+                        />
+                      </label>
+                    );
+                  },
                 )}
               </div>
 
               {sharedCalendars.length > 0 && (
                 <div className="calendar-visibility-group">
-                  <span className="eyebrow">Shared with me</span>
-                  {sharedCalendars.map((share) => (
-                    <label className="calendar-visibility-row" key={share.id}>
-                      <span
-                        className="colour-dot"
-                        style={
-                          {
-                            "--swatch-colour": resolveColour(share.calendar_color ?? "teal"),
-                          } as React.CSSProperties
-                        }
-                        aria-hidden="true"
-                      />
-                      <span className="calendar-visibility-name">
-                        {share.calendar_name}
-                        <small>{share.source_group_name}</small>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={!hiddenCalendarIds.has(share.id)}
-                        onChange={() => toggleCalendarVisibility(share.id)}
-                        aria-label={`Show ${share.calendar_name}, shared by ${share.source_group_name}`}
-                      />
-                    </label>
-                  ))}
+                  <span className="eyebrow calendar-visibility-heading">Shared with you</span>
+                  {sharedCalendars.map((share) => {
+                    const visible = !hiddenCalendarIds.has(share.id);
+                    return (
+                      <label className="calendar-visibility-row" key={share.id}>
+                        <span
+                          className="colour-dot calendar-visibility-dot"
+                          style={
+                            {
+                              "--swatch-colour": resolveColour(share.calendar_color ?? "teal"),
+                            } as React.CSSProperties
+                          }
+                          aria-hidden="true"
+                        />
+                        <span className="calendar-visibility-name">
+                          <span className="calendar-visibility-name-primary">
+                            {share.calendar_name}
+                          </span>
+                          <small>{share.source_group_name}</small>
+                        </span>
+                        <input
+                          className="switch"
+                          type="checkbox"
+                          role="switch"
+                          checked={visible}
+                          aria-checked={visible}
+                          onChange={() => toggleCalendarVisibility(share.id)}
+                          aria-label={`Show ${share.calendar_name}, shared by ${share.source_group_name}`}
+                        />
+                      </label>
+                    );
+                  })}
                 </div>
               )}
 
               <Link
-                className="tertiary"
+                className="button secondary calendar-visibility-manage-link"
                 href="/calendar/shared"
                 onClick={() => setCalendarSelectorOpen(false)}
               >
