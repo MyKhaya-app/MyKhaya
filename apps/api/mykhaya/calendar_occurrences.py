@@ -117,3 +117,101 @@ def expand_occurrences(
             break
 
     return occurrences
+
+
+# Safety valve only, not a user-facing horizon: a pathological recurrence (e.g.
+# daily with no end) stepping toward a cursor decades away still resolves in a
+# handful of iterations for realistic cursors, so this cap is never expected to
+# bite in practice — see next_occurrence_on_or_after.
+_MAX_OCCURRENCE_STEPS = 10_000
+
+
+def upcoming_candidate_filter(cursor: datetime) -> ColumnElement[bool]:
+    """SQL pre-filter for "could this event's series ever produce an
+    occurrence on/after `cursor`" — paired with next_occurrence_on_or_after,
+    which computes the exact next occurrence per candidate in memory.
+    Deliberately has no upper bound: the number of matching rows is bounded
+    by how many event *definitions* a Home/share has, never by how far in
+    the future the next occurrence of any one of them falls, which is what
+    lets routers.calendar's upcoming_events endpoint (Home -> "Coming up")
+    answer "next 3 occurrences" without an arbitrary future-date horizon."""
+    return or_(
+        and_(CalendarEvent.recurrence == RecurrencePattern.none, CalendarEvent.start_at >= cursor),
+        and_(
+            CalendarEvent.recurrence != RecurrencePattern.none,
+            or_(
+                CalendarEvent.recurrence_until.is_(None),
+                CalendarEvent.recurrence_until >= cursor,
+            ),
+        ),
+    )
+
+
+def next_occurrence_on_or_after(
+    event: CalendarEvent, cursor: datetime
+) -> tuple[datetime, datetime] | None:
+    """The single next occurrence of `event` whose start is on/after
+    `cursor`, or None if the series never reaches it (a one-off event
+    already in the past, or a recurring series that ends — via
+    recurrence_count/recurrence_until/recurrence_end_date — before ever
+    reaching `cursor`).
+
+    Unlike expand_occurrences, this is not bounded by MAX_RANGE_DAYS: it
+    steps forward occurrence-by-occurrence using the exact same recurrence
+    math (kept in lockstep with expand_occurrences deliberately — see that
+    function's docstring on why both call sites must agree), but the loop
+    itself is pure in-memory arithmetic with no DB calls, so "next
+    occurrence in 6 months" and "next occurrence tomorrow" cost the same
+    small, bounded number of iterations. Paired with
+    upcoming_candidate_filter to answer "next N occurrences" without ever
+    expanding or reading an unbounded range of occurrences — see
+    routers.calendar's upcoming_events endpoint (Home -> "Coming up")."""
+    duration = event.end_at - event.start_at
+    if event.recurrence == RecurrencePattern.none:
+        if event.start_at >= cursor:
+            return (event.start_at, event.end_at)
+        return None
+
+    tz: tzinfo
+    try:
+        tz = ZoneInfo(event.timezone)
+    except ZoneInfoNotFoundError:
+        tz = UTC
+    current_start = event.start_at.astimezone(tz)
+    cursor_local = cursor.astimezone(tz)
+    recurrence_until_local = (
+        event.recurrence_until.astimezone(tz) if event.recurrence_until else None
+    )
+    generated = 0
+    for _ in range(_MAX_OCCURRENCE_STEPS):
+        if (
+            event.recurrence_end_date is not None
+            and current_start.date() > event.recurrence_end_date
+        ):
+            return None
+        generated += 1
+        if current_start >= cursor_local:
+            current_end = current_start + duration
+            return (current_start.astimezone(UTC), current_end.astimezone(UTC))
+        if event.recurrence_count and generated >= event.recurrence_count:
+            return None
+        if recurrence_until_local and current_start > recurrence_until_local:
+            return None
+
+        if event.recurrence == RecurrencePattern.daily:
+            current_start = current_start + timedelta(days=event.recurrence_interval)
+        elif event.recurrence == RecurrencePattern.weekly:
+            current_start = current_start + timedelta(weeks=event.recurrence_interval)
+        elif event.recurrence == RecurrencePattern.monthly:
+            current_start = month_increment(current_start, event.recurrence_interval)
+        elif event.recurrence == RecurrencePattern.yearly:
+            current_start = month_increment(current_start, 12 * event.recurrence_interval)
+        elif event.recurrence == RecurrencePattern.weekdays:
+            next_day = current_start + timedelta(days=1)
+            while next_day.weekday() > 4:
+                next_day = next_day + timedelta(days=1)
+            current_start = next_day
+        else:
+            return None
+
+    return None

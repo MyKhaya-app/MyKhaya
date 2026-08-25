@@ -217,25 +217,26 @@ export function calendarDateAfter(key: string, days: number): string {
   return dateKey(date);
 }
 
-export function upcomingDateWindow(
-  timeZone: string,
-  now: Date = new Date(),
-  days = 3,
-): { startKey: string; endExclusiveKey: string } {
-  const todayKey = dateKey(zonedToday(timeZone, now));
-  return {
-    startKey: calendarDateAfter(todayKey, 1),
-    endExclusiveKey: calendarDateAfter(todayKey, days + 1),
-  };
+/** The first calendar date "Coming up" may show — the day after today, in
+ *  `timeZone` — with deliberately no upper bound: Home -> "Coming up" shows
+ *  the next N eligible occurrences however far out they fall, never a fixed
+ *  future window (see calendar_occurrences.upcoming_candidate_filter on the
+ *  backend for the matching "no horizon" rule). */
+export function tomorrowDateKey(timeZone: string, now: Date = new Date()): string {
+  return calendarDateAfter(dateKey(zonedToday(timeZone, now)), 1);
 }
 
-export function eventInDateWindow(
+/** Whether `event`'s occurrence starts on/after `dateKeyThreshold` — the
+ *  exact, timezone-correct inclusion test "Coming up" applies to whatever
+ *  candidate occurrences the backend already selected as upcoming; unlike
+ *  the old bounded eventInDateWindow, this has no upper edge. */
+export function eventOnOrAfterDate(
   event: EventOccurrence,
   timeZone: string,
-  window: { startKey: string; endExclusiveKey: string },
+  dateKeyThreshold: string,
 ): boolean {
-  const { startKey, endKey } = eventDateBounds(event, timeZone);
-  return startKey < window.endExclusiveKey && endKey >= window.startKey;
+  const { startKey } = eventDateBounds(event, timeZone);
+  return startKey >= dateKeyThreshold;
 }
 
 /** Converts a wall-clock date/time as seen in `timeZone` (e.g. "14 Aug 2026,

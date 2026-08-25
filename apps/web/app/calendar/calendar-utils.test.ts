@@ -13,7 +13,7 @@ import {
   DEFAULT_EVENT_START_TIME,
   emptyStateMessage,
   eventDateBounds,
-  eventInDateWindow,
+  eventOnOrAfterDate,
   eventsForDay,
   filterByVisibleCalendars,
   filterVisibleEvents,
@@ -31,7 +31,7 @@ import {
   zonedDateKey,
   zonedTimeToUtc,
   zonedToday,
-  upcomingDateWindow,
+  tomorrowDateKey,
 } from "./calendar-utils";
 
 function event(overrides: Partial<EventOccurrence>): EventOccurrence {
@@ -75,13 +75,37 @@ function member(overrides: Partial<Member>): Member {
 }
 
 describe("Calendar presentation", () => {
-  it("defines Coming up as the next three local calendar dates", () => {
+  it("defines Coming up as starting the day after today, with no upper bound", () => {
+    // 22:30 UTC is already 23:30 local in Europe/London (BST) on 2026-08-17,
+    // so "today" locally is still the 17th and tomorrow is the 18th.
     const now = new Date("2026-08-17T22:30:00Z");
-    const window = upcomingDateWindow("Europe/London", now);
-    expect(window).toEqual({ startKey: "2026-08-18", endExclusiveKey: "2026-08-21" });
-    expect(eventInDateWindow(event({ start_at: "2026-08-17T22:00:00Z", end_at: "2026-08-17T23:30:00Z" }), "Europe/London", window)).toBe(true);
-    expect(eventInDateWindow(event({ start_at: "2026-08-17T10:00:00Z", end_at: "2026-08-17T11:00:00Z" }), "Europe/London", window)).toBe(false);
-    expect(eventInDateWindow(event({ start_at: "2026-08-21T10:00:00Z", end_at: "2026-08-21T11:00:00Z" }), "Europe/London", window)).toBe(false);
+    const threshold = tomorrowDateKey("Europe/London", now);
+    expect(threshold).toBe("2026-08-18");
+    // An event starting locally just before local midnight on the 17th is
+    // still "today", not "Coming up".
+    expect(
+      eventOnOrAfterDate(
+        event({ start_at: "2026-08-17T22:00:00Z", end_at: "2026-08-17T23:30:00Z" }),
+        "Europe/London",
+        threshold,
+      ),
+    ).toBe(false);
+    // Tomorrow (the 18th) qualifies...
+    expect(
+      eventOnOrAfterDate(
+        event({ start_at: "2026-08-18T10:00:00Z", end_at: "2026-08-18T11:00:00Z" }),
+        "Europe/London",
+        threshold,
+      ),
+    ).toBe(true);
+    // ...and so does an event many months away — there is no fixed future window.
+    expect(
+      eventOnOrAfterDate(
+        event({ start_at: "2027-02-21T10:00:00Z", end_at: "2027-02-21T11:00:00Z" }),
+        "Europe/London",
+        threshold,
+      ),
+    ).toBe(true);
   });
   it("builds a stable six-week Monday-first month", () => {
     const cells = monthCells(new Date("2026-08-15T00:00:00Z"));

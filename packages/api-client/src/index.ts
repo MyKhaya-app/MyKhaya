@@ -302,6 +302,16 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events?${search.toString()}`,
     );
   };
+  listUpcomingEvents = (
+    homeId: string,
+    params: { after: string; limit?: number },
+  ) => {
+    const search = new URLSearchParams({ after: params.after });
+    if (params.limit) search.set("limit", String(params.limit));
+    return this.request<import("@mykhaya/shared-types").EventListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/events/upcoming?${search.toString()}`,
+    );
+  };
   createEvent = (
     homeId: string,
     body: import("@mykhaya/shared-types").EventPayload,
@@ -433,6 +443,16 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").EventListResponse>(
       `/calendar-shares/${encodeURIComponent(shareId)}/events?${new URLSearchParams(params).toString()}`,
     );
+  listUpcomingSharedEvents = (
+    shareId: string,
+    params: { after: string; limit?: number },
+  ) => {
+    const search = new URLSearchParams({ after: params.after });
+    if (params.limit) search.set("limit", String(params.limit));
+    return this.request<import("@mykhaya/shared-types").EventListResponse>(
+      `/calendar-shares/${encodeURIComponent(shareId)}/events/upcoming?${search.toString()}`,
+    );
+  };
   createSharedEvent = (
     shareId: string,
     body: import("@mykhaya/shared-types").SharedEventPayload,

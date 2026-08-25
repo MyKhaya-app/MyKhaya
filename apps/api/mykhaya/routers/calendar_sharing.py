@@ -43,7 +43,9 @@ from mykhaya.audit import audit
 from mykhaya.calendar_occurrences import (
     MAX_RANGE_DAYS,
     expand_occurrences,
+    next_occurrence_on_or_after,
     recurrence_candidate_filter,
+    upcoming_candidate_filter,
 )
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
@@ -906,6 +908,52 @@ async def list_shared_events(
             )
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=None)
+
+
+@shared_router.get("/{share_id}/events/upcoming", response_model=EventListResponse)
+async def list_upcoming_shared_events(
+    share_id: uuid.UUID,
+    after: datetime,
+    limit: int = Query(default=3, ge=1, le=20),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventListResponse:
+    """Shared-calendar counterpart of routers.calendar's
+    list_upcoming_events, same "next occurrence per candidate, no future
+    horizon" approach (see that function's docstring) — powers Home ->
+    "Coming up" picking up events from calendars shared into the viewer's
+    Home, exactly as the full Calendar view already does for list_events."""
+    share = await _require_my_share(db, share_id, auth)
+    calendar = await db.get(HomeCalendar, share.calendar_id)
+    if calendar is None:
+        return EventListResponse(items=[], next_page=None)
+
+    events = (
+        await db.scalars(
+            select(CalendarEvent).where(
+                and_(
+                    CalendarEvent.calendar_id == share.calendar_id,
+                    CalendarEvent.deleted_at.is_(None),
+                    upcoming_candidate_filter(after),
+                )
+            )
+        )
+    ).all()
+    label_by_id = await _label_map(db, share.source_group_id)
+    candidates: list[EventOccurrence] = []
+    for event in events:
+        if not event_matches_share(event, share):
+            continue
+        next_occ = next_occurrence_on_or_after(event, after)
+        if next_occ is None:
+            continue
+        occurrence_start, occurrence_end = next_occ
+        label = label_by_id.get(event.label_id) if event.label_id else None
+        candidates.append(
+            _occurrence(event, occurrence_start, occurrence_end, label, [], calendar.color)
+        )
+    candidates.sort(key=lambda item: item.start_at)
+    return EventListResponse(items=candidates[:limit], next_page=None)
 
 
 @shared_router.post("/{share_id}/events", response_model=EventOccurrence, status_code=201)

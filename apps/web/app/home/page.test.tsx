@@ -38,6 +38,9 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       members: vi.fn(),
       homeSummary: vi.fn(),
       listEvents: vi.fn(),
+      listUpcomingEvents: vi.fn(),
+      sharedCalendars: vi.fn(),
+      listUpcomingSharedEvents: vi.fn(),
       routines: vi.fn(),
       completeRoutine: vi.fn(),
       mealPlanDay: vi.fn(),
@@ -65,6 +68,16 @@ beforeEach(() => {
   (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.completeRoutine as ReturnType<typeof vi.fn>).mockResolvedValue({});
   (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({ date: "2026-08-20", entries: [] });
+  (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+    today_events: [],
+    next_event: null,
+  });
+  (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
+  (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.listUpcomingSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+    items: [],
+    next_page: null,
+  });
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
     features: [
       { feature: "calendar", enabled: false },
@@ -272,6 +285,106 @@ describe("Home — Routines shortcut", () => {
     expect(bottomRow?.children).toHaveLength(1);
     expect(screen.queryByRole("link", { name: /meal plans/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^lists$/i })).not.toBeInTheDocument();
+  });
+});
+
+function occurrence(overrides: Record<string, unknown>) {
+  return {
+    occurrence_id: "occ-1",
+    event_id: "event-1",
+    calendar_id: "cal-1",
+    title: "Event",
+    start_at: "2026-08-26T10:00:00+00:00",
+    end_at: "2026-08-26T11:00:00+00:00",
+    is_all_day: false,
+    timezone: "UTC",
+    description: null,
+    location_text: null,
+    label: null,
+    calendar_color: "teal",
+    member_ids: [],
+    recurrence: "none",
+    reminder_minutes: null,
+    created_by: "u1",
+    updated_at: "2026-08-01T00:00:00+00:00",
+    ...overrides,
+  };
+}
+
+function enableCalendarOnly() {
+  (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+    features: [
+      { feature: "calendar", enabled: true },
+      { feature: "meals", enabled: false },
+      { feature: "shopping", enabled: false },
+    ],
+  });
+  (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
+}
+
+describe("Home — Coming up", () => {
+  it("shows the empty-state copy when there are genuinely no future events", async () => {
+    enableCalendarOnly();
+
+    render(<HomePage />);
+
+    await screen.findByText("Coming up");
+    expect(await screen.findByText("Nothing else planned yet.")).toBeInTheDocument();
+  });
+
+  it("never duplicates an event already shown in Today", async () => {
+    enableCalendarOnly();
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      today_events: [occurrence({ occurrence_id: "occ-today", title: "Today's event" })],
+      next_event: null,
+    });
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        // The backend's generous cursor can re-include the same occurrence
+        // already shown in Today — the frontend must filter it back out.
+        occurrence({ occurrence_id: "occ-today", title: "Today's event" }),
+        occurrence({ occurrence_id: "occ-tomorrow", title: "Tomorrow's event", start_at: tomorrow }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Tomorrow's event");
+    expect(screen.getAllByText("Today's event")).toHaveLength(1);
+  });
+
+  it("merges in an event from a calendar shared into this Home", async () => {
+    enableCalendarOnly();
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "share-1",
+          calendar_id: "shared-cal",
+          calendar_name: "Grandma's calendar",
+          source_group_id: "other-home",
+          source_group_name: "Grandma's House",
+          recipient_email: "me@example.com",
+          recipient_user_id: "u1",
+          permission: "view",
+          status: "accepted",
+        },
+      ],
+    });
+    (api.listUpcomingSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [occurrence({ occurrence_id: "occ-shared", title: "Sunday lunch", start_at: tomorrow })],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Sunday lunch")).toBeInTheDocument();
+    expect(api.listUpcomingSharedEvents).toHaveBeenCalledWith(
+      "share-1",
+      expect.objectContaining({ limit: expect.any(Number) }),
+    );
   });
 });
 

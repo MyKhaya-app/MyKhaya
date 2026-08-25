@@ -7,7 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from mykhaya.calendar_occurrences import expand_occurrences
+from mykhaya.calendar_occurrences import expand_occurrences, next_occurrence_on_or_after
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
@@ -362,6 +362,286 @@ def test_recurrence_end_date_is_inclusive() -> None:
         date(2026, 9, 11),
         date(2026, 9, 18),
     ]
+
+
+def test_next_occurrence_on_or_after_one_off_event_in_the_past_has_none() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.none,
+        recurrence_interval=1,
+    )
+    assert next_occurrence_on_or_after(event, datetime(2026, 6, 1, tzinfo=UTC)) is None
+
+
+def test_next_occurrence_on_or_after_finds_a_weekly_occurrence_months_out() -> None:
+    """No arbitrary future horizon: a weekly series' next occurrence, found by
+    stepping in memory rather than expanding a bounded date range, must
+    resolve correctly even many months past MAX_RANGE_DAYS (93 days)."""
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 6, 9, tzinfo=UTC),  # a Tuesday
+        end_at=datetime(2026, 1, 6, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+    )
+    cursor = datetime(2026, 9, 1, tzinfo=UTC)  # ~8 months after start_at
+    result = next_occurrence_on_or_after(event, cursor)
+    assert result is not None
+    start, end = result
+    assert start >= cursor
+    assert start.weekday() == 1  # still a Tuesday
+    assert (start - datetime(2026, 1, 6, 9, tzinfo=UTC)).days % 7 == 0
+    assert end - start == timedelta(hours=1)
+
+
+def test_next_occurrence_on_or_after_respects_recurrence_until() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.monthly,
+        recurrence_interval=1,
+        recurrence_until=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    # The series ends before ever reaching a cursor this far out.
+    assert next_occurrence_on_or_after(event, datetime(2026, 6, 1, tzinfo=UTC)) is None
+    # But a cursor within the series' lifetime finds the right occurrence.
+    found = next_occurrence_on_or_after(event, datetime(2026, 2, 1, tzinfo=UTC))
+    assert found is not None
+    assert found[0].date() == date(2026, 2, 1)
+
+
+def test_next_occurrence_on_or_after_respects_recurrence_count() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.daily,
+        recurrence_interval=1,
+        recurrence_count=3,
+    )
+    # Occurrences exist for Jan 1/2/3 only — a cursor past that has none.
+    assert next_occurrence_on_or_after(event, datetime(2026, 1, 4, tzinfo=UTC)) is None
+    found = next_occurrence_on_or_after(event, datetime(2026, 1, 2, 12, tzinfo=UTC))
+    assert found is not None
+    assert found[0].date() == date(2026, 1, 3)
+
+
+def test_next_occurrence_on_or_after_parent_start_date_does_not_win_ordering() -> None:
+    """Regression: the parent CalendarEvent row's own start_at (its very
+    first occurrence, possibly long past) must never be mistaken for "the
+    next occurrence" — callers that sort candidates by the returned
+    occurrence's start must see the actual next one, not the series' origin
+    date."""
+    event = CalendarEvent(
+        start_at=datetime(2020, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2020, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.yearly,
+        recurrence_interval=1,
+    )
+    cursor = datetime(2026, 6, 1, tzinfo=UTC)
+    found = next_occurrence_on_or_after(event, cursor)
+    assert found is not None
+    assert found[0].date() == date(2027, 1, 1)
+    assert found[0] > event.start_at
+
+
+async def _enable_calendar(home_id: str) -> None:
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
+            )
+        )
+        await db.commit()
+
+
+async def _create_home(client: AsyncClient, name: str) -> str:
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": name})
+    assert group.status_code == 201, group.text
+    home_id = group.json()["id"]
+    await _enable_calendar(home_id)
+    return home_id
+
+
+async def _create_upcoming_event(
+    client: AsyncClient,
+    home_id: str,
+    title: str,
+    start: datetime,
+    *,
+    is_all_day: bool = False,
+    recurrence: str = "none",
+) -> None:
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": title,
+            "start_at": start.isoformat(),
+            "end_at": (start + timedelta(hours=1)).isoformat(),
+            "timezone": "UTC",
+            "is_all_day": is_all_day,
+            "member_ids": [],
+            "recurrence": recurrence,
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_shows_next_three_events_tomorrow(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming1-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home One")
+    now = datetime.now(UTC)
+    await _create_upcoming_event(client, home_id, "Breakfast", now + timedelta(days=1, hours=1))
+    await _create_upcoming_event(client, home_id, "Lunch", now + timedelta(days=1, hours=5))
+    await _create_upcoming_event(client, home_id, "Dinner", now + timedelta(days=1, hours=9))
+
+    response = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming",
+        params={"after": (now - timedelta(hours=1)).isoformat(), "limit": 3},
+    )
+    assert response.status_code == 200
+    titles = [item["title"] for item in response.json()["items"]]
+    assert titles == ["Breakfast", "Lunch", "Dinner"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_has_no_future_horizon_and_trims_to_limit(
+    client: AsyncClient,
+) -> None:
+    """Unlike list_events (capped at MAX_RANGE_DAYS = 93 days), the upcoming
+    endpoint must find an occurrence 8 months out with no fixed window, while
+    still trimming a larger candidate set down to `limit`, earliest first."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming2-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Two")
+    now = datetime.now(UTC)
+    await _create_upcoming_event(client, home_id, "Yesterday", now - timedelta(days=1))
+    await _create_upcoming_event(client, home_id, "Tomorrow", now + timedelta(days=1))
+    await _create_upcoming_event(client, home_id, "Five days", now + timedelta(days=5))
+    await _create_upcoming_event(client, home_id, "Fourteen days", now + timedelta(days=14))
+    await _create_upcoming_event(client, home_id, "Eight months", now + timedelta(days=240))
+
+    after = (now - timedelta(hours=1)).isoformat()
+    limited = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert limited.status_code == 200
+    assert [item["title"] for item in limited.json()["items"]] == [
+        "Tomorrow",
+        "Five days",
+        "Fourteen days",
+    ]
+
+    unlimited = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 10}
+    )
+    assert unlimited.status_code == 200
+    assert [item["title"] for item in unlimited.json()["items"]] == [
+        "Tomorrow",
+        "Five days",
+        "Fourteen days",
+        "Eight months",
+    ]
+    # The Yesterday event never appears — the endpoint only ever returns
+    # occurrences on/after `after`.
+    assert "Yesterday" not in [item["title"] for item in unlimited.json()["items"]]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_single_and_zero_future_events(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming3-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Three")
+    now = datetime.now(UTC)
+    after = (now - timedelta(hours=1)).isoformat()
+
+    # No future events at all yet.
+    empty = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert empty.status_code == 200
+    assert empty.json()["items"] == []
+
+    await _create_upcoming_event(client, home_id, "Only one", now + timedelta(days=2))
+    single = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert single.status_code == 200
+    assert [item["title"] for item in single.json()["items"]] == ["Only one"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_recurring_and_all_day_ordering(
+    client: AsyncClient,
+) -> None:
+    """A recurring event's long-past parent start_at must never win ordering
+    over its actual next occurrence (see the pure-function regression above),
+    and an all-day event must still take part in the same ordering as timed
+    events."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming4-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Four")
+    now = datetime.now(UTC)
+
+    # A weekly series that started long ago — its next real occurrence must
+    # sort by that actual date, never by its 400-day-old parent start_at.
+    old_start = (now - timedelta(days=400)).replace(hour=9, minute=0, second=0, microsecond=0)
+    one_off_start = now + timedelta(days=3)
+    all_day_start = (now + timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+    await _create_upcoming_event(
+        client, home_id, "Weekly standup", old_start, recurrence="weekly"
+    )
+    await _create_upcoming_event(client, home_id, "One-off soon", one_off_start)
+    await _create_upcoming_event(
+        client, home_id, "All-day trip", all_day_start, is_all_day=True
+    )
+
+    after = now - timedelta(hours=1)
+    response = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming",
+        params={"after": after.isoformat(), "limit": 3},
+    )
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {item["title"] for item in items} == {"Weekly standup", "One-off soon", "All-day trip"}
+    for item in items:
+        assert datetime.fromisoformat(item["start_at"]) >= after
+
+    # The response is sorted by each occurrence's actual (computed) start —
+    # verify independently against the pure recurrence math rather than
+    # hardcoding which title lands first, since that depends on exactly
+    # where `now` falls in the weekly cycle.
+    weekly_event = CalendarEvent(
+        start_at=old_start,
+        end_at=old_start + timedelta(hours=1),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+    )
+    weekly_next = next_occurrence_on_or_after(weekly_event, after)
+    assert weekly_next is not None
+    starts_by_title = {
+        "Weekly standup": weekly_next[0],
+        "One-off soon": one_off_start,
+        "All-day trip": all_day_start,
+    }
+    expected_order = [
+        title for title, _ in sorted(starts_by_title.items(), key=lambda pair: pair[1])
+    ]
+    assert [item["title"] for item in items] == expected_order
 
 
 @pytest.mark.asyncio

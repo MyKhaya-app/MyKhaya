@@ -245,6 +245,56 @@ async def test_other_member_cannot_see_your_personal_event_in_list_events(
 
 
 @pytest.mark.asyncio
+async def test_upcoming_events_endpoint_hides_another_members_personal_event(
+    client: AsyncClient,
+) -> None:
+    """Home -> "Coming up" (GET /events/upcoming) must respect the exact
+    same Personal Calendar privacy boundary as list_events — including
+    against a standard_partner who otherwise holds calendar_view_all."""
+    anthony_email = unique_email("anthony")
+    await create_verified_user(client, anthony_email, "Anthony")
+    home_id = await _home_with_calendar(
+        client, "Upcoming Privacy Home", plan=SubscriptionPlan.family
+    )
+    anthony_personal = await _personal_calendar_id(client, home_id)
+
+    future_start = datetime.now(UTC) + timedelta(days=7)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=_event_body(
+            calendar_id=anthony_personal,
+            start_at=future_start.isoformat(),
+            end_at=(future_start + timedelta(hours=1)).isoformat(),
+        ),
+    )
+    assert created.status_code == 201
+    event_id = created.json()["event_id"]
+
+    after = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+
+    # Anthony sees his own personal event in "Coming up".
+    own = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 5}
+    )
+    assert own.status_code == 200
+    assert event_id in {item["event_id"] for item in own.json()["items"]}
+
+    megan_email = unique_email("megan")
+    await _join_home_as_partner(home_id, megan_email)
+    megan_client = await _login_client(megan_email)
+    try:
+        theirs = await megan_client.get(
+            f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 5}
+        )
+        assert theirs.status_code == 200
+        assert event_id not in {item["event_id"] for item in theirs.json()["items"]}
+    finally:
+        await megan_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_owner_can_see_their_own_personal_event(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("owner2"), "Owner Two")
     home_id = await _home_with_calendar(client, "Owner Home")

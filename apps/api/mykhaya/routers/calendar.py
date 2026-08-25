@@ -12,7 +12,9 @@ from mykhaya.audit import audit
 from mykhaya.calendar_occurrences import (
     MAX_RANGE_DAYS,
     expand_occurrences,
+    next_occurrence_on_or_after,
     recurrence_candidate_filter,
+    upcoming_candidate_filter,
 )
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
@@ -937,6 +939,74 @@ async def list_events(
 
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=page + 1 if has_more else None)
+
+
+# Registered ahead of GET /{home_id}/events/{event_id} deliberately — Starlette
+# matches path templates in registration order, and "upcoming" would otherwise
+# be swallowed by that route's {event_id}: uuid.UUID converter (422, not a
+# fall-through) before ever reaching this one.
+@router.get("/{home_id}/events/upcoming", response_model=EventListResponse)
+async def list_upcoming_events(
+    home_id: uuid.UUID,
+    after: datetime,
+    limit: int = Query(default=3, ge=1, le=20),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventListResponse:
+    """The next `limit` occurrences across the Home's own calendars whose
+    start is on/after `after` — powers Home -> "Coming up". Deliberately not
+    date-range bounded like list_events: candidate CalendarEvent rows are
+    selected by upcoming_candidate_filter ("could this series ever produce
+    an occurrence on/after `after`", bounded by how many event definitions
+    the Home has, never by how far in the future that occurrence falls),
+    and next_occurrence_on_or_after computes the exact next occurrence per
+    candidate in memory — so there is no arbitrary future-date horizon, and
+    no risk of an unbounded scan or N+1 query. Same visibility rules as
+    list_events (Personal Calendar boundary + calendar_view_all gating),
+    just reused rather than duplicated."""
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
+
+    filters = [
+        CalendarEvent.group_id == home_id,
+        CalendarEvent.deleted_at.is_(None),
+        upcoming_candidate_filter(after),
+        # Unconditional: applies even to calendar_view_all holders — see
+        # _personal_calendar_visibility_filter.
+        _personal_calendar_visibility_filter(home_id, auth.user.id),
+    ]
+    if Capability.calendar_view_all not in capabilities:
+        filters.append(
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
+                ),
+            )
+        )
+
+    events = (await db.scalars(select(CalendarEvent).where(and_(*filters)))).all()
+    label_by_id = await _label_map(db, home_id)
+    members_by_event = await _event_members_map(db, [event.id for event in events])
+    calendar_colors = await _calendar_color_map(db, home_id)
+
+    candidates: list[EventOccurrence] = []
+    for event in events:
+        next_occ = next_occurrence_on_or_after(event, after)
+        if next_occ is None:
+            continue
+        occurrence_start, occurrence_end = next_occ
+        label = label_by_id.get(event.label_id) if event.label_id else None
+        member_ids = members_by_event.get(event.id, [])
+        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR)
+        candidates.append(
+            _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
+        )
+
+    candidates.sort(key=lambda item: item.start_at)
+    return EventListResponse(items=candidates[:limit], next_page=None)
 
 
 @router.post("/{home_id}/events", response_model=EventOccurrence, status_code=201)

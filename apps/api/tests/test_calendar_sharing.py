@@ -180,6 +180,93 @@ async def test_home_admin_can_share_directly_and_recipient_must_accept(client: A
 
 
 @pytest.mark.asyncio
+async def test_upcoming_shared_events_visible_once_accepted_and_hidden_before(
+    client: AsyncClient,
+) -> None:
+    """Home -> "Coming up" must include a future event from a calendar
+    shared into the viewer's Home once they've accepted, and must not be
+    reachable at all — same as every other calendar-shares endpoint — before
+    acceptance or after decline/revoke."""
+    owner_email = unique_email("owner")
+    recipient_email = unique_email("recipient")
+    await create_verified_user(client, owner_email, "Home Owner")
+    home_id, calendar_id = await _create_home_with_calendar(client, "Shared Coming Up Home")
+
+    created_share = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/calendar-shares",
+        json={"calendar_id": calendar_id, "recipient_email": recipient_email, "permission": "view"},
+    )
+    assert created_share.status_code == 201, created_share.text
+    share_id = created_share.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(days=10)
+    created_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Grandkids visit",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=2)).isoformat(),
+            "timezone": "UTC",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created_event.status_code == 201, created_event.text
+
+    after = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as recipient_client:
+        await create_verified_user(recipient_client, recipient_email, "Recipient")
+
+        # Not yet accepted — no access, matching the other share-scoped
+        # endpoints (see test_home_admin_can_share_directly_and_recipient_must_accept).
+        before_accept = await unsafe(
+            recipient_client,
+            "GET",
+            f"/api/v1/calendar-shares/{share_id}/events/upcoming",
+            params={"after": after},
+        )
+        assert before_accept.status_code in (401, 403, 404)
+
+        token = await _share_token(share_id)
+        accept = await unsafe(
+            recipient_client,
+            "POST",
+            "/api/v1/calendar-shares/accept",
+            json={"token": token, "notification_preference": "all", "include_in_briefing": True},
+        )
+        assert accept.status_code == 200, accept.text
+
+        after_accept = await recipient_client.get(
+            f"/api/v1/calendar-shares/{share_id}/events/upcoming", params={"after": after}
+        )
+        assert after_accept.status_code == 200
+        titles = [item["title"] for item in after_accept.json()["items"]]
+        assert titles == ["Grandkids visit"]
+
+        leave = await unsafe(
+            recipient_client, "POST", f"/api/v1/calendar-shares/{share_id}/leave"
+        )
+        assert leave.status_code == 200, leave.text
+
+        after_leave = await unsafe(
+            recipient_client,
+            "GET",
+            f"/api/v1/calendar-shares/{share_id}/events/upcoming",
+            params={"after": after},
+        )
+        assert after_leave.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_member_requested_share_needs_admin_approval(client: AsyncClient) -> None:
     admin_email = unique_email("admin")
     partner_email = unique_email("partner")

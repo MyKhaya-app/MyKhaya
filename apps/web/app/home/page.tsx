@@ -40,8 +40,8 @@ import {
 import { routineDueLabel } from "./routine-utils";
 import {
   eventDateBounds,
-  eventInDateWindow,
-  upcomingDateWindow,
+  eventOnOrAfterDate,
+  tomorrowDateKey,
 } from "../calendar/calendar-utils";
 
 function eventTime(value: string, timezone: string) {
@@ -62,7 +62,44 @@ function eventDateStack(value: string, timezone: string) {
 
 function isComingUp(event: EventOccurrence): boolean {
   const timeZone = event.timezone;
-  return eventInDateWindow(event, timeZone, upcomingDateWindow(timeZone));
+  return eventOnOrAfterDate(event, timeZone, tomorrowDateKey(timeZone));
+}
+
+// The backend answers "next N occurrences on/after a cursor" per source
+// (Home + each externally shared calendar) with no future-date horizon —
+// see calendar_occurrences.upcoming_candidate_filter/next_occurrence_on_or_after.
+// The cursor here is a generous 24h-back UTC buffer (comfortably more than
+// any real UTC offset) so a boundary occurrence is never missed before the
+// exact, timezone-correct isComingUp/compareUpcoming pass below narrows it
+// down to the real "after today" set; UPCOMING_FETCH_LIMIT similarly asks
+// for more than the 3 ultimately shown so that pass always has enough to
+// choose from.
+const UPCOMING_FETCH_LIMIT = 8;
+
+async function fetchUpcomingCandidates(homeId: string): Promise<EventOccurrence[]> {
+  const after = new Date(Date.now() - 86_400_000).toISOString();
+  const [homeUpcoming, shares] = await Promise.all([
+    api.listUpcomingEvents(homeId, { after, limit: UPCOMING_FETCH_LIMIT }),
+    api.sharedCalendars().catch(() => ({ items: [] })),
+  ]);
+  const sharedUpcomingLists = await Promise.all(
+    shares.items.map((share) =>
+      api
+        .listUpcomingSharedEvents(share.id, { after, limit: UPCOMING_FETCH_LIMIT })
+        .then((response) =>
+          response.items.map(
+            (item): EventOccurrence => ({
+              ...item,
+              share_id: share.id,
+              share_permission: share.permission,
+              shared_by_home_name: share.source_group_name,
+            }),
+          ),
+        )
+        .catch(() => []),
+    ),
+  );
+  return [...homeUpcoming.items, ...sharedUpcomingLists.flat()];
 }
 
 function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number {
@@ -248,13 +285,7 @@ export default function HomePage() {
           enabled
             ? Promise.all([
                 api.homeSummary(activeHomeId),
-                api.listEvents(activeHomeId, {
-                  // Fetch a small UTC safety envelope, then apply the exact local
-                  // calendar-date window below using each occurrence's timezone.
-                  start_at: new Date(Date.now() - 86_400_000).toISOString(),
-                  end_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
-                  page_size: 200,
-                }),
+                fetchUpcomingCandidates(activeHomeId),
               ])
             : null,
           notificationsEnabled ? api.routines(activeHomeId, { home: true }) : null,
@@ -266,7 +297,7 @@ export default function HomePage() {
             homeSummary.today_events.map((event) => event.occurrence_id),
           );
           setUpcoming(
-            upcomingRows.items
+            upcomingRows
               .filter(
                 (event) =>
                   !todayOccurrenceIds.has(event.occurrence_id) && isComingUp(event),

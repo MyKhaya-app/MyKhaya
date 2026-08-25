@@ -2090,9 +2090,36 @@ textarea {
   display: flex;
   gap: 0.4rem;
 }
+/* Self-sufficient on the *shape* properties only — deliberately no
+   background/color/border here, which stay owned by `.secondary` (or the
+   `button, .button` tag rule's own defaults for a plain .icon-button with
+   no colour-theme class), so this can't fight the cascade with either.
+   Most callers are real <button> elements that already inherit
+   display/align/min-height/etc. from `button, .button` above, but this
+   class is also applied to plain <a>/<Link> toolbar controls (e.g. the
+   calendar toolbar's "Event categories" link) — an anchor never matches
+   `button, .button`, and min-width/min-height have no effect on its
+   default `display: inline` box, so it would silently render
+   smaller/narrower than its sibling buttons unless the shape properties
+   are declared here directly rather than relied on via the element's tag. */
 .icon-button {
+  align-items: center;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  justify-content: center;
+  min-height: 44px;
   min-width: 44px;
   padding-inline: 0.8rem;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+.icon-button:hover {
+  box-shadow: var(--shadow-raised);
+  transform: translateY(-1px);
 }
 .calendar-month {
   min-width: 0;
