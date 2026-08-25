@@ -381,9 +381,13 @@ describe("Home — Coming up", () => {
     render(<HomePage />);
 
     expect(await screen.findByText("Sunday lunch")).toBeInTheDocument();
+    // vitest's `expect.any(Number)` types as `any`, which trips
+    // @typescript-eslint/no-unsafe-assignment — assert the actual fetch
+    // limit (UPCOMING_FETCH_LIMIT in page.tsx) instead, which is both
+    // properly typed and a more precise assertion.
     expect(api.listUpcomingSharedEvents).toHaveBeenCalledWith(
       "share-1",
-      expect.objectContaining({ limit: expect.any(Number) }),
+      expect.objectContaining({ limit: 8 }),
     );
   });
 });
