@@ -802,6 +802,48 @@ textarea {
 .auth-biometric .tertiary {
   margin-top: 0.25rem;
 }
+/* The returning-child screen's PIN field lives inside .auth-biometric (a
+   centred flex column) — without this the field would shrink-to-fit and its
+   label text would inherit the ancestor's centred alignment. */
+.auth-biometric label {
+  align-self: stretch;
+  text-align: left;
+  width: 100%;
+}
+/* Multi-child-on-one-device account picker (Home -> Coming up card's
+   .home-event-row is the nearest existing precedent for an avatar + text
+   selectable row; kept intentionally simpler since there's no swatch/stack
+   here). Real <button>s, so reset away the default filled/centred
+   button, .button treatment rather than fight it. */
+.child-account-list {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+}
+.child-account-row {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid #e6e0d7;
+  color: var(--colour-slate);
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-start;
+  padding: 0.65rem 0.9rem;
+  text-align: left;
+  width: 100%;
+}
+.child-account-row:hover {
+  background: var(--colour-cream-light);
+}
+.child-account-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.child-account-copy small {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+}
 .onboarding {
   align-items: center;
   background:
