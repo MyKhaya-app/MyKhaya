@@ -130,7 +130,7 @@ export default function NotificationsOverviewPage() {
                   <p className="notice error">
                     {health.failures_today} delivery failure{health.failures_today === 1 ? "" : "s"}{" "}
                     today —{" "}
-                    <Link href="/control-centre/notifications/delivery-logs">
+                    <Link href="/notifications/delivery-logs">
                       view delivery logs
                     </Link>
                     .
@@ -142,13 +142,13 @@ export default function NotificationsOverviewPage() {
             <section>
               <h2>Shortcuts</h2>
               <div className="sheet-actions">
-                <Link className="button secondary" href="/control-centre/notifications/templates">
+                <Link className="button secondary" href="/notifications/templates">
                   Browse templates
                 </Link>
-                <Link className="button secondary" href="/control-centre/notifications/test-centre">
+                <Link className="button secondary" href="/notifications/test-centre">
                   Send a test notification
                 </Link>
-                <Link className="button secondary" href="/control-centre/notifications/delivery-logs">
+                <Link className="button secondary" href="/notifications/delivery-logs">
                   View delivery failures
                 </Link>
               </div>

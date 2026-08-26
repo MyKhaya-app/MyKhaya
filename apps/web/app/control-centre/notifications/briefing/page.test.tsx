@@ -5,7 +5,7 @@ import DailyBriefingPage from "./page";
 
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/control-centre/notifications/briefing",
+  usePathname: () => "/notifications/briefing",
   useRouter: () => stableRouter,
 }));
 

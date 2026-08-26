@@ -68,6 +68,45 @@ describe("hostname security boundaries", () => {
     );
   });
 
+  it("rewrites every bare Notifications module path to its internal Control Centre route", () => {
+    // Regression guard: the Notifications module's own links briefly hard-coded
+    // "/control-centre"-prefixed hrefs, which this rewrite then doubled to
+    // "/control-centre/control-centre/..." on the real admin host — a raw
+    // Next.js 404 that unit/component tests (which never exercise middleware)
+    // couldn't catch. This proves the *rewrite* side of the contract: a bare
+    // browser path always lands on the intended internal route.
+    const bareToInternal: Record<string, string> = {
+      "/notifications": "/control-centre/notifications",
+      "/notifications/templates": "/control-centre/notifications/templates",
+      "/notifications/channels": "/control-centre/notifications/channels",
+      "/notifications/briefing": "/control-centre/notifications/briefing",
+      "/notifications/test-centre": "/control-centre/notifications/test-centre",
+      "/notifications/delivery-logs": "/control-centre/notifications/delivery-logs",
+    };
+    for (const [bare, internal] of Object.entries(bareToInternal)) {
+      const response = middleware(
+        new NextRequest(`http://admin.localhost${bare}`, { headers: { host: "admin.localhost" } }),
+      );
+      expect(response.headers.get("x-middleware-rewrite")).toContain(internal);
+    }
+  });
+
+  it("would double-prefix a request that already includes /control-centre — hrefs must stay bare", () => {
+    // Documents *why* every Link/redirect target in this app must be a bare
+    // path: the rewrite is unconditional and doesn't know the path might
+    // already carry the prefix. A page/component that hard-codes a
+    // "/control-centre"-prefixed href produces exactly this broken URL when
+    // clicked on the real admin host.
+    const response = middleware(
+      new NextRequest("http://admin.localhost/control-centre/notifications/templates", {
+        headers: { host: "admin.localhost" },
+      }),
+    );
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/control-centre/control-centre/notifications/templates",
+    );
+  });
+
   it("denies internal management and status routes on the main application host", () => {
     expect(
       middleware(

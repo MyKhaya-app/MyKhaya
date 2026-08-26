@@ -82,14 +82,14 @@ export default function NotificationChannelsPage() {
                   <td>Email</td>
                   <td>{statusBadge(health.smtp.configured)}</td>
                   <td>
-                    {health.smtp.status} — see <Link href="/control-centre/mail">Email</Link>
+                    {health.smtp.status} — see <Link href="/mail">Email</Link>
                   </td>
                 </tr>
                 <tr>
                   <td>Push</td>
                   <td>{statusBadge(health.push.configured)}</td>
                   <td>
-                    {health.push.status} — see <Link href="/control-centre/push">Push</Link>
+                    {health.push.status} — see <Link href="/push">Push</Link>
                   </td>
                 </tr>
                 <tr>
@@ -105,7 +105,7 @@ export default function NotificationChannelsPage() {
                     <span className="badge badge-success">Configured</span>
                   </td>
                   <td>
-                    Wording managed on the <Link href="/control-centre/notifications/briefing">Daily Briefing</Link>{" "}
+                    Wording managed on the <Link href="/notifications/briefing">Daily Briefing</Link>{" "}
                     screen; delivered via the channels above.
                   </td>
                 </tr>
@@ -128,7 +128,7 @@ export default function NotificationChannelsPage() {
           </div>
           {health && health.failures_today > 0 && (
             <p className="notice error">
-              See <Link href="/control-centre/notifications/delivery-logs">delivery logs</Link> for
+              See <Link href="/notifications/delivery-logs">delivery logs</Link> for
               failure detail.
             </p>
           )}

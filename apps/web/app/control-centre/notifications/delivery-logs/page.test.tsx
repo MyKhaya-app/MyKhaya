@@ -5,7 +5,7 @@ import NotificationDeliveryLogsPage from "./page";
 
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/control-centre/notifications/delivery-logs",
+  usePathname: () => "/notifications/delivery-logs",
   useRouter: () => stableRouter,
 }));
 

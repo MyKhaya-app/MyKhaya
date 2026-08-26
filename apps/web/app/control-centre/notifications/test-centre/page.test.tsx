@@ -5,7 +5,7 @@ import NotificationTestCentrePage from "./page";
 
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/control-centre/notifications/test-centre",
+  usePathname: () => "/notifications/test-centre",
   useRouter: () => stableRouter,
 }));
 

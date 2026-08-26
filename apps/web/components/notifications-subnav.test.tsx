@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { NotificationsSubNav } from "./notifications-subnav";
 
-let currentPath = "/control-centre/notifications/templates";
+let currentPath = "/notifications/templates";
 vi.mock("next/navigation", () => ({ usePathname: () => currentPath }));
 
 describe("NotificationsSubNav", () => {
@@ -14,7 +14,7 @@ describe("NotificationsSubNav", () => {
   });
 
   it("marks only the current section's link as active", () => {
-    currentPath = "/control-centre/notifications/channels";
+    currentPath = "/notifications/channels";
     render(<NotificationsSubNav />);
     expect(screen.getByRole("link", { name: "Channels" })).toHaveClass("active");
     expect(screen.getByRole("link", { name: "Templates" })).not.toHaveClass("active");
@@ -24,7 +24,7 @@ describe("NotificationsSubNav", () => {
     render(<NotificationsSubNav />);
     expect(screen.getByRole("link", { name: "Delivery Logs" })).toHaveAttribute(
       "href",
-      "/control-centre/notifications/delivery-logs",
+      "/notifications/delivery-logs",
     );
   });
 });

@@ -3,13 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+// Bare paths — do not add a control-centre prefix here. On the real admin
+// domain (admin[.dev].mykhaya.app), middleware.ts rewrites every incoming
+// request onto the internal Control Centre route and the browser/
+// usePathname() never see that prefix — matching PlatformShell's own
+// top-level nav array. A prefixed href here would get double-rewritten and
+// 404 on the deployed admin site (though not under `next dev` on a bare
+// localhost, where no such rewrite happens) — see middleware.ts.
 const TABS = [
-  ["Overview", "/control-centre/notifications"],
-  ["Templates", "/control-centre/notifications/templates"],
-  ["Channels", "/control-centre/notifications/channels"],
-  ["Daily Briefing", "/control-centre/notifications/briefing"],
-  ["Test Centre", "/control-centre/notifications/test-centre"],
-  ["Delivery Logs", "/control-centre/notifications/delivery-logs"],
+  ["Overview", "/notifications"],
+  ["Templates", "/notifications/templates"],
+  ["Channels", "/notifications/channels"],
+  ["Daily Briefing", "/notifications/briefing"],
+  ["Test Centre", "/notifications/test-centre"],
+  ["Delivery Logs", "/notifications/delivery-logs"],
 ] as const;
 
 /** Second-level navigation within the PCC Notifications module — Overview /

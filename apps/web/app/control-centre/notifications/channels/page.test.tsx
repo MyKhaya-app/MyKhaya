@@ -4,7 +4,7 @@ import NotificationChannelsPage from "./page";
 
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/control-centre/notifications/channels",
+  usePathname: () => "/notifications/channels",
   useRouter: () => stableRouter,
 }));
 
@@ -79,11 +79,11 @@ describe("NotificationChannelsPage", () => {
     const table = screen.getByRole("table");
     expect(within(table).getByRole("link", { name: "Email" })).toHaveAttribute(
       "href",
-      "/control-centre/mail",
+      "/mail",
     );
     expect(within(table).getByRole("link", { name: "Push" })).toHaveAttribute(
       "href",
-      "/control-centre/push",
+      "/push",
     );
     // Let PlatformShell's own /auth/me resolution settle before the test ends.
     await waitFor(() => expect(screen.getByText(actor.display_name)).toBeInTheDocument());
@@ -108,7 +108,7 @@ describe("NotificationChannelsPage", () => {
     await waitFor(() => expect(screen.getByText("Today")).toBeInTheDocument());
     expect(screen.getByRole("link", { name: "delivery logs" })).toHaveAttribute(
       "href",
-      "/control-centre/notifications/delivery-logs",
+      "/notifications/delivery-logs",
     );
     // Let PlatformShell's own /auth/me resolution settle before the test ends.
     await waitFor(() => expect(screen.getByText(actor.display_name)).toBeInTheDocument());

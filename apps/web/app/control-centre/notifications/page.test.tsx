@@ -4,7 +4,7 @@ import NotificationsOverviewPage from "./page";
 
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/control-centre/notifications",
+  usePathname: () => "/notifications",
   useRouter: () => stableRouter,
 }));
 
@@ -82,7 +82,7 @@ describe("NotificationsOverviewPage", () => {
     mockRoutes();
     render(<NotificationsOverviewPage />);
     const link = await screen.findByRole("link", { name: "view delivery logs" });
-    expect(link).toHaveAttribute("href", "/control-centre/notifications/delivery-logs");
+    expect(link).toHaveAttribute("href", "/notifications/delivery-logs");
   });
 
   it("does not show a failure banner when there are no failures today", async () => {
@@ -110,11 +110,11 @@ describe("NotificationsOverviewPage", () => {
     await waitFor(() => expect(screen.getByText("Shortcuts")).toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Browse templates" })).toHaveAttribute(
       "href",
-      "/control-centre/notifications/templates",
+      "/notifications/templates",
     );
     expect(screen.getByRole("link", { name: "Send a test notification" })).toHaveAttribute(
       "href",
-      "/control-centre/notifications/test-centre",
+      "/notifications/test-centre",
     );
   });
 });
