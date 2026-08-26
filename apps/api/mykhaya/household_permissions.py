@@ -90,7 +90,16 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.sharing_external,
         }
     ),
-    PermissionProfile.child_restricted: frozenset(),
+    # Read-only baseline: a Child can always see today's household meals —
+    # this is ordinary shared household information (like Routines, which
+    # has no capability gate on its read endpoint at all — see
+    # routers.household_routines.list_routines), not something that needs
+    # parent configuration the way calendar visibility does. meals_manage
+    # (create/edit/delete meals and plan entries) is deliberately NOT
+    # included here — it stays out of reach for every Child regardless of
+    # ChildProfile settings, since there is no child-facing "meals" toggle
+    # in CHILD_PERMISSION_CAPABILITIES and none is being added.
+    PermissionProfile.child_restricted: frozenset({Capability.meals_view}),
     PermissionProfile.explicit_sharing: frozenset(),
     PermissionProfile.review_required: frozenset({Capability.members_view}),
 }

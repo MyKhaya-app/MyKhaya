@@ -256,9 +256,18 @@ export default function HomePage() {
         setListsEnabled(false);
         setWishlistsEnabled(false);
       });
-    Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
-      .then(async ([matrix, memberRows]) => {
-        setMembers(memberRows);
+    // Member roster is only used for display (event participant avatars) —
+    // its own membership-gated read (Capability.members_view) isn't held by
+    // every relationship (e.g. a Child), and that must never block or
+    // error out the rest of the dashboard: fetched independently, degrading
+    // to an empty list rather than joining the featureMatrix chain below.
+    api
+      .members(activeHomeId)
+      .then(setMembers)
+      .catch(() => setMembers([]));
+    api
+      .featureMatrix(activeHomeId)
+      .then(async (matrix) => {
         const enabled = matrix.features.some(
           (feature) => feature.feature === "calendar" && feature.enabled,
         );
@@ -281,15 +290,16 @@ export default function HomePage() {
           setRoutines([]);
           return;
         }
-        const [calendarData, routineData] = await Promise.all([
-          enabled
-            ? Promise.all([
-                api.homeSummary(activeHomeId),
-                fetchUpcomingCandidates(activeHomeId),
-              ])
-            : null,
-          notificationsEnabled ? api.routines(activeHomeId, { home: true }) : null,
-        ]);
+        // Calendar visibility (Capability.calendar_view) is parent-configured
+        // per Child and legitimately absent for some members — that is an
+        // expected, not-visible-to-me outcome, not a page-level failure, so
+        // it degrades this one section rather than rejecting into `error`.
+        const calendarData = enabled
+          ? await Promise.all([
+              api.homeSummary(activeHomeId),
+              fetchUpcomingCandidates(activeHomeId),
+            ]).catch(() => null)
+          : null;
         if (calendarData) {
           const [homeSummary, upcomingRows] = calendarData;
           setSummary(homeSummary);
@@ -309,6 +319,9 @@ export default function HomePage() {
           setSummary(null);
           setUpcoming([]);
         }
+        const routineData = notificationsEnabled
+          ? await api.routines(activeHomeId, { home: true }).catch(() => null)
+          : null;
         setRoutines(routineData?.items ?? []);
         setRoutinesExpanded(false);
       })
@@ -571,7 +584,7 @@ export default function HomePage() {
                   Add event
                 </Link>
               )}
-              {canInviteMore && (
+              {canInviteMore && (activeHome?.capabilities ?? []).includes("members.invite") && (
                 <Link className="quick-action" href="/people">
                   <UserPlus size={20} aria-hidden="true" />
                   Invite family

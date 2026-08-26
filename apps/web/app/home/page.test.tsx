@@ -15,14 +15,20 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/home",
 }));
 
-vi.mock("@/components/use-active-home", () => ({
-  useActiveHome: () => ({
-    activeHome: { id: "home-1", name: "Hales Home" },
+function defaultActiveHome() {
+  return {
+    activeHome: { id: "home-1", name: "Hales Home", capabilities: ["members.invite"] },
     activeHomeId: "home-1",
     homes: [{ id: "home-1", name: "Hales Home" }],
     setActiveHomeId: vi.fn(),
     loading: false,
-  }),
+  };
+}
+
+const activeHomeMock = vi.fn(defaultActiveHome);
+
+vi.mock("@/components/use-active-home", () => ({
+  useActiveHome: () => activeHomeMock(),
 }));
 
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
@@ -62,6 +68,11 @@ function billing(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks() resets call history but not a mock's implementation —
+  // explicitly restore the default here so a test-local
+  // activeHomeMock.mockReturnValue(...) (mockClear doesn't undo those
+  // either) never leaks into a later test.
+  activeHomeMock.mockImplementation(defaultActiveHome);
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Megan" });
   (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -500,5 +511,171 @@ describe("Home — household routines", () => {
     expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
     await user.click(screen.getByRole("button", { name: "Show less" }));
     expect(screen.queryByText("Take Tablet")).not.toBeInTheDocument();
+  });
+});
+
+// A Child's Home dashboard must reuse these exact same components — no
+// role branching anywhere on this page — with only the underlying
+// capability/permission data differing. These tests simulate a Child by
+// controlling capabilities/API responses the same way a real Child
+// membership would produce them, never by asserting on a role field.
+describe("Home — Invite family is capability-gated, not role-gated", () => {
+  it("hides Invite family when the member has no members.invite capability, even with seats available", async () => {
+    activeHomeMock.mockReturnValue({
+      activeHome: { id: "home-1", name: "Hales Home", capabilities: [] },
+      activeHomeId: "home-1",
+      homes: [{ id: "home-1", name: "Hales Home" }],
+      setActiveHomeId: vi.fn(),
+      loading: false,
+    });
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ member_usage: { count: 1, limit: 4, over_limit: false } }),
+    );
+
+    render(<HomePage />);
+
+    await screen.findByText("Routines");
+    expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
+  });
+
+  it("shows Invite family when both seats are available and members.invite is held", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ member_usage: { count: 1, limit: 4, over_limit: false } }),
+    );
+
+    render(<HomePage />);
+
+    expect(await screen.findByRole("link", { name: /invite family/i })).toHaveAttribute(
+      "href",
+      "/people",
+    );
+  });
+
+  it("still hides Invite family when the capability is held but the Home is at capacity", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ member_usage: { count: 4, limit: 4, over_limit: false } }),
+    );
+
+    render(<HomePage />);
+
+    await screen.findByText("Routines");
+    expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("Home — a denied member roster degrades gracefully (Child parity)", () => {
+  it("still loads Coming up, Meals and Routines, with no global permission error, when /members 403s", async () => {
+    enableCalendarOnly();
+    (api.members as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("You do not have permission to perform that action."),
+    );
+    (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      today_events: [],
+      next_event: null,
+    });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [occurrence({ occurrence_id: "occ-tomorrow", title: "Sports day", start_at: tomorrow })],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Sports day")).toBeInTheDocument();
+    expect(screen.getByText("Coming up")).toBeInTheDocument();
+    expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
+  });
+
+  it("does not populate the members list used for event avatars when denied, but does not error either", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("forbidden"));
+
+    render(<HomePage />);
+
+    await screen.findByText("Routines");
+    expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
+  });
+});
+
+describe("Home — denied calendar visibility fails closed, not with a global error", () => {
+  it("shows the Coming up empty state rather than a permission banner when calendar_view is denied", async () => {
+    enableCalendarOnly();
+    (api.homeSummary as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("You do not have permission to perform that action."),
+    );
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("You do not have permission to perform that action."),
+    );
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Coming up")).toBeInTheDocument();
+    expect(screen.getByText("Nothing else planned yet.")).toBeInTheDocument();
+    expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
+  });
+});
+
+describe("Home — genuine unexpected errors still surface", () => {
+  it("still shows the error banner when the feature matrix itself fails unexpectedly", async () => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Network error"));
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Network error")).toBeInTheDocument();
+  });
+});
+
+describe("Home — Meals card shows for a Child once meals_view is granted", () => {
+  it("renders today's meals from the same MealPlansTodayCard adults use", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing({ meals_enabled: true }));
+    (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({
+      date: "2026-08-26",
+      entries: [
+        {
+          id: "entry-1",
+          meal_slot: "dinner",
+          meal_id: "meal-1",
+          meal_name: "Spaghetti",
+          quick_meal_name: null,
+          time: "18:00:00",
+          member_ids: ["u1"],
+        },
+      ],
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Meals")).toBeInTheDocument();
+    expect(screen.getByText(/Spaghetti/)).toBeInTheDocument();
+  });
+
+  it("does not require any meal-plan management capability merely to view today's meals", async () => {
+    // No members.invite, no other capability granted — mirrors a
+    // child_restricted membership with no ChildProfile toggles enabled.
+    activeHomeMock.mockReturnValue({
+      activeHome: { id: "home-1", name: "Hales Home", capabilities: ["meals.view"] },
+      activeHomeId: "home-1",
+      homes: [{ id: "home-1", name: "Hales Home" }],
+      setActiveHomeId: vi.fn(),
+      loading: false,
+    });
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing({ meals_enabled: true }));
+    (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({
+      date: "2026-08-26",
+      entries: [
+        {
+          id: "entry-1",
+          meal_slot: "breakfast",
+          meal_id: "meal-1",
+          meal_name: "Porridge",
+          quick_meal_name: null,
+          time: null,
+          member_ids: [],
+        },
+      ],
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText(/Porridge/)).toBeInTheDocument();
   });
 });
