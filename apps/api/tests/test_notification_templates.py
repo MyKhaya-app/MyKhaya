@@ -19,6 +19,7 @@ from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
+    AuthIdentity,
     NotificationChannel,
     NotificationTemplate,
     NotificationTemplateRevision,
@@ -33,7 +34,13 @@ from mykhaya.notifications.default_templates import (
     SAMPLE_VARIABLES,
     TEMPLATES,
 )
-from mykhaya.notifications.templates import UnknownTemplateVariable, render_notification
+from mykhaya.notifications.templates import (
+    MissingRequiredTemplateVariable,
+    UnknownTemplateVariable,
+    render_notification,
+    used_variables,
+    validate_required_variables,
+)
 from mykhaya.routers import platform as platform_router
 from mykhaya.security import derived_token, password_hash
 
@@ -157,6 +164,8 @@ def test_registry_matches_migration_version() -> None:
         "routine.due",
         "briefing.title",
         "briefing.intro",
+        "birthday.reminder.self",
+        "birthday.reminder.other",
     }
 
 
@@ -1043,3 +1052,377 @@ async def test_disabling_a_template_is_audited_as_an_update(
         )
         assert event is not None
         assert event.new_values.get("enabled") is False
+
+
+# --- required_variables: registry integrity -----------------------------------
+
+
+def test_every_required_variable_is_also_allowed() -> None:
+    """Enforced at import time in default_templates.py — re-asserted here so a
+    future edit that somehow bypasses that check still fails a test, not
+    just a silent AssertionError at process start."""
+    for template_type, default in TEMPLATES.items():
+        assert default.required_variables <= default.allowed_variables, template_type
+
+
+def test_every_built_in_default_contains_its_own_required_placeholders() -> None:
+    """A registry entry that requires a placeholder its own default text
+    doesn't contain would make render_notification's fallback path itself
+    invalid — the one thing that must always be safe to fall back to."""
+    for template_type, default in TEMPLATES.items():
+        used = used_variables(default.subject) | used_variables(default.body)
+        missing = default.required_variables - used
+        assert not missing, f"{template_type} default is missing {missing}"
+
+
+def test_expected_templates_declare_the_expected_required_variables() -> None:
+    expected = {
+        "email_verification": {"link"},
+        "password_reset": {"link"},
+        "household_invitation": {"link"},
+        "calendar_share_invitation": {"link"},
+        "platform_administrator_invitation": {"link"},
+    }
+    for template_type, required in expected.items():
+        assert set(TEMPLATES[template_type].required_variables) == required, template_type
+
+    # Ordinary product notifications remain unrestricted — removing a variable
+    # merely changes the wording, it doesn't break or mislead.
+    for template_type in (
+        "calendar_share_accepted",
+        "calendar_share_declined",
+        "calendar_share_revoked",
+        "calendar.event.member_added",
+        "calendar.event.member_removed",
+        "calendar.event.updated",
+        "calendar.event.cancelled",
+        "calendar.event.shared_created",
+        "calendar.event.reminder",
+        "routine.due",
+        "briefing.title",
+        "briefing.intro",
+        "birthday.reminder.self",
+        "birthday.reminder.other",
+    ):
+        assert TEMPLATES[template_type].required_variables == frozenset(), template_type
+
+
+def test_security_critical_templates_all_require_their_link() -> None:
+    """Every security_critical template happens to centre on a single secure
+    link today — if a future one doesn't, this test should be updated
+    deliberately rather than silently passing."""
+    for template_type, default in TEMPLATES.items():
+        if default.security_critical:
+            assert default.required_variables == frozenset({"link"}), template_type
+            assert default.disableable is False, template_type
+
+
+# --- required_variables: validation helper --------------------------------------
+
+
+def test_validate_required_variables_passes_when_present_in_either_field() -> None:
+    validate_required_variables("Reset", "Use {{link}} to continue.", frozenset({"link"}))
+    validate_required_variables("Use {{link}}", "no variables here", frozenset({"link"}))
+
+
+def test_validate_required_variables_rejects_when_missing_from_both_fields() -> None:
+    with pytest.raises(MissingRequiredTemplateVariable) as excinfo:
+        validate_required_variables(
+            "Reset your password", "All done, no link here.", frozenset({"link"})
+        )
+    assert excinfo.value.missing == ["link"]
+
+
+def test_validate_required_variables_reports_every_missing_variable() -> None:
+    with pytest.raises(MissingRequiredTemplateVariable) as excinfo:
+        validate_required_variables("Subject", "Body", frozenset({"link", "expires_at"}))
+    assert excinfo.value.missing == ["expires_at", "link"]
+
+
+# --- required_variables: server-side save enforcement ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_saving_an_override_that_keeps_the_required_link_succeeds(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/notification-templates/password_reset",
+        json={
+            "subject": "Reset your account",
+            "body": "Use this link to reset your password: {{link}}",
+            "enabled": True,
+            "reason": "Rewording the reset email while keeping the reset link.",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_removing_the_required_link_is_rejected_with_a_clear_422(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/notification-templates/password_reset",
+        json={
+            "subject": "Reset your account",
+            "body": "Your password has been reset. All done!",
+            "enabled": True,
+            "reason": "Accidentally dropping the reset link.",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 422
+    assert "required placeholder" in response.text
+    assert "{{link}}" in response.text
+
+    # Nothing was persisted — the template is still using the built-in default.
+    listed = await admin_client.get("/api/v1/platform/notification-templates")
+    row = next(r for r in listed.json() if r["template_type"] == "password_reset")
+    assert row["is_override"] is False
+
+
+@pytest.mark.asyncio
+async def test_removing_a_required_link_creates_no_audit_event(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    """A rejected save must not leave a misleading `.updated` audit trail
+    behind — the mutation never happened, so nothing should be audited."""
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    before = await admin_client.get("/api/v1/platform/notification-templates")
+    async with SessionFactory() as db:
+        before_count = len(
+            (
+                await db.scalars(
+                    select(AdministrativeAuditEvent).where(
+                        AdministrativeAuditEvent.administrator_id == admin.id
+                    )
+                )
+            ).all()
+        )
+    assert before.status_code == 200
+
+    rejected = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/notification-templates/email_verification",
+        json={
+            "subject": "Verify your email",
+            "body": "Thanks for verifying!",
+            "enabled": True,
+            "reason": "Dropping the verification link by mistake.",
+            "confirmed": True,
+        },
+    )
+    assert rejected.status_code == 422
+
+    async with SessionFactory() as db:
+        after_count = len(
+            (
+                await db.scalars(
+                    select(AdministrativeAuditEvent).where(
+                        AdministrativeAuditEvent.administrator_id == admin.id
+                    )
+                )
+            ).all()
+        )
+    assert after_count == before_count
+
+
+@pytest.mark.asyncio
+async def test_unknown_variable_still_rejected_alongside_required_variable_check(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/notification-templates/password_reset",
+        json={
+            "subject": "Reset",
+            "body": "Use {{link}} or contact {{support_email}}.",
+            "enabled": True,
+            "reason": "Testing unknown variable still rejected.",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 422
+    assert "support_email" in response.text
+
+
+@pytest.mark.asyncio
+async def test_resetting_an_override_restores_a_valid_default(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    saved = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/notification-templates/password_reset",
+        json={
+            "subject": "Custom reset",
+            "body": "Reset here: {{link}}",
+            "enabled": True,
+            "reason": "Customising before resetting.",
+            "confirmed": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+    reset = await unsafe(
+        admin_client, "DELETE", "/api/v1/platform/notification-templates/password_reset"
+    )
+    assert reset.status_code == 200
+    body = reset.json()
+    assert body["is_override"] is False
+    used = used_variables(body["subject"]) | used_variables(body["body"])
+    assert set(body["required_variables"]) <= used
+
+
+# --- required_variables: legacy/stale override resilience -----------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_override_missing_a_newly_required_variable_falls_back_safely() -> None:
+    """Simulates an override saved before `required_variables` existed (or
+    before this particular variable was added to it): a stored row that
+    would fail today's save-time validation but was never re-validated after
+    the fact. Resolution must detect this and use the built-in default —
+    exactly the same safety net as an unknown-variable override, just for a
+    different kind of invalidity."""
+    async with SessionFactory() as db:
+        legacy_override = NotificationTemplate(
+            template_type="password_reset",
+            channel=NotificationChannel.email,
+            subject="Your password was reset",
+            body_text="Your MyKhaya password has been reset. If this wasn't you, contact support.",
+            enabled=True,
+        )
+        db.add(legacy_override)
+        await db.commit()
+        try:
+            subject, body = await render_notification(
+                db, "password_reset", {"link": "https://example.com/reset/abc"}
+            )
+            assert subject == TEMPLATES["password_reset"].subject
+            assert "https://example.com/reset/abc" in body
+            assert "Your password was reset" not in subject
+        finally:
+            await db.delete(legacy_override)
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_password_reset_test_send_does_not_perform_a_real_reset(
+    admin_client: AsyncClient, admin_factory: AdminFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Security-critical templates must remain safe to test-send: sending a
+    test of password_reset's wording must not change the target user's
+    actual password or create a real reset token."""
+    admin = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, admin)
+    await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/mail/smtp-settings",
+        json={
+            "enabled": True,
+            "host": "smtp.example.com",
+            "port": 587,
+            "connection_security": "starttls",
+            "auth_enabled": True,
+            "username": "mailer",
+            "password": "correct horse battery staple",
+            "sender_name": "MyKhaya",
+            "sender_email": "hello@mykhaya.example",
+            "reply_to": None,
+            "timeout_seconds": 10,
+            "reason": "Configuring SMTP for the password-reset test-send safety check.",
+            "confirmed": True,
+        },
+    )
+    email = unique_email("resettestsafety")
+    register = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/auth/register",
+        json={"email": email, "display_name": "Reset Safety Test", "password": PASSWORD},
+    )
+    assert register.status_code == 202
+    async with SessionFactory() as db:
+        target_user = await db.scalar(select(User).where(User.email == email))
+        assert target_user is not None
+        original_identity = await db.scalar(
+            select(AuthIdentity).where(AuthIdentity.user_id == target_user.id)
+        )
+        assert original_identity is not None
+        original_password_hash = original_identity.password_hash
+
+    def fake_send_email(
+        config: object, recipient: str, subject: str, text: str, html: str | None = None
+    ) -> None:
+        pass
+
+    monkeypatch.setattr(platform_router, "send_email", fake_send_email)
+    response = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/notification-templates/password_reset/test-send",
+        json={
+            "recipient_user_id": str(target_user.id),
+            "reason": "Confirming test-send has no real security effect.",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    async with SessionFactory() as db:
+        after = await db.scalar(select(User).where(User.email == email))
+        assert after is not None
+        after_identity = await db.scalar(
+            select(AuthIdentity).where(AuthIdentity.user_id == after.id)
+        )
+        assert after_identity is not None
+        assert after_identity.password_hash == original_password_hash
+        reset_tokens = (
+            await db.scalars(
+                select(ActionToken).where(
+                    ActionToken.user_id == after.id,
+                    ActionToken.purpose == TokenPurpose.reset_password,
+                )
+            )
+        ).all()
+        assert reset_tokens == []
+
+
+# --- Birthday reminder migration -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_birthday_templates_render_the_same_wording_as_before_migration() -> None:
+    """Regression guard: birthdays.py used to hard-code these two variants
+    directly. The external notify() notification_type stays the single,
+    unchanged "birthday_reminder" for both — only the wording now comes from
+    the registry."""
+    async with SessionFactory() as db:
+        self_subject, self_body = await render_notification(db, "birthday.reminder.self", {})
+        assert self_subject == "Happy Birthday!"
+        assert self_body == "Happy Birthday! We hope you have a wonderful day."
+
+        other_subject, other_body = await render_notification(
+            db, "birthday.reminder.other", {"display_name": "Megan"}
+        )
+        assert other_subject == "Megan's birthday"
+        assert other_body == "Today is Megan's birthday."

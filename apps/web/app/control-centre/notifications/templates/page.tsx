@@ -12,6 +12,7 @@ type Template = {
   channel: string;
   description: string;
   allowed_variables: string[];
+  required_variables: string[];
   default_subject: string;
   default_body: string;
   subject: string;
@@ -24,6 +25,19 @@ type Template = {
   updated_at: string | null;
   updated_by: string | null;
 };
+
+function usedVariables(text: string): Set<string> {
+  const names: string[] = [];
+  for (const match of text.matchAll(/\{\{(\w+)\}\}/g)) {
+    if (match[1]) names.push(match[1]);
+  }
+  return new Set(names);
+}
+
+function missingRequiredVariables(subject: string, body: string, required: string[]): string[] {
+  const present = new Set([...usedVariables(subject), ...usedVariables(body)]);
+  return required.filter((name) => !present.has(name));
+}
 
 function StatusBadges({ template }: { template: Template }) {
   return (
@@ -133,10 +147,24 @@ export default function NotificationTemplatesPage() {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
-    setBusy(true);
+    if (!selected || !active) return;
     setError("");
     setMessage("");
+
+    // Usability only — the backend re-validates this and is authoritative.
+    // Checking here just avoids a round trip for the common slip of editing
+    // out a required placeholder, without discarding the admin's draft.
+    const missing = missingRequiredVariables(subject, body, active.required_variables);
+    if (missing.length > 0) {
+      setError(
+        `Template must include required placeholder(s): ${missing
+          .map((name) => `{{${name}}}`)
+          .join(", ")}.`,
+      );
+      return;
+    }
+
+    setBusy(true);
     const form = new FormData(event.currentTarget);
     try {
       await platformApi.put(`/notification-templates/${selected}`, {
@@ -347,7 +375,13 @@ export default function NotificationTemplatesPage() {
               <small>
                 Allowed variables:{" "}
                 {active.allowed_variables.length > 0
-                  ? active.allowed_variables.map((name) => `{{${name}}}`).join(", ")
+                  ? active.allowed_variables
+                      .map((name) =>
+                        active.required_variables.includes(name)
+                          ? `{{${name}}} — Required`
+                          : `{{${name}}}`,
+                      )
+                      .join(", ")
                   : "none"}
               </small>
             </p>
@@ -382,16 +416,20 @@ export default function NotificationTemplatesPage() {
               </label>
               {active.allowed_variables.length > 0 && (
                 <div className="sheet-actions">
-                  {active.allowed_variables.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className="secondary"
-                      onClick={() => setBody((current) => `${current}{{${name}}}`)}
-                    >
-                      Insert {`{{${name}}}`}
-                    </button>
-                  ))}
+                  {active.allowed_variables.map((name) => {
+                    const isRequired = active.required_variables.includes(name);
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        className="secondary"
+                        onClick={() => setBody((current) => `${current}{{${name}}}`)}
+                      >
+                        Insert {`{{${name}}}`}
+                        {isRequired && <span className="badge badge-warning">Required</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
               <label className="check-row">

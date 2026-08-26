@@ -28,6 +28,14 @@ class TemplateDefault:
     body: str
     allowed_variables: frozenset[str]
     description: str
+    # Placeholders that MUST remain present (in the subject and/or the body —
+    # combined, not per-field, since no current template needs a variable
+    # pinned to one specific field) for an override to be considered valid.
+    # Always a subset of allowed_variables (enforced below, at import time).
+    # Empty for every template where dropping a variable makes the wording
+    # merely different, not broken/misleading/unusable — see
+    # docs/architecture/notification-engine.md.
+    required_variables: frozenset[str] = frozenset()
     # --- Registry metadata (PCC Notifications module) -----------------------
     # None of the fields below are ever persisted to NotificationTemplate —
     # they describe the *definition* (module grouping, which channel an
@@ -60,6 +68,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "If you didn't create a MyKhaya account, you can safely ignore this email."
         ),
         allowed_variables=frozenset({"link"}),
+        required_variables=frozenset({"link"}),
         description="Sent when someone registers or an administrator resends verification.",
         module="account_security",
         disableable=False,
@@ -74,6 +83,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "your password has not been changed."
         ),
         allowed_variables=frozenset({"link"}),
+        required_variables=frozenset({"link"}),
         description="Sent when someone requests a password reset.",
         module="account_security",
         disableable=False,
@@ -89,6 +99,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "If you were not expecting this invitation, you can ignore this email."
         ),
         allowed_variables=frozenset({"inviter_display_name", "home_name", "link", "expires_at"}),
+        required_variables=frozenset({"link"}),
         description="Sent when a household admin or partner invites someone to join.",
         module="invitations",
         disableable=False,
@@ -115,6 +126,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
                 "expires_at",
             }
         ),
+        required_variables=frozenset({"link"}),
         description="Sent when a Home shares one of its calendars with someone outside the Home.",
         module="calendar_sharing",
         disableable=False,
@@ -164,6 +176,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
             "account will be created unless the link above is used."
         ),
         allowed_variables=frozenset({"inviter_display_name", "role", "link", "expires_at"}),
+        required_variables=frozenset({"link"}),
         description="Sent when a Platform Owner invites a new global platform administrator.",
         module="platform",
         disableable=False,
@@ -272,7 +285,44 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="daily_briefing",
         channel=NotificationChannel.in_app,
     ),
+    # --- Birthdays --------------------------------------------------------
+    # notifications.birthdays sends exactly two wording variants — never a
+    # third — regardless of whether the birthday belongs to an adult user or
+    # a child: the birthday person themself (self) sees one message, every
+    # other household member (other) sees a different one naming them. The
+    # *external* notify() notification_type stays the single, unchanged
+    # "birthday_reminder" for both — preferences, idempotency keys and
+    # existing delivery-log/analytics rows keyed on that string are
+    # unaffected; only these two internal template keys are new.
+    "birthday.reminder.self": TemplateDefault(
+        subject="Happy Birthday!",
+        body="Happy Birthday! We hope you have a wonderful day.",
+        allowed_variables=frozenset(),
+        description="Sent to a household member on their own birthday.",
+        module="birthdays",
+        channel=NotificationChannel.in_app,
+    ),
+    "birthday.reminder.other": TemplateDefault(
+        subject="{{display_name}}'s birthday",
+        body="Today is {{display_name}}'s birthday.",
+        allowed_variables=frozenset({"display_name"}),
+        description=(
+            "Sent to everyone else in the household when it's a member's or child's "
+            "birthday."
+        ),
+        module="birthdays",
+        channel=NotificationChannel.in_app,
+    ),
 }
+
+for _template_type, _default in TEMPLATES.items():
+    _unknown_required = _default.required_variables - _default.allowed_variables
+    if _unknown_required:
+        raise AssertionError(
+            f"{_template_type}: required_variables {sorted(_unknown_required)} "
+            "must be a subset of allowed_variables"
+        )
+del _template_type, _default, _unknown_required
 
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
@@ -342,4 +392,6 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
     "routine.due": {"routine_title": "Put the bins out"},
     "briefing.title": {"count_phrase": "3 events"},
     "briefing.intro": {},
+    "birthday.reminder.self": {},
+    "birthday.reminder.other": {"display_name": "Megan"},
 }

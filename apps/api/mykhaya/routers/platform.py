@@ -103,12 +103,14 @@ from mykhaya.notifications.default_templates import (
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_config, send_push
 from mykhaya.notifications.templates import (
+    MissingRequiredTemplateVariable,
     UnknownTemplateVariable,
     get_override,
     render_notification,
     render_notification_email,
     substitute,
     validate_override_text,
+    validate_required_variables,
 )
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_health import current_platform_health
@@ -5085,6 +5087,7 @@ def _template_response(
         channel=default.channel.value,
         description=default.description,
         allowed_variables=sorted(default.allowed_variables),
+        required_variables=sorted(default.required_variables),
         default_subject=default.subject,
         default_body=default.body,
         subject=(override.subject if override and override.subject else default.subject),
@@ -5187,6 +5190,14 @@ async def update_notification_template(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unknown template variable: {{{{{exc}}}}}. Allowed: "
             f"{', '.join(sorted(default.allowed_variables))}.",
+        ) from exc
+    try:
+        validate_required_variables(body.subject, body.body, default.required_variables)
+    except MissingRequiredTemplateVariable as exc:
+        placeholders = ", ".join(f"{{{{{name}}}}}" for name in exc.missing)
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Template must include required placeholder(s): {placeholders}.",
         ) from exc
     # Some templates (account security, mandatory household/calendar-share
     # invitations) must always reach their recipient — see

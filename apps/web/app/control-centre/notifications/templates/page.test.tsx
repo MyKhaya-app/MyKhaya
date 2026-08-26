@@ -39,6 +39,7 @@ const templates = [
     channel: "in_app",
     description: "Sent shortly before an event starts.",
     allowed_variables: ["event_title", "event_when", "event_location"],
+    required_variables: [],
     default_subject: "{{event_title}}",
     default_body: "{{event_title}} starts {{event_when}}{{event_location}}.",
     subject: "{{event_title}}",
@@ -57,6 +58,7 @@ const templates = [
     channel: "email",
     description: "Verifies a new account's email address.",
     allowed_variables: ["code"],
+    required_variables: ["code"],
     default_subject: "Verify your email",
     default_body: "Your verification code is {{code}}.",
     subject: "Verify your email — customised",
@@ -387,5 +389,102 @@ describe("NotificationTemplatesPage — reset behaviour", () => {
       }),
     );
     expect(await screen.findByText(/restored to their built-in defaults/)).toBeInTheDocument();
+  });
+});
+
+describe("NotificationTemplatesPage — required placeholders", () => {
+  it("labels a required variable distinctly from an ordinary allowed one", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
+    await user.click(screen.getAllByText("email_verification")[0]!);
+
+    expect(screen.getByText(/\{\{code\}\} — Required/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Insert \{\{code\}\}/ })).toHaveTextContent(
+      "Required",
+    );
+  });
+
+  it("does not mark an ordinary variable as required", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("calendar.event.reminder")).toBeInTheDocument());
+    await user.click(screen.getByText("calendar.event.reminder"));
+
+    const editor = screen.getByRole("heading", { name: "Calendar Event Reminder" }).closest(
+      "section",
+    )!;
+    expect(within(editor).queryByText(/Required/)).not.toBeInTheDocument();
+  });
+
+  it("blocks a save that removes a required placeholder, without calling the API", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
+    await user.click(screen.getAllByText("email_verification")[0]!);
+
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: "All verified now, thanks!" } });
+    await user.type(screen.getByLabelText("Reason for change"), "Accidentally dropping the code");
+    await user.click(screen.getByRole("button", { name: "Save override" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Template must include required placeholder(s): {{code}}.",
+    );
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("retains the admin's draft after a blocked save — it does not reset the form", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
+    await user.click(screen.getAllByText("email_verification")[0]!);
+
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: "All verified now, thanks!" } });
+    await user.type(screen.getByLabelText("Reason for change"), "Accidentally dropping the code");
+    await user.click(screen.getByRole("button", { name: "Save override" }));
+
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("Body")).toHaveValue("All verified now, thanks!");
+  });
+
+  it("does not show a false success state when a required placeholder is missing", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
+    await user.click(screen.getAllByText("email_verification")[0]!);
+
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: "All verified now, thanks!" } });
+    await user.type(screen.getByLabelText("Reason for change"), "Accidentally dropping the code");
+    await user.click(screen.getByRole("button", { name: "Save override" }));
+
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Template saved.")).not.toBeInTheDocument();
+  });
+
+  it("saves successfully once the required placeholder is restored", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    put.mockResolvedValue(templates[1]);
+    render(<NotificationTemplatesPage />);
+    await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
+    await user.click(screen.getAllByText("email_verification")[0]!);
+
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: "All verified now, thanks!" } });
+    await user.type(screen.getByLabelText("Reason for change"), "Accidentally dropping the code");
+    await user.click(screen.getByRole("button", { name: "Save override" }));
+    await screen.findByRole("alert");
+
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: { value: "All verified now, thanks! Code: {{code}}" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save override" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    expect(screen.getByText("Template saved.")).toBeInTheDocument();
   });
 });

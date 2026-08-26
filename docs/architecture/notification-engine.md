@@ -254,10 +254,11 @@ render_notification(db, template_type, variables, channel=None)   [templates.py]
         ├─ look up TemplateDefault in TEMPLATES (default_templates.py) — 404 if unknown key
         ├─ look up a matching NotificationTemplate override row (template_type, channel)
         │
-        ├─ override exists, enabled, substitutes cleanly ──► use override's subject/body
+        ├─ override exists, enabled, keeps every required placeholder, substitutes
+        │  cleanly ──► use override's subject/body
         │
-        └─ no override / disabled / references an unknown placeholder
-               ──► log a warning, fall back to the built-in default subject/body
+        └─ no override / disabled / drops a required placeholder / references an
+           unknown placeholder ──► log a warning, fall back to the built-in default
         ▼
 notify(..., title=<resolved subject>, body=<resolved body>, ...)   [engine.py, unchanged]
 ```
@@ -284,6 +285,20 @@ entry is a `TemplateDefault`:
   may reference. This is enforced in both directions: a saved override may not reference
   a variable outside this set, and every variable in this set must be supplied by the
   producer's call to `render_notification()` for the default itself to render cleanly.
+- `required_variables` (`frozenset[str]`) — the subset of `allowed_variables` that must
+  remain present (in the subject, the body, or both — checked as one combined set, not
+  per-field, since no current template needs a variable pinned to one specific field)
+  for a save to be accepted. Always a subset of `allowed_variables`; a module-level
+  check at the bottom of `default_templates.py` raises `AssertionError` at import time
+  if any template violates this, so a bad registry entry fails at process startup, not
+  silently at render time. Only the five security/mandatory-invitation templates
+  (`email_verification`, `password_reset`, `household_invitation`,
+  `calendar_share_invitation`, `platform_administrator_invitation`) require anything —
+  each requires `{{link}}`, since dropping the secure link makes the notification
+  actively broken (the recipient has no way to complete the flow it exists for).
+  Ordinary product notifications (calendar, routines, briefing, birthdays,
+  informational calendar-sharing notices) require nothing: removing a variable there
+  changes the wording, it doesn't break or mislead.
 - `disableable` — whether a Platform Admin may turn this notification type off at all.
   `False` for account-security and other mandatory workflows; enforced server-side in
   `routers/platform.py::update_notification_template` (not just hidden in the UI), so a
@@ -296,14 +311,14 @@ entry is a `TemplateDefault`:
 preview panel and Test Centre so every registered template can be rendered without a
 real event/invitation/user to source variables from.
 
-There is deliberately **no separate "required variables" tier** distinct from
-`allowed_variables` today: an override may legally drop a placeholder from the default
-wording entirely (e.g. an admin could save a `password_reset` override with no
-`{{link}}` in it). Nothing currently stops a PCC administrator from saving wording that
-omits a placeholder a real user would need to complete the flow (a reset link, an
-invite code). This is a known gap relative to a stricter "some placeholders are
-mandatory" design — see the Completion Report for this stage — and is flagged here
-rather than silently left undocumented.
+Saving an override that drops a `required_variables` placeholder is rejected at write
+time (`PUT /notification-templates/{type}` → 422, "Template must include required
+placeholder(s): {{link}}.") — checked with the exact same subject+body-combined logic
+described above, alongside (not instead of) the existing unknown-placeholder check.
+Nothing is auto-inserted on the administrator's behalf; they must fix the wording
+themselves before it can save. The PCC Templates editor's variable list marks each
+required placeholder distinctly ("`{{link}}` — Required") so this isn't a surprise at
+save time.
 
 ### Overrides (`NotificationTemplate` / `NotificationTemplateRevision`, `platform.py`)
 
@@ -331,17 +346,19 @@ per channel.
 ### Failure handling — a malformed override can never block delivery
 
 `render_notification()`'s override branch is wrapped in a `try/except
-UnknownTemplateVariable`: if a saved override references a placeholder outside the
-template's `allowed_variables` — because it was hand-edited, or because a since-changed
-registry no longer allows a variable an old override still uses — the exception is
-caught, a `notification_template_render_fallback` warning is logged (via `structlog`,
-not raised to the caller), and the trusted built-in default is substituted and returned
-instead. The producer module and `notify()` never see the failure; a notification is
-never dropped or delivered half-rendered because of a bad PCC customisation. Saving an
-override that references an unknown variable is also rejected up front at write time
-(`validate_override_text`, 422) — the fallback above exists for overrides that were
-valid when saved but have since drifted out of sync with a registry change, not as the
-primary defence.
+(UnknownTemplateVariable, MissingRequiredTemplateVariable)`: if a saved override
+references a placeholder outside the template's `allowed_variables`, **or** drops one of
+its `required_variables` — because it was hand-edited, or because a since-changed
+registry now requires or allows something different than when it was saved — the
+exception is caught, a `notification_template_render_fallback` warning is logged (via
+`structlog`, not raised to the caller), and the trusted built-in default is substituted
+and returned instead. The producer module and `notify()` never see the failure; a
+notification is never dropped or delivered half-rendered because of a bad PCC
+customisation. Both checks are also enforced up front at write time
+(`validate_override_text` / `validate_required_variables`, both 422) — the render-time
+fallback exists for overrides that were valid when saved but have since drifted out of
+sync with a registry change (including an older override saved before
+`required_variables` gained an entry it doesn't satisfy), not as the primary defence.
 
 A **disabled** override (`NotificationTemplate.enabled = False`) is treated the same as
 "no override" for rendering purposes — `render_notification()` falls through to the
@@ -424,6 +441,21 @@ selection — which events/meals appear, ordering, empty-day rotation — is not
 here and is not affected by this stage). The previous `/control-centre/notification-templates`
 page now redirects to `/control-centre/notifications/templates` rather than being
 deleted outright, so any existing bookmark or link keeps working.
+
+### Birthdays (`mykhaya/notifications/birthdays.py`)
+
+`notifications.birthdays` sends exactly two wording variants, never a third, regardless
+of whether the birthday belongs to an adult user or a child: `birthday.reminder.self`
+(shown to the birthday person themself) and `birthday.reminder.other` (shown to every
+other household member, with `{{display_name}}`). The **external** `notify()`
+`notification_type` stays the single, unchanged string `"birthday_reminder"` for both —
+this is deliberately different from the internal template key, so existing
+`NotificationPreferences`/idempotency-key/delivery-log rows keyed on
+`notification_type` are entirely unaffected by the split; only the wording lookup
+changed, from two hard-coded f-strings to two registry entries. Trigger timing,
+recipient selection (co-members of the birthday person's household, or of a child's
+guardian's household), the `birthday_visible` visibility gate, and deep links are all
+unchanged.
 
 ## Known limitation: repeated enqueueing of already-pending work
 

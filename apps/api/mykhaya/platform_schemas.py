@@ -590,6 +590,10 @@ class NotificationTemplateResponse(BaseModel):
     channel: str
     description: str
     allowed_variables: list[str]
+    # Placeholders from allowed_variables that must remain present somewhere
+    # in subject+body for a save to be accepted — see
+    # TemplateDefault.required_variables and templates.validate_required_variables.
+    required_variables: list[str]
     default_subject: str
     default_body: str
     subject: str

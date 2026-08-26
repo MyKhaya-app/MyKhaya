@@ -24,6 +24,7 @@ from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.quiet_hours import effective_timezone, home_timezone
+from mykhaya.notifications.templates import render_notification
 
 LOOKAHEAD = timedelta(minutes=2)
 BIRTHDAY_TOPIC = "notification.birthday"
@@ -145,14 +146,13 @@ async def _deliver_user_birthday(
         ).all()
         co_member_ids.update(rows)
 
+    self_title, self_body = await render_notification(db, "birthday.reminder.self", {})
+    other_title, other_body = await render_notification(
+        db, "birthday.reminder.other", {"display_name": user.display_name}
+    )
     for recipient_id in co_member_ids:
         is_self = recipient_id == user_id
-        title = "Happy Birthday!" if is_self else f"{user.display_name}'s birthday"
-        body = (
-            "Happy Birthday! We hope you have a wonderful day."
-            if is_self
-            else f"Today is {user.display_name}'s birthday."
-        )
+        title, body = (self_title, self_body) if is_self else (other_title, other_body)
         await notify(
             db,
             settings=settings,
@@ -197,14 +197,17 @@ async def _deliver_child_birthday(
             )
         )
     ).all()
+    title, body = await render_notification(
+        db, "birthday.reminder.other", {"display_name": user.display_name}
+    )
     for recipient_id in recipients:
         await notify(
             db,
             settings=settings,
             recipient_user_id=recipient_id,
             notification_type="birthday_reminder",
-            title=f"{user.display_name}'s birthday",
-            body=f"Today is {user.display_name}'s birthday.",
+            title=title,
+            body=body,
             idempotency_key=f"{idempotency_key}:{recipient_id}",
             group_id=membership.group_id,
             related_entity_type="child",
