@@ -47,6 +47,7 @@ from mykhaya.models import (
 from mykhaya.notifications.calendar_shares import notify_calendar_share_recipients
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.schemas import (
     CalendarListResponse,
     EventActivityResponse,
@@ -599,6 +600,11 @@ async def _notify_members_added(
     belt-and-braces against NotificationDelivery's own unique constraint,
     consistent with mykhaya.notifications.reminders' key construction."""
     when = _format_event_when(event)
+    title, body = await render_notification(
+        db,
+        "calendar.event.member_added",
+        {"actor_name": actor_name, "event_title": event.title, "event_when": when},
+    )
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -607,8 +613,8 @@ async def _notify_members_added(
             settings=settings,
             recipient_user_id=recipient_id,
             notification_type="event_invitation",
-            title="Added to an event",
-            body=f"{actor_name} added you to {event.title}. {when}.",
+            title=title,
+            body=body,
             idempotency_key=f"calendar_event_member_added:{event.id}:{recipient_id}:{version_marker}",
             group_id=event.group_id,
             related_entity_type="calendar_event",
@@ -626,6 +632,11 @@ async def _notify_members_removed(
     recipient_ids: set[uuid.UUID],
     version_marker: int,
 ) -> None:
+    title, body = await render_notification(
+        db,
+        "calendar.event.member_removed",
+        {"actor_name": actor_name, "event_title": event.title},
+    )
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -634,8 +645,8 @@ async def _notify_members_removed(
             settings=settings,
             recipient_user_id=recipient_id,
             notification_type="event_updated",
-            title="Removed from an event",
-            body=f"{actor_name} removed you from {event.title}.",
+            title=title,
+            body=body,
             idempotency_key=f"calendar_event_member_removed:{event.id}:{recipient_id}:{version_marker}",
             group_id=event.group_id,
             related_entity_type="calendar_event",
@@ -654,6 +665,11 @@ async def _notify_members_event_updated(
     version_marker: int,
 ) -> None:
     when = _format_event_when(event)
+    title, body = await render_notification(
+        db,
+        "calendar.event.updated",
+        {"actor_name": actor_name, "event_title": event.title, "event_when": when},
+    )
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -662,8 +678,8 @@ async def _notify_members_event_updated(
             settings=settings,
             recipient_user_id=recipient_id,
             notification_type="event_updated",
-            title="Event updated",
-            body=f"{actor_name} updated {event.title}. {when}.",
+            title=title,
+            body=body,
             idempotency_key=f"calendar_event_updated:{event.id}:{recipient_id}:{version_marker}",
             group_id=event.group_id,
             related_entity_type="calendar_event",
@@ -680,6 +696,9 @@ async def _notify_members_event_cancelled(
     actor_name: str,
     recipient_ids: set[uuid.UUID],
 ) -> None:
+    title, body = await render_notification(
+        db, "calendar.event.cancelled", {"actor_name": actor_name, "event_title": event.title}
+    )
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -688,8 +707,8 @@ async def _notify_members_event_cancelled(
             settings=settings,
             recipient_user_id=recipient_id,
             notification_type="event_cancelled",
-            title="Event cancelled",
-            body=f"{actor_name} cancelled {event.title}.",
+            title=title,
+            body=body,
             idempotency_key=f"calendar_event_cancelled:{event.id}:{recipient_id}",
             group_id=event.group_id,
             related_entity_type="calendar_event",

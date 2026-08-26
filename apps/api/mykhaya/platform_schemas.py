@@ -586,6 +586,7 @@ class FeatureMatrixResponse(BaseModel):
 
 class NotificationTemplateResponse(BaseModel):
     template_type: str
+    module: str
     channel: str
     description: str
     allowed_variables: list[str]
@@ -595,14 +596,24 @@ class NotificationTemplateResponse(BaseModel):
     body: str
     is_override: bool
     enabled: bool
+    # False = this notification is required (account security, mandatory
+    # invitations, ...) and `enabled` can never be set to False for it — see
+    # TemplateDefault.disableable.
+    disableable: bool
+    security_critical: bool
     is_stale: bool
     updated_at: datetime | None
+    updated_by: str | None = None
 
 
 class NotificationTemplateUpdate(SensitiveActionRequest):
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=4000)
     enabled: bool = True
+
+
+class NotificationTemplateResetAllRequest(SensitiveActionRequest):
+    pass
 
 
 class NotificationTemplatePreviewRequest(StrictModel):
@@ -617,6 +628,17 @@ class NotificationTemplatePreviewResponse(BaseModel):
 
 class NotificationTemplateTestRequest(SensitiveActionRequest):
     recipient: EmailStr
+
+
+class NotificationTemplateTestSendRequest(SensitiveActionRequest):
+    """Test Centre: sends the real, current wording (default or override) to
+    a real MyKhaya user through the actual delivery pipeline for whichever
+    channel the template is registered on — see
+    routers.platform.test_send_notification. Distinct from
+    NotificationTemplateTestRequest (an arbitrary email address, useful for
+    checking SMTP configuration itself rather than a specific user)."""
+
+    recipient_user_id: uuid.UUID
 
 
 class ServiceStatusResponse(BaseModel):

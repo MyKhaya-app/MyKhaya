@@ -36,6 +36,7 @@ from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
 from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
 from mykhaya.notifications.quiet_hours import effective_timezone
+from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import event_matches_share, viewer_ids_for_event
 
 # Matches the reminder scan's cadence — short enough that the scan reliably catches each
@@ -104,8 +105,22 @@ def format_daily_briefing(
     tz: tzinfo,
     birthday_phrases: list[str] | None = None,
     meal_items: list[MealBriefingItem] | None = None,
+    title_override: str | None = None,
+    intro_line: str = "Please take care of yourself!",
 ) -> tuple[str, str]:
-    """Build the stable title/body while keeping event ordering deterministic."""
+    """Build the stable title/body while keeping event ordering deterministic.
+
+    `title_override`/`intro_line` let the two fixed, non-computed lines of
+    the briefing (see PCC template keys briefing.title/briefing.intro) be
+    resolved through the template registry by the caller — which has the
+    `db` access this function deliberately doesn't need — while every other
+    line here stays exactly the same *computed* content it always was:
+    which events/meals/birthdays appear, their ordering, the empty-day
+    rotation, and the "+N more" overflow are never editable wording, so
+    they're never routed through the template registry. Calling this with
+    no new arguments (as every existing caller/test does) reproduces the
+    exact previous defaults, byte for byte.
+    """
     ordered = sorted(
         occurrences,
         key=lambda item: (
@@ -116,8 +131,8 @@ def format_daily_briefing(
     )
     meals = meal_items or []
     count = len(ordered) + len(meals)
-    title = f"You have {count} event{'s' if count != 1 else ''} today."
-    lines = ["Please take care of yourself!"]
+    title = title_override or f"You have {count} event{'s' if count != 1 else ''} today."
+    lines = [intro_line]
 
     # Birthdays are an existing briefing feature. Preserve them without allowing
     # display names to introduce control characters into the push payload.
@@ -364,12 +379,20 @@ async def deliver_daily_briefing(
     ):
         return
 
+    count = len(occurrences) + len(meal_items)
+    count_phrase = f"{count} event{'s' if count != 1 else ''}"
+    _subject, title_override = await render_notification(
+        db, "briefing.title", {"count_phrase": count_phrase}
+    )
+    _subject, intro_line = await render_notification(db, "briefing.intro", {})
     title, body = format_daily_briefing(
         occurrences,
         local_date=local_date,
         tz=tz,
         birthday_phrases=birthday_phrases,
         meal_items=meal_items,
+        title_override=title_override,
+        intro_line=intro_line,
     )
     await notify(
         db,

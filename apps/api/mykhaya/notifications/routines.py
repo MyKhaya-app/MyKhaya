@@ -29,6 +29,7 @@ from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.routine_occurrences import is_occurrence_date
+from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import active_membership
 
 LOOKAHEAD = timedelta(minutes=2)
@@ -139,7 +140,15 @@ async def deliver_routine_reminder(
         return
 
     idempotency_key = f"routine:{routine_id}:{occurrence_date_iso}:{timing}"
-    body = routine.description or f"Don't forget: {routine.title}."
+    if routine.description:
+        # A routine's own description is user-authored content, not app
+        # wording — used verbatim, never passed through the template
+        # registry (there is nothing generic to customise here).
+        body = routine.description
+    else:
+        _subject, body = await render_notification(
+            db, "routine.due", {"routine_title": routine.title}
+        )
     for recipient_id in await _recipients_for(db, routine):
         if await active_membership(db, routine.group_id, recipient_id) is None:
             continue  # membership removed since this reminder was scanned

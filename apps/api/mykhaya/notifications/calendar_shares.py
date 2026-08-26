@@ -22,12 +22,18 @@ from mykhaya.config import Settings
 from mykhaya.models import CalendarEvent, CalendarShare, CalendarShareStatus
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import event_matches_share
 
-_TITLES = {
-    "created": "New event",
-    "updated": "Event updated",
-    "cancelled": "Event cancelled",
+# Template registry key per action — "updated"/"cancelled" reuse the exact
+# same wording (and so the same PCC template) as routers.calendar's own
+# per-event-member notifications; "created" has its own wording here since a
+# share recipient seeing a brand-new event ("New event") reads differently
+# from a Home member being personally added to one ("Added to an event").
+_TEMPLATE_KEYS = {
+    "created": "calendar.event.shared_created",
+    "updated": "calendar.event.updated",
+    "cancelled": "calendar.event.cancelled",
 }
 _NOTIFICATION_TYPES = {
     "created": "event_invitation",
@@ -77,12 +83,8 @@ async def notify_calendar_share_recipients(
     (not instead of) their normal event_invitation/event_updated/
     event_cancelled category toggles, which `notify()` still applies."""
     when = _format_event_when(event)
-    if action == "created":
-        body = f"{actor_name} added {event.title}. {when}."
-    elif action == "updated":
-        body = f"{actor_name} updated {event.title}. {when}."
-    else:
-        body = f"{actor_name} cancelled {event.title}."
+    variables = {"actor_name": actor_name, "event_title": event.title, "event_when": when}
+    title, body = await render_notification(db, _TEMPLATE_KEYS[action], variables)
     marker = f":{version_marker}" if version_marker is not None else ""
 
     for share in await active_share_recipients(db, event.calendar_id):
@@ -99,7 +101,7 @@ async def notify_calendar_share_recipients(
             settings=settings,
             recipient_user_id=share.recipient_user_id,
             notification_type=_NOTIFICATION_TYPES[action],
-            title=_TITLES[action],
+            title=title,
             body=body,
             idempotency_key=f"calendar_share_event_{action}:{event.id}:{share.id}{marker}",
             group_id=event.group_id,

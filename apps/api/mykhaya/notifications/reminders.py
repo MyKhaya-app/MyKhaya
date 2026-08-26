@@ -23,6 +23,7 @@ from mykhaya.features import is_feature_enabled
 from mykhaya.models import CalendarEvent, FeatureKey, OutboxEvent
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import can_view_event, viewer_ids_for_event
 
 # Short look-ahead so an edit landing between scans has minimal opportunity to race a
@@ -34,9 +35,13 @@ MAX_REMINDER_OFFSET_MINUTES = 1440
 REMINDER_TOPIC = "notification.event_reminder"
 
 
-def _format_reminder_body(
+def _reminder_when_and_location(
     event: CalendarEvent, occurrence_start: datetime, reminder_minutes: int
-) -> str:
+) -> tuple[str, str]:
+    """Pre-formats the two dynamic fragments (when the event starts, and an
+    optional location suffix) that calendar.event.reminder's template
+    interpolates — all the actual time-zone/wording logic stays here in
+    Python; the template itself only ever does plain text substitution."""
     tz: tzinfo
     try:
         tz = ZoneInfo(event.timezone)
@@ -50,7 +55,7 @@ def _format_reminder_body(
     else:
         when = f"at {local_start.strftime('%H:%M')}"
     location = f" at {event.location_text}" if event.location_text else ""
-    return f"{event.title} starts {when}{location}."
+    return when, location
 
 
 async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
@@ -120,7 +125,12 @@ async def deliver_event_reminder(
         return
 
     idempotency_key = f"reminder:{event_id}:{occurrence_start_iso}:{reminder_minutes}"
-    body = _format_reminder_body(event, occurrence_start, reminder_minutes)
+    when, location = _reminder_when_and_location(event, occurrence_start, reminder_minutes)
+    _subject, body = await render_notification(
+        db,
+        "calendar.event.reminder",
+        {"event_title": event.title, "event_when": when, "event_location": location},
+    )
     for recipient_id in await viewer_ids_for_event(db, event):
         if not await can_view_event(db, event, recipient_id):
             continue  # membership/permissions changed since this reminder was scanned

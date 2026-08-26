@@ -61,12 +61,23 @@ async def get_override(
 
 
 async def render_notification(
-    db: AsyncSession, template_type: str, variables: dict[str, str]
+    db: AsyncSession,
+    template_type: str,
+    variables: dict[str, str],
+    channel: NotificationChannel | None = None,
 ) -> tuple[str, str]:
     """Renders a template's (subject, body): the admin's override if one exists,
-    enabled, and renders cleanly, otherwise the trusted built-in default."""
+    enabled, and renders cleanly, otherwise the trusted built-in default.
+
+    `channel` selects which per-channel override row to look up — defaults to
+    the template's own registered channel (`TemplateDefault.channel`), which
+    for every template that existed before this parameter was added is
+    `NotificationChannel.email`, so no existing call site's behaviour
+    changes. A caller only needs to pass `channel` explicitly if it's
+    resolving a template for a channel other than the one it's registered
+    under, which no current call site does."""
     default: TemplateDefault = TEMPLATES[template_type]
-    override = await get_override(db, template_type)
+    override = await get_override(db, template_type, channel or default.channel)
 
     if override is not None and override.enabled:
         try:

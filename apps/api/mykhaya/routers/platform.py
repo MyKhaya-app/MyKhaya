@@ -105,6 +105,7 @@ from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_conf
 from mykhaya.notifications.templates import (
     UnknownTemplateVariable,
     get_override,
+    render_notification,
     render_notification_email,
     substitute,
     validate_override_text,
@@ -150,8 +151,10 @@ from mykhaya.platform_schemas import (
     NoteRequest,
     NotificationTemplatePreviewRequest,
     NotificationTemplatePreviewResponse,
+    NotificationTemplateResetAllRequest,
     NotificationTemplateResponse,
     NotificationTemplateTestRequest,
+    NotificationTemplateTestSendRequest,
     NotificationTemplateUpdate,
     PageResponse,
     PlatformActorResponse,
@@ -5070,13 +5073,16 @@ async def test_stripe_connection(
 
 
 def _template_response(
-    template_type: str, override: NotificationTemplate | None
+    template_type: str,
+    override: NotificationTemplate | None,
+    updated_by_name: str | None = None,
 ) -> NotificationTemplateResponse:
     default = TEMPLATES[template_type]
     is_override = override is not None
     return NotificationTemplateResponse(
         template_type=template_type,
-        channel=NotificationChannel.email.value,
+        module=default.module,
+        channel=default.channel.value,
         description=default.description,
         allowed_variables=sorted(default.allowed_variables),
         default_subject=default.subject,
@@ -5085,9 +5091,25 @@ def _template_response(
         body=(override.body_text if override and override.body_text else default.body),
         is_override=is_override,
         enabled=override.enabled if override else True,
+        disableable=default.disableable,
+        security_critical=default.security_critical,
         is_stale=bool(override and override.based_on_default_version < DEFAULT_TEMPLATE_VERSION),
         updated_at=override.updated_at if override else None,
+        updated_by=updated_by_name,
     )
+
+
+async def _administrator_names(
+    db: AsyncSession, administrator_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not administrator_ids:
+        return {}
+    rows = (
+        await db.scalars(
+            select(PlatformAdministrator).where(PlatformAdministrator.id.in_(administrator_ids))
+        )
+    ).all()
+    return {row.id: row.display_name for row in rows}
 
 
 @router.get("/notification-templates")
@@ -5095,18 +5117,34 @@ async def list_notification_templates(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationTemplateResponse]:
+    # Every template_type is only ever stored under its own registered
+    # channel (TEMPLATES[type].channel) — the (template_type, channel)
+    # unique constraint means keying purely by template_type here is
+    # unambiguous even across a mix of email/in-app-registered types.
     overrides = {
         row.template_type: row
-        for row in (
-            await db.scalars(
-                select(NotificationTemplate).where(
-                    NotificationTemplate.channel == NotificationChannel.email
-                )
-            )
-        ).all()
+        for row in (await db.scalars(select(NotificationTemplate))).all()
     }
+    names = await _administrator_names(
+        db,
+        {
+            row.updated_by_administrator_id
+            for row in overrides.values()
+            if row.updated_by_administrator_id is not None
+        },
+    )
+
+    def _updated_by(override: NotificationTemplate | None) -> str | None:
+        if override is None or override.updated_by_administrator_id is None:
+            return None
+        return names.get(override.updated_by_administrator_id)
+
     return [
-        _template_response(template_type, overrides.get(template_type))
+        _template_response(
+            template_type,
+            overrides.get(template_type),
+            _updated_by(overrides.get(template_type)),
+        )
         for template_type in sorted(TEMPLATES)
     ]
 
@@ -5117,10 +5155,15 @@ async def get_notification_template(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationTemplateResponse:
-    if template_type not in TEMPLATES:
+    default = TEMPLATES.get(template_type)
+    if default is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
-    override = await get_override(db, template_type)
-    return _template_response(template_type, override)
+    override = await get_override(db, template_type, default.channel)
+    updated_by = None
+    if override and override.updated_by_administrator_id:
+        names = await _administrator_names(db, {override.updated_by_administrator_id})
+        updated_by = names.get(override.updated_by_administrator_id)
+    return _template_response(template_type, override, updated_by)
 
 
 @router.put("/notification-templates/{template_type}")
@@ -5145,12 +5188,20 @@ async def update_notification_template(
             f"Unknown template variable: {{{{{exc}}}}}. Allowed: "
             f"{', '.join(sorted(default.allowed_variables))}.",
         ) from exc
-
-    override = await get_override(db, template_type)
-    if override is None:
-        override = NotificationTemplate(
-            template_type=template_type, channel=NotificationChannel.email
+    # Some templates (account security, mandatory household/calendar-share
+    # invitations) must always reach their recipient — see
+    # TemplateDefault.disableable and notifications.engine.MANDATORY_EMAIL_TYPES.
+    # Enforced here, not just hidden in the UI: a request that slips past a
+    # stale/tampered frontend must still be rejected.
+    if not default.disableable and not body.enabled:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This notification is required and cannot be disabled.",
         )
+
+    override = await get_override(db, template_type, default.channel)
+    if override is None:
+        override = NotificationTemplate(template_type=template_type, channel=default.channel)
         db.add(override)
     else:
         db.add(
@@ -5190,9 +5241,10 @@ async def reset_notification_template(
     settings: Settings = Depends(get_settings),
 ) -> NotificationTemplateResponse:
     require_recent_auth(context, settings)
-    if template_type not in TEMPLATES:
+    default = TEMPLATES.get(template_type)
+    if default is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
-    override = await get_override(db, template_type)
+    override = await get_override(db, template_type, default.channel)
     if override is not None:
         await db.delete(override)
         platform_audit(
@@ -5206,6 +5258,37 @@ async def reset_notification_template(
         )
         await db.commit()
     return _template_response(template_type, None)
+
+
+@router.post("/notification-templates/reset-all")
+async def reset_all_notification_templates(
+    body: NotificationTemplateResetAllRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[NotificationTemplateResponse]:
+    """Restores every notification template to its built-in default —
+    deletes every override row (their revisions cascade with them). The
+    explicit `confirmed: true` requirement (SensitiveActionRequest) is the
+    "explicit confirmation" the bulk reset action needs; the frontend also
+    asks a second time via a confirmation dialog before ever sending this."""
+    require_recent_auth(context, settings)
+    overrides = (await db.scalars(select(NotificationTemplate))).all()
+    reset_count = len(overrides)
+    for override in overrides:
+        await db.delete(override)
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.reset_all",
+        "notification_template",
+        reason=body.reason,
+        new={"reset_count": reset_count},
+    )
+    await db.commit()
+    return [_template_response(template_type, None) for template_type in sorted(TEMPLATES)]
 
 
 @router.post("/notification-templates/{template_type}/preview")
@@ -5275,6 +5358,99 @@ async def test_notification_template(
     )
     await db.commit()
     return {"message": "Test email sent."}
+
+
+@router.post("/notification-templates/{template_type}/test-send")
+async def test_send_notification(
+    template_type: str,
+    body: NotificationTemplateTestSendRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Test Centre: renders the template's real current wording (override if
+    one exists, else the built-in default) against sample data and sends it
+    to a real MyKhaya user the administrator picks, through the same
+    delivery pipeline (notify()/email) production notifications use —
+    distinct from /test above, which targets an arbitrary email address to
+    check SMTP configuration rather than a specific user's experience.
+
+    A test send never triggers a genuine account/security effect (no real
+    verification/reset/invitation is created) and is clearly marked "[Test]"
+    so it can never be mistaken for the real thing."""
+    require_recent_auth(context, settings)
+    default = TEMPLATES.get(template_type)
+    if default is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    await enforce_rate_limit(request, settings, "platform-test-template", 3, 300)
+    target_user = await db.get(User, body.recipient_user_id)
+    if target_user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+
+    try:
+        if default.channel == NotificationChannel.email:
+            if not target_user.email:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "That user has no email address."
+                )
+            config = await resolve_smtp_config(settings, db)
+            if not config.configured:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
+            subject, message, html = await render_notification_email(
+                db, settings, template_type, SAMPLE_VARIABLES[template_type]
+            )
+            await asyncio.to_thread(
+                send_email, config, target_user.email, f"[Test] {subject}", message, html
+            )
+        else:
+            subject, message = await render_notification(
+                db, template_type, SAMPLE_VARIABLES[template_type]
+            )
+            # A dedicated, non-gated type (never in PREFERENCE_GATES/
+            # MANDATORY_EMAIL_TYPES) — respects the target's real in-app/push
+            # channel toggles (the actual pipeline), but is never itself
+            # subject to a category opt-out, and allow_email=False keeps a
+            # channel test from also firing an unrelated email.
+            await notify(
+                db,
+                settings=settings,
+                recipient_user_id=target_user.id,
+                notification_type="platform_test_notification",
+                title=f"[Test] {subject}",
+                body=message,
+                idempotency_key=f"platform_test:{template_type}:{uuid.uuid4()}",
+                allow_email=False,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        platform_audit(
+            db,
+            request,
+            context,
+            "notification_template.test_failed",
+            "notification_template",
+            reason=body.reason,
+            new={"template_type": template_type, "channel": default.channel.value},
+            outcome="failure",
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The test send failed.") from exc
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.test_sent",
+        "notification_template",
+        reason=body.reason,
+        new={"template_type": template_type, "channel": default.channel.value},
+    )
+    await db.commit()
+    return {
+        "message": f"Test {default.channel.value} notification sent to {target_user.display_name}."
+    }
 
 
 async def _incident_services_and_updates(

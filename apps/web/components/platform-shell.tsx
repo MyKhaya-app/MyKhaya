@@ -12,7 +12,7 @@ const navigation = [
   ["Subscriptions", "/subscriptions"],
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
   ["Payments", "/payments"],
-  ["Templates", "/notification-templates"], ["Communications", "/communications"],
+  ["Notifications", "/notifications"], ["Communications", "/communications"],
   ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
   ["Settings", "/settings"], ["Modules & Features", "/modules"],
   ["Administrators", "/administrators"], ["Security", "/security"], ["Audit", "/audit"],

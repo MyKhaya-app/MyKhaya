@@ -3646,6 +3646,62 @@ select.icon-row-control {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+/* Sub-navigation within one PCC module (currently just Notifications) —
+   deliberately distinct from .platform-shell's own sidebar nav (that's
+   top-level PCC sections; this is second-level within one of them) and
+   from the household-facing .control-tabs (mobile-first, 44px targets) —
+   PCC is a dense desktop admin surface. */
+.platform-subnav {
+  border-bottom: 1px solid var(--platform-line);
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+}
+.platform-subnav a {
+  border-bottom: 2px solid transparent;
+  color: #5d6e76;
+  font-size: 0.82rem;
+  font-weight: 650;
+  padding: 0.6rem 0.2rem;
+}
+.platform-subnav a:hover {
+  color: var(--platform-ink);
+}
+.platform-subnav a.active {
+  border-bottom-color: var(--platform-blue);
+  color: var(--platform-ink);
+}
+.badge {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 0.3rem 0.55rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.badge-neutral {
+  background: #eef1f2;
+  color: #5d6e76;
+}
+.badge-info {
+  background: #e3edf4;
+  color: var(--platform-blue);
+}
+.badge-success {
+  background: #e2f0e5;
+  color: #2f7d43;
+}
+.badge-warning {
+  background: #fbeee0;
+  color: #a3611a;
+}
+.badge-danger {
+  background: #fbe4e1;
+  color: #a3382b;
+}
 .metric-grid {
   display: grid;
   gap: 0.8rem;

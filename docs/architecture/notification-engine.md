@@ -235,18 +235,195 @@ Adding a channel (SMS, a native mobile push provider, etc.) means: add a
 helper in `engine.py` called from `notify()`, add one `worker.py` handler that's the
 channel's only caller of its transport library. No caller of `notify()` changes.
 
-## Future: template overrides (Stage 9)
+## Notification template registry and PCC overrides (Stage 9)
 
-Not built yet — noting the intended design so it isn't reinvented differently later.
-`default_templates.py` remains the **authoritative source of truth**; a Platform Admin
-customisation is stored as an **override only** (a row exists only when an admin has
-actually changed that template/channel), never a copy of the built-in template. Deleting
-the override row resets to the built-in default. When a built-in template's wording
-changes in a future release, an admin with an active override should be able to see
-"this template has changed since your override was created" and choose to compare, keep
-their override, or adopt the new default — this comparison needs the override to record
-which version of the built-in copy it was based on, decided at Stage 9 implementation
-time, not before.
+This is the layer that owns notification **wording**. It has no say in who receives a
+notification, whether it fires at all, or which channel it goes over — that stays with
+the producer modules (Calendar, Routines, Daily Briefing, Invitations, account security,
+...) and with the preference/channel gating in `notify()` described above. Concretely:
+recipient selection, visibility rules, and the decision to call `notify()` all happen
+**before** this layer is ever consulted; this layer only answers "given this template
+key and these variables, what text should go in `title`/`body`?".
+
+```
+producer module (Calendar / Routines / Daily Briefing / Invitations / account security / ...)
+        │  decides: who receives it, whether it fires, which channel — unchanged by this layer
+        ▼
+render_notification(db, template_type, variables, channel=None)   [templates.py]
+        │
+        ├─ look up TemplateDefault in TEMPLATES (default_templates.py) — 404 if unknown key
+        ├─ look up a matching NotificationTemplate override row (template_type, channel)
+        │
+        ├─ override exists, enabled, substitutes cleanly ──► use override's subject/body
+        │
+        └─ no override / disabled / references an unknown placeholder
+               ──► log a warning, fall back to the built-in default subject/body
+        ▼
+notify(..., title=<resolved subject>, body=<resolved body>, ...)   [engine.py, unchanged]
+```
+
+### Registry (`mykhaya/notifications/default_templates.py`)
+
+`TEMPLATES: dict[str, TemplateDefault]` is the **authoritative, code-owned** source of
+every notification's default wording — not a cache of something in the database. Each
+entry is a `TemplateDefault`:
+
+- `template_type` (the dict key) — a stable internal key, e.g. `email_verification` or
+  `calendar.event.reminder`. Dotted `module.entity.event` keys are used for newer,
+  more granular templates; the eight pre-Stage-9 types keep their original flat names
+  (`email_verification`, `household_invitation`, ...) rather than being renamed, since
+  renaming would silently orphan any admin override already saved against the old key.
+- `module` — a coarse grouping (`account_security`, `calendar`, `calendar_sharing`,
+  `daily_briefing`, `platform`, ...) used for filtering in the PCC Templates browser.
+- `channel` (`NotificationChannel`) — which channel this template's row lives on. Every
+  template that existed before this field was added defaults to `email`, preserving
+  exact prior behaviour; newer, in-app-only templates (the calendar/routine/briefing
+  fragments) are registered under `in_app`.
+- `subject` / `body` — the built-in default wording, using `{{variable}}` placeholders.
+- `allowed_variables` (`frozenset[str]`) — the closed set of placeholders this template
+  may reference. This is enforced in both directions: a saved override may not reference
+  a variable outside this set, and every variable in this set must be supplied by the
+  producer's call to `render_notification()` for the default itself to render cleanly.
+- `disableable` — whether a Platform Admin may turn this notification type off at all.
+  `False` for account-security and other mandatory workflows; enforced server-side in
+  `routers/platform.py::update_notification_template` (not just hidden in the UI), so a
+  request that bypasses a stale or tampered frontend is still rejected with 422.
+- `security_critical` — a display-only flag (badge in the PCC UI) for account-security /
+  authentication notifications; distinct from, but currently identical in coverage to,
+  `disableable is False`.
+
+`SAMPLE_VARIABLES` holds one realistic example value set per template, used by the PCC
+preview panel and Test Centre so every registered template can be rendered without a
+real event/invitation/user to source variables from.
+
+There is deliberately **no separate "required variables" tier** distinct from
+`allowed_variables` today: an override may legally drop a placeholder from the default
+wording entirely (e.g. an admin could save a `password_reset` override with no
+`{{link}}` in it). Nothing currently stops a PCC administrator from saving wording that
+omits a placeholder a real user would need to complete the flow (a reset link, an
+invite code). This is a known gap relative to a stricter "some placeholders are
+mandatory" design — see the Completion Report for this stage — and is flagged here
+rather than silently left undocumented.
+
+### Overrides (`NotificationTemplate` / `NotificationTemplateRevision`, `platform.py`)
+
+A `NotificationTemplate` row is created **only when an admin actually customises** a
+template/channel pair (unique on `(template_type, channel)`) — the registry is never
+copied into the database, so a brand-new notification type added in code appears in PCC
+immediately with zero migration or seeding step. Deleting the row (`DELETE
+/notification-templates/{type}`) resets that template to the built-in default; there is
+also a bulk `POST /notification-templates/reset-all` (requires `reason` +
+`confirmed: true` — a `SensitiveActionRequest` — plus the frontend's own confirmation
+dialog) that deletes every override row in one action.
+
+Saving a second override over an existing one first copies the row's *previous*
+subject/body into a `NotificationTemplateRevision` (undo history) before overwriting it.
+`NotificationTemplate.based_on_default_version` records `DEFAULT_TEMPLATE_VERSION` (a
+single package-wide integer bumped whenever a *default's wording* changes) at save time;
+the API exposes this as `is_stale` — true when the built-in default has moved on since
+the override was last saved — so PCC can flag "the built-in wording changed since you
+customised this" without guessing from text diffs.
+
+`NotificationChannel` on the override row means a template registered on multiple
+channels (none are, today, but the schema supports it) can carry independent overrides
+per channel.
+
+### Failure handling — a malformed override can never block delivery
+
+`render_notification()`'s override branch is wrapped in a `try/except
+UnknownTemplateVariable`: if a saved override references a placeholder outside the
+template's `allowed_variables` — because it was hand-edited, or because a since-changed
+registry no longer allows a variable an old override still uses — the exception is
+caught, a `notification_template_render_fallback` warning is logged (via `structlog`,
+not raised to the caller), and the trusted built-in default is substituted and returned
+instead. The producer module and `notify()` never see the failure; a notification is
+never dropped or delivered half-rendered because of a bad PCC customisation. Saving an
+override that references an unknown variable is also rejected up front at write time
+(`validate_override_text`, 422) — the fallback above exists for overrides that were
+valid when saved but have since drifted out of sync with a registry change, not as the
+primary defence.
+
+A **disabled** override (`NotificationTemplate.enabled = False`) is treated the same as
+"no override" for rendering purposes — `render_notification()` falls through to the
+default text. (Whether the notification is sent *at all* when its type is disabled is a
+`notify()`/producer-level concern, not something this layer decides.)
+
+Upgrading past a registry change (a template's default wording, or its allowed variable
+set, changes in a later release) is safe by construction: existing overrides for
+*other* templates are untouched, and an override that becomes invalid under the new
+registry is not deleted — it simply stops applying (falls back to the new default, per
+the failure handling above) until an admin revisits it, which the `is_stale` flag
+surfaces.
+
+### Security
+
+- Rendering is plain-text `{{variable}}` substitution (`templates.py::substitute`, a
+  single regex + closed allowlist lookup) — never Jinja, `str.format`, `eval`, or any
+  templating engine capable of arbitrary expression evaluation, attribute access, or
+  control flow. A template body is data, never code.
+- The allowlist is closed per template: a variable not in `TemplateDefault.allowed_variables`
+  cannot be referenced, in either the built-in default or an override, full stop —
+  there is no way for a PCC-authored string to read an arbitrary field off a model, a
+  settings value, or an environment variable.
+- HTML email output is built by `email_branding.py` from the *resolved* subject/body and
+  HTML-escapes interpolated variables before they reach markup — an override cannot
+  inject markup or scripts into the branded email template.
+- Editing, resetting, enabling/disabling, reset-all, previewing, and test-sending
+  templates all require an authenticated `PlatformContext` via `require_roles(*OPERATORS)`
+  (owner/administrator), the same platform-admin auth model as the rest of PCC — entirely
+  separate from household `User` sessions. A household user (including a Home Admin) has
+  no path to these endpoints regardless of their in-household role. Save/reset/reset-all
+  additionally require `require_recent_auth` (a recent MFA step-up).
+- Secrets — SMTP credentials, VAPID keys, API tokens — are never read, stored, or
+  rendered by this layer. The Channels screen links to the existing Email/Push
+  configuration pages rather than re-displaying provider settings.
+- Test Centre sends go through the real delivery pipeline (real SMTP send, real
+  `notify()` call for in-app) so a test is representative, but every test is prefixed
+  `[Test]`, uses a freshly generated idempotency key, and performs no genuine business
+  or security side effect — sending a test of `password_reset`'s wording does not reset
+  anyone's password, create a session, or generate a real reset link.
+
+### Localisation
+
+There is exactly one locale today — UK English — and `render_notification()` takes no
+locale parameter. The registry/override schema does not assume this remains true forever
+(template keys are stable identifiers independent of any particular wording, and nothing
+about the resolution flow is English-specific), but no locale-selection, per-locale
+override storage, or translation-management UI exists yet. Adding a locale would be a
+new stage of work, not a flag flip.
+
+### Audit and delivery visibility
+
+Template mutations reuse the **existing** platform audit trail
+(`platform_audit()` → `AdministrativeAuditEvent`), not a parallel logging system:
+`notification_template.updated` (covers both a wording change and an enable/disable
+toggle — recorded as an `enabled: bool` field, not a separate action), `.reset`,
+`.reset_all`, `.test_sent`, and `.test_failed` each record the acting administrator,
+timestamp, reason, and outcome. The audited `new`/`previous` payloads intentionally carry
+only structural facts (`template_type`, `enabled`, `reset_count`) — never the customised
+subject/body text itself — so browsing the audit log cannot leak what an override's
+wording says.
+
+Delivery-level visibility (did a specific notification actually send, and if not, why)
+is **not** a new store built for this stage — it reuses the existing
+`NotificationDelivery`/`OutboxEvent` data already exposed by
+`routers/communications_admin.py` (`GET /communications/health`,
+`GET /communications/diagnostics`). The PCC Notifications module's Channels and Delivery
+Logs screens call these same endpoints rather than duplicating the underlying storage or
+retention behaviour; there is currently no separate retention policy layered on for
+this stage beyond whatever `communications_admin.py` already implements.
+
+### Platform Control Centre screens
+
+`/control-centre/notifications/*` — Overview, Templates, Channels, Daily Briefing, Test
+Centre, Delivery Logs — implemented as ordinary PCC pages (`PlatformShell` +
+`NotificationsSubNav`), calling the endpoints above. The Templates screen is the
+CRUD/browse/preview/reset surface; Daily Briefing is the same CRUD narrowed to the two
+`briefing.title`/`briefing.intro` fragments (the daily briefing's actual content
+selection — which events/meals appear, ordering, empty-day rotation — is not exposed
+here and is not affected by this stage). The previous `/control-centre/notification-templates`
+page now redirects to `/control-centre/notifications/templates` rather than being
+deleted outright, so any existing bookmark or link keeps working.
 
 ## Known limitation: repeated enqueueing of already-pending work
 
