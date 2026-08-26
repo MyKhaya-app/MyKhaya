@@ -68,13 +68,16 @@ test.describe("calendar month view density", () => {
     await api(page, "PUT", `/features/${homeId}/calendar/household`, { enabled: true, confirmed: true });
 
     // A busy first week of August 2026, several genuinely empty weeks, and a
-    // multi-day event spanning a week boundary (12th-19th).
+    // multi-day event spanning a week boundary (12th-19th). Six same-day
+    // events is deliberately one more than MONTH_VISIBLE_ROW_CAP (5) so the
+    // overflow indicator below is genuinely exercised.
     for (const [title, day, hour] of [
       ["Busy one", 3, 8],
-      ["Busy two", 3, 14],
-      ["Busy three", 3, 16],
-      ["Busy four", 3, 18],
-      ["Busy five", 3, 20],
+      ["Busy two", 3, 10],
+      ["Busy three", 3, 14],
+      ["Busy four", 3, 16],
+      ["Busy five", 3, 18],
+      ["Busy six", 3, 20],
     ] as const) {
       await api(page, "POST", `/homes/${homeId}/events`, {
         title,
@@ -134,7 +137,7 @@ test.describe("calendar month view density", () => {
     const allWeeksBottom = weekHeights.reduce((sum, h) => sum + h, 0) + weeksBox!.y;
     expect(allWeeksBottom).toBeLessThanOrEqual(844);
 
-    // The busy day shows an overflow indicator (5 events > MONTH_VISIBLE_ROW_CAP).
+    // The busy day shows an overflow indicator (6 events > MONTH_VISIBLE_ROW_CAP).
     await expect(page.locator(".overflow-events").first()).toBeVisible();
 
     // The multi-day event renders as a single spanning bar, not five separate items.

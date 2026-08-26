@@ -2180,6 +2180,12 @@ textarea {
   touch-action: pan-y;
 }
 .calendar-month-swipe-track {
+  /* flex-start, not the default stretch: the previous/current/next panels
+     can each be a genuinely different natural height now (a 5-week month
+     renders taller rows than a 6-week one — see --calendar-week-count),
+     and stretching every panel to match the tallest of the three would
+     undo that per-month sizing for whichever panel isn't it. */
+  align-items: flex-start;
   display: flex;
   transform: translateX(-33.3333%);
   width: 300%;
@@ -2227,8 +2233,15 @@ textarea {
   clip: rect(0, 0, 0, 0);
 }
 .calendar-weeks {
-  --month-day-number-h: 26px;
-  --month-event-row-h: 24px;
+  /* --calendar-week-count is set inline per month (MonthView in
+     month-view.tsx) — 5 or 6, however many week rows this specific month
+     actually renders (a month whose grid needs only 5 doesn't render an
+     all-next-month 6th row) — read by the mobile per-row height clamp()
+     below so a 5-week month's rows can use the space a 6th row would have
+     taken instead of leaving it blank. */
+  --calendar-week-count: 6;
+  --month-day-number-h: 24px;
+  --month-event-row-h: 20px;
   background: var(--colour-white);
   border: 1px solid #ece6dc;
   border-radius: 0.6rem;
@@ -2269,7 +2282,7 @@ textarea {
   background: color-mix(in srgb, var(--colour-terracotta) 4%, transparent);
 }
 .calendar-week .day-number {
-  min-height: 26px;
+  min-height: var(--month-day-number-h);
   width: 100%;
 }
 .calendar-week .overflow-events {
@@ -2289,9 +2302,16 @@ textarea {
 }
 .calendar-week .month-event {
   align-self: center;
-  background: color-mix(in srgb, var(--event-color) 15%, white);
-  border-radius: 0.3rem;
-  color: var(--colour-slate);
+  /* Solid Calendar Tag colour for every event — single-day, all-day and
+     multi-day span alike — with the text colour picked for contrast
+     against that specific colour (see contrastText/resolveColour in
+     month-view.tsx). Previously single-day chips used a pale ~15% tint
+     with a fixed dark text colour while spans alone were solid; the two
+     are unified so an event's colour reads the same regardless of how
+     many days it covers. */
+  background: var(--event-color);
+  border-radius: 0.25rem;
+  color: var(--event-text-color);
   display: flex;
   align-items: center;
   /* The global `button` reset defaults to `justify-content: center` — harmless
@@ -2302,40 +2322,25 @@ textarea {
      the title always renders from its first character and only ever
      truncates on the right. */
   justify-content: flex-start;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 600;
   line-height: 1.15;
-  min-height: 22px;
+  min-height: 20px;
   overflow: hidden;
-  /* No leading category dot (see month-view.tsx) — the tinted/solid chip
+  /* No leading category dot (see month-view.tsx) — the solid chip
      background already carries the colour, so this space goes straight to
-     the title instead. ~5.6px horizontal, near the top of the ~5-6px target
-     since this is the base/desktop size; the <800px override below keeps
-     its own already-tighter value. */
-  padding: 0.15rem 0.35rem;
+     the title instead. */
+  padding: 0.12rem 0.3rem;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
   width: calc(100% - 0.1rem);
   z-index: 4;
 }
-/* Multi-day spans render as a continuous solid-fill bar (TimeTree's "schedule bar"
-   look) rather than the lighter tinted chip used for single-day events, so a span
-   reads as one shape flowing across its date range instead of a pill sitting inside
-   a cell. */
-.calendar-week .month-event.month-event-span {
-  background: color-mix(in srgb, var(--event-color) 82%, white);
-  border-radius: 0.35rem;
-  color: white;
-  font-weight: 600;
-  /* Deliberately left-aligned, not centered: centering a `nowrap` flex child
-     that's wider than its box overflows equally on both sides, and
-     `overflow: hidden` then clips the *start* of the title with no ellipsis
-     there to show it happened ("AH - Police ..." silently became
-     "- Police Tr..."). Left-align + the shared rule's `text-overflow:
-     ellipsis` above guarantees the title always starts from its first
-     character and only ever truncates at the right. */
-}
+/* Multi-day spans keep their own class (month-view.tsx keys the "↳ "
+   continuation prefix and title-visibility rules off it) but, now that
+   every event is a solid Calendar Tag colour, there is no longer a
+   background/colour difference from a single-day chip to declare here. */
 .month-event-shared-icon {
   flex-shrink: 0;
   margin-right: 0.2rem;
@@ -3396,19 +3401,25 @@ select.icon-row-control {
     margin-bottom: 0.2rem;
   }
   .calendar-weeks {
-    --month-day-number-h: 24px;
-    --month-event-row-h: 22px;
+    --month-day-number-h: 22px;
+    --month-event-row-h: 20px;
   }
   .calendar-week {
-    /* All six weeks must be visible together at once — no internal scroll region
-       inside the month grid. Height is the viewport's actual leftover space (after
-       the header, compact toolbar, weekday row, bottom nav and safe areas) divided
-       across the six rows, so it scales with the real device rather than a single
-       hardcoded phone height. 258px is that chrome's measured total at this
-       breakpoint (header ~70 + toolbar ~84 + weekday row ~14 + bottom nav ~72 +
-       page/gap padding ~18). The clamp() floor keeps rows usable on a very short
-       viewport (ordinary page scroll takes over there, not a nested scroll area);
-       the ceiling stops rows ballooning unreasonably tall on large-screen devices. */
+    /* Every week row this month actually renders (--calendar-week-count, 5
+       or 6 — see month-view.tsx) must be visible together at once — no
+       internal scroll region inside the month grid. Height is the
+       viewport's actual leftover space (after the header, compact toolbar,
+       weekday row, bottom nav and safe areas) divided across those rows, so
+       it scales with the real device rather than a single hardcoded phone
+       height, and a 5-week month gets visibly taller rows than a 6-week one
+       instead of leaving the freed-up row's space blank. 270px is that
+       chrome's measured total at this breakpoint (header ~70 + toolbar ~84 +
+       weekday row ~14 + bottom nav ~72 + page/gap padding ~18, plus a small
+       margin). The clamp() floor keeps rows usable on a very short viewport
+       (ordinary page scroll takes over there, not a nested scroll area); the
+       ceiling stops rows ballooning unreasonably tall on large-screen
+       devices — raised from 145px to 160px alongside the taller per-row
+       event capacity (MONTH_VISIBLE_ROW_CAP, 3 -> 5). */
     min-height: clamp(
       88px,
       calc(
@@ -3416,17 +3427,14 @@ select.icon-row-control {
             100dvh - 270px - env(safe-area-inset-top) -
               env(safe-area-inset-bottom)
           ) /
-          6
+          var(--calendar-week-count, 6)
       ),
-      145px
+      160px
     );
-    row-gap: 3px;
+    row-gap: 2px;
   }
   .calendar-week .calendar-day {
     padding-inline: 0.08rem;
-  }
-  .calendar-week .day-number {
-    min-height: 22px;
   }
   .calendar-week .day-number span {
     font-size: 11px;
@@ -3435,11 +3443,11 @@ select.icon-row-control {
     width: 19px;
   }
   .calendar-week .month-event {
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 500;
     line-height: 1.05;
     min-height: 18px;
-    padding: 0.06rem 0.28rem;
+    padding: 0.05rem 0.22rem;
   }
   .calendar-week .month-event.month-event-span {
     font-weight: 600;

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Users } from "lucide-react";
 import type { EventOccurrence } from "@mykhaya/shared-types";
-import { resolveColour } from "@mykhaya/design-tokens";
+import { contrastText, resolveColour } from "@mykhaya/design-tokens";
 import { usePrefersReducedMotion, useMonthSwipe } from "./use-month-swipe";
 import {
   addMonths,
@@ -96,8 +96,11 @@ export function MonthSwipeView({
 
 // Show at most this many event bars per week before collapsing the rest into a
 // "+N more" indicator — a week with nothing more than this stays compact instead of
-// reserving space for events it doesn't have.
-const MONTH_VISIBLE_ROW_CAP = 3;
+// reserving space for events it doesn't have. Raised from 3 to 5 so the denser
+// mobile chip styling (see .calendar-week .month-event) can actually surface more
+// of a busy day's events before collapsing, matching a traditional compact family
+// calendar rather than needing to open the day sheet for every third event.
+const MONTH_VISIBLE_ROW_CAP = 5;
 
 export function MonthView({
   cells,
@@ -119,13 +122,29 @@ export function MonthView({
     () => new Map(events.map((event) => [event.occurrence_id, eventDateBounds(event, timeZone)])),
     [events, timeZone],
   );
+  // monthCells always pads to a fixed 6-week/42-cell grid, but not every
+  // month actually needs all 6 — when the last row is entirely spillover
+  // from next month, it's dropped so that row's reserved vertical space
+  // goes to the weeks that actually belong to this month instead (see
+  // --calendar-week-count, read by the mobile per-row height clamp() in
+  // styles.css, so a 5-week month gets taller rows than a 6-week one).
+  const weekCount = useMemo(() => {
+    const lastWeek = cells.slice(35, 42);
+    const lastWeekBelongsToThisMonth = lastWeek.some(
+      (day) => day.getUTCMonth() === focusDate.getUTCMonth(),
+    );
+    return lastWeekBelongsToThisMonth ? 6 : 5;
+  }, [cells, focusDate]);
   return (
     <section className="calendar-month" aria-label="Month view">
       <div className="calendar-weekdays" aria-hidden="true">
         {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => <span key={label}>{label}</span>)}
       </div>
-      <div className="calendar-weeks">
-        {Array.from({ length: 6 }, (_, weekIndex) => {
+      <div
+        className="calendar-weeks"
+        style={{ "--calendar-week-count": weekCount } as React.CSSProperties}
+      >
+        {Array.from({ length: weekCount }, (_, weekIndex) => {
           const days = cells.slice(weekIndex * 7, weekIndex * 7 + 7);
           const weekStart = dateKey(days[0]!);
           const weekEnd = dateKey(days[6]!);
@@ -178,12 +197,12 @@ export function MonthView({
                 );
               })}
               {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => {
-                // A multi-day event keeps the same solid-bar treatment on every week
-                // segment it touches, even a segment that only covers one day of that
-                // week (e.g. an event ending on a week's first day) — styling must key
-                // off the event's own duration, not how much of it happens to fall in
-                // this particular week, or a continuation segment would silently revert
-                // to the lighter single-day chip look and read as a different event.
+                // A multi-day event keeps its "spanning bar" treatment (see
+                // .month-event-span) on every week segment it touches, even a segment
+                // that only covers one day of that week (e.g. an event ending on a
+                // week's first day) — styling must key off the event's own duration,
+                // not how much of it happens to fall in this particular week, or a
+                // continuation segment would silently look like a different event.
                 const { startKey, endKey } = bounds.get(event.occurrence_id)!;
                 const isMultiDay = endKey !== startKey;
                 const segmentDays = end - start + 1;
@@ -193,6 +212,13 @@ export function MonthView({
                 // coloured bar still communicates "this event continues here," which a
                 // squeezed fragment does not.
                 const showTitle = !isMultiDay || segmentDays >= 2;
+                // Solid Calendar Tag colour for every event — single-day, all-day and
+                // multi-day alike (see .calendar-week .month-event) — with the text
+                // colour picked for contrast against that specific colour, the same
+                // contrastText/resolveColour pairing Avatar already uses for initials
+                // on a member's colour.
+                const eventColour = resolveColour(event.label?.color ?? event.calendar_color);
+                const eventTextColour = contrastText(eventColour);
                 return (
                   <button
                     key={`${event.occurrence_id}-${weekStart}`}
@@ -200,7 +226,8 @@ export function MonthView({
                     className={`month-event${isMultiDay ? " month-event-span" : ""}`}
                     style={
                       {
-                        "--event-color": resolveColour(event.label?.color ?? event.calendar_color),
+                        "--event-color": eventColour,
+                        "--event-text-color": eventTextColour,
                         gridColumn: `${start + 1} / ${end + 2}`,
                         gridRow: row + 2,
                       } as React.CSSProperties
