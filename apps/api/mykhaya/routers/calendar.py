@@ -55,6 +55,7 @@ from mykhaya.schemas import (
     EventLabelCreate,
     EventLabelResponse,
     EventLabelUpdate,
+    EventLabelUsageResponse,
     EventListResponse,
     EventOccurrence,
     EventUpdate,
@@ -863,6 +864,69 @@ async def update_label(
         is_active=label.is_active,
         sort_order=label.sort_order,
     )
+
+
+@router.get("/{home_id}/event-labels/{label_id}/usage", response_model=EventLabelUsageResponse)
+async def label_usage(
+    home_id: uuid.UUID,
+    label_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventLabelUsageResponse:
+    """How many events currently carry this Calendar Tag — shown on the
+    delete-confirmation sheet so an authorised user can see the blast radius
+    before deleting it (see delete_label below). Counts base CalendarEvent
+    rows, not expanded recurring occurrences: a weekly series is one event
+    with one Calendar Tag, regardless of how many occurrences it produces."""
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    label = await db.get(CalendarEventLabel, label_id)
+    if label is None or label.group_id != home_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That calendar or category could not be found."
+        )
+    count = await db.scalar(
+        select(func.count())
+        .select_from(CalendarEvent)
+        .where(CalendarEvent.label_id == label_id, CalendarEvent.deleted_at.is_(None))
+    )
+    return EventLabelUsageResponse(event_count=count or 0)
+
+
+@router.delete("/{home_id}/event-labels/{label_id}", status_code=204)
+async def delete_label(
+    home_id: uuid.UUID,
+    label_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Deletes a Calendar Tag. Never deletes an event, never touches any
+    HomeCalendar, and never moves an event to a different calendar —
+    calendar_events.label_id has an `ON DELETE SET NULL` foreign key (see
+    CalendarEvent.label_id in models.py, created by migration 0003), so the
+    single DELETE below atomically clears label_id on every event that
+    carried this tag, in the same transaction, entirely at the database
+    level — there is no separate cleanup step (and so nothing that could run
+    non-atomically, or accidentally reassign those events to another tag,
+    or copy this tag's colour onto them). Those events keep their calendar,
+    participants, dates, recurrence and notifications untouched, and simply
+    fall back to their calendar's own colour like any other untagged event
+    already does (event.label?.color ?? event.calendar_color — unchanged by
+    this endpoint). No CalendarEventLabel is currently "protected": `
+    is_system` marks the Home's seeded defaults for information only and is
+    never read to block anything, so every label — system-seeded or
+    custom, including one currently over the Home's plan limit
+    (read_only_due_to_plan) — may be deleted, mirroring how an
+    over-the-limit HomeCalendar can still be voluntarily deleted."""
+    await require_capability(home_id, Capability.calendar_edit_all, auth, db)
+    label = await db.get(CalendarEventLabel, label_id)
+    if label is None or label.group_id != home_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That calendar or category could not be found."
+        )
+    await db.execute(delete(CalendarEventLabel).where(CalendarEventLabel.id == label.id))
+    audit(db, request, "calendar.label.deleted", auth.user.id, home_id, "label", label.id)
+    await db.commit()
 
 
 @router.get("/{home_id}/events", response_model=EventListResponse)

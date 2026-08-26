@@ -631,6 +631,15 @@ class EventLabelResponse(BaseModel):
     commercial_access: Literal["normal", "read_only_due_to_plan"] | None = None
 
 
+class EventLabelUsageResponse(BaseModel):
+    """How many events currently carry a Calendar Tag — fetched on demand
+    for the delete-confirmation sheet, never bundled onto EventLabelResponse
+    itself (which is also returned on the hot event-creation-dropdown path,
+    where this count is never needed)."""
+
+    event_count: int
+
+
 def _require_tz_aware(value: datetime | None) -> datetime | None:
     # A naive datetime (no UTC offset in the wire representation) is
     # ambiguous about which instant it actually names — accepting one here

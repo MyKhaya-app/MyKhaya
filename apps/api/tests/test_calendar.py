@@ -812,6 +812,126 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
 
 
 @pytest.mark.asyncio
+async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
+    client: AsyncClient,
+) -> None:
+    """The acceptance scenario for Calendar vs Calendar Tag: an event on a
+    secondary Home calendar (e.g. "GFOAT") follows *that* calendar's
+    identity/sharing, while its Calendar Tag (CalendarEventLabel, e.g.
+    "Activity") is a fully independent colour/classification concept — two
+    orthogonal fields on the same CalendarEvent row (calendar_id, label_id),
+    never a second calendar-like resource."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"gfoat-{suffix}@example.com", "GFOAT Owner")
+    home_id = await _home_with_calendar(client, "GFOAT Home")
+
+    gfoat = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/calendars", json={"name": "GFOAT"}
+    )
+    assert gfoat.status_code == 201, gfoat.text
+    gfoat_id = gfoat.json()["id"]
+
+    activity = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Activity", "color": "emerald"},
+    )
+    assert activity.status_code == 201, activity.text
+    activity_id = activity.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=2)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Football practice",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "calendar_id": gfoat_id,
+            "label_id": activity_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event = created.json()
+    assert event["calendar_id"] == gfoat_id
+    assert event["label"]["id"] == activity_id
+    assert event["label"]["name"] == "Activity"
+    # The colour on the wire is the Calendar Tag's, not GFOAT's own colour —
+    # see _occurrence/_calendar_color_map: a label always wins.
+    assert event["label"]["color"] == "emerald"
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    listed_event = next(
+        item for item in listed.json()["items"] if item["event_id"] == event["event_id"]
+    )
+    assert listed_event["calendar_id"] == gfoat_id
+    assert listed_event["label"]["name"] == "Activity"
+
+
+@pytest.mark.asyncio
+async def test_personal_calendar_event_can_carry_a_calendar_tag(client: AsyncClient) -> None:
+    """A Personal Calendar event is never shareable with other members (see
+    create_event's Personal-Calendar member check), but that restriction is
+    about *membership*, not Calendar Tags — a Calendar Tag never grants or
+    withholds calendar access, so a Personal Calendar event can carry one
+    exactly like any other event."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"personaltag-{suffix}@example.com", "Personal Tag Owner")
+    home_id = await _home_with_calendar(client, "Personal Tag Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    personal_id = calendars.json()["personal_calendar"]["id"]
+
+    other_tag = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Other", "color": "sky"},
+    )
+    assert other_tag.status_code == 201, other_tag.text
+    other_tag_id = other_tag.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=3)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Doctor's appointment",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "calendar_id": personal_id,
+            "label_id": other_tag_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event = created.json()
+    assert event["calendar_id"] == personal_id
+    assert event["label"]["id"] == other_tag_id
+    assert event["label"]["name"] == "Other"
+
+
+@pytest.mark.asyncio
 async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient) -> None:
     """A household member without calendar.edit_all (e.g. an explicit-sharing
     friend/extended-family profile) cannot rename or recolour a shared
@@ -859,6 +979,326 @@ async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient
 
     unchanged = await client.get(f"/api/v1/homes/{home_id}/event-labels")
     assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == "coral"
+
+
+@pytest.mark.asyncio
+async def test_authorised_user_can_delete_a_calendar_tag(client: AsyncClient) -> None:
+    """The basic happy path: calendar.edit_all (the same capability that
+    already gates create/rename/recolour) can delete an optional Calendar
+    Tag, and it's gone from the listing afterwards."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagdelete-{suffix}@example.com", "Tag Deleter")
+    home_id = await _home_with_calendar(client, "Tag Delete Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Throwaway", "color": "coral"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    deleted = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
+    )
+    assert deleted.status_code == 204
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert label_id not in {row["id"] for row in listed.json()}
+
+
+@pytest.mark.asyncio
+async def test_unauthorised_user_cannot_delete_a_calendar_tag(client: AsyncClient) -> None:
+    """Same permission boundary as create/rename/recolour — deletion must be
+    backend-authorised, not merely a hidden button in the frontend."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagdelowner-{suffix}@example.com", "Tag Owner")
+    home_id = await _home_with_calendar(client, "Tag Delete Perms Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Protected From Friend", "color": "coral"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        friend_email = f"tagdelfriend-{suffix}@example.com"
+        await create_verified_user(friend_client, friend_email, "Tag Friend")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == friend_email))
+            assert user is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=user.id,
+                    role=Role.guest,
+                    relationship=HouseholdRelationship.friend,
+                    permission_profile=PermissionProfile.explicit_sharing,
+                )
+            )
+            await db.commit()
+
+        blocked = await unsafe(
+            friend_client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
+        )
+        assert blocked.status_code == 403
+
+    still_there = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert label_id in {row["id"] for row in still_there.json()}
+
+
+@pytest.mark.asyncio
+async def test_label_usage_endpoint_reports_affected_event_count(client: AsyncClient) -> None:
+    """Backs the delete-confirmation sheet's "used by N events" copy —
+    counts base CalendarEvent rows (not expanded recurring occurrences)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagusage-{suffix}@example.com", "Tag Usage Owner")
+    home_id = await _home_with_calendar(client, "Tag Usage Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Activity", "color": "emerald"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    zero_usage = await client.get(f"/api/v1/homes/{home_id}/event-labels/{label_id}/usage")
+    assert zero_usage.status_code == 200
+    assert zero_usage.json()["event_count"] == 0
+
+    future_start = datetime.now(UTC) + timedelta(hours=1)
+    for i in range(3):
+        made = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/events",
+            json={
+                "title": f"Tagged event {i}",
+                "start_at": (future_start + timedelta(days=i)).isoformat(),
+                "end_at": (future_start + timedelta(days=i, hours=1)).isoformat(),
+                "timezone": "Europe/London",
+                "is_all_day": False,
+                "member_ids": [],
+                "recurrence": "none",
+                "recurrence_interval": 1,
+                "label_id": label_id,
+            },
+        )
+        assert made.status_code == 201, made.text
+
+    usage = await client.get(f"/api/v1/homes/{home_id}/event-labels/{label_id}/usage")
+    assert usage.status_code == 200
+    assert usage.json()["event_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_calendar_tag_untags_its_events_without_touching_anything_else(
+    client: AsyncClient,
+) -> None:
+    """The core safety contract: deleting a Calendar Tag must never delete
+    an event, never touch calendar_id, and must leave title/dates/
+    participants untouched — only label_id changes, to null. Also proves
+    there is no FK-cascade path that could delete events through tag
+    deletion (calendar_events.label_id is ON DELETE SET NULL, never
+    CASCADE — see models.CalendarEvent.label_id)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"taguntag-{suffix}@example.com", "Untag Owner")
+    home_id = await _home_with_calendar(client, "Untag Home")
+
+    created_label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Activity", "color": "violet"},
+    )
+    assert created_label.status_code == 201
+    label_id = created_label.json()["id"]
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    future_start = datetime.now(UTC) + timedelta(hours=2)
+    created_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Football practice",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "location_text": "The park",
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "label_id": label_id,
+        },
+    )
+    assert created_event.status_code == 201, created_event.text
+    event = created_event.json()
+    assert event["label"]["id"] == label_id
+
+    deleted = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
+    )
+    assert deleted.status_code == 204
+
+    # The label itself is gone.
+    labels_after = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert label_id not in {row["id"] for row in labels_after.json()}
+
+    # The event still exists — untouched apart from label_id — and now
+    # falls back to the calendar's own colour, exactly like any other
+    # never-tagged event (event.label?.color ?? event.calendar_color).
+    fetched = await client.get(f"/api/v1/homes/{home_id}/events/{event['event_id']}")
+    assert fetched.status_code == 200
+    after = fetched.json()["event"]
+    assert after["label"] is None
+    assert after["calendar_id"] == primary["id"]
+    assert after["calendar_color"] == primary["color"]
+    assert after["title"] == "Football practice"
+    assert after["location_text"] == "The park"
+    assert after["start_at"] == event["start_at"]
+    assert after["end_at"] == event["end_at"]
+    assert after["member_ids"] == event["member_ids"]
+    assert after["recurrence"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_calendar_tag_leaves_a_recurring_event_intact(
+    client: AsyncClient,
+) -> None:
+    """Recurring-event information (pattern/interval/occurrences) must
+    survive a Calendar Tag deletion exactly like any other event field —
+    only label_id is affected."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagrecur-{suffix}@example.com", "Recurring Tag Owner")
+    home_id = await _home_with_calendar(client, "Recurring Tag Home")
+
+    created_label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Activity", "color": "violet"},
+    )
+    assert created_label.status_code == 201
+    label_id = created_label.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=1)
+    created_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Weekly swim",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "weekly",
+            "recurrence_interval": 1,
+            "label_id": label_id,
+        },
+    )
+    assert created_event.status_code == 201, created_event.text
+    event_id = created_event.json()["event_id"]
+
+    deleted = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
+    )
+    assert deleted.status_code == 204
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(days=21)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    occurrences = [item for item in listed.json()["items"] if item["event_id"] == event_id]
+    # Still a genuinely weekly series producing multiple occurrences, now
+    # simply untagged.
+    assert len(occurrences) >= 3
+    for occurrence in occurrences:
+        assert occurrence["recurrence"] == "weekly"
+        assert occurrence["label"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_system_seeded_default_calendar_tag_can_still_be_deleted(
+    client: AsyncClient,
+) -> None:
+    """No CalendarEventLabel is currently "protected": is_system marks the
+    Home's seeded defaults (Family/Megan/Activity/...) for information only
+    and is never read to block anything — see delete_label's docstring. If a
+    genuinely protected tag is ever introduced, this test should be updated
+    to assert the new restriction instead."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagsystem-{suffix}@example.com", "System Tag Owner")
+    group = await unsafe(
+        client, "POST", "/api/v1/groups", json={"name": "System Tag Home"}
+    )
+    assert group.status_code == 201
+    home_id = group.json()["id"]
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
+            )
+        )
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
+
+    seeded = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert seeded.status_code == 200
+    seeded_labels = seeded.json()
+    assert len(seeded_labels) > 0, "expected the Home to have seeded default Calendar Tags"
+    system_label_id = seeded_labels[0]["id"]
+
+    deleted = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{system_label_id}"
+    )
+    assert deleted.status_code == 204
+
+    remaining = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert system_label_id not in {row["id"] for row in remaining.json()}
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_nonexistent_calendar_tag_changes_nothing(client: AsyncClient) -> None:
+    """A 404 on an already-deleted/foreign-Home label id must leave every
+    other label completely untouched — no partial cleanup, matching the
+    all-or-nothing (single-statement, DB-enforced) delete."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagatomic-{suffix}@example.com", "Atomic Tag Owner")
+    home_id = await _home_with_calendar(client, "Atomic Tag Home")
+
+    before = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert before.status_code == 200
+    before_ids = {row["id"] for row in before.json()}
+
+    missing = await unsafe(
+        client,
+        "DELETE",
+        f"/api/v1/homes/{home_id}/event-labels/{uuid.uuid4()}",
+    )
+    assert missing.status_code == 404
+
+    after = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert {row["id"] for row in after.json()} == before_ids
 
 
 @pytest.mark.asyncio

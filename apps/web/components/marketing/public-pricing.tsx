@@ -34,7 +34,7 @@ const FREE_POINTS = [
   "Calendar",
   "Events",
   "Notes",
-  "1 event category",
+  "1 Calendar Tag",
   "Up to 3 personal routines",
   "1 person",
 ];
@@ -42,7 +42,7 @@ const FREE_POINTS = [
 const FAMILY_POINTS = [
   "Everything in Free",
   "Whole household",
-  "Unlimited event categories",
+  "Unlimited Calendar Tags",
   "Unlimited routines",
   "Household routines",
   "Shared family events",

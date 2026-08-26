@@ -103,7 +103,7 @@ export default function Onboarding() {
               <p className="muted">A useful personal organiser for one person.</p>
               <ul className="plan-points">
                 <li>Calendar, events and notes</li>
-                <li>1 event category</li>
+                <li>1 Calendar Tag</li>
                 <li>Up to 3 personal routines</li>
                 <li>No payment details required</li>
               </ul>

@@ -179,7 +179,7 @@ export default function Profile() {
           <p className="muted">
             Used for your avatar and anywhere you show up as yourself in{" "}
             {activeHome?.name ?? "your Home"} — not your calendar events, which take
-            their colour from the calendar or category instead.
+            their colour from their Calendar Tag (or the calendar itself, if untagged).
           </p>
           <ColourSwatchPicker
             value={membership.colour}

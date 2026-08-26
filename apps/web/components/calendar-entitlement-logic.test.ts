@@ -79,13 +79,13 @@ describe("atLimitMessage", () => {
 
   it("names the limit once reached, singular", () => {
     expect(atLimitMessage(usage({ count: 1, limit: 1 }))).toBe(
-      "You've reached the Free plan limit of 1 event category.",
+      "You've reached the Free plan limit of 1 Home calendar.",
     );
   });
 
   it("names the limit once reached, plural", () => {
     expect(atLimitMessage(usage({ count: 2, limit: 2 }))).toBe(
-      "You've reached the Free plan limit of 2 event categories.",
+      "You've reached the Free plan limit of 2 Home calendars.",
     );
   });
 });
@@ -98,8 +98,8 @@ describe("overLimitExplanation", () => {
   it("explains the over-limit state without deleting anything or naming a price", () => {
     const message = overLimitExplanation(usage({ count: 3, limit: 1, over_limit: true }));
     expect(message).toBe(
-      "Your Home has 3 event categories. The Free plan includes 1 category. " +
-        "Your calendars and events are safe. Upgrade to Family to restore full access to all categories.",
+      "Your Home has 3 Home calendars. The Free plan includes 1 calendar. " +
+        "Your calendars and events are safe. Upgrade to Family to restore full access to all of them.",
     );
     expect(message).not.toMatch(/[£$€]/);
   });

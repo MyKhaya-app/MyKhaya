@@ -133,11 +133,11 @@ describe("Calendars page — Manage sharing sheet", () => {
     ).toBeInTheDocument();
   });
 
-  it("reveals a category checklist only after choosing 'Selected categories only'", async () => {
+  it("reveals a Calendar Tag checklist only after choosing 'Selected Calendar Tags only'", async () => {
     const dialog = await openSharingSheet();
     expect(within(dialog).queryByText("Family Events")).not.toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("radio", { name: "Selected categories only" }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Selected Calendar Tags only" }));
 
     await waitFor(() => expect(within(dialog).getByText("Family Events")).toBeInTheDocument());
     expect(within(dialog).getByText("Football Club")).toBeInTheDocument();

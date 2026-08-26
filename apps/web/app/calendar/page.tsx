@@ -14,6 +14,7 @@ import {
   MapPin,
   Plus,
   Search,
+  Tag,
   Trash2,
   Users,
   X,
@@ -189,22 +190,25 @@ function utcMidnightOf(dateInput: string): Date {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
-// Sentinel select value for "Personal calendar" — distinct from any real
-// label UUID, so the single "Calendar or category" control can represent
-// both concepts (which HomeCalendar the event belongs to, and which
-// CalendarEventLabel it's tagged with) without them ever colliding. Never
-// sent to the API as-is; submit() translates it into calendar_id.
+// Calendar and Calendar Tag are two independent concepts on an event
+// (calendar_id / label_id) — this is the frontend's *Calendar* picker's
+// sentinel scheme (see the separate `tagSelection` state below for Calendar
+// Tag). Home calendars (including secondary ones like "GFOAT") are offered
+// by their real HomeCalendar id; Personal Calendar and a writable shared
+// calendar aren't in that same list, so they need their own sentinel
+// values, never sent to the API as-is — submit() translates them into
+// calendar_id (or routes to onSubmitShared entirely).
 const PERSONAL_CALENDAR_VALUE = "__personal__";
 // Sentinel prefix for a writable (Can add & edit) externally shared
-// calendar, appended with its CalendarShare.id — same "one select, several
-// calendar concepts" trick as PERSONAL_CALENDAR_VALUE. Only ever offered
-// when *creating* a brand-new event (see writableShares below); an
-// existing event's calendar assignment never changes via edit, matching
-// the Home calendar's own "calendar_id is fixed at creation" rule.
+// calendar, appended with its CalendarShare.id. Only ever offered when
+// *creating* a brand-new event (see writableShares below); an existing
+// event's calendar assignment never changes via edit, matching the Home
+// calendar's own "calendar_id is fixed at creation" rule.
 const SHARE_VALUE_PREFIX = "__share__:";
 
 function EventForm({
   labels,
+  homeCalendars,
   members,
   initial,
   initialDay,
@@ -219,7 +223,16 @@ function EventForm({
   onCancel,
   onDelete,
 }: {
+  /** Calendar Tags (CalendarEventLabel) — a colour/category tag, entirely
+   *  independent of which calendar contains the event. */
   labels: EventLabel[];
+  /** This Home's own calendars (the primary "Home calendar" plus any
+   *  secondary ones, e.g. "GFOAT") — the canonical list from
+   *  GET /homes/{id}/calendars, same source the Calendars overlay/visibility
+   *  sheet and Home calendar management already use. Never includes the
+   *  Personal Calendar (see personalCalendarId) or shared calendars (see
+   *  writableShares) — those are offered as separate picker entries below. */
+  homeCalendars: HomeCalendar[];
   members: Member[];
   initial?: EventOccurrence;
   initialDay: Date;
@@ -282,23 +295,34 @@ function EventForm({
   // does the next time the user actually turns All day off.
   const hasTimedValues = useRef(initialWhen.hasTimedValues);
   // Editing an occurrence merged in from an externally shared calendar (see
-  // CalendarPage.load) — People and Calendar/category never apply: the
-  // recipient isn't a Home member (nothing to assign to) and categories are
+  // CalendarPage.load) — People and Calendar Tag never apply: the recipient
+  // isn't a Home member (nothing to assign to) and Calendar Tags are
   // Home-owned structure they aren't authorised to use. onSubmit's payload
   // still carries member_ids/label_id (unused fields, always empty/None
   // here) but the parent strips them via toSharedEventPayload before this
   // ever reaches the share-scoped endpoint — see calendar-utils.ts.
   const isSharedEvent = Boolean(initial?.share_id);
-  // The "Calendar or category" select's value — either a real
-  // CalendarEventLabel id (unchanged existing behaviour), "" (the existing
-  // default/no-label option), or PERSONAL_CALENDAR_VALUE. Controlled (not
-  // read from FormData like the rest of this form) so the "Only you can
-  // see..." supporting copy can react live to the current selection.
-  const [calendarSelection, setCalendarSelection] = useState(() =>
-    initial && personalCalendarId && initial.calendar_id === personalCalendarId
-      ? PERSONAL_CALENDAR_VALUE
-      : (initial?.label?.id ?? ""),
-  );
+  // The Calendar picker's value: a real HomeCalendar id (covers both the
+  // primary "Home calendar" and any secondary one, e.g. "GFOAT"),
+  // PERSONAL_CALENDAR_VALUE, or a SHARE_VALUE_PREFIX-tagged CalendarShare id
+  // (create-only). Controlled (not read from FormData like the rest of this
+  // form) so the "Only you can see..."/"shared with you" supporting copy can
+  // react live to the current selection. Immutable once editing an existing
+  // event — see the Calendar <select>'s `disabled` below — so this only
+  // ever reflects, never changes, initial.calendar_id on edit.
+  const [calendarTarget, setCalendarTarget] = useState(() => {
+    if (initial) {
+      return personalCalendarId && initial.calendar_id === personalCalendarId
+        ? PERSONAL_CALENDAR_VALUE
+        : initial.calendar_id;
+    }
+    return homeCalendars.find((calendar) => calendar.is_primary)?.id ?? "";
+  });
+  // The Calendar Tag picker's value — a real CalendarEventLabel id, or ""
+  // for "No tag". Entirely independent of calendarTarget: which calendar
+  // contains the event never constrains which tag it can carry (or vice
+  // versa) — see docs on Calendar vs Calendar Tag.
+  const [tagSelection, setTagSelection] = useState(() => initial?.label?.id ?? "");
 
   function zonedInstant(date: string, time: string): Date {
     return combineZoned(date, time, eventTimeZone);
@@ -408,9 +432,9 @@ function EventForm({
       end_at = zonedInstant(multiDay ? endDate : startDate, endTime).toISOString();
     }
 
-    const isPersonal = calendarSelection === PERSONAL_CALENDAR_VALUE;
-    const sharedTargetId = calendarSelection.startsWith(SHARE_VALUE_PREFIX)
-      ? calendarSelection.slice(SHARE_VALUE_PREFIX.length)
+    const isPersonal = calendarTarget === PERSONAL_CALENDAR_VALUE;
+    const sharedTargetId = calendarTarget.startsWith(SHARE_VALUE_PREFIX)
+      ? calendarTarget.slice(SHARE_VALUE_PREFIX.length)
       : null;
     const savedRecurrenceEndDate =
       recurrence !== "none" && recurrenceEndMode === "on_date" ? recurrenceEndDate : null;
@@ -449,10 +473,13 @@ function EventForm({
       // backend rejects this too — see create_event/update_event's
       // Personal-Calendar member check — this just avoids a round-trip
       // rejection when the People section still shows other members
-      // checked from before switching to Personal calendar).
+      // checked from before switching to Personal calendar). Calendar Tag
+      // is independent of the calendar, though: a Personal Calendar event
+      // can still carry a tag (Megan/Activity/Other/...), so this is never
+      // forced to null just because the calendar is Personal.
       member_ids: isPersonal ? [] : data.getAll("members").map(String),
-      label_id: isPersonal ? null : calendarSelection || null,
-      calendar_id: isPersonal ? personalCalendarId : null,
+      label_id: tagSelection || null,
+      calendar_id: isPersonal ? personalCalendarId : calendarTarget || null,
       location_text: formText(data, "location") || null,
       reminder_minutes: formText(data, "reminder")
         ? Number(formText(data, "reminder"))
@@ -591,8 +618,8 @@ function EventForm({
           there's no household roster to assign it to. */}
       {members.length > 0 &&
         !isSharedEvent &&
-        calendarSelection !== PERSONAL_CALENDAR_VALUE &&
-        !calendarSelection.startsWith(SHARE_VALUE_PREFIX) && (
+        calendarTarget !== PERSONAL_CALENDAR_VALUE &&
+        !calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
         <div className="form-wide event-section">
           <span className="eyebrow">People</span>
           <div className="member-list">
@@ -649,8 +676,8 @@ function EventForm({
           </span>
           <span className="icon-row-control quiet-state">
             {initial?.shared_by_home_name
-              ? `Shared by ${initial.shared_by_home_name} — no category to choose here.`
-              : "Shared calendar — no category to choose here."}
+              ? `Shared by ${initial.shared_by_home_name} — no Calendar Tag to choose here.`
+              : "Shared calendar — no Calendar Tag to choose here."}
           </span>
         </p>
       )}
@@ -662,27 +689,28 @@ function EventForm({
         <span className="sr-only">Calendar</span>
         <select
           className="icon-row-control"
-          name="label"
-          value={calendarSelection}
-          onChange={(event) => setCalendarSelection(event.target.value)}
+          name="calendar"
+          value={calendarTarget}
+          onChange={(event) => setCalendarTarget(event.target.value)}
+          // Where an event lives is fixed at creation — matching the
+          // backend's EventUpdate schema, which has no calendar_id field at
+          // all (moving an existing event between calendars isn't
+          // supported). Shown (not hidden) on edit so it's still clear
+          // which calendar the event belongs to.
+          disabled={Boolean(initial)}
         >
-          {/* Categories only ever apply on the Home calendar itself — see
-              docs on Home/Personal/Shared calendars vs categories. Selecting
-              "Home calendar" or any category below both target the same
-              calendar; only the category tag differs. */}
-          <optgroup label="Home calendar">
-            <option value="">Home calendar</option>
-            {labels.map((label) => {
-              // Transition-safe, matching update_event's own check: a category
-              // already assigned to this event stays selectable (so resaving
-              // never breaks), but a different, over-the-plan-limit category
-              // preserved past a downgrade can't be newly assigned.
+          <optgroup label="Home calendars">
+            {homeCalendars.map((calendar) => {
+              // Transition-safe, matching update_event's own check: the
+              // calendar an event already lives on stays selectable (so
+              // resaving never breaks), but a different, over-the-plan-limit
+              // calendar preserved past a downgrade can't be newly targeted.
               const locked =
-                label.commercial_access === "read_only_due_to_plan" &&
-                initial?.label?.id !== label.id;
+                calendar.commercial_access === "read_only_due_to_plan" &&
+                initial?.calendar_id !== calendar.id;
               return (
-                <option key={label.id} value={label.id} disabled={locked}>
-                  {label.name}
+                <option key={calendar.id} value={calendar.id} disabled={locked}>
+                  {calendar.is_primary ? "Home calendar" : calendar.name}
                   {locked ? " (Family)" : ""}
                 </option>
               );
@@ -709,14 +737,52 @@ function EventForm({
         <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
       </label>
       )}
-      {calendarSelection === PERSONAL_CALENDAR_VALUE && (
+      {calendarTarget === PERSONAL_CALENDAR_VALUE && (
         <p className="form-wide quiet-state">Only you can see events in this calendar.</p>
       )}
-      {calendarSelection.startsWith(SHARE_VALUE_PREFIX) && (
+      {calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
         <p className="form-wide quiet-state">
           This event will be created on a calendar shared with you — everyone it's shared with
           can see it.
         </p>
+      )}
+      {/* Calendar Tag: a colour/category tag, entirely separate from which
+          calendar contains the event (see PERSONAL_CALENDAR_VALUE's
+          docstring above) — never offered for a shared-calendar event or
+          target, since a CalendarEventLabel is Home-owned structure an
+          external recipient isn't authorised to use (same reasoning as the
+          People section above). */}
+      {!isSharedEvent && !calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
+        <label className="form-wide icon-row">
+          <span className="icon-row-icon" aria-hidden="true">
+            <Tag size={16} />
+          </span>
+          <span className="sr-only">Calendar Tag</span>
+          <select
+            className="icon-row-control"
+            name="tag"
+            value={tagSelection}
+            onChange={(event) => setTagSelection(event.target.value)}
+          >
+            <option value="">No tag</option>
+            {labels.map((label) => {
+              // Transition-safe, matching update_event's own check: a tag
+              // already assigned to this event stays selectable (so
+              // resaving never breaks), but a different, over-the-plan-limit
+              // tag preserved past a downgrade can't be newly assigned.
+              const locked =
+                label.commercial_access === "read_only_due_to_plan" &&
+                initial?.label?.id !== label.id;
+              return (
+                <option key={label.id} value={label.id} disabled={locked}>
+                  {label.name}
+                  {locked ? " (Family)" : ""}
+                </option>
+              );
+            })}
+          </select>
+          <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
+        </label>
       )}
       <label className="form-wide icon-row">
         <span className="icon-row-icon" aria-hidden="true">
@@ -946,14 +1012,15 @@ function EventDetails({
         )}
       </div>
 
-      {/* Category is a separate concept from Calendar (see docs on the
-          three calendar types vs categories) — this is a Home-calendar
-          category (CalendarEventLabel), never shown as if it were the
-          calendar's own identity. Absent for Personal/Shared events, which
-          have no categories. */}
+      {/* Calendar Tag is a separate concept from Calendar (see docs on the
+          calendar types vs Calendar Tags) — a CalendarEventLabel, never
+          shown as if it were the calendar's own identity. Any event on a
+          Home calendar or the Personal Calendar can carry one; only an
+          externally shared event never has one (Calendar Tags are
+          Home-owned structure the recipient isn't authorised to use). */}
       {event.label && (
         <div className="event-view-section">
-          <span className="eyebrow">Category</span>
+          <span className="eyebrow">Calendar Tag</span>
           <div className="event-view-value">
             <span
               className="colour-dot"
@@ -1543,11 +1610,16 @@ export default function CalendarPage() {
               >
                 <Search size={16} aria-hidden="true" />
               </button>
+              {/* Pre-existing mislabel fixed alongside the Calendar Tag
+                  rename: this always navigated to /calendar/calendars (Home
+                  calendar management + sharing), never to the Calendar Tag
+                  management screen (/settings/home) — the old "Manage event
+                  categories" label just described the wrong destination. */}
               <Link
                 className="icon-button secondary"
                 href="/calendar/calendars"
-                aria-label="Manage event categories"
-                title="Event categories"
+                aria-label="Manage calendars"
+                title="Manage calendars"
               >
                 <Layers size={16} aria-hidden="true" />
               </Link>
@@ -1571,7 +1643,7 @@ export default function CalendarPage() {
             <label className="calendar-selector">
               {/* The household member to view the calendar as — filters by the
                   canonical event-membership relationship (member_ids, backed by
-                  CalendarEventMember), not by a CalendarEventLabel category.
+                  CalendarEventMember), not by a CalendarEventLabel Calendar Tag.
                   "Everyone" (value "") applies no member filter. */}
               <span className="sr-only">Filter by household member</span>
               <select value={memberFilter} onChange={(event) => chooseMember(event.target.value)} aria-label="Filter by household member">
@@ -1639,14 +1711,13 @@ export default function CalendarPage() {
               </div>
               <div className="calendar-selectors-row">
                 <label className="calendar-selector">
-                  {/* This filters by CalendarEventLabel — a free-form, unlimited event
-                      tag (Family/School/Work/...), not the commercial "event category"
-                      (HomeCalendar) concept limited by calendar.max_categories, and not
-                      the household-member filter above even when a label happens to
-                      share a member's name — see
+                  {/* This filters by CalendarEventLabel, user-facing "Calendar Tag" — a
+                      free-form, unlimited tag (Family/School/Work/...), not a Calendar
+                      (HomeCalendar) itself, and not the household-member filter above
+                      even when a tag happens to share a member's name — see
                       docs/architecture/commercial-entitlements.md#commercial-plan-cleanup. */}
-                  <span className="sr-only">Filter by category</span>
-                  <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by category">
+                  <span className="sr-only">Filter by Calendar Tag</span>
+                  <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by Calendar Tag">
                     <option value="">{activeHome?.name ?? "Household"} calendar</option>
                     {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
                   </select>
@@ -1884,6 +1955,7 @@ export default function CalendarPage() {
           >
             <EventForm
               labels={labels}
+              homeCalendars={homeCalendars}
               members={members}
               initialDay={editorDay}
               timeZone={calendarTimezone}
@@ -1931,6 +2003,7 @@ export default function CalendarPage() {
               {editingSelected ? (
                 <EventForm
                   labels={labels}
+                  homeCalendars={homeCalendars}
                   members={members}
                   initial={selectedEvent}
                   initialDay={new Date(selectedEvent.start_at)}

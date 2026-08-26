@@ -25,18 +25,18 @@ const shareStatusLabels: Record<CalendarShare["status"], string> = {
 
 function shareCategorySummary(share: CalendarShare, labelsById: Map<string, EventLabel>): string {
   if (share.category_ids === null) return "Entire calendar";
-  if (share.category_ids.length === 0) return "No categories selected";
-  return share.category_ids.map((id) => labelsById.get(id)?.name ?? "Unknown category").join(", ");
+  if (share.category_ids.length === 0) return "No Calendar Tags selected";
+  return share.category_ids.map((id) => labelsById.get(id)?.name ?? "Unknown Calendar Tag").join(", ");
 }
 
 // Calendar management — three distinct concepts, kept visually and
 // structurally separate (see docs on Home/Personal/Shared calendars vs
-// categories): this Home's own calendar(s) and their sharing, the
+// Calendar Tags): this Home's own calendar(s) and their sharing, the
 // signed-in user's Personal calendar, and calendars genuinely shared with
-// them by other Homes. Categories (CalendarEventLabel — Family, Megan,
+// them by other Homes. Calendar Tags (CalendarEventLabel — Family, Megan,
 // Activity, ...) are managed on Home settings, deliberately not here: they
-// colour/tag events within the Home calendar, they are never a calendar of
-// their own — see /settings/home's "Categories" section.
+// colour/tag events within a calendar, they are never a calendar of their
+// own — see /settings/home's "Calendar Tags" section.
 export default function CalendarsPage() {
   const { activeHomeId, loading: homeLoading } = useActiveHome();
   const [items, setItems] = useState<HomeCalendar[]>([]);
@@ -254,7 +254,7 @@ export default function CalendarsPage() {
             <p className="eyebrow">Calendar</p>
             <h1>Home calendars</h1>
             <p className="muted">
-              Manage your Home calendars and sharing. Categories are managed separately in{" "}
+              Manage your Home calendars and sharing. Calendar Tags are managed separately in{" "}
               <Link href="/settings/home">Home settings</Link>.
             </p>
           </div>
@@ -297,8 +297,8 @@ export default function CalendarsPage() {
             <section className="card details">
               <h2>Add a Home calendar</h2>
               <p className="muted">
-                A second shared calendar for this Home — separate from categories, which colour
-                and tag events within a calendar rather than containing their own.
+                A second shared calendar for this Home — separate from Calendar Tags, which
+                colour and tag events within a calendar rather than containing their own.
               </p>
               {canCreateCalendar(usage) ? (
                 <form onSubmit={createCalendar}>
@@ -487,11 +487,11 @@ export default function CalendarsPage() {
                             checked={shareScope === "selected"}
                             onChange={() => setShareScope("selected")}
                           />
-                          Selected categories only
+                          Selected Calendar Tags only
                         </label>
                         {shareScope === "selected" && (
                           <fieldset className="share-category-list">
-                            <legend className="sr-only">Categories</legend>
+                            <legend className="sr-only">Calendar Tags</legend>
                             {labels.map((label) => (
                               <label className="check-row" key={label.id}>
                                 <input

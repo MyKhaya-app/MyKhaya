@@ -92,6 +92,14 @@ export interface EventLabel {
   commercial_access: CalendarCommercialAccess | null;
 }
 
+// How many events currently carry a given Calendar Tag — fetched on demand
+// for the delete-confirmation sheet (Settings -> Home settings -> Calendar
+// Tags), never bundled onto the label listing itself. Counts base
+// CalendarEvent rows, not expanded recurring occurrences.
+export interface EventLabelUsage {
+  event_count: number;
+}
+
 export interface EventOccurrence {
   occurrence_id: string;
   event_id: string;

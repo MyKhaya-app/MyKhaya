@@ -20,20 +20,23 @@ export function calendarIsWritable(calendar: HomeCalendar): boolean {
   return calendar.commercial_access === "normal";
 }
 
-/** The banner shown next to a disabled/blocked "add category" action once a
- * Free Home is at its limit. Never mentions a price — Plan & Billing owns
- * pricing. Customer-facing wording says "event category", never "calendar"
- * — both Free and Family always include the Calendar itself; the limit is
- * on how many categories a Home's calendar is split into. See
- * docs/architecture/commercial-entitlements.md#event-categories. */
+/** The banner shown next to a disabled/blocked "Add a Home calendar" action
+ * once a Free Home is at its limit. Never mentions a price — Plan & Billing
+ * owns pricing. This is about the count of Home *calendars* (e.g. a second
+ * one like "GFOAT") — a distinct limit from how many Calendar Tags a Home
+ * may have, even though both happen to share the same backend entitlement
+ * key (calendar.max_categories, a naming legacy predating the Calendar vs
+ * Calendar Tag split — see docs/architecture/commercial-entitlements.md
+ * #event-categories). Customer-facing wording must say "calendar", never
+ * "category"/"Calendar Tag", to avoid exactly that historical confusion. */
 export function atLimitMessage(usage: CalendarUsage): string | null {
   if (canCreateCalendar(usage)) return null;
   const count = usage.limit ?? usage.count;
-  return `You've reached the Free plan limit of ${count} event categor${count === 1 ? "y" : "ies"}.`;
+  return `You've reached the Free plan limit of ${count} Home calendar${count === 1 ? "" : "s"}.`;
 }
 
 /** The Settings -> Plan & Billing explanation for a Home that currently has
- * more event categories than its plan allows (almost always the result of a
+ * more Home calendars than its plan allows (almost always the result of a
  * downgrade — see docs/architecture/commercial-entitlements.md#event-categories).
  * Never shown for a Home within its limit. */
 /** Whether this Home's plan currently allows creating a new external
@@ -48,9 +51,9 @@ export function canShareCalendar(externalInvitesEnabled: boolean): boolean {
 
 export function overLimitExplanation(usage: CalendarUsage): string | null {
   if (!usage.over_limit) return null;
-  const planWord = usage.limit === 1 ? "category" : "categories";
+  const planWord = usage.limit === 1 ? "calendar" : "calendars";
   return (
-    `Your Home has ${usage.count} event categories. The Free plan includes ${usage.limit} ${planWord}. ` +
-    "Your calendars and events are safe. Upgrade to Family to restore full access to all categories."
+    `Your Home has ${usage.count} Home calendars. The Free plan includes ${usage.limit} ${planWord}. ` +
+    "Your calendars and events are safe. Upgrade to Family to restore full access to all of them."
   );
 }

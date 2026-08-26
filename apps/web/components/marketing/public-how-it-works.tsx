@@ -5,7 +5,7 @@ const STEPS = [
   },
   {
     title: "Make it yours",
-    description: "Set up your calendar, categories and personal routines.",
+    description: "Set up your calendar, Calendar Tags and personal routines.",
   },
   {
     title: "Your home, organised",

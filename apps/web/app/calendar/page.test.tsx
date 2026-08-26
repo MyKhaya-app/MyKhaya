@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { resolveColour } from "@mykhaya/design-tokens";
+import type { EventPayload, EventUpdatePayload } from "@mykhaya/shared-types";
 import CalendarPage from "./page";
 import { SETTLE_DURATION_MS } from "./use-month-swipe";
 
@@ -25,7 +27,10 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/components/use-active-home", () => ({
   useActiveHome: () => ({
-    activeHome: { id: "home-1", name: "Hales Home" },
+    // calendar.edit_all so the Edit action is reachable for the
+    // Calendar/Calendar Tag edit-flow tests below — no existing test in
+    // this file asserts on the Edit action being hidden.
+    activeHome: { id: "home-1", name: "Hales Home", capabilities: ["calendar.edit_all"] },
     activeHomeId: "home-1",
     homes: [{ id: "home-1", name: "Hales Home" }],
     setActiveHomeId: vi.fn(),
@@ -48,6 +53,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn(),
       birthdays: vi.fn(),
       sharedCalendars: vi.fn(),
+      createEvent: vi.fn(),
+      updateEvent: vi.fn(),
     },
   };
 });
@@ -246,5 +253,247 @@ describe("Calendar — Calendars visibility sheet", () => {
     fireEvent.click(homeToggle);
     await waitFor(() => expect(homeToggle).not.toBeChecked());
     expect(personalToggle).toBeChecked();
+  });
+});
+
+// Calendar vs Calendar Tag on Add/Edit Event — regression coverage for the
+// terminology/UI split: "Calendar" (where the event lives — Home Calendar,
+// a secondary Home calendar like GFOAT, Personal calendar, a writable
+// shared calendar) is a completely separate control from "Calendar Tag"
+// (CalendarEventLabel — a colour/category tag), and only actual writable
+// calendars ever appear as Calendar destinations.
+describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
+  const primaryCalendar = {
+    id: "cal-1",
+    name: "Home Calendar",
+    timezone: "UTC",
+    is_primary: true,
+    owner_user_id: null,
+    color: "teal",
+    commercial_access: "normal" as const,
+  };
+  const secondaryCalendar = {
+    id: "cal-2",
+    name: "GFOAT",
+    timezone: "UTC",
+    is_primary: false,
+    owner_user_id: null,
+    color: "coral",
+    commercial_access: "normal" as const,
+  };
+  const personalCalendar = {
+    id: "cal-personal",
+    name: "Personal calendar",
+    timezone: "UTC",
+    is_primary: false,
+    owner_user_id: "u1",
+    color: "sage",
+    commercial_access: "normal" as const,
+  };
+  const activityTag = {
+    id: "label-activity",
+    name: "Activity",
+    color: "violet",
+    is_active: true,
+    sort_order: 1,
+    commercial_access: "normal" as const,
+  };
+
+  function existingEvent(overrides: Record<string, unknown> = {}) {
+    const start = new Date();
+    return {
+      occurrence_id: "occ-1",
+      event_id: "event-1",
+      calendar_id: secondaryCalendar.id,
+      title: "Football",
+      start_at: start.toISOString(),
+      end_at: new Date(start.getTime() + 3_600_000).toISOString(),
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: activityTag,
+      calendar_color: secondaryCalendar.color,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-08-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar, secondaryCalendar],
+      personal_calendar: personalCalendar,
+    });
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([activityTag]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-anthony", display_name: "Anthony", colour: null, avatar_version: null },
+    ]);
+  });
+
+  async function openAddEventSheet() {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    return screen.findByRole("dialog", { name: "Add event" });
+  }
+
+  async function openEditEventSheet() {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(await screen.findByText("Football"));
+    const viewDialog = await screen.findByRole("dialog", { name: "Football" });
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    return screen.findByRole("dialog", { name: "Edit event" });
+  }
+
+  it("shows separate Calendar and Calendar Tag fields when adding an event", async () => {
+    const dialog = await openAddEventSheet();
+    expect(within(dialog).getByLabelText("Calendar")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Calendar Tag")).toBeInTheDocument();
+  });
+
+  it("shows separate Calendar and Calendar Tag fields when editing an event", async () => {
+    const dialog = await openEditEventSheet();
+    const calendarSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar");
+    const tagSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar Tag");
+    expect(calendarSelect.value).toBe(secondaryCalendar.id);
+    expect(tagSelect.value).toBe(activityTag.id);
+  });
+
+  it("the Calendar picker lists Home Calendar and a secondary Home calendar like GFOAT", async () => {
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).getByText("Home calendar")).toBeInTheDocument();
+    expect(within(calendarSelect).getByText("GFOAT")).toBeInTheDocument();
+  });
+
+  it("the Calendar picker lists Personal calendar for its owner", async () => {
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).getByText("Personal calendar")).toBeInTheDocument();
+  });
+
+  it("a writable (manage) shared calendar appears in the Calendar picker", async () => {
+    (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "share-1",
+          calendar_name: "Grandma's calendar",
+          calendar_color: "rose",
+          source_group_name: "Smith Home",
+          permission: "manage",
+        },
+      ],
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).getByText(/Grandma's calendar.*Smith Home/)).toBeInTheDocument();
+  });
+
+  it("a read-only (view) shared calendar never appears as a writable destination", async () => {
+    (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "share-2",
+          calendar_name: "Read-only calendar",
+          calendar_color: "rose",
+          source_group_name: "Smith Home",
+          permission: "view",
+        },
+      ],
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).queryByText(/Read-only calendar/)).not.toBeInTheDocument();
+  });
+
+  it("household member names never appear in the Calendar picker merely because they are members", async () => {
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).queryByText("Anthony")).not.toBeInTheDocument();
+  });
+
+  it("existing Calendar Tags appear in the Calendar Tag picker", async () => {
+    const dialog = await openAddEventSheet();
+    const tagSelect = within(dialog).getByLabelText("Calendar Tag");
+    expect(within(tagSelect).getByText("No tag")).toBeInTheDocument();
+    expect(within(tagSelect).getByText("Activity")).toBeInTheDocument();
+  });
+
+  it("selecting a Calendar persists the correct calendar_id, independent of the Calendar Tag", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Match day" } });
+    fireEvent.change(within(dialog).getByLabelText("Calendar"), {
+      target: { value: secondaryCalendar.id },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Calendar Tag"), {
+      target: { value: activityTag.id },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /save event/i }));
+
+    await waitFor(() => expect(api.createEvent).toHaveBeenCalled());
+    const [, payload] = (api.createEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      EventPayload,
+    ];
+    expect(payload).toMatchObject({ calendar_id: secondaryCalendar.id, label_id: activityTag.id });
+  });
+
+  it("selecting Personal calendar together with a Calendar Tag keeps both — a tag never changes calendar access", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Nap time" } });
+    fireEvent.change(within(dialog).getByLabelText("Calendar"), {
+      target: { value: "__personal__" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Calendar Tag"), {
+      target: { value: activityTag.id },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /save event/i }));
+
+    await waitFor(() => expect(api.createEvent).toHaveBeenCalled());
+    const [, payload] = (api.createEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      EventPayload,
+    ];
+    expect(payload).toMatchObject({
+      calendar_id: personalCalendar.id,
+      label_id: activityTag.id,
+      member_ids: [],
+    });
+  });
+
+  it("the Calendar field is fixed (disabled) when editing — only Calendar Tag can change", async () => {
+    const dialog = await openEditEventSheet();
+    const calendarSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar");
+    expect(calendarSelect).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByLabelText("Calendar Tag"), { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalled());
+    const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    expect(payload).toMatchObject({ label_id: null });
+    expect(payload).not.toHaveProperty("calendar_id");
+  });
+
+  it("the event chip's colour comes from its Calendar Tag, not the calendar it lives on", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
+    render(<CalendarPage />);
+    await screen.findByText("Football");
+
+    const chip = document.querySelector(".month-event") as HTMLElement;
+    expect(chip).not.toBeNull();
+    const eventColour = chip.style.getPropertyValue("--event-color");
+    expect(eventColour).toBe(resolveColour(activityTag.color));
+    expect(eventColour).not.toBe(resolveColour(secondaryCalendar.color));
   });
 });

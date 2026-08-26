@@ -1,10 +1,11 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { Lock } from "lucide-react";
+import { Lock, Trash2 } from "lucide-react";
 import type { CalendarUsage, EventLabel, Home, HomeCalendar } from "@mykhaya/shared-types";
 import { resolveColour, type ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
+import { BottomSheet } from "@/components/bottom-sheet";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
@@ -35,11 +36,21 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
   // client-supplied `name`).
   const [homeCalendar, setHomeCalendar] = useState<HomeCalendar | null>(null);
   const [homeCalendarColourOpen, setHomeCalendarColourOpen] = useState(false);
+  // Delete-confirmation sheet state. `deleteUsageCount`: null while the
+  // affected-event count is still loading, -1 if it couldn't be fetched
+  // (deletion still proceeds — just without a number in the copy).
+  const [deleteTarget, setDeleteTarget] = useState<EventLabel | null>(null);
+  const [deleteUsageCount, setDeleteUsageCount] = useState<number | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
-  // This page is the actual user-facing "event category" resource
-  // calendar.max_categories governs (every event belongs to one of these —
-  // see the copy below) — not the separate, lower-level Calendar concept.
-  // See docs/architecture/commercial-entitlements.md "Event categories are
+  // This page is the actual user-facing "Calendar Tag" resource
+  // calendar.max_categories governs (every event may carry one of these —
+  // see the copy below) — entirely separate from which Calendar contains
+  // the event. The entitlement key itself (calendar.max_categories) and the
+  // underlying CalendarEventLabel model are unchanged; only the
+  // user-facing term is "Calendar Tag" now. See
+  // docs/architecture/commercial-entitlements.md "Event categories are
   // CalendarEventLabel, not HomeCalendar".
   async function load() {
     const [rows, billing, calendars] = await Promise.all([
@@ -89,12 +100,12 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
       await api.createLabel(homeId, { name: newName.trim(), color: newColour });
       setNewName("");
       setNewColour("teal");
-      setStatus({ kind: "success", message: "Category added." });
+      setStatus({ kind: "success", message: "Calendar Tag added." });
       await load();
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not add that category.",
+        message: cause instanceof ApiError ? cause.message : "Could not add that Calendar Tag.",
       });
     } finally {
       setBusy(false);
@@ -111,7 +122,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not rename that category.",
+        message: cause instanceof ApiError ? cause.message : "Could not rename that Calendar Tag.",
       });
     } finally {
       setBusy(false);
@@ -146,20 +157,55 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     } catch (cause) {
       setStatus({
         kind: "error",
-        message: cause instanceof ApiError ? cause.message : "Could not update that category.",
+        message: cause instanceof ApiError ? cause.message : "Could not update that Calendar Tag.",
       });
     } finally {
       setBusy(false);
     }
   }
 
+  function startDelete(label: EventLabel) {
+    setDeleteTarget(label);
+    setDeleteUsageCount(null);
+    setDeleteError("");
+    // Best-effort: shown when available (see EventLabelUsageResponse), but
+    // the confirmation still works — just without a number — if this fails.
+    api
+      .labelUsage(homeId, label.id)
+      .then((usage) => setDeleteUsageCount(usage.event_count))
+      .catch(() => setDeleteUsageCount(-1));
+  }
+
+  function cancelDelete() {
+    setDeleteTarget(null);
+    setDeleteUsageCount(null);
+    setDeleteError("");
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      await api.deleteLabel(homeId, deleteTarget.id);
+      setDeleteTarget(null);
+      setDeleteUsageCount(null);
+      setStatus({ kind: "success", message: "Calendar Tag deleted." });
+      await load();
+    } catch (cause) {
+      setDeleteError(cause instanceof ApiError ? cause.message : "Could not delete that Calendar Tag.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <section className="card details">
-      <h2>Categories</h2>
+      <h2>Calendar Tags</h2>
       <p className="muted">
-        Categories colour and tag events on your Home calendar — who it&rsquo;s mainly
-        for, or what type of event it is. They&rsquo;re not separate calendars; see{" "}
-        <Link href="/calendar/calendars">Home calendars</Link> for that.
+        Use Calendar Tags to colour and organise events across your calendars — who
+        it&rsquo;s mainly for, or what type of event it is. They&rsquo;re not separate
+        calendars; see <Link href="/calendar/calendars">Home calendars</Link> for that.
       </p>
       <FormStatus
         message={status.kind === "success" ? status.message : undefined}
@@ -180,7 +226,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
               />
               <span>Home calendar</span>
             </div>
-            <p className="muted">Shared events without a category</p>
+            <p className="muted">Shared events without a Calendar Tag</p>
             {homeCalendarColourOpen && (
               <ColourSwatchPicker
                 value={homeCalendar.color}
@@ -208,6 +254,18 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
                   <span className="quiet-state label-locked-indicator">
                     <Lock size={14} aria-hidden="true" /> Family
                   </span>
+                  {/* Deletion is never plan-gated — only creating/reactivating
+                      a Calendar Tag is, matching how an over-the-limit Home
+                      calendar can still be voluntarily deleted. */}
+                  <button
+                    type="button"
+                    className="tertiary label-delete-button"
+                    aria-label={`Delete ${label.name}`}
+                    disabled={busy}
+                    onClick={() => startDelete(label)}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                  </button>
                 </div>
               </li>
             );
@@ -260,6 +318,15 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
                   />
                   Active
                 </label>
+                <button
+                  type="button"
+                  className="tertiary label-delete-button"
+                  aria-label={`Delete ${label.name}`}
+                  disabled={busy}
+                  onClick={() => startDelete(label)}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                </button>
               </div>
               {colourEditingId === label.id && (
                 <ColourSwatchPicker
@@ -276,7 +343,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
       {canAddMore ? (
         <form className="label-create-form" onSubmit={createLabel}>
           <label>
-            New category
+            New Calendar Tag
             <input
               type="text"
               value={newName}
@@ -290,7 +357,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
               type="button"
               className="colour-dot"
               style={{ "--swatch-colour": resolveColour(newColour) } as React.CSSProperties}
-              aria-label="Change new category colour"
+              aria-label="Change new Calendar Tag colour"
               aria-expanded={newColourOpen}
               onClick={() => setNewColourOpen((open) => !open)}
             />
@@ -303,17 +370,56 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
                 setNewColour(colour);
                 setNewColourOpen(false);
               }}
-              groupLabel="New category colour"
+              groupLabel="New Calendar Tag colour"
               disabled={busy}
             />
           )}
-          <button disabled={busy || !newName.trim()}>Add category</button>
+          <button disabled={busy || !newName.trim()}>Add Calendar Tag</button>
         </form>
       ) : (
         <FamilyUpsell
-          title="Add another category 🔒"
-          description="Unlimited categories are included with MyKhaya Family."
+          title="Add another Calendar Tag 🔒"
+          description="Unlimited Calendar Tags are included with MyKhaya Family."
         />
+      )}
+      {deleteTarget && (
+        <BottomSheet title="Delete Calendar Tag?" onDismiss={cancelDelete}>
+          <div className="delete-label-confirm">
+            <p>
+              {deleteUsageCount === null ? (
+                <>Checking how many events use {deleteTarget.name}…</>
+              ) : deleteUsageCount === -1 ? (
+                <>{deleteTarget.name} may be in use on some events.</>
+              ) : deleteUsageCount === 0 ? (
+                <>{deleteTarget.name} isn&rsquo;t currently used by any events.</>
+              ) : (
+                <>
+                  {deleteTarget.name} is used by {deleteUsageCount}{" "}
+                  {deleteUsageCount === 1 ? "event" : "events"}.
+                </>
+              )}
+            </p>
+            <p className="muted">
+              Deleting this tag will remove the tag from those events. The events themselves
+              will not be deleted and will fall back to the Home colour.
+            </p>
+            <p className="muted">This action cannot be undone.</p>
+            <FormStatus error={deleteError} />
+            <div className="delete-label-actions">
+              <button type="button" className="secondary" onClick={cancelDelete} disabled={deleteBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={confirmDelete}
+                disabled={deleteBusy || deleteUsageCount === null}
+              >
+                {deleteBusy ? "Deleting…" : "Delete tag"}
+              </button>
+            </div>
+          </div>
+        </BottomSheet>
       )}
     </section>
   );

@@ -3070,11 +3070,32 @@ select.icon-row-control {
 .label-active-toggle {
   min-height: auto;
 }
+.label-delete-button {
+  color: #9d332f;
+  min-height: auto;
+  padding: 0.3rem;
+}
+.label-delete-button:hover {
+  background: #fdf3f2;
+  box-shadow: none;
+  transform: none;
+}
 .label-create-form {
   border-top: 1px solid #ebe4da;
   display: grid;
   gap: 0.6rem;
   padding-top: 0.9rem;
+}
+.delete-label-confirm {
+  display: grid;
+  gap: 0.75rem;
+}
+.delete-label-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+.delete-label-actions button {
+  flex: 1;
 }
 .event-advanced summary,
 .child-card summary {

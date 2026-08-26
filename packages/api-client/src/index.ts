@@ -281,6 +281,15 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/event-labels/${encodeURIComponent(labelId)}`,
       { method: "PATCH", body: JSON.stringify(body) },
     );
+  labelUsage = (homeId: string, labelId: string) =>
+    this.request<import("@mykhaya/shared-types").EventLabelUsage>(
+      `/homes/${encodeURIComponent(homeId)}/event-labels/${encodeURIComponent(labelId)}/usage`,
+    );
+  deleteLabel = (homeId: string, labelId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/event-labels/${encodeURIComponent(labelId)}`,
+      { method: "DELETE" },
+    );
   listEvents = (
     homeId: string,
     params: {
