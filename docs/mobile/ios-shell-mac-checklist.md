@@ -106,19 +106,33 @@ after Anthony has confirmed the identifier choice.
   (`/auth/mobile/login`, `/auth/mobile/child/login`) and not the
   browser/cookie ones.
 
+## Step 7 — Verify persistent Keychain-backed login end to end
+
+`apps/web/components/native-auth.ts` now selects
+`apps/web/components/keychain-native-session-store.ts`
+(`@aparajita/capacitor-secure-storage`-backed) whenever it's running inside
+the native shell — this is only exercisable for real once the `ios/`
+project exists, which is why it couldn't be verified end-to-end before
+this checklist. On the Mac:
+
+1. Sign in as an adult (or managed child, via Home Code/username/PIN).
+2. Confirm Home loads.
+3. Close the app normally (send to background / swipe away), then reopen —
+   confirm still signed in.
+4. Force-kill the app from the iOS app switcher, then reopen — confirm
+   still signed in. This is the real test: `InMemoryNativeSessionStore`
+   would have failed it (Phase 2/3 never wired up real persistence); the
+   Keychain-backed store should not.
+5. Sign out — confirm the app returns to a clean signed-out state and a
+   subsequent relaunch does **not** silently resume the old session.
+
+If any of the above fails, check that Xcode's generated project actually
+resolved the `@aparajita/capacitor-secure-storage` native pod/package (see
+`npx cap sync ios`'s output) — a missing native dependency is the most
+likely cause of a working JS-side adapter with no real persistence.
+
 ## What is deliberately still open after this checklist
 
-- **Real Keychain-backed session persistence.** `apps/web/components/native-auth.ts`
-  currently uses `InMemoryNativeSessionStore` (Phase 2/3) — a session does
-  not survive an app restart yet. ADR 0012 reviewed two Capacitor Keychain
-  plugins (`@aparajita/capacitor-secure-storage`,
-  `capacitor-secure-storage-plugin`) without being able to verify their
-  actual Keychain-accessibility-flag behaviour from a non-Mac sandbox. On
-  the Mac, verify one of these (or an alternative) actually stores under
-  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`-equivalent, does not sync
-  via iCloud Keychain, and does not silently fall back to a less secure
-  store if Keychain access fails — then implement a `NativeSessionStore`
-  adapter backed by it and wire it into `native-auth.ts`'s `sharedStore`.
 - **The Stripe billing navigation question** flagged in ADR 0012 — needs a
   deliberate decision (allow-list relaxation vs. external-browser +
   Universal Links), not a mechanical fix.

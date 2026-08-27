@@ -5,22 +5,35 @@ const bootstrapSession = vi.fn();
 const login = vi.fn();
 const childLogin = vi.fn();
 const logout = vi.fn();
+const nativeClientCtor = vi.fn();
 
 vi.mock("@mykhaya/api-client", () => ({
-  InMemoryNativeSessionStore: vi.fn(),
-  NativeMyKhayaClient: vi.fn().mockImplementation(() => ({
-    bootstrapSession,
-    login,
-    childLogin,
-    logout,
-  })),
+  InMemoryNativeSessionStore: vi.fn().mockImplementation(function InMemoryNativeSessionStore() {
+    return { kind: "in-memory" };
+  }),
+  NativeMyKhayaClient: vi.fn().mockImplementation((...args: unknown[]) => {
+    nativeClientCtor(...args);
+    return { bootstrapSession, login, childLogin, logout };
+  }),
   nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
+}));
+
+let nativeShell = false;
+vi.mock("./native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+}));
+
+vi.mock("./keychain-native-session-store", () => ({
+  KeychainNativeSessionStore: vi.fn().mockImplementation(function KeychainNativeSessionStore() {
+    return { kind: "keychain" };
+  }),
 }));
 
 describe("native-auth", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    nativeShell = false;
   });
 
   it("bootstrapNativeSession delegates to the client's bootstrapSession", async () => {
@@ -67,5 +80,29 @@ describe("native-auth", () => {
     await nativeLogout();
 
     expect(vi.mocked(NativeMyKhayaClient)).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the Keychain-backed store inside the native shell", async () => {
+    nativeShell = true;
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+
+    expect(nativeClientCtor).toHaveBeenCalledWith(
+      "https://api.dev.mykhaya.app/api/v1",
+      { kind: "keychain" },
+    );
+  });
+
+  it("uses the in-memory store outside the native shell", async () => {
+    nativeShell = false;
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+
+    expect(nativeClientCtor).toHaveBeenCalledWith(
+      "https://api.dev.mykhaya.app/api/v1",
+      { kind: "in-memory" },
+    );
   });
 });
