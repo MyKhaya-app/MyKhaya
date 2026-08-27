@@ -8,7 +8,35 @@ term is explained inline. It does not cover App Store submission,
 TestFlight, APNs, Face ID, or native passkeys — those are separate, later
 work.
 
-## Before you start
+## Fastest path: copy-paste scripts, no Xcode GUI required
+
+If you just want to get MyKhaya running on the iOS Simulator with the
+least ceremony, everything through "build and launch" is one script:
+
+```sh
+brew install node cocoapods   # if not already installed
+bash apps/ios-shell/scripts/mac-bootstrap.sh
+```
+
+This installs deps, generates `ios/`, syncs the Capacitor config, picks an
+already-installed iPhone simulator (no new runtime download), builds, and
+launches the app — no Xcode window ever needs to open. Read the step-by-step
+version below if you want to understand what it's doing, want to run on a
+**physical device** instead (needs the GUI signing step below), or
+something in the script fails and you need to debug it manually.
+
+After manually verifying the app (see Step 6 below), commit the generated
+project with:
+
+```sh
+bash apps/ios-shell/scripts/mac-commit.sh
+```
+
+It stages `apps/ios-shell/ios/`, shows you the file list, and asks for
+confirmation before committing — review it once so nothing machine-specific
+(user state, DerivedData) sneaks in.
+
+## Before you start (only needed if not using the script above)
 
 - Install Xcode from the Mac App Store (free). Open it once and let it
   finish its own first-run setup — this can take a while.
@@ -63,6 +91,12 @@ see:
   builds.
 
 ## Step 4 — Apple Developer account and signing
+
+**This is the one step in this whole checklist that cannot be scripted —
+it's an interactive Apple-account choice, not a mechanical action.** It is
+only needed to run on a **physical iPhone**. Simulator builds (what
+`mac-bootstrap.sh` does) need no signing at all — skip this step entirely
+if the simulator is enough for this phase's verification.
 
 You'll need an Apple Developer account (paid, $99/year, or the free tier
 for simulator-only testing) signed into Xcode:
