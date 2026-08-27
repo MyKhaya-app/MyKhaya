@@ -1,0 +1,61 @@
+# @mykhaya/ios-shell
+
+Capacitor native iOS shell for MyKhaya. This package does **not** contain a
+second copy of the MyKhaya frontend — it configures a native WKWebView that
+loads the real, deployed `apps/web` origin ("live frontend" model). See
+[ADR 0012](../../docs/architecture/adr/0012-capacitor-ios-shell.md) for the
+full architecture decision, and [ADR 0011](../../docs/architecture/adr/0011-single-pwa-retire-mobile-app.md)
+for why this is a thin shell and not a resurrection of the retired
+`apps/mobile` Expo app.
+
+## What lives here vs. what doesn't
+
+- **Here:** `capacitor.config.ts` (which live frontend origin to load, and
+  the explicit `allowNavigation` allow-list), a minimal `www/index.html`
+  fallback page, and (once generated on a Mac — see the checklist below)
+  the native `ios/` Xcode project.
+- **Not here:** any MyKhaya UI. Ordinary web/PWA feature work happens in
+  `apps/web` exactly as before and reaches this shell automatically on next
+  app launch, with no new iOS release, because the shell always loads the
+  live origin.
+
+## Windows-friendly commands
+
+These all run on Windows (or Linux) with no Xcode/macOS required:
+
+```sh
+pnpm install                                   # from the repo root
+pnpm --filter @mykhaya/ios-shell typecheck     # tsc --noEmit
+pnpm --filter @mykhaya/ios-shell test          # vitest — config.ts's logic
+```
+
+Editing `capacitor.config.ts` or `src/config.ts` (which live frontend origin
+a build points at, the `allowNavigation` list, the app name/identifier) is
+plain TypeScript — fully editable and testable from Windows.
+
+## Commands that require macOS + Xcode
+
+Capacitor's `ios add`/`ios sync` and everything downstream of them needs
+CocoaPods and Xcode, which only run on macOS. **None of this has been run
+yet** — no `ios/` directory exists in this repo. See
+[the Mac handoff checklist](../../docs/mobile/ios-shell-mac-checklist.md)
+for the exact, minimal steps to do this once, on the Mac, when Phase 4
+begins.
+
+```sh
+npx cap add ios        # generates ios/ — macOS + CocoaPods only, one-time
+npx cap sync ios        # copies capacitor.config.ts + www/ into ios/ after any change to either
+npx cap open ios        # opens Xcode
+```
+
+`cap sync ios` needs re-running (on the Mac) only when `capacitor.config.ts`,
+`www/`, or a native plugin dependency changes — never for an ordinary
+`apps/web` UI change, which the live shell picks up on its own.
+
+## Environment selection
+
+`MYKHAYA_IOS_ENV` (`development` | `production`, default `production`)
+selects which live frontend origin a build points at — see `src/config.ts`.
+There is no separate `.env` file for this package; it is a single named
+variable, set when running `cap sync`/opening the relevant Xcode scheme, the
+same MYKHAYA_-prefixed convention used throughout the backend.

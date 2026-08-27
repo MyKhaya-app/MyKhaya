@@ -12,6 +12,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@capacitor/browser": "8.0.4",
+    "@capacitor/core": "8.5.0",
     "@mykhaya/api-client": "workspace:*",
     "@mykhaya/design-tokens": "workspace:*",
     "@mykhaya/shared-types": "workspace:*",

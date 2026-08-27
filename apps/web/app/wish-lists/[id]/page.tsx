@@ -22,6 +22,7 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShell } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { openExternalUrl } from "@/components/open-external-url";
 import { useActiveHome } from "@/components/use-active-home";
 import { WISHLIST_OCCASION_OPTIONS, occasionGlyph, occasionLabel } from "../occasion";
 
@@ -428,7 +429,22 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                       .join(" · ")}
                   </span>
                   {item.url && (
-                    <a className="wishlists-item-link" href={item.url} target="_blank" rel="noreferrer">
+                    <a
+                      className="wishlists-item-link"
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => {
+                        // Inside the Capacitor shell, taking over the main
+                        // authenticated WebView with an arbitrary external
+                        // product link isn't safe — route it through the
+                        // system browser instead. In an ordinary browser
+                        // tab, the anchor's own target="_blank" already
+                        // does the right thing, so this is a no-op there.
+                        event.preventDefault();
+                        void openExternalUrl(item.url!);
+                      }}
+                    >
                       <ExternalLink size={14} aria-hidden="true" /> View item
                     </a>
                   )}

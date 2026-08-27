@@ -237,6 +237,61 @@ describe("NativeMyKhayaClient — error handling never leaks the token", () => {
   });
 });
 
+describe("NativeMyKhayaClient — bootstrapSession", () => {
+  it("returns null without calling the network when no session is stored", async () => {
+    const fetchMock = vi.fn();
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.bootstrapSession()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the current user when the stored token is still valid", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "u1",
+        email: "a@example.com",
+        display_name: "Adult",
+        email_verified: true,
+        birth_month: null,
+        birth_day: null,
+        birth_year: null,
+        avatar_version: null,
+        principal_type: "adult",
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "valid-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.bootstrapSession();
+
+    expect(user?.id).toBe("u1");
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE_URL}/users/me`, expect.anything());
+  });
+
+  it("returns null and leaves the session cleared when the stored token is rejected", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "Expired." }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "stale-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.bootstrapSession()).resolves.toBeNull();
+    expect(await store.get()).toBeNull();
+  });
+
+  it("rethrows a non-401 failure rather than treating it as signed-out", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "valid-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.bootstrapSession()).rejects.toThrow("network down");
+    expect(await store.get()).toEqual({ token: "valid-token" });
+  });
+});
+
 describe("NativeMyKhayaClient — passkeys", () => {
   it("reports passkeys as unsupported over the native transport", () => {
     const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore());

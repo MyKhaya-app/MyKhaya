@@ -1,0 +1,71 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const bootstrapSession = vi.fn();
+const login = vi.fn();
+const childLogin = vi.fn();
+const logout = vi.fn();
+
+vi.mock("@mykhaya/api-client", () => ({
+  InMemoryNativeSessionStore: vi.fn(),
+  NativeMyKhayaClient: vi.fn().mockImplementation(() => ({
+    bootstrapSession,
+    login,
+    childLogin,
+    logout,
+  })),
+  nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
+}));
+
+describe("native-auth", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  it("bootstrapNativeSession delegates to the client's bootstrapSession", async () => {
+    bootstrapSession.mockResolvedValue({ id: "u1" });
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    const user = await bootstrapNativeSession();
+
+    expect(user).toEqual({ id: "u1" });
+    expect(bootstrapSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("nativeLogin delegates to the client's login", async () => {
+    login.mockResolvedValue({ id: "u1" });
+    const { nativeLogin } = await import("./native-auth");
+
+    await nativeLogin("a@example.com", "pw");
+
+    expect(login).toHaveBeenCalledWith("a@example.com", "pw");
+  });
+
+  it("nativeChildLogin delegates to the client's childLogin", async () => {
+    childLogin.mockResolvedValue({ id: "c1" });
+    const { nativeChildLogin } = await import("./native-auth");
+
+    await nativeChildLogin("ABC123", "kiddo", "4242");
+
+    expect(childLogin).toHaveBeenCalledWith("ABC123", "kiddo", "4242");
+  });
+
+  it("nativeLogout delegates to the client's logout", async () => {
+    const { nativeLogout } = await import("./native-auth");
+
+    await nativeLogout();
+
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the same client instance across calls", async () => {
+    const { NativeMyKhayaClient } = await import("@mykhaya/api-client");
+    const { bootstrapNativeSession, nativeLogout } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+    await nativeLogout();
+
+    expect(vi.mocked(NativeMyKhayaClient)).toHaveBeenCalledTimes(1);
+  });
+});

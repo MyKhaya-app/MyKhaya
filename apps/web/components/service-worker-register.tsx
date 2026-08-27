@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { isSafeInternalPath } from "./internal-path";
+import { isNativeShell } from "./native-runtime";
 
 // sw.js's own resolveDeepLinkPath() already maps every notification's
 // deep_link to one of a small, closed set of literal internal paths before
@@ -16,6 +17,14 @@ export function ServiceWorkerRegister() {
   const router = useRouter();
 
   useEffect(() => {
+    // Inside the Capacitor native shell, push delivery and foreground
+    // navigation will eventually go through native APNs + the web/native
+    // bridge (see native-bridge.ts) instead of a service worker message —
+    // that's future work, but registering this browser-only listener now
+    // would be dead weight at best and a second, conflicting navigation
+    // path at worst once the native bridge exists.
+    if (isNativeShell()) return;
+
     // Foreground click-to-navigate: sw.js's notificationclick handler
     // postMessages an already-open client with the resolved path rather
     // than reloading it via clients.openWindow (which is only used when no
@@ -46,6 +55,14 @@ export function ServiceWorkerRegister() {
   }, [router]);
 
   useEffect(() => {
+    // The PWA service worker (offline caching, background push) is a
+    // browser-tab concept; Capacitor's native app lifecycle (backgrounding,
+    // termination, relaunch) is managed by iOS itself, and a future native
+    // push implementation (APNs) will replace this path entirely rather
+    // than layer on top of it. Registering it here would risk it competing
+    // with — or being silently no-op'd/inconsistent under — the native
+    // WebView's own lifecycle, for no benefit.
+    if (isNativeShell()) return;
     if (!("serviceWorker" in navigator)) return;
 
     let registration: ServiceWorkerRegistration | undefined;

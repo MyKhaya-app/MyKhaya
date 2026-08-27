@@ -6,13 +6,19 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace: vi.fn() }),
 }));
 
+let nativeShell = false;
+vi.mock("./native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+}));
+
 const { ServiceWorkerRegister } = await import("./service-worker-register");
 
 function stubServiceWorker() {
   const listeners: Record<string, (event: MessageEvent) => void> = {};
+  const register = vi.fn().mockResolvedValue({ update: vi.fn() });
   vi.stubGlobal("navigator", {
     serviceWorker: {
-      register: vi.fn().mockResolvedValue({ update: vi.fn() }),
+      register,
       addEventListener: (type: string, listener: (event: MessageEvent) => void) => {
         listeners[type] = listener;
       },
@@ -20,6 +26,7 @@ function stubServiceWorker() {
     },
   });
   return {
+    register,
     dispatch(data: unknown) {
       listeners.message?.({ data } as MessageEvent);
     },
@@ -28,6 +35,7 @@ function stubServiceWorker() {
 
 beforeEach(() => {
   push.mockReset();
+  nativeShell = false;
 });
 
 afterEach(() => {
@@ -89,5 +97,33 @@ describe("ServiceWorkerRegister — foreground notification-click navigation", (
     sw.dispatch({ type: "mykhaya-notification-click", path: { toString: () => "/home" } });
 
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("ServiceWorkerRegister — native shell separation", () => {
+  it("does not register a service worker inside the native shell", () => {
+    nativeShell = true;
+    const sw = stubServiceWorker();
+    render(<ServiceWorkerRegister />);
+
+    expect(sw.register).not.toHaveBeenCalled();
+  });
+
+  it("does not attach the notification-click message listener inside the native shell", () => {
+    nativeShell = true;
+    const sw = stubServiceWorker();
+    render(<ServiceWorkerRegister />);
+
+    sw.dispatch({ type: "mykhaya-notification-click", path: "/calendar" });
+
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("still registers normally in an ordinary browser/PWA tab", () => {
+    nativeShell = false;
+    const sw = stubServiceWorker();
+    render(<ServiceWorkerRegister />);
+
+    expect(sw.register).toHaveBeenCalledWith("/sw.js");
   });
 });

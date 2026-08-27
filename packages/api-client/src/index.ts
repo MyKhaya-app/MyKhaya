@@ -933,5 +933,9 @@ export type {
   NativeSessionStore,
 } from "./native-session-store";
 export { InMemoryNativeSessionStore } from "./native-session-store";
-export { NATIVE_API_ORIGINS, nativeApiBaseUrl } from "./native-config";
+export {
+  NATIVE_API_ORIGINS,
+  nativeApiBaseUrl,
+  nativeApiBaseUrlForWebHost,
+} from "./native-config";
 export type { NativeApiEnvironment } from "./native-config";

@@ -5,6 +5,7 @@ import { Gift } from "lucide-react";
 import type { WishlistItemViewer, WishlistViewerDetail } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
+import { openExternalUrl } from "@/components/open-external-url";
 import { occasionGlyph, occasionLabel } from "@/app/wish-lists/occasion";
 
 // A guest reaching this page has no MyKhaya account and no normal session —
@@ -144,7 +145,16 @@ export default function GuestWishlistSharePage({ params }: { params: Promise<{ t
                     .join(" · ")}
                 </span>
                 {item.url && (
-                  <a className="wishlists-item-link" href={item.url} target="_blank" rel="noreferrer">
+                  <a
+                    className="wishlists-item-link"
+                    href={item.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openExternalUrl(item.url!);
+                    }}
+                  >
                     View item
                   </a>
                 )}

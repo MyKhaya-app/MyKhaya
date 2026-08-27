@@ -1,0 +1,4 @@
+{
+  "extends": "@mykhaya/typescript-config/base.json",
+  "include": ["src", "capacitor.config.ts"]
+}

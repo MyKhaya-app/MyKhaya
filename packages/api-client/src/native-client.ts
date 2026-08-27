@@ -177,6 +177,29 @@ export class NativeMyKhayaClient {
   }
 
   /**
+   * App-start native auth bootstrap (task: "read current token, determine
+   * if a session exists, validate it against the API, recognise
+   * invalid/revoked sessions, cleanly enter a signed-out state"). Returns
+   * the current user if a stored token is still valid, or `null` if there
+   * is no stored token or the server has rejected/expired it — in the
+   * `null` case, `request()`'s own compare-and-clear has already removed
+   * the stale token from the store, so the caller can treat `null` as
+   * "signed out" without any further cleanup step. Any other failure
+   * (network error, 5xx) is rethrown rather than treated as signed-out,
+   * since that is a transient condition, not proof the session is invalid.
+   */
+  async bootstrapSession(): Promise<User | null> {
+    const current = await this.store.get();
+    if (!current) return null;
+    try {
+      return await this.request<User>("/users/me");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return null;
+      throw error;
+    }
+  }
+
+  /**
    * Passkeys are not implemented over the native transport in this phase —
    * WebAuthn's origin/RP-ID checks and Associated Domains configuration are
    * separate future work (see the iOS/Capacitor readiness audit). This is a
