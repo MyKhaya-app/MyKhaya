@@ -95,7 +95,20 @@ export function AppShell({
           if (renewalCause instanceof ApiError && renewalCause.status === 401) {
             setAuthState("signed_out");
             recordAuthDiagnostic("LOGIN_REDIRECT");
-            router.replace("/login");
+            // Preserve where the user was trying to go (e.g. a calendar-share
+            // accept link's ?token=) so login can return them there instead
+            // of silently losing it — see app/login/page.tsx's `next` handling.
+            // window.location, not useSearchParams(), specifically so AppShell
+            // doesn't need a Suspense boundary just for this one redirect.
+            const destination =
+              typeof window === "undefined"
+                ? ""
+                : `${window.location.pathname}${window.location.search}`;
+            router.replace(
+              destination && destination !== "/login"
+                ? `/login?next=${encodeURIComponent(destination)}`
+                : "/login",
+            );
           } else {
             setAuthState("offline");
           }

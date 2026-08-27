@@ -17,12 +17,20 @@ import {
   passkeyWasCancelled,
   setBiometricHint,
 } from "@/components/passkey-client";
+import { isSafeInternalPath } from "@/components/internal-path";
 
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
   const calendarShare = params.get("calendar_share");
+  // Set by AppShell when it bounces an expired/invalid session to /login —
+  // the exact protected path (e.g. a calendar-share accept link's
+  // ?token=...) the user was trying to reach, so a plain expired-session
+  // redirect doesn't silently drop it. Validated as an internal path only:
+  // this must never become an open redirect to an attacker-supplied URL.
+  const nextParam = params.get("next");
+  const next = isSafeInternalPath(nextParam) ? nextParam : null;
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [biometricBusy, setBiometricBusy] = useState(false),
@@ -94,6 +102,10 @@ export default function Login() {
     // sends them straight there instead of the Home dashboard.
     if (calendarShare) {
       router.push(`/calendar-shares/accept?token=${encodeURIComponent(calendarShare)}`);
+      return;
+    }
+    if (next) {
+      router.push(next);
       return;
     }
     router.push((await api.homes()).length ? "/home" : "/onboarding");

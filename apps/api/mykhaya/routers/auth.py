@@ -705,24 +705,20 @@ async def revoke_passkey(
 CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
 
 
-@router.post("/child/login", response_model=UserResponse)
-async def child_login(
-    body: ChildLoginRequest,
-    request: Request,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> UserResponse:
-    """Managed Child sign-in — deliberately separate from /login: no email, no
-    password, no verification/reset flow. A Home code + Child username + PIN,
-    all rate limited, all failures returning the identical generic message so
-    neither the Home, the username nor the PIN can be distinguished as the
-    wrong element (no enumeration of Homes or Child usernames).
-    """
-    # Per-IP (matches adult login's own bucket) *and* per sign-in-identity — a
-    # slow, distributed attempt against one specific Child is limited even if it
-    # never trips the per-IP bucket, and vice versa.
-    await enforce_rate_limit(request, settings, "child-login", settings.rate_limit_login, 60)
+async def authenticate_child_credentials(
+    db: AsyncSession, request: Request, settings: Settings, body: ChildLoginRequest, bucket: str
+) -> User:
+    """Shared by /child/login and /auth/mobile/child/login — same rationale as
+    authenticate_credentials for the adult path: the security-sensitive check
+    (rate limiting, PIN verification, active/login-enabled checks) is never
+    duplicated between transports. `bucket` lets the two callers use separate
+    per-IP rate-limit buckets without changing the shared identity-bucket
+    logic below, which must stay keyed on the child identity regardless of
+    which endpoint is used."""
+    # Per-IP *and* per-sign-in-identity — a slow, distributed attempt against
+    # one specific Child is limited even if it never trips the per-IP bucket,
+    # and vice versa.
+    await enforce_rate_limit(request, settings, bucket, settings.rate_limit_login, 60)
     identity_bucket = "child-login-identity:" + hash_secret(
         f"{normalise_home_code(body.home_code)}:{normalise_child_username(body.username)}",
         settings.secret_key.get_secret_value(),
@@ -762,7 +758,24 @@ async def child_login(
     user = await db.get(User, membership.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+    return user
 
+
+@router.post("/child/login", response_model=UserResponse)
+async def child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Managed Child sign-in — deliberately separate from /login: no email, no
+    password, no verification/reset flow. A Home code + Child username + PIN,
+    all rate limited, all failures returning the identical generic message so
+    neither the Home, the username nor the PIN can be distinguished as the
+    wrong element (no enumeration of Homes or Child usernames).
+    """
+    user = await authenticate_child_credentials(db, request, settings, body, "child-login")
     session = await issue_family_session(
         db, response, request, user, settings, SessionKind.managed_child
     )
@@ -770,6 +783,35 @@ async def child_login(
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
     return user_response(user, session)
+
+
+@router.post("/mobile/child/login", response_model=MobileSessionResponse)
+async def mobile_child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Native-client equivalent of /child/login — same relationship as
+    /mobile/login has to /login (see ADR 0010): identical credential check,
+    opaque Session token, but returned in the body instead of a cookie. A
+    managed Child is a normal Session row with kind=managed_child regardless
+    of transport — this does not introduce a second child-auth mechanism,
+    just a second way to carry the same session."""
+    require_secure_transport(request, settings)
+    user = await authenticate_child_credentials(
+        db, request, settings, body, "child-login-mobile"
+    )
+    raw, session = await issue_mobile_session(
+        db, request, user, settings, kind=SessionKind.managed_child
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
 
 
 @router.post("/renew", response_model=UserResponse)

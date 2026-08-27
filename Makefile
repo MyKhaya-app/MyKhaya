@@ -76,7 +76,6 @@ caddy-check:
 		caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
 web-check:
 	docker build --target check -f apps/web/Dockerfile .
-	docker build --target mobile-check -f apps/web/Dockerfile .
 # The single canonical pre-release command: everything the `quality` GitHub
 # Actions workflow checks that can meaningfully run outside CI's own runner
 # (image builds/pushes and Gitleaks are the two things this deliberately

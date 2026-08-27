@@ -1,8 +1,50 @@
 "use client";
 
 import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { isSafeInternalPath } from "./internal-path";
+
+// sw.js's own resolveDeepLinkPath() already maps every notification's
+// deep_link to one of a small, closed set of literal internal paths before
+// this message is ever sent — isSafeInternalPath below is defence-in-depth
+// on top of that, not the primary safety mechanism. It exists so a
+// malformed or unexpected message (a future bug in the service worker, or
+// any other script able to postMessage this client) can never cause a
+// navigation outside the app.
 
 export function ServiceWorkerRegister() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // Foreground click-to-navigate: sw.js's notificationclick handler
+    // postMessages an already-open client with the resolved path rather
+    // than reloading it via clients.openWindow (which is only used when no
+    // window is open at all) — this is the listener that was previously
+    // missing, so clicking a push notification while the app was already
+    // open in a foreground tab did nothing.
+    function handleMessage(event: MessageEvent<unknown>) {
+      const data = event.data;
+      if (
+        typeof data !== "object" ||
+        data === null ||
+        (data as { type?: unknown }).type !== "mykhaya-notification-click"
+      ) {
+        return;
+      }
+      const path = (data as { path?: unknown }).path;
+      if (!isSafeInternalPath(path)) return;
+      router.push(path);
+    }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", handleMessage);
+    }
+    return () => {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener("message", handleMessage);
+      }
+    };
+  }, [router]);
+
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 

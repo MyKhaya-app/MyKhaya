@@ -550,3 +550,177 @@ async def test_bearer_token_never_written_to_audit_metadata(client: AsyncClient)
         assert events
         for event in events:
             assert token not in str(event.metadata_)
+
+
+@pytest.mark.asyncio
+async def test_mobile_login_with_wrong_password_returns_401_and_no_token(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"wrongpass-{suffix}@example.com"
+    await register_and_verify(client, email, "Wrong Password User")
+
+    response = await client.post(
+        "/api/v1/auth/mobile/login", json={"email": email, "password": "not the right password"}
+    )
+    assert response.status_code == 401
+    assert "session_token" not in response.json()
+    assert not client.cookies.get("mk_session")
+
+
+async def _make_family_home_with_child(
+    client: AsyncClient, suffix: str
+) -> tuple[str, str, str]:
+    """Registers a Home Admin (cookie session) and adds a Child. Returns
+    (group_id, membership_id, home_code) — mirrors the equivalent helper in
+    test_child_login.py/test_child_home_dashboard_permissions.py, kept local
+    here rather than shared since each test module's fixtures differ."""
+    await register_and_verify(client, f"admin-{suffix}@example.com", "Home Admin")
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": f"admin-{suffix}@example.com", "password": PASSWORD},
+    )
+    assert login.status_code == 200
+    group = await client.post(
+        "/api/v1/groups",
+        json={"name": f"Home {suffix}"},
+        headers=csrf_header(client),
+    )
+    assert group.status_code == 201, group.text
+    group_id = group.json()["id"]
+    home_code = group.json()["child_login_code"]
+    assert home_code
+
+    members = await client.get(f"/api/v1/groups/{group_id}/members")
+    assert members.status_code == 200
+    admin_membership_id = next(
+        row["membership_id"] for row in members.json() if row["relationship"] == "home_admin"
+    )
+    child = await client.post(
+        f"/api/v1/groups/{group_id}/children",
+        json={
+            "display_name": "Erin",
+            "age_band": "under_13",
+            "guardian_membership_ids": [admin_membership_id],
+        },
+        headers=csrf_header(client),
+    )
+    assert child.status_code == 201, child.text
+    return group_id, child.json()["membership_id"], home_code
+
+
+@pytest.mark.asyncio
+async def test_mobile_child_login_returns_token_and_sets_no_cookies(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    group_id, membership_id, home_code = await _make_family_home_with_child(client, suffix)
+    configured = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": True, "username": "erin", "pin": "4242"},
+        headers=csrf_header(client),
+    )
+    assert configured.status_code == 200, configured.text
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as child_client:
+        response = await child_client.post(
+            "/api/v1/auth/mobile/child/login",
+            json={"home_code": home_code, "username": "erin", "pin": "4242"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["session_token"]
+        assert body["principal_type"] == "managed_child"
+        # Same email-hiding rule as the cookie path — a managed Child's
+        # synthetic placeholder address is never exposed over any transport.
+        assert body["email"] is None
+        assert not child_client.cookies.get("mk_session")
+        assert not child_client.cookies.get("mk_csrf")
+        assert response.headers.get("cache-control") == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_mobile_child_login_wrong_pin_returns_generic_401(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    group_id, membership_id, home_code = await _make_family_home_with_child(client, suffix)
+    configured = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": True, "username": "erin", "pin": "4242"},
+        headers=csrf_header(client),
+    )
+    assert configured.status_code == 200, configured.text
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as child_client:
+        response = await child_client.post(
+            "/api/v1/auth/mobile/child/login",
+            json={"home_code": home_code, "username": "erin", "pin": "0000"},
+        )
+        assert response.status_code == 401
+        assert "session_token" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_bearer_managed_child_session_reaches_ordinary_endpoints(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    group_id, membership_id, home_code = await _make_family_home_with_child(client, suffix)
+    configured = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": True, "username": "erin", "pin": "4242"},
+        headers=csrf_header(client),
+    )
+    assert configured.status_code == 200, configured.text
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as child_client:
+        login = await child_client.post(
+            "/api/v1/auth/mobile/child/login",
+            json={"home_code": home_code, "username": "erin", "pin": "4242"},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json()["session_token"]
+
+        me = await child_client.get("/api/v1/users/me", headers=bearer(token))
+        assert me.status_code == 200
+        assert me.json()["principal_type"] == "managed_child"
+
+        routines = await child_client.get(
+            f"/api/v1/homes/{group_id}/routines", headers=bearer(token), params={"home": "true"}
+        )
+        assert routines.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_adult_only_endpoint_rejects_bearer_managed_child_session(
+    client: AsyncClient,
+) -> None:
+    """require_adult_session checks Session.kind, not transport — a bearer
+    managed_child session must be rejected from an adult-only endpoint
+    exactly like a cookie managed_child session is today."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    group_id, membership_id, home_code = await _make_family_home_with_child(client, suffix)
+    configured = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": True, "username": "erin", "pin": "4242"},
+        headers=csrf_header(client),
+    )
+    assert configured.status_code == 200, configured.text
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as child_client:
+        login = await child_client.post(
+            "/api/v1/auth/mobile/child/login",
+            json={"home_code": home_code, "username": "erin", "pin": "4242"},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json()["session_token"]
+
+        denied = await child_client.post(
+            "/api/v1/groups", json={"name": "Should Not Exist"}, headers=bearer(token)
+        )
+        assert denied.status_code == 403

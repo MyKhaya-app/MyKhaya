@@ -40,13 +40,18 @@ Create or delegate these names to NetBird Proxy:
 - `dev.mykhaya.app`
 - `admin.dev.mykhaya.app`
 - `status.dev.mykhaya.app`
+- `api.dev.mykhaya.app` — the dev equivalent of production's `api.mykhaya.app`
+  (ADR 0010): a direct-to-API origin for native/bearer clients, never proxied
+  through the web app. No browser-facing behaviour depends on this hostname
+  existing yet; it only needs to be routed once native-client testing begins.
 
-Configure three HTTPS proxy routes and preserve the incoming `Host` header:
+Configure HTTPS proxy routes and preserve the incoming `Host` header:
 
 ```text
 dev.mykhaya.app        -> http://SERVER_NETBIRD_IP:8089
 admin.dev.mykhaya.app  -> http://SERVER_NETBIRD_IP:8089
 status.dev.mykhaya.app -> http://SERVER_NETBIRD_IP:8089
+api.dev.mykhaya.app    -> http://SERVER_NETBIRD_IP:8089
 ```
 
 The host port defaults to `8089` (`MYKHAYA_DEV_HOST_PORT`, set in `compose.dev.yml`) —

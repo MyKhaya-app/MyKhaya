@@ -922,3 +922,16 @@ export class MyKhayaClient {
 export const api = new MyKhayaClient();
 
 export { platformApi, PlatformClient } from "./platform";
+
+// Native (bearer-transport, ADR 0010) client — kept as separate exports
+// rather than folded into MyKhayaClient, so nothing about the browser
+// client's cookie/CSRF/relative-path behaviour above this line is affected
+// by, or has to account for, native transport at all.
+export { NativeMyKhayaClient } from "./native-client";
+export type {
+  NativeSession,
+  NativeSessionStore,
+} from "./native-session-store";
+export { InMemoryNativeSessionStore } from "./native-session-store";
+export { NATIVE_API_ORIGINS, nativeApiBaseUrl } from "./native-config";
+export type { NativeApiEnvironment } from "./native-config";

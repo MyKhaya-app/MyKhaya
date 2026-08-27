@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"
+    # The direct-to-API origin for native/bearer clients (ADR 0010) — never
+    # proxied through the Next.js web app the way public_web_url/admin_url
+    # are. Its host must be listed in trusted_hosts (validated below) but,
+    # unlike admin_url, does not need to be in cors_origins: a native client
+    # sends no Origin header and isn't subject to CORS at all.
+    native_api_url: str = "http://api.localhost:8080"
     cors_origins: list[str] = ["http://localhost:8080"]
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "api", "api.mykhaya.app"]
     cookie_secure: bool = False
@@ -319,6 +325,7 @@ class Settings(BaseSettings):
             ("admin_url", self.admin_url),
             ("status_url", self.status_url),
             ("public_web_url", self.public_web_url),
+            ("native_api_url", self.native_api_url),
         ):
             parts = urlsplit(url)
             if parts.scheme not in ("http", "https") or not parts.hostname:

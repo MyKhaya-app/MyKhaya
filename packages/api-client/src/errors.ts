@@ -1,3 +1,31 @@
+/**
+ * Shared response→ApiError parsing, factored out so the native transport
+ * (native-client.ts) can reuse the exact same error-shape handling as the
+ * browser client without either duplicating subtly-different logic or
+ * requiring any change to `MyKhayaClient.request()` itself — the browser
+ * client's own inline copy of this logic is left exactly as it was
+ * (untouched) so its behaviour cannot drift by way of this refactor.
+ */
+export async function parseApiResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    const detail = body?.detail;
+    if (detail && typeof detail === "object" && "message" in detail) {
+      const { code, message, ...metadata } = detail as {
+        code?: string;
+        message: string;
+        [key: string]: unknown;
+      };
+      throw new ApiError(response.status, message, code, metadata);
+    }
+    throw new ApiError(
+      response.status,
+      typeof detail === "string" ? detail : "Something went wrong. Please try again.",
+    );
+  }
+  return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>);
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,

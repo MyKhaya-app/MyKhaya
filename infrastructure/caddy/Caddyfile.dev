@@ -64,6 +64,27 @@ http://admin.dev.mykhaya.app {
 	import admin_security_headers
 }
 
+# Direct-to-API origin for native/bearer clients (ADR 0010) — the dev
+# equivalent of production's api.mykhaya.app. Deliberately never proxies to
+# web:3000 and has no /api/* path matcher: every request on this host goes
+# straight to FastAPI, exactly like production's api.mykhaya.app. Not a
+# browser-facing origin, so it carries the plain security_headers set, not
+# admin_security_headers, and is never added to CORS_ORIGINS.
+http://api.dev.mykhaya.app {
+	encode zstd gzip
+	reverse_proxy api:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {client_ip}
+	}
+	import security_headers
+	log {
+		output stdout
+		format json
+	}
+}
+
 http://localhost, http://127.0.0.1, http://status.localhost {
 	encode zstd gzip
 	@api path /api/*
@@ -102,6 +123,23 @@ http://admin.localhost {
 		header_up X-Forwarded-For {remote_host}
 	}
 	import admin_security_headers
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Direct-to-API origin for native/bearer clients (ADR 0010), pure-local
+# equivalent of api.dev.mykhaya.app above — same rationale.
+http://api.localhost {
+	encode zstd gzip
+	reverse_proxy api:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto http
+		header_up X-Forwarded-For {remote_host}
+	}
+	import security_headers
 	log {
 		output stdout
 		format json

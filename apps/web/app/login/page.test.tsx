@@ -10,9 +10,10 @@ import Login from "./page";
 // another way" as the only route back to the plain form.
 
 const push = vi.fn();
+let searchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParams,
 }));
 
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
@@ -22,6 +23,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       previewInvitation: vi.fn(),
+      previewCalendarShare: vi.fn(),
       post: vi.fn(),
       homes: vi.fn(),
       passkeyLoginOptions: vi.fn(),
@@ -47,6 +49,7 @@ const user = { id: "user-1", display_name: "Anthony", avatar_version: null } as 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  searchParams = new URLSearchParams();
   window.localStorage.clear();
   (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: "home-1" }]);
   // Re-asserted every test (clearAllMocks clears call history but not a
@@ -172,5 +175,82 @@ describe("Login — biometric sign-in previously enrolled on this device", () =>
 
     await waitFor(() => expect(screen.getByLabelText("Email")).toBeInTheDocument());
     expect(passkeyClient.getBiometricHint()).toBeNull();
+  });
+});
+
+// Regression coverage for the audit's calendar-share-token-loss bug: an
+// expired session bounced a user mid-invitation to a bare /login with no
+// way back to their intended destination. AppShell now attaches ?next=
+// when it does that; the login page must restore it after a successful
+// sign-in, but only when it is a genuine internal path — never an
+// externally supplied redirect target.
+describe("Login — post-login destination preservation (?next=)", () => {
+  it("returns to the preserved internal destination after signing in", async () => {
+    searchParams = new URLSearchParams({
+      next: "/calendar-shares/accept?token=abc123",
+    });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith("/calendar-shares/accept?token=abc123"),
+    );
+    // Must not also have taken the default /home destination.
+    expect(push).not.toHaveBeenCalledWith("/home");
+  });
+
+  it("falls back to the normal /home destination when next is a protocol-relative URL", async () => {
+    searchParams = new URLSearchParams({ next: "//evil.example/phish" });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(push).not.toHaveBeenCalledWith("//evil.example/phish");
+  });
+
+  it("falls back to the normal /home destination when next is a fully external URL", async () => {
+    searchParams = new URLSearchParams({ next: "https://evil.example/phish" });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(push).not.toHaveBeenCalledWith("https://evil.example/phish");
+  });
+
+  it("prefers an explicit calendar_share destination over next when both are somehow present", async () => {
+    searchParams = new URLSearchParams({
+      next: "/home",
+      calendar_share: "share-token",
+    });
+    (api.previewCalendarShare as ReturnType<typeof vi.fn>).mockResolvedValue({
+      calendar_name: "School",
+      source_group_name: "The Smiths",
+    });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith("/calendar-shares/accept?token=share-token"),
+    );
   });
 });

@@ -11,7 +11,7 @@
    config validation (`Caddyfile.dev`, same image/flags as CI), the Alembic
    head count, ruff (lint + format check), canonical `mypy mykhaya`, `tsc`,
    `eslint`, the backend/frontend test suites, and the frontend Docker
-   `check`/`mobile-check` build targets. This exists specifically so a
+   `check` build target. This exists specifically so a
    release candidate can never be reported green locally while
    `python infrastructure/scripts/validate_version.py` (or any of the other
    steps it wraps) would immediately fail in CI — see the "quality /

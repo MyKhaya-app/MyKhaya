@@ -9,7 +9,7 @@ No UI change may be merged into MyKhaya unless it has been reviewed on a physica
 Screenshots taken via automated tooling (Playwright, etc.) are useful for catching layout regressions and are not a substitute for this review — they confirm the markup renders, not that it meets the quality bar.
 
 - Design mobile-first: build and verify the phone layout before widening for tablet/desktop, not the reverse.
-- Store reusable credentials (session tokens) only via secure, HttpOnly cookies as already used on web — no separate mobile credential storage exists once there is no separate mobile client.
+- Store reusable credentials (session tokens) only via secure, HttpOnly cookies for the browser/PWA client — this remains unchanged and is not migrated to any other storage. A future native (Capacitor) shell around this same PWA uses the separate bearer-token mechanism in [ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md) instead, stored via the native-session-store abstraction in `packages/api-client` (in-memory only until an iOS Keychain adapter exists) — this is a second, narrowly-scoped transport for that one future shell, not a general-purpose mobile credential store, and does not change how the browser/PWA client authenticates.
 - Request browser permissions (notifications, etc.) only when a feature needs them, with clear just-in-time explanation.
 - Design for intermittent connectivity and PWA offline support via the service worker.
 - Keep bottom navigation purpose-built for touch rather than a shrunk desktop layout.

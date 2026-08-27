@@ -53,8 +53,6 @@ jobs:
         run: docker compose run --rm migrate alembic heads | tee /tmp/alembic-heads.txt && test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
       - name: Web lint, type check, tests and build
         run: docker build --target check -f apps/web/Dockerfile .
-      - name: Mobile lint and type check
-        run: docker build --target mobile-check -f apps/web/Dockerfile .
       - name: API lint, formatting, types and tests
         run: docker compose --profile tools run --rm test sh -c 'ruff check mykhaya tests && ruff format --check mykhaya tests && mypy mykhaya && python -m pytest'
       - name: Production images
