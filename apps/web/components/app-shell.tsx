@@ -6,6 +6,7 @@ import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
+import { isNativeShell } from "./native-runtime";
 import { useActiveHome } from "./use-active-home";
 import { useUserUpdatedListener } from "./user-events";
 
@@ -158,6 +159,23 @@ export function AppShell({
 
   useUserUpdatedListener(setUser);
 
+  // Marks <html> with the class styles.css uses to switch from ordinary
+  // document scrolling (browser/PWA) to the bounded native-app-viewport
+  // model (fixed header/bottom-nav, one scrollable content region) — see
+  // the "Native shell viewport model" block in styles.css. Scoped to
+  // AppShell's own mount lifecycle rather than set globally in layout.tsx:
+  // pre-auth pages that render no header/bottom-nav (login, register,
+  // onboarding, ...) render no AppShell either, and are left with ordinary
+  // scrolling either way, native shell or not. Runs regardless of
+  // authState (placed before the early returns below, like every other
+  // hook here) since even the loading/offline screens should get the
+  // stable native viewport rather than flash between two scroll models.
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    document.documentElement.classList.add("native-shell");
+    return () => document.documentElement.classList.remove("native-shell");
+  }, []);
+
   if (authState === "loading") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
@@ -181,8 +199,10 @@ export function AppShell({
         onSwitchHome={setActiveHomeId}
         flush={Boolean(hero)}
       />
-      {hero}
-      <main className="app-main">{children}</main>
+      <div className="app-content-scroll-region">
+        {hero}
+        <main className="app-main">{children}</main>
+      </div>
       <BottomNav principalType={user?.principal_type} />
     </div>
   );

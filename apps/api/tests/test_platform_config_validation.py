@@ -24,7 +24,14 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "public_web_url": "http://localhost:8089",
         "admin_url": "http://admin.localhost:8089",
         "status_url": "http://status.localhost:8089",
-        "trusted_hosts": ["localhost", "127.0.0.1", "admin.localhost", "status.localhost"],
+        "native_api_url": "http://api.localhost:8089",
+        "trusted_hosts": [
+            "localhost",
+            "127.0.0.1",
+            "admin.localhost",
+            "status.localhost",
+            "api.localhost",
+        ],
         "cors_origins": ["http://localhost:8089", "http://admin.localhost:8089"],
     }
     kwargs.update(overrides)
@@ -47,10 +54,12 @@ def test_valid_production_https_configuration_is_accepted() -> None:
         public_web_url="https://mykhaya.example.com",
         admin_url="https://admin.mykhaya.example.com",
         status_url="https://status.mykhaya.example.com",
+        native_api_url="https://api.mykhaya.example.com",
         trusted_hosts=[
             "mykhaya.example.com",
             "admin.mykhaya.example.com",
             "status.mykhaya.example.com",
+            "api.mykhaya.example.com",
         ],
         cors_origins=["https://admin.mykhaya.example.com"],
         cookie_secure=True,
@@ -98,6 +107,52 @@ def test_admin_url_host_not_in_trusted_hosts_is_rejected() -> None:
         )
 
 
+def test_native_api_url_host_in_trusted_hosts_is_accepted() -> None:
+    settings = _settings(
+        native_api_url="https://api.dev.mykhaya.app",
+        trusted_hosts=[
+            "dev.mykhaya.app",
+            "admin.dev.mykhaya.app",
+            "status.dev.mykhaya.app",
+            "api.dev.mykhaya.app",
+        ],
+        public_web_url="https://dev.mykhaya.app",
+        admin_url="https://admin.dev.mykhaya.app",
+        status_url="https://status.dev.mykhaya.app",
+        cors_origins=["https://dev.mykhaya.app", "https://admin.dev.mykhaya.app"],
+    )
+    assert settings.native_api_url == "https://api.dev.mykhaya.app"
+
+
+def test_native_api_url_host_not_in_trusted_hosts_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="MYKHAYA_NATIVE_API_URL.*MYKHAYA_TRUSTED_HOSTS"):
+        _settings(native_api_url="https://api.dev.mykhaya.app")
+
+
+def test_current_persistent_development_domain_configuration_is_accepted() -> None:
+    settings = _settings(
+        public_web_url="https://dev.mykhaya.app",
+        admin_url="https://admin.dev.mykhaya.app",
+        status_url="https://status.dev.mykhaya.app",
+        native_api_url="https://api.dev.mykhaya.app",
+        trusted_hosts=[
+            "dev.mykhaya.app",
+            "admin.dev.mykhaya.app",
+            "status.dev.mykhaya.app",
+            "api.dev.mykhaya.app",
+            "localhost",
+            "127.0.0.1",
+            "api",
+        ],
+        cors_origins=[
+            "https://dev.mykhaya.app",
+            "https://admin.dev.mykhaya.app",
+            "https://status.dev.mykhaya.app",
+        ],
+    )
+    assert settings.admin_webauthn_origin == "https://admin.dev.mykhaya.app"
+
+
 def test_admin_url_origin_not_in_cors_origins_is_rejected() -> None:
     with pytest.raises(ValidationError, match="MYKHAYA_CORS_ORIGINS"):
         _settings(cors_origins=["http://localhost:8089"])
@@ -128,7 +183,8 @@ def test_webauthn_rp_id_and_origin_are_derived_from_admin_url() -> None:
         admin_url="http://admin.localhost:9999",
         status_url="http://status.localhost:9999",
         public_web_url="http://localhost:9999",
-        trusted_hosts=["localhost", "admin.localhost", "status.localhost"],
+        native_api_url="http://api.localhost:9999",
+        trusted_hosts=["localhost", "admin.localhost", "status.localhost", "api.localhost"],
         cors_origins=["http://admin.localhost:9999"],
     )
     assert settings.admin_webauthn_rp_id == "admin.localhost"

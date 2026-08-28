@@ -9,6 +9,18 @@
 # of this script.
 set -euo pipefail
 
+# Phase 4 development bootstrap: this must point at the dev live frontend
+# (dev.mykhaya.app), not the capacitor.config.ts default of production
+# (mykhaya.app) — see apps/ios-shell/src/config.ts's
+# resolveIosShellEnvironment(). The default there is intentional production
+# architecture and is NOT changed by this script; this only fixes what this
+# *bootstrap script* exports, so `cap add`/`cap sync` below actually build
+# against dev.mykhaya.app unless you explicitly override it, e.g.:
+#   MYKHAYA_IOS_ENV=production bash mac-bootstrap.sh
+export MYKHAYA_IOS_ENV="${MYKHAYA_IOS_ENV:-development}"
+echo "== MYKHAYA_IOS_ENV=$MYKHAYA_IOS_ENV =="
+echo "(unset it, or pass MYKHAYA_IOS_ENV=production, to build against the production frontend instead)"
+
 echo "== 0. Tool versions (record these in the completion report) =="
 sw_vers
 xcodebuild -version
@@ -49,12 +61,34 @@ echo "^ confirm cleartext:false and allowNavigation is present and non-wildcard"
 echo "== 7. Pick an already-installed iPhone simulator (do not download a new runtime) =="
 xcrun simctl list devices available | grep -i "iPhone" | head -20
 echo "^ pick one of the above; the rest of this script uses the first available iPhone runtime found"
-SIM_NAME=$(xcrun simctl list devices available | grep -i "iPhone" | head -1 | sed -E 's/^\s*([^(]+)\(.*/\1/' | sed -E 's/[[:space:]]+$//')
-echo "Using simulator: $SIM_NAME"
+# `xcrun simctl list devices` indents every line (typically 4 spaces) under
+# each runtime heading — strip leading whitespace *first*, then cut at the
+# first "(" (the UDID). Deliberately not `\s` in the sed pattern: macOS
+# ships BSD sed, which doesn't understand the GNU/PCRE `\s` escape at all —
+# it silently fails to match, which is exactly how a previous version of
+# this script ended up with "    iPhone 16 Pro" (leading whitespace intact)
+# as $SIM_NAME. [[:space:]] is the POSIX class BSD sed actually supports.
+SIM_NAME=$(
+  xcrun simctl list devices available \
+    | grep -i "iPhone" \
+    | head -1 \
+    | sed -E 's/^[[:space:]]+//' \
+    | sed -E 's/[[:space:]]*\(.*$//'
+)
+echo "Using simulator: '$SIM_NAME'"
 
 echo "== 8. Build for the simulator (no signing required for simulator builds) =="
+# Capacitor 8 generates a plain ios/App/App.xcodeproj here, not an
+# .xcworkspace — this project has no CocoaPods plugin dependencies of its
+# own (apps/ios-shell's package.json lists only @capacitor/core/@capacitor/ios;
+# native plugins like @capacitor/browser and @aparajita/capacitor-secure-storage
+# are dependencies of apps/web, not apps/ios-shell — see the completion
+# report's note on this), so `cap sync` never runs `pod install` and never
+# generates the .xcworkspace CocoaPods normally would. If a future plugin
+# add changes that, `npx cap sync ios`'s own output will say so, and this
+# line would need to switch to `-workspace ios/App/App.xcworkspace`.
 xcodebuild \
-  -workspace ios/App/App.xcworkspace \
+  -project ios/App/App.xcodeproj \
   -scheme App \
   -configuration Debug \
   -sdk iphonesimulator \

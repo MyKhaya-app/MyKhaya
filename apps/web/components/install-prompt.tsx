@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isNativeShell } from "./native-runtime";
 
 const DISMISSED_KEY = "mykhaya.install-prompt.dismissed-at";
 const DISMISS_DAYS = 14;
@@ -42,7 +43,12 @@ export function InstallPrompt() {
   const [dismissed, setDismissed] = useState(true);
 
   useEffect(() => {
-    if (isStandalone() || wasRecentlyDismissed()) return;
+    // Inside the Capacitor shell the app is already "installed" — there is
+    // no browser/home-screen install action to offer, and this banner is
+    // a position:fixed element that only makes sense in the document-scroll
+    // browser/PWA layout (see the native-shell viewport rules in
+    // app/styles.css).
+    if (isNativeShell() || isStandalone() || wasRecentlyDismissed()) return;
     setDismissed(false);
 
     if (isIos()) {

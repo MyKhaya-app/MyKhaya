@@ -13,6 +13,12 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#7D8F7A",
+  // Lets the page extend under the iOS status bar/Dynamic Island and home
+  // indicator instead of Safari/WKWebView letterboxing around them, so
+  // env(safe-area-inset-*) actually resolves to the real inset instead of
+  // 0 — required for both the native Capacitor shell and an iOS PWA added
+  // to the home screen. See app/styles.css's native-shell viewport rules.
+  viewportFit: "cover",
 };
 export default function RootLayout({
   children,

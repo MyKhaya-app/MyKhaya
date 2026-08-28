@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
+import { isNativeShell } from "./native-runtime";
 
 export function BottomSheet({
   title,
@@ -35,9 +36,22 @@ export function BottomSheet({
     // Focus the sheet control, never a form field. iOS Safari zooms when it
     // programmatically focuses a small input as a sheet opens.
     (initialFocus ?? element)?.focus();
-    document.body.style.position = "fixed";
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.width = "100%";
+    // Browser/PWA: the document itself is what scrolls, so the classic
+    // iOS Safari body-lock trick applies to document.body. Inside the
+    // native shell, body/html never scroll at all (see the native-shell
+    // viewport rules in styles.css) — the thing that actually needs
+    // locking there is the one scrollable content region instead, or a
+    // long Settings/Lists page would keep scrolling underneath the sheet.
+    const nativeScrollRegion = isNativeShell()
+      ? document.querySelector<HTMLElement>(".app-content-scroll-region")
+      : null;
+    if (nativeScrollRegion) {
+      nativeScrollRegion.style.overflow = "hidden";
+    } else {
+      document.body.style.position = "fixed";
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.width = "100%";
+    }
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") dismiss.current();
       if (event.key !== "Tab" || !element) return;
@@ -62,10 +76,14 @@ export function BottomSheet({
     return () => {
       document.removeEventListener("keydown", keydown);
       document.body.classList.remove("sheet-open");
-      document.body.style.position = "";
-      document.body.style.top = "";
-      document.body.style.width = "";
-      window.scrollTo(0, scrollY);
+      if (nativeScrollRegion) {
+        nativeScrollRegion.style.overflow = "";
+      } else {
+        document.body.style.position = "";
+        document.body.style.top = "";
+        document.body.style.width = "";
+        window.scrollTo(0, scrollY);
+      }
       restoreFocus.current?.focus();
     };
   }, []);

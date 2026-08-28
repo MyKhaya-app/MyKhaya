@@ -1097,6 +1097,76 @@ textarea {
     transition: none !important;
   }
 }
+/* --- Native shell (Capacitor iOS) viewport model ---------------------------
+   Browser/PWA (the default, untouched by anything below): the document
+   itself scrolls, .app-header is a sticky-at-top element, .bottom-nav is a
+   fixed overlay — exactly the layout this app has always used, and exactly
+   what a normal mobile web page/installed PWA should do.
+
+   Inside the Capacitor native shell, WKWebView's own UIScrollView is what
+   physically scrolls the *document* — and a position:fixed/sticky element
+   is part of that same scrolled layer, so it visually drags along with the
+   page instead of staying pinned (the actual cause of the header/bottom-nav/
+   FAB "floating away" bug this fixes). The reliable fix used throughout
+   Capacitor/Cordova apps is to stop the document itself from scrolling at
+   all and give the app exactly one explicit scrollable region instead, so
+   there is nothing left for WKWebView's own scroll view to pan — html/body
+   become a fixed-height, non-scrolling frame; .app-header and .bottom-nav
+   become ordinary (non-fixed) flex siblings that can structurally never be
+   covered or dragged; .app-content-scroll-region becomes the one place
+   that actually scrolls.
+
+   `html.native-shell` is set by components/app-shell.tsx (via the Phase 3
+   isNativeShell() runtime check — see components/native-runtime.ts) only
+   while AppShell is mounted, so pre-auth pages that render no header/bottom
+   nav (login, register, onboarding, ...) are left with ordinary document
+   scrolling, unaffected either way. */
+html.native-shell,
+html.native-shell body {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+html.native-shell .app-shell {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+html.native-shell .app-header {
+  flex: none;
+  position: static;
+}
+/* Invisible to layout in browser/PWA (display: contents drops the wrapper
+   from the box tree entirely, so .app-header/hero/.app-main remain direct
+   flex children of .app-shell exactly as before this wrapper existed —
+   zero behavioural change there). Becomes the one bounded, independently
+   scrolling region in the native shell. */
+.app-content-scroll-region {
+  display: contents;
+}
+html.native-shell .app-content-scroll-region {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+html.native-shell .app-main {
+  /* .bottom-nav is a real flex sibling here (see below), not an overlay —
+     it already reserves its own space, so app-main only needs ordinary
+     breathing room, not the browser layout's bottom-nav-height offset. */
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+html.native-shell .bottom-nav {
+  bottom: auto;
+  flex: none;
+  left: auto;
+  position: static;
+  right: auto;
+}
 .standard-page {
   margin: auto;
   max-width: 640px;
