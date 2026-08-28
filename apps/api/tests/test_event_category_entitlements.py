@@ -18,6 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
@@ -217,7 +218,7 @@ async def test_free_home_can_rename_and_recolour_its_one_usable_category(
     )
     assert response.status_code == 200, response.text
     assert response.json()["name"] == "Our Household"
-    assert response.json()["color"] == "rose"
+    assert response.json()["color"] == PALETTE_HEX[ColourToken.rose]
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +394,7 @@ async def test_existing_historical_event_keeps_rendering_after_downgrade(
     detail = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/events/{event_id}")
     assert detail.status_code == 200
     assert detail.json()["event"]["label"]["id"] == str(second.id)
-    assert detail.json()["event"]["label"]["color"] == second.color.value
+    assert detail.json()["event"]["label"]["color"] == second.color
 
     # Resaving the event with the same (locked) category, only changing an
     # unrelated field, must still work — never destroy historical rendering.

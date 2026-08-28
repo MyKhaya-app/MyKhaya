@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from mykhaya.colour_palette import ColourToken
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken, HexColour
 from mykhaya.models import (
     CalendarSharePermission,
     CalendarShareStatus,
@@ -390,7 +390,7 @@ class CalendarShareResponse(BaseModel):
     # the source calendar has since been deleted (calendar_name falls back
     # to "Deleted calendar" in that same case — see routers.calendar_sharing
     # ._share_response).
-    calendar_color: ColourToken | None
+    calendar_color: HexColour | None
     source_group_id: uuid.UUID
     source_group_name: str
     recipient_email: EmailStr
@@ -530,7 +530,7 @@ class HomeCalendarUpdate(StrictModel):
     # identity) is not user-editable data. StrictModel's extra="forbid"
     # means a client-supplied `name` is rejected outright (422), not merely
     # ignored, so this is structural enforcement, not a convention.
-    color: ColourToken
+    color: HexColour
 
 
 class HomeCalendarResponse(BaseModel):
@@ -538,7 +538,7 @@ class HomeCalendarResponse(BaseModel):
     name: str
     timezone: str
     is_primary: bool
-    color: ColourToken
+    color: HexColour
     # None for every shared/Home calendar in `items` below. Set only on the
     # `personal_calendar` object — included here (rather than a separate
     # response shape) so both cases share one type. See
@@ -589,7 +589,7 @@ class CalendarUsageResponse(BaseModel):
 
 class EventLabelCreate(StrictModel):
     name: str = Field(min_length=1, max_length=40)
-    color: ColourToken = ColourToken.teal
+    color: HexColour = DEFAULT_LABEL_COLOUR_HEX
 
     @field_validator("name")
     @classmethod
@@ -599,7 +599,7 @@ class EventLabelCreate(StrictModel):
 
 class EventLabelUpdate(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=40)
-    color: ColourToken | None = None
+    color: HexColour | None = None
     is_active: bool | None = None
 
     @field_validator("name")
@@ -611,7 +611,7 @@ class EventLabelUpdate(StrictModel):
 class EventLabelResponse(BaseModel):
     id: uuid.UUID
     name: str
-    color: ColourToken
+    color: HexColour
     is_active: bool
     sort_order: int
     # This is the actual user-facing "event category" resource
@@ -724,7 +724,7 @@ class EventOccurrence(BaseModel):
     # hardcoded default. Reused as-is for Personal Calendar events too
     # (unaffected by this feature — no UI exposes changing it, so it stays
     # whatever it always defaulted to).
-    calendar_color: ColourToken
+    calendar_color: HexColour
     member_ids: list[uuid.UUID]
     recurrence: RecurrencePattern
     recurrence_end_date: date | None

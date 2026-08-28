@@ -3,10 +3,10 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { Lock, Trash2 } from "lucide-react";
 import type { CalendarUsage, EventLabel, Home, HomeCalendar } from "@mykhaya/shared-types";
-import { resolveColour, type ColourKey } from "@mykhaya/design-tokens";
+import { DEFAULT_CALENDAR_COLOUR, resolveColour } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
-import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { CalendarColourPicker } from "@/components/calendar-colour-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { SettingsPage } from "@/components/settings-page";
@@ -28,7 +28,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
   const [newColourOpen, setNewColourOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newColour, setNewColour] = useState<ColourKey>("teal");
+  const [newColour, setNewColour] = useState<string>(DEFAULT_CALENDAR_COLOUR);
   // The primary/system Home calendar — its `name` is a fixed product
   // concept ("Home calendar" — see the copy below), never user-editable,
   // but its colour is (the fallback uncategorised events render with; see
@@ -63,7 +63,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     setHomeCalendar(calendars.items.find((row) => row.is_primary) ?? null);
   }
 
-  async function recolourHomeCalendar(colour: ColourKey) {
+  async function recolourHomeCalendar(colour: string) {
     if (busy || !homeCalendar) return;
     setBusy(true);
     setStatus({ kind: "idle" });
@@ -99,7 +99,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     try {
       await api.createLabel(homeId, { name: newName.trim(), color: newColour });
       setNewName("");
-      setNewColour("teal");
+      setNewColour(DEFAULT_CALENDAR_COLOUR);
       setStatus({ kind: "success", message: "Calendar Tag added." });
       await load();
     } catch (cause) {
@@ -129,7 +129,7 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
     }
   }
 
-  async function recolourLabel(label: EventLabel, colour: ColourKey) {
+  async function recolourLabel(label: EventLabel, colour: string) {
     if (busy) return;
     setBusy(true);
     setStatus({ kind: "idle" });
@@ -228,12 +228,14 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
             </div>
             <p className="muted">Shared events without a Calendar Tag</p>
             {homeCalendarColourOpen && (
-              <ColourSwatchPicker
-                value={homeCalendar.color}
-                onChange={recolourHomeCalendar}
-                groupLabel="Home calendar colour"
-                disabled={busy}
-              />
+              <div className="label-row-colour-picker">
+                <CalendarColourPicker
+                  value={homeCalendar.color}
+                  onChange={recolourHomeCalendar}
+                  groupLabel="Home calendar colour"
+                  disabled={busy}
+                />
+              </div>
             )}
           </li>
         </ul>
@@ -329,12 +331,14 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
                 </button>
               </div>
               {colourEditingId === label.id && (
-                <ColourSwatchPicker
-                  value={label.color}
-                  onChange={(colour) => recolourLabel(label, colour)}
-                  groupLabel={`${label.name} colour`}
-                  disabled={busy}
-                />
+                <div className="label-row-colour-picker">
+                  <CalendarColourPicker
+                    value={label.color}
+                    onChange={(colour) => recolourLabel(label, colour)}
+                    groupLabel={`${label.name} colour`}
+                    disabled={busy}
+                  />
+                </div>
               )}
             </li>
           );
@@ -364,15 +368,17 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
             <span className="muted">Colour</span>
           </div>
           {newColourOpen && (
-            <ColourSwatchPicker
-              value={newColour}
-              onChange={(colour) => {
-                setNewColour(colour);
-                setNewColourOpen(false);
-              }}
-              groupLabel="New Calendar Tag colour"
-              disabled={busy}
-            />
+            <div className="label-row-colour-picker">
+              <CalendarColourPicker
+                value={newColour}
+                onChange={(colour) => {
+                  setNewColour(colour);
+                  setNewColourOpen(false);
+                }}
+                groupLabel="New Calendar Tag colour"
+                disabled={busy}
+              />
+            </div>
           )}
           <button disabled={busy || !newName.trim()}>Add Calendar Tag</button>
         </form>

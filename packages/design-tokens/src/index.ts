@@ -17,15 +17,17 @@ export const colour = {
 } as const;
 
 // The one curated colour palette shared by member identity and calendar
-// categories — a stable token (e.g. "emerald") is what's persisted and
-// passed across the API, never a raw hex value, so the actual shade can be
-// tuned here later without touching a database. Mirrored by hand from
-// mykhaya.colour_palette.PALETTE_HEX (Python); keep the two in sync. See
-// docs/design/visual-identity.md.
+// categories. Member colour still persists a stable token (e.g. "emerald");
+// calendar/category colour persists the resolved hex value directly (see
+// mykhaya.colour_palette.HexColour) with an optional custom colour on top —
+// this array is the preset swatch set offered before "Custom" in either
+// picker. Mirrored by hand from mykhaya.colour_palette.PALETTE_HEX (Python);
+// keep the two in sync. See docs/design/visual-identity.md.
 export const PALETTE_KEYS = [
-  "red", "coral", "orange", "amber", "yellow", "lime", "green", "emerald",
-  "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "pink",
-  "rose", "slate",
+  "red", "coral", "rust", "orange", "amber", "yellow", "olive", "lime",
+  "green", "emerald", "jade", "teal", "cyan", "sky", "blue", "azure",
+  "indigo", "periwinkle", "violet", "purple", "plum", "pink", "magenta",
+  "rose", "slate", "stone", "charcoal",
 ] as const;
 
 export type ColourKey = (typeof PALETTE_KEYS)[number];
@@ -33,23 +35,36 @@ export type ColourKey = (typeof PALETTE_KEYS)[number];
 export const PALETTE_HEX: Record<ColourKey, string> = {
   red: "#B8433A",
   coral: "#D97757",
+  rust: "#9C5223",
   orange: "#C97A2E",
   amber: "#D9A83E",
   yellow: "#BFA23A",
+  olive: "#8C9138",
   lime: "#7C9A4E",
   green: "#5C8A54",
   emerald: "#3F7A5C",
+  jade: "#2F7A6A",
   teal: "#456B76",
   cyan: "#2E8B99",
   sky: "#4C7FA6",
   blue: "#3D6FB0",
+  azure: "#3E5FA0",
   indigo: "#5A63A8",
+  periwinkle: "#6C63B5",
   violet: "#8B6BA8",
   purple: "#7A5C99",
+  plum: "#6B4C87",
   pink: "#B85C8A",
+  magenta: "#9C2F6E",
   rose: "#A03F6A",
   slate: "#62706F",
+  stone: "#8A7F6E",
+  charcoal: "#4A4F4E",
 };
+
+// Mirrors mykhaya.colour_palette.DEFAULT_LABEL_COLOUR_HEX — the initial
+// colour a new Calendar Tag/Home calendar gets before anyone customises it.
+export const DEFAULT_CALENDAR_COLOUR: string = PALETTE_HEX.teal;
 
 function isColourKey(value: string): value is ColourKey {
   return Object.prototype.hasOwnProperty.call(PALETTE_HEX, value);

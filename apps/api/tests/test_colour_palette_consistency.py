@@ -98,7 +98,7 @@ def test_palette_tokens_and_hex_values_match_across_python_ts_and_css() -> None:
     }
     assert not mismatched_css, f"Hex values differ between Python and tokens.css: {mismatched_css}"
 
-    # 16-18 well-chosen colours, per the design requirement — not a hard cap
+    # ~24-30 well-chosen colours, per the design requirement — not a hard cap
     # going forward, but a sanity check that nobody accidentally collapsed
     # or exploded the curated set.
-    assert 16 <= len(python_keys) <= 18
+    assert 24 <= len(python_keys) <= 30

@@ -23,22 +23,31 @@
      docs/design/visual-identity.md. */
   --colour-palette-red: #b8433a;
   --colour-palette-coral: #d97757;
+  --colour-palette-rust: #9c5223;
   --colour-palette-orange: #c97a2e;
   --colour-palette-amber: #d9a83e;
   --colour-palette-yellow: #bfa23a;
+  --colour-palette-olive: #8c9138;
   --colour-palette-lime: #7c9a4e;
   --colour-palette-green: #5c8a54;
   --colour-palette-emerald: #3f7a5c;
+  --colour-palette-jade: #2f7a6a;
   --colour-palette-teal: #456b76;
   --colour-palette-cyan: #2e8b99;
   --colour-palette-sky: #4c7fa6;
   --colour-palette-blue: #3d6fb0;
+  --colour-palette-azure: #3e5fa0;
   --colour-palette-indigo: #5a63a8;
+  --colour-palette-periwinkle: #6c63b5;
   --colour-palette-violet: #8b6ba8;
   --colour-palette-purple: #7a5c99;
+  --colour-palette-plum: #6b4c87;
   --colour-palette-pink: #b85c8a;
+  --colour-palette-magenta: #9c2f6e;
   --colour-palette-rose: #a03f6a;
   --colour-palette-slate: #62706f;
+  --colour-palette-stone: #8a7f6e;
+  --colour-palette-charcoal: #4a4f4e;
 
   /* Elevation scale: resting card, raised/pressed, overlay (sheets, menus),
      and the deep shadow the green hero casts onto the content below it. */

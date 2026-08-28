@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from mykhaya.calendar_occurrences import expand_occurrences, next_occurrence_on_or_after
+from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
@@ -746,7 +747,7 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     )
     assert created.status_code == 201
     label = created.json()
-    assert label["color"] == "emerald"
+    assert label["color"] == PALETTE_HEX[ColourToken.emerald]
     assert label["is_active"] is True
 
     # An unrecognised colour token is rejected at the schema, not stored.
@@ -777,7 +778,8 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     )
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Football"
-    assert renamed.json()["color"] == "emerald"  # unchanged by a name-only update
+    # unchanged by a name-only update
+    assert renamed.json()["color"] == PALETTE_HEX[ColourToken.emerald]
 
     recoloured = await unsafe(
         client,
@@ -786,7 +788,7 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
         json={"color": "sky"},
     )
     assert recoloured.status_code == 200
-    assert recoloured.json()["color"] == "sky"
+    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.sky]
     assert recoloured.json()["name"] == "Football"  # unchanged by a colour-only update
 
     # Two different labels may share the same colour — not blocked.
@@ -809,6 +811,73 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     assert disabled.json()["is_active"] is False
     listed = await client.get(f"/api/v1/homes/{home_id}/event-labels")
     assert label["id"] not in {row["id"] for row in listed.json()}
+
+
+@pytest.mark.asyncio
+async def test_event_label_accepts_a_custom_hex_colour(client: AsyncClient) -> None:
+    """A custom colour never has to correspond to a predefined palette
+    identifier — any valid 6-digit hex value is accepted, persisted exactly
+    as given (normalised to uppercase), and reloads correctly. Two different
+    labels may use the exact same custom colour; nothing enforces uniqueness."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"customcolour-{suffix}@example.com", "Custom Colour")
+    home_id = await _home_with_calendar(client, "Custom Colour Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Custom One", "color": "#e27658"},
+    )
+    assert created.status_code == 201, created.text
+    # Normalised to uppercase on the way in.
+    assert created.json()["color"] == "#E27658"
+
+    # A second, different label may use the exact same custom colour — colours
+    # are a visual preference, not an identity, so no uniqueness is enforced.
+    second = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Custom Two", "color": "#E27658"},
+    )
+    assert second.status_code == 201
+    assert second.json()["color"] == "#E27658"
+
+    # Reloads correctly from the listing endpoint, not just the create response.
+    listed = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    listed_colours = {row["name"]: row["color"] for row in listed.json()}
+    assert listed_colours["Custom One"] == "#E27658"
+    assert listed_colours["Custom Two"] == "#E27658"
+
+    # A PATCH-only recolour to a different custom hex also works.
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/event-labels/{created.json()['id']}",
+        json={"color": "#1a2b3c"},
+    )
+    assert recoloured.status_code == 200
+    assert recoloured.json()["color"] == "#1A2B3C"
+
+
+@pytest.mark.asyncio
+async def test_event_label_rejects_invalid_custom_colours(client: AsyncClient) -> None:
+    """Only a preset palette name or a genuine 6-digit hex value is
+    accepted — never arbitrary CSS colour syntax (named colours, rgb(),
+    3-digit shorthand, or a malformed hex string)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"badcolour-{suffix}@example.com", "Bad Colour")
+    home_id = await _home_with_calendar(client, "Bad Colour Home")
+
+    for bad_colour in ["#fff", "rebeccapurple", "rgb(1,2,3)", "#GGGGGG", "#12345", "E27658"]:
+        response = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/event-labels",
+            json={"name": f"Bad {bad_colour}", "color": bad_colour},
+        )
+        assert response.status_code == 422, f"{bad_colour!r} should have been rejected"
 
 
 @pytest.mark.asyncio
@@ -865,7 +934,7 @@ async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
     assert event["label"]["name"] == "Activity"
     # The colour on the wire is the Calendar Tag's, not GFOAT's own colour —
     # see _occurrence/_calendar_color_map: a label always wins.
-    assert event["label"]["color"] == "emerald"
+    assert event["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
 
     listed = await client.get(
         f"/api/v1/homes/{home_id}/events",
@@ -978,7 +1047,9 @@ async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient
         assert blocked.status_code == 403
 
     unchanged = await client.get(f"/api/v1/homes/{home_id}/event-labels")
-    assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == "coral"
+    assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == (
+        PALETTE_HEX[ColourToken.coral]
+    )
 
 
 @pytest.mark.asyncio
@@ -1316,7 +1387,7 @@ async def test_home_calendar_colour_can_be_changed_but_never_its_name(client: As
     assert calendars.status_code == 200
     primary = next(row for row in calendars.json()["items"] if row["is_primary"])
     assert primary["name"] == "Home Calendar"
-    assert primary["color"] == "teal"
+    assert primary["color"] == PALETTE_HEX[ColourToken.teal]
 
     recoloured = await unsafe(
         client,
@@ -1325,7 +1396,7 @@ async def test_home_calendar_colour_can_be_changed_but_never_its_name(client: As
         json={"color": "amber"},
     )
     assert recoloured.status_code == 200, recoloured.text
-    assert recoloured.json()["color"] == "amber"
+    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.amber]
     assert recoloured.json()["name"] == "Home Calendar"  # unchanged
 
     # A client-supplied `name` is rejected structurally, not just ignored.
@@ -1340,7 +1411,37 @@ async def test_home_calendar_colour_can_be_changed_but_never_its_name(client: As
     unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
     persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
     assert persisted["name"] == "Home Calendar"
-    assert persisted["color"] == "amber"  # the earlier colour-only update still stands
+    # the earlier colour-only update still stands
+    assert persisted["color"] == PALETTE_HEX[ColourToken.amber]
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_colour_accepts_a_custom_hex_colour(client: AsyncClient) -> None:
+    """The Home calendar's colour uses the same HexColour validation as a
+    Calendar Tag's — a custom colour works here too, not just for tags."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"homecustom-{suffix}@example.com", "Home Custom Colour")
+    home_id = await _home_with_calendar(client, "Home Custom Colour")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "#4b9c7a"},
+    )
+    assert recoloured.status_code == 200, recoloured.text
+    assert recoloured.json()["color"] == "#4B9C7A"
+
+    invalid = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "not-a-real-colour"},
+    )
+    assert invalid.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -1384,7 +1485,7 @@ async def test_home_calendar_colour_update_requires_calendar_edit_all(client: As
 
     unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
     persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
-    assert persisted["color"] == "teal"  # unchanged
+    assert persisted["color"] == PALETTE_HEX[ColourToken.teal]  # unchanged
 
 
 @pytest.mark.asyncio
@@ -1432,7 +1533,7 @@ async def test_uncategorised_events_use_home_calendar_colour_and_category_still_
         },
     )
     assert uncategorised.status_code == 201
-    assert uncategorised.json()["calendar_color"] == "violet"
+    assert uncategorised.json()["calendar_color"] == PALETTE_HEX[ColourToken.violet]
     assert uncategorised.json()["label"] is None
 
     categorised = await unsafe(
@@ -1453,8 +1554,8 @@ async def test_uncategorised_events_use_home_calendar_colour_and_category_still_
     assert categorised.status_code == 201
     # The Home calendar colour is still populated for a categorised event
     # (uniform shape for the frontend) but its label colour takes precedence.
-    assert categorised.json()["calendar_color"] == "violet"
-    assert categorised.json()["label"]["color"] == "emerald"
+    assert categorised.json()["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert categorised.json()["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
 
     listed = await client.get(
         f"/api/v1/homes/{home_id}/events",
@@ -1465,9 +1566,9 @@ async def test_uncategorised_events_use_home_calendar_colour_and_category_still_
     )
     assert listed.status_code == 200
     items = {row["title"]: row for row in listed.json()["items"]}
-    assert items["No category"]["calendar_color"] == "violet"
-    assert items["With category"]["calendar_color"] == "violet"
-    assert items["With category"]["label"]["color"] == "emerald"
+    assert items["No category"]["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert items["With category"]["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert items["With category"]["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
 
 
 @pytest.mark.asyncio
@@ -1520,7 +1621,7 @@ async def test_recurring_event_occurrences_keep_consistent_label_colour(
     assert listed.status_code == 200
     items = listed.json()["items"]
     assert len(items) >= 4, "expected multiple weekly occurrences in a 5-week window"
-    assert all(item["label"]["color"] == "violet" for item in items)
+    assert all(item["label"]["color"] == PALETTE_HEX[ColourToken.violet] for item in items)
     assert all(item["label"]["id"] == label_id for item in items)
 
 

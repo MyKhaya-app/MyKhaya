@@ -207,7 +207,7 @@ describe("Home settings — Home calendar colour", () => {
       timezone: "Europe/London",
       is_primary: true,
       owner_user_id: null,
-      color: "amber",
+      color: "#D9A83E",
       commercial_access: "normal",
       created_at: "2026-01-01T00:00:00Z",
     });
@@ -220,8 +220,35 @@ describe("Home settings — Home calendar colour", () => {
     const picker = screen.getByRole("radiogroup", { name: /home calendar colour/i });
     await user.click(within(picker).getByRole("radio", { name: /amber/i }));
 
-    // Exact match: only `color` is ever sent — never a `name`.
-    expect(api.updateCalendar).toHaveBeenCalledWith("home-1", "cal-1", { color: "amber" });
+    // Exact match: only `color` is ever sent — never a `name` — and it's the
+    // preset's real hex value, not a palette token name.
+    expect(api.updateCalendar).toHaveBeenCalledWith("home-1", "cal-1", { color: "#D9A83E" });
+  });
+
+  it("opens and closes an inline, contained picker rather than an unbounded block or a modal", async () => {
+    const user = userEvent.setup();
+    render(<HomeSettings />);
+    await screen.findByRole("heading", { name: /calendar tags/i });
+
+    expect(screen.queryByRole("radiogroup", { name: /home calendar colour/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    const toggle = await screen.findByRole("button", { name: /change home calendar colour/i });
+    await user.click(toggle);
+
+    // Rendered inline, inside a width-constrained wrapper (see .label-row-colour-picker
+    // / .colour-picker in styles.css — max-width: 100%; overflow-x: hidden — so a large
+    // preset palette can never push the row/card wider than its container), not as a
+    // BottomSheet/dialog.
+    const picker = screen.getByRole("radiogroup", { name: /home calendar colour/i });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(picker.closest(".label-row-colour-picker")).not.toBeNull();
+    expect(picker).toHaveClass("colour-picker");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(toggle);
+    expect(screen.queryByRole("radiogroup", { name: /home calendar colour/i })).not.toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 });
 

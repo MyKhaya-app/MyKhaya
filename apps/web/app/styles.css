@@ -1873,9 +1873,12 @@ textarea {
   gap: 0.6rem;
 }
 /* Shared by profile colour and calendar/category colour selection — see
-   components/colour-swatch-picker.tsx. Fixed swatch size with wrapping,
-   not a fluid grid, so swatches stay a comfortable tap target and never
-   shrink to illegible dots on a narrow phone. */
+   components/colour-swatch-picker.tsx and components/calendar-colour-picker.tsx.
+   Fixed swatch size with wrapping, not a fluid grid, so swatches stay a
+   comfortable tap target and never shrink to illegible dots on a narrow
+   phone. Wrapped in its own scroll-safe container (.colour-picker) by the
+   calendar/category picker so a large preset set never causes horizontal
+   overflow or excessively grows the containing card — see that rule below. */
 .colour-swatch-grid {
   display: flex;
   flex-wrap: wrap;
@@ -1887,12 +1890,13 @@ textarea {
   border: 2px solid transparent;
   border-radius: 50%;
   box-shadow: none;
-  color: white;
+  color: var(--swatch-check-colour, white);
   display: inline-flex;
   height: 34px;
   justify-content: center;
   min-height: 0;
   padding: 0;
+  position: relative;
   width: 34px;
 }
 .colour-swatch:hover {
@@ -1908,6 +1912,58 @@ textarea {
 .colour-swatch:focus-visible {
   outline: 3px solid var(--colour-mustard);
   outline-offset: 2px;
+}
+/* The trailing "Custom" control (components/calendar-colour-picker.tsx) — a
+   real <input type="color"> sized/positioned to fill the same 34px circle as
+   every preset swatch, so it's a native OS colour picker trigger rather than
+   a bespoke one, per "use the simplest appropriate browser colour picker".
+   Unselected, it shows a decorative rainbow ring so it reads as "pick any
+   colour" rather than a 28th preset; once a genuinely custom colour is
+   active, --swatch-colour takes over and it looks exactly like a preset
+   swatch (including the same selected ring/check treatment) showing that
+   exact colour — never reverting to the rainbow after a real choice. */
+.colour-swatch-custom {
+  overflow: hidden;
+}
+.colour-swatch-custom:not(.selected) {
+  background: conic-gradient(
+    from 180deg,
+    #b8433a,
+    #d9a83e,
+    #5c8a54,
+    #2e8b99,
+    #3d6fb0,
+    #8b6ba8,
+    #b85c8a,
+    #b8433a
+  );
+}
+.colour-swatch-custom input[type="color"] {
+  appearance: none;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  height: 100%;
+  inset: 0;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  width: 100%;
+}
+.colour-swatch-custom:has(input:focus-visible) {
+  outline: 3px solid var(--colour-mustard);
+  outline-offset: 2px;
+}
+.colour-swatch-custom-icon {
+  pointer-events: none;
+}
+/* The picker as a whole — presets plus the trailing Custom control. A
+   compact wrapping grid, deliberately capped so it can never push the
+   containing card significantly taller or wider than a phone screen (see
+   .label-row below, which is what previously grew a lot when this opened). */
+.colour-picker {
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .coming {
   text-align: center;
@@ -2940,6 +2996,21 @@ select.icon-row-control {
   list-style: none;
   margin: 0.75rem 0;
   padding: 0;
+}
+/* The colour picker opened from a .label-row's colour dot (calendars & Calendar
+   Tags — see app/settings/home/page.tsx). A contained, visually-attached panel
+   directly beneath the row's controls rather than an unbounded flex-wrap block —
+   this is what keeps a large preset palette from reading as the whole card
+   suddenly growing a lot taller; it still grows (more presets need more room
+   than the old 18 did), but as one clearly-bounded, compact block associated
+   with the row it came from, not raw uncontained expansion. Never a modal —
+   inline is preferred so the row/card relationship stays visible. */
+.label-row-colour-picker {
+  background: #f7f5f1;
+  border-radius: var(--radius-small);
+  margin-top: 0.15rem;
+  max-width: 100%;
+  padding: 0.65rem;
 }
 .label-row {
   border: 1px solid #ebe4da;

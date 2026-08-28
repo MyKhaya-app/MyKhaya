@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.calendar_provisioning import ensure_personal_calendar
-from mykhaya.colour_palette import ColourToken
+from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
 from mykhaya.entitlements import ensure_home_subscription
@@ -134,7 +134,7 @@ async def create_group(
             CalendarEventLabel(
                 group_id=group.id,
                 name=name,
-                color=color,
+                color=PALETTE_HEX[color],
                 is_system=True,
                 sort_order=(index + 1) * 10,
                 # This is the actual, user-facing "event category" resource

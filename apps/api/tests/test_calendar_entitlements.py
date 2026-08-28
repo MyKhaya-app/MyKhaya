@@ -17,6 +17,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import PLAN_DEFINITIONS, get_home_subscription
@@ -235,7 +236,7 @@ async def test_free_home_owner_can_recolour_the_home_calendar_without_touching_e
         json={"color": "amber"},
     )
     assert recoloured.status_code == 200, recoloured.text
-    assert recoloured.json()["color"] == "amber"
+    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.amber]
     assert recoloured.json()["commercial_access"] == "normal"
 
     # Still exactly one calendar, same limit — a colour change never creates
@@ -245,7 +246,7 @@ async def test_free_home_owner_can_recolour_the_home_calendar_without_touching_e
     assert after.json()["limit"] == 1
     assert len(after.json()["items"]) == 1
     assert after.json()["items"][0]["id"] == primary["id"]
-    assert after.json()["items"][0]["color"] == "amber"
+    assert after.json()["items"][0]["color"] == PALETTE_HEX[ColourToken.amber]
 
     # The Free one-calendar limit is still enforced exactly as before.
     blocked = await unsafe(

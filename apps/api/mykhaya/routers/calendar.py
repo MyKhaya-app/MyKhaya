@@ -17,7 +17,7 @@ from mykhaya.calendar_occurrences import (
     upcoming_candidate_filter,
 )
 from mykhaya.calendar_provisioning import ensure_personal_calendar
-from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, PALETTE_HEX, ColourToken
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
@@ -167,7 +167,7 @@ async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCa
             CalendarEventLabel(
                 group_id=group_id,
                 name=name,
-                color=color,
+                color=PALETTE_HEX[color],
                 is_system=True,
                 sort_order=(index + 1) * 10,
                 # See routers.groups' matching seeding block — only the
@@ -512,7 +512,7 @@ def _to_label_response(label: CalendarEventLabel | None) -> EventLabelResponse |
 
 async def _calendar_color_map(
     db: AsyncSession, group_id: uuid.UUID
-) -> dict[uuid.UUID, ColourToken]:
+) -> dict[uuid.UUID, str]:
     """Every calendar in the Home (shared and Personal alike) mapped to its
     own colour — the fallback an event on it renders with when it carries no
     label. One query per request, reused across every event in the response,
@@ -527,7 +527,7 @@ def _occurrence(
     end_at: datetime,
     label: CalendarEventLabel | None,
     member_ids: list[uuid.UUID],
-    calendar_color: ColourToken,
+    calendar_color: str,
 ) -> EventOccurrence:
     return EventOccurrence(
         occurrence_id=f"{event.id}:{start_at.isoformat()}",
@@ -1014,7 +1014,7 @@ async def list_events(
     for event in events:
         label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR)
+        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
         for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
             items.append(
                 _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
@@ -1083,7 +1083,7 @@ async def list_upcoming_events(
         occurrence_start, occurrence_end = next_occ
         label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR)
+        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
         candidates.append(
             _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
         )
@@ -1273,7 +1273,9 @@ async def event_detail(
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     event_calendar = await db.get(HomeCalendar, event.calendar_id)
-    calendar_color = event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR
+    calendar_color = (
+        event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR_HEX
+    )
     member_ids = [
         row.user_id
         for row in (
@@ -1501,7 +1503,9 @@ async def update_event(
     await db.refresh(event)
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
-    calendar_color = event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR
+    calendar_color = (
+        event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR_HEX
+    )
     return _occurrence(
         event, event.start_at, event.end_at, label, requested_members, calendar_color
     )
@@ -1675,7 +1679,7 @@ async def home_summary(
             event.end_at,
             labels.get(event.label_id) if event.label_id else None,
             member_map.get(event.id, []),
-            calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR),
+            calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
         )
         for event in today_rows
     ]
@@ -1699,7 +1703,7 @@ async def home_summary(
             next_event_row.end_at,
             labels.get(next_event_row.label_id) if next_event_row.label_id else None,
             member_map.get(next_event_row.id, []),
-            calendar_colors.get(next_event_row.calendar_id, DEFAULT_LABEL_COLOUR),
+            calendar_colors.get(next_event_row.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
         )
 
     pending_count = None

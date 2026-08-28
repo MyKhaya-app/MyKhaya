@@ -27,7 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
-from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
 
@@ -366,6 +366,11 @@ class HomeCalendar(UuidTimeMixin, Base):
         # constrained by this — only the personal ones are. See migration
         # 0028_personal_calendars.
         UniqueConstraint("group_id", "owner_user_id", name="uq_home_calendar_owner"),
+        # Defence in depth alongside the Pydantic-level HexColour validator
+        # (mykhaya.colour_palette.normalise_calendar_colour) — belt-and-braces
+        # so a row can never end up with a non-hex value regardless of how
+        # it's written. See migration 0045_calendar_colour_hex.
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="ck_home_calendar_colour_hex"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
@@ -389,16 +394,18 @@ class HomeCalendar(UuidTimeMixin, Base):
     # The colour events on this calendar render with when they carry no
     # CalendarEventLabel (label_id IS NULL) — a category's own colour still
     # always takes precedence when one is assigned (see routers.calendar's
-    # _occurrence). Same palette/validation as CalendarEventLabel.color, and
-    # the same default ("teal"), so this is a pure enhancement: an
-    # uncategorised event's rendered colour is unchanged until someone
-    # deliberately customises it. User-editable (see update_calendar); the
-    # calendar's `name` deliberately is not — see migration
-    # 0029_home_calendar_colour.
-    color: Mapped[ColourToken] = mapped_column(
-        Enum(ColourToken, name="colour_token", create_type=False),
-        default=DEFAULT_LABEL_COLOUR,
-        server_default=DEFAULT_LABEL_COLOUR.value,
+    # _occurrence). A real hex value (e.g. "#3F7A5C"), not a palette token —
+    # see mykhaya.colour_palette.HexColour — so a custom colour never has to
+    # correspond to a predefined identifier. Same shape/validation and the
+    # same default ("teal", as hex) as CalendarEventLabel.color, so this is a
+    # pure enhancement: an uncategorised event's rendered colour is unchanged
+    # until someone deliberately customises it. User-editable (see
+    # update_calendar); the calendar's `name` deliberately is not — see
+    # migrations 0029_home_calendar_colour and 0045_calendar_colour_hex.
+    color: Mapped[str] = mapped_column(
+        String(7),
+        default=DEFAULT_LABEL_COLOUR_HEX,
+        server_default=DEFAULT_LABEL_COLOUR_HEX,
     )
 
 
@@ -407,19 +414,25 @@ class CalendarEventLabel(UuidTimeMixin, Base):
     __table_args__ = (
         UniqueConstraint("group_id", "name", name="uq_event_label_group_name"),
         Index("ix_event_label_group_sort", "group_id", "sort_order"),
+        # Defence in depth alongside the Pydantic-level HexColour validator
+        # (mykhaya.colour_palette.normalise_calendar_colour). See migration
+        # 0045_calendar_colour_hex.
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="ck_event_label_colour_hex"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(40))
-    # A palette token, never a raw hex value — see mykhaya.colour_palette. The
-    # same shared palette as member colours, but this is the calendar/category
-    # identity colour: event bars are coloured by their label, not by who
-    # created them. See docs/design/visual-identity.md.
-    color: Mapped[ColourToken] = mapped_column(
-        Enum(ColourToken, name="colour_token", create_type=False),
-        default=DEFAULT_LABEL_COLOUR,
-        server_default=DEFAULT_LABEL_COLOUR.value,
+    # A real hex value (e.g. "#3F7A5C"), not a palette token — see
+    # mykhaya.colour_palette.HexColour. Presets shown in the picker still come
+    # from the shared palette (mykhaya.colour_palette.PALETTE_HEX), but a
+    # custom colour never has to correspond to one of them. This is the
+    # calendar/category identity colour: event bars are coloured by their
+    # label, not by who created them. See docs/design/visual-identity.md.
+    color: Mapped[str] = mapped_column(
+        String(7),
+        default=DEFAULT_LABEL_COLOUR_HEX,
+        server_default=DEFAULT_LABEL_COLOUR_HEX,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
