@@ -26,18 +26,38 @@ import type { NativeSession, NativeSessionStore } from "@mykhaya/api-client";
 //   - throws (StorageError) rather than silently degrading to an insecure
 //     fallback if the OS-level Keychain call itself fails
 const KEY = "mykhaya.native.session.token";
+// The long-lived TrustedDevice renewal credential (NativeSession.deviceToken)
+// — kept under its own Keychain key rather than folded into one JSON blob
+// with the session token, so each credential's own lifecycle stays simple
+// and independently inspectable: clearing a session never has to parse
+// anything to know what else to remove alongside it.
+const DEVICE_KEY = "mykhaya.native.session.device_token";
+
+async function readString(key: string): Promise<string | null> {
+  let value: unknown;
+  try {
+    value = await SecureStorage.get(key, false, false);
+  } catch (error) {
+    if (error instanceof StorageError) return null;
+    throw error;
+  }
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+async function removeKey(key: string): Promise<void> {
+  try {
+    await SecureStorage.remove(key, false);
+  } catch (error) {
+    if (!(error instanceof StorageError)) throw error;
+  }
+}
 
 export class KeychainNativeSessionStore implements NativeSessionStore {
   async get(): Promise<NativeSession | null> {
-    let token: unknown;
-    try {
-      token = await SecureStorage.get(KEY, false, false);
-    } catch (error) {
-      if (error instanceof StorageError) return null;
-      throw error;
-    }
-    if (typeof token !== "string" || token === "") return null;
-    return { token };
+    const token = await readString(KEY);
+    if (token === null) return null;
+    const deviceToken = await readString(DEVICE_KEY);
+    return deviceToken !== null ? { token, deviceToken } : { token };
   }
 
   async set(session: NativeSession): Promise<void> {
@@ -48,6 +68,22 @@ export class KeychainNativeSessionStore implements NativeSessionStore {
       false,
       KeychainAccess.whenUnlockedThisDeviceOnly,
     );
+    if (session.deviceToken) {
+      await SecureStorage.set(
+        DEVICE_KEY,
+        session.deviceToken,
+        false,
+        false,
+        KeychainAccess.whenUnlockedThisDeviceOnly,
+      );
+    }
+    // A rotate() (session_token-only refresh) never supplies a
+    // deviceToken and must never disturb the existing one — only a
+    // genuinely deviceToken-less write (there is none in this codebase
+    // today, but the interface allows it) would reach here, so an
+    // explicit "clear the device key" branch is deliberately not
+    // included: silently keeping a previously-stored device token is
+    // always at least as safe as discarding it.
   }
 
   async clearIfMatches(token: string): Promise<void> {
@@ -58,10 +94,7 @@ export class KeychainNativeSessionStore implements NativeSessionStore {
   }
 
   async clear(): Promise<void> {
-    try {
-      await SecureStorage.remove(KEY, false);
-    } catch (error) {
-      if (!(error instanceof StorageError)) throw error;
-    }
+    await removeKey(KEY);
+    await removeKey(DEVICE_KEY);
   }
 }

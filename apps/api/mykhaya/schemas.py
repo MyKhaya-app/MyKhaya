@@ -118,6 +118,18 @@ class MobileSessionResponse(UserResponse):
     """Returned only by /auth/mobile/* endpoints - never by the browser /auth/* endpoints."""
 
     session_token: str
+    # The long-lived (settings.trusted_device_days) TrustedDevice renewal
+    # credential — the bearer-transport equivalent of the browser's mk_device
+    # cookie. Present at login (POST /mobile/login, /mobile/child/login) and
+    # after a successful POST /mobile/sessions/renew; null from
+    # POST /mobile/sessions/rotate, which only ever refreshes the short-lived
+    # session_token of an *already-valid* session and never touches the
+    # device credential, so there is nothing new for the client to persist.
+    device_token: str | None = None
+
+
+class MobileDeviceRenewRequest(StrictModel):
+    device_token: str = Field(min_length=30, max_length=500)
 
 
 class GroupCreate(StrictModel):

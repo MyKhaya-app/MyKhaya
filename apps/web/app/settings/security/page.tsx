@@ -14,6 +14,8 @@ import {
   setBiometricHint,
   setEnrolledPasskeyId,
 } from "@/components/passkey-client";
+import { isNativeShell } from "@/components/native-runtime";
+import { QuickSignIn } from "@/components/quick-sign-in";
 
 type Device = {
   id: string;
@@ -147,9 +149,18 @@ export default function Security() {
   }
 
   const otherPasskeys = passkeys.filter((row) => row.id !== enrolledId);
+  // The browser/PWA "Biometric sign-in" card below is a WebAuthn passkey
+  // feature — meaningless (and, per the native auth architecture, out of
+  // scope) inside the Capacitor shell, which gets its own native Face
+  // ID/Touch ID card (QuickSignIn) instead. Neither the passkey card's code
+  // nor its behaviour changes for an actual browser/PWA user — isNativeShell()
+  // is always false there.
+  const native = isNativeShell();
 
   return (
     <SettingsPage title="Security">
+      {native && <QuickSignIn />}
+      {!native && (
       <section className="card details">
         <h2>Biometric sign-in</h2>
         {thisDevicePasskey ? (
@@ -216,6 +227,7 @@ export default function Security() {
           </details>
         )}
       </section>
+      )}
       <section className="card details">
         <h2>Signed-in devices</h2>
         {devices.map((device) => (

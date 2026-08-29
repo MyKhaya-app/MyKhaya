@@ -19,6 +19,16 @@ export interface NativeSession {
   /** The raw bearer token. Never logged, never placed in a URL, never
    * stored anywhere else in this object or elsewhere in the app. */
   token: string;
+  /** The long-lived TrustedDevice renewal credential (the bearer-transport
+   * equivalent of the browser's mk_device cookie — see
+   * routers.auth.issue_mobile_session/renew_mobile_session). Optional:
+   * absent for a session predating this field, and never set at all by
+   * POST /auth/mobile/sessions/rotate (which never touches it — see
+   * NativeMyKhayaClient.rotate). What actually gives a native session
+   * persistence across app restarts well beyond the short session_token's
+   * own expiry — see NativeMyKhayaClient.renew. Same handling rules as
+   * `token`: never logged, never placed in a URL. */
+  deviceToken?: string;
 }
 
 export interface NativeSessionStore {

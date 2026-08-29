@@ -47,6 +47,7 @@ from mykhaya.schemas import (
     ForgotRequest,
     LoginRequest,
     MessageResponse,
+    MobileDeviceRenewRequest,
     MobileSessionResponse,
     PasskeyAuthenticationVerifyRequest,
     PasskeyOptionsResponse,
@@ -284,23 +285,51 @@ async def issue_mobile_session(
     settings: Settings,
     kind: SessionKind = SessionKind.adult,
     fresh_auth_at: datetime | None = None,
-) -> tuple[str, Session]:
+    existing_device_id: uuid.UUID | None = None,
+) -> tuple[str, Session, str | None]:
     """Bearer-transport equivalent of issue_session: same Session model, same
-    token scheme, no cookies. Returns the raw token - callers must put it in
-    the response body only, never a cookie, never a log line."""
+    token scheme, no cookies. Returns the raw session token - callers must
+    put it in the response body only, never a cookie, never a log line.
+
+    At login time (existing_device_id=None) also issues a TrustedDevice (the
+    same row/table the browser's "remember this device" cookie uses — see
+    issue_family_session) linked via Session.trusted_device_id, and returns
+    its own raw renewal token alongside the session token. This is what
+    gives a native app a genuinely long-lived (settings.trusted_device_days,
+    e.g. 90 days) path back in after its short-lived bearer session
+    (settings.session_minutes) has expired, via
+    POST /auth/mobile/sessions/renew, without ever asking for a password
+    again — the exact bearer-transport equivalent of the browser's silent
+    /auth/renew. Before this, a native session that outlived
+    session_minutes without ever calling the (session-still-valid-only)
+    /mobile/sessions/rotate endpoint had no way back in at all.
+
+    When rotating an *already*-valid session (existing_device_id set — see
+    rotate_mobile_session), the existing device is reused unchanged rather
+    than minting a new TrustedDevice on every rotation; the returned device
+    token is None in that case since nothing about the device credential
+    changed and there is nothing new to persist."""
     raw = new_session_token()
+    device_raw: str | None = None
+    device_id = existing_device_id
+    if device_id is None:
+        device, device_raw, _device_csrf = await issue_trusted_device(
+            db, request, user, settings, kind
+        )
+        device_id = device.id
     session = Session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
+        trusted_device_id=device_id,
         kind=kind,
     )
     db.add(session)
     await db.flush()
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
-    return raw, session
+    return raw, session, device_raw
 
 
 async def authenticate_credentials(
@@ -803,7 +832,7 @@ async def mobile_child_login(
     user = await authenticate_child_credentials(
         db, request, settings, body, "child-login-mobile"
     )
-    raw, session = await issue_mobile_session(
+    raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, kind=SessionKind.managed_child
     )
     user.last_login_at = datetime.now(UTC)
@@ -811,7 +840,9 @@ async def mobile_child_login(
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
 
 
 @router.post("/renew", response_model=UserResponse)
@@ -965,7 +996,7 @@ async def mobile_login(
     token - only the caller who receives this response ever sees it."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
-    raw, session = await issue_mobile_session(
+    raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=datetime.now(UTC)
     )
     user.last_login_at = datetime.now(UTC)
@@ -973,7 +1004,9 @@ async def mobile_login(
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
 
 
 @router.post(
@@ -1097,12 +1130,20 @@ async def mobile_logout(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Revokes the session; does not touch cookies (there are none for a
-    bearer session) and is not subject to CSRF (bearer transport). The
-    mobile client must still clear its SecureStore token locally even if
-    this call fails - see ADR 0010."""
+    """Revokes the session and its linked TrustedDevice (the renewable
+    credential — see issue_mobile_session); does not touch cookies (there
+    are none for a bearer session) and is not subject to CSRF (bearer
+    transport). Mirrors the browser /auth/logout's identical
+    session-plus-device revocation. The mobile client must still clear its
+    SecureStore token locally even if this call fails - see ADR 0010."""
     require_bearer_transport(auth)
     auth.session.revoked_at = datetime.now(UTC)
+    if auth.session.trusted_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(TrustedDevice.id == auth.session.trusted_device_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
     audit(
         db,
         request,
@@ -1313,14 +1354,19 @@ async def rotate_mobile_session(
     auth.session.revoked_at = datetime.now(UTC)
     # See the identical comment in rotate_session: kind must carry over from the
     # session being rotated, not silently reset to issue_mobile_session's adult
-    # default.
-    raw, new_session = await issue_mobile_session(
+    # default. existing_device_id reuses the session's current TrustedDevice
+    # rather than minting a new one on every rotation — see
+    # issue_mobile_session's docstring.
+    # existing_device_id set => issue_mobile_session never mints a new device
+    # and always returns None for the device token here — see its docstring.
+    raw, new_session, device_raw = await issue_mobile_session(
         db,
         request,
         auth.user,
         settings,
         kind=auth.session.kind,
         fresh_auth_at=auth.session.fresh_auth_at,
+        existing_device_id=auth.session.trusted_device_id,
     )
     audit(
         db,
@@ -1334,5 +1380,86 @@ async def rotate_mobile_session(
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
     return MobileSessionResponse(
-        **user_response(auth.user, new_session).model_dump(), session_token=raw
+        **user_response(auth.user, new_session).model_dump(),
+        session_token=raw,
+        device_token=device_raw,
+    )
+
+
+@router.post("/mobile/sessions/renew", response_model=MobileSessionResponse)
+async def renew_mobile_session(
+    body: MobileDeviceRenewRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Bearer-transport equivalent of /auth/renew: silently mints a fresh
+    session from the long-lived TrustedDevice credential once the previous
+    bearer session_token has already expired — deliberately takes no
+    AuthContext dependency, the same way /auth/renew reads mk_device instead
+    of requiring a currently-valid mk_session. No CSRF check: bearer
+    transport is CSRF-exempt throughout (ADR 0010), matching every other
+    /mobile/* endpoint.
+
+    The device credential is rotated here too (old token revoked, this
+    response's device_token is the only copy of the new one) — the native
+    client must persist it before this call is considered complete, exactly
+    as it already must for session_token; if the app is killed first, the
+    next renewal attempt correctly fails as an unrecognised/already-rotated
+    device token, and the user simply signs in again. This is the identical
+    single-use-credential trade-off /auth/renew already accepts for the
+    browser's mk_device cookie."""
+    require_secure_transport(request, settings)
+    now = datetime.now(UTC)
+    pair = (
+        await db.execute(
+            select(User, TrustedDevice)
+            .join(TrustedDevice, TrustedDevice.user_id == User.id)
+            .where(
+                TrustedDevice.token_hash
+                == hash_secret(body.device_token, settings.secret_key.get_secret_value()),
+                TrustedDevice.revoked_at.is_(None),
+                TrustedDevice.expires_at > now,
+                User.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+    ).one_or_none()
+    if pair is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    user, device = pair
+
+    if device.kind == SessionKind.managed_child:
+        child_active = await db.scalar(
+            select(ChildProfile.id)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                Membership.user_id == user.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+            )
+        )
+        if child_active is None:
+            device.revoked_at = now
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+
+    rotated_device_token = new_session_token()
+    device.token_hash = hash_secret(rotated_device_token, settings.secret_key.get_secret_value())
+    device.last_used_at = now
+    device.expires_at = now + timedelta(days=settings.trusted_device_days)
+    device.ip_last_seen = resolve_client_ip(request, settings)
+    raw, session, _device_raw = await issue_mobile_session(
+        db, request, user, settings, kind=device.kind, existing_device_id=device.id
+    )
+    audit(db, request, "session.renewed", user.id, target_type="session", target_id=session.id)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(),
+        session_token=raw,
+        device_token=rotated_device_token,
     )

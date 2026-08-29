@@ -38,11 +38,28 @@ describe("KeychainNativeSessionStore", () => {
     expect(storageGet).toHaveBeenCalledWith("mykhaya.native.session.token", false, false);
   });
 
-  it("get() returns the stored token", async () => {
-    storageGet.mockResolvedValue("the-token");
+  it("get() returns the stored token when there is no device token", async () => {
+    storageGet.mockImplementation((key: string) =>
+      Promise.resolve(key === "mykhaya.native.session.token" ? "the-token" : null),
+    );
     const store = new KeychainNativeSessionStore();
 
     expect(await store.get()).toEqual({ token: "the-token" });
+  });
+
+  it("get() also returns the device token when one is stored alongside the session", async () => {
+    storageGet.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === "mykhaya.native.session.token"
+          ? "the-token"
+          : key === "mykhaya.native.session.device_token"
+            ? "the-device-token"
+            : null,
+      ),
+    );
+    const store = new KeychainNativeSessionStore();
+
+    expect(await store.get()).toEqual({ token: "the-token", deviceToken: "the-device-token" });
   });
 
   it("get() fails safe (returns null) if the Keychain read itself fails", async () => {
@@ -64,14 +81,39 @@ describe("KeychainNativeSessionStore", () => {
       false,
       1,
     );
+    // No deviceToken supplied — a rotate()-style refresh must never touch
+    // (or clear) whatever device token is already stored.
+    expect(storageSet).toHaveBeenCalledTimes(1);
   });
 
-  it("clear() removes the key with sync disabled", async () => {
+  it("set() also writes the device token when one is supplied, under its own key", async () => {
+    const store = new KeychainNativeSessionStore();
+
+    await store.set({ token: "new-token", deviceToken: "new-device-token" });
+
+    expect(storageSet).toHaveBeenCalledWith(
+      "mykhaya.native.session.token",
+      "new-token",
+      false,
+      false,
+      1,
+    );
+    expect(storageSet).toHaveBeenCalledWith(
+      "mykhaya.native.session.device_token",
+      "new-device-token",
+      false,
+      false,
+      1,
+    );
+  });
+
+  it("clear() removes both the session and device token keys, with sync disabled", async () => {
     const store = new KeychainNativeSessionStore();
 
     await store.clear();
 
     expect(storageRemove).toHaveBeenCalledWith("mykhaya.native.session.token", false);
+    expect(storageRemove).toHaveBeenCalledWith("mykhaya.native.session.device_token", false);
   });
 
   it("clear() swallows a Keychain-level failure rather than throwing", async () => {

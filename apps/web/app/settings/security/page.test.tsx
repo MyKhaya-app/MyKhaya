@@ -68,6 +68,29 @@ vi.mock("@/components/passkey-client", async (importOriginal) => {
   };
 });
 
+let nativeShell = false;
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+}));
+
+vi.mock("@/components/native-biometric", () => ({
+  getBiometricCapability: vi.fn(async () => ({
+    kind: "faceId",
+    label: "Face ID",
+    available: true,
+    lockedOut: false,
+    notEnrolled: false,
+    reason: "",
+  })),
+  authenticateWithBiometrics: vi.fn(async () => ({ ok: true })),
+  isBiometricCancellation: vi.fn(() => false),
+}));
+
+vi.mock("@/components/native-biometric-preference", () => ({
+  isBiometricSignInEnabled: vi.fn(async () => false),
+  setBiometricSignInEnabled: vi.fn(async () => {}),
+}));
+
 const { api } = await import("@mykhaya/api-client");
 const passkeyClient = await import("@/components/passkey-client");
 
@@ -97,6 +120,7 @@ function passkey(overrides: Partial<Passkey> = {}): Passkey {
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  nativeShell = false;
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -215,5 +239,58 @@ describe("Security — Biometric sign-in already enabled on this device", () => 
     const user = userEvent.setup();
     await user.click(screen.getByText(/1 other device with biometric sign-in/i));
     expect(screen.getByText("Work laptop")).toBeInTheDocument();
+  });
+});
+
+describe("Security — native shell shows Quick Sign-In instead of the browser passkey card", () => {
+  it("renders Quick Sign-In and hides the WebAuthn passkey card inside the native shell", async () => {
+    nativeShell = true;
+    render(<Security />);
+
+    await screen.findByRole("button", { name: /enable face id/i });
+    expect(screen.queryByText("Biometric sign-in")).not.toBeInTheDocument();
+  });
+
+  it("still renders the browser passkey card, not Quick Sign-In, outside the native shell", async () => {
+    nativeShell = false;
+    render(<Security />);
+
+    await screen.findByText("Biometric sign-in");
+    expect(screen.queryByText("Quick Sign-In")).not.toBeInTheDocument();
+  });
+
+  it("Quick Sign-In enable flow requires a successful biometric confirmation before recording the preference", async () => {
+    nativeShell = true;
+    const { authenticateWithBiometrics } = await import("@/components/native-biometric");
+    const { setBiometricSignInEnabled } = await import("@/components/native-biometric-preference");
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: /enable face id/i }));
+
+    expect(authenticateWithBiometrics).toHaveBeenCalled();
+    expect(setBiometricSignInEnabled).toHaveBeenCalledWith(true);
+    await screen.findByText(/face id is ready/i);
+  });
+
+  it("a cancelled biometric prompt never records the preference and shows no error", async () => {
+    nativeShell = true;
+    const { authenticateWithBiometrics, isBiometricCancellation } = await import(
+      "@/components/native-biometric"
+    );
+    const { setBiometricSignInEnabled } = await import("@/components/native-biometric-preference");
+    (authenticateWithBiometrics as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      code: "userCancel",
+      message: "cancelled",
+    });
+    (isBiometricCancellation as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: /enable face id/i }));
+
+    expect(setBiometricSignInEnabled).not.toHaveBeenCalledWith(true);
+    expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
   });
 });

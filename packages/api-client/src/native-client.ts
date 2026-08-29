@@ -63,16 +63,17 @@ export class NativeMyKhayaClient {
 
   /** Adult sign-in — native equivalent of the browser's POST /auth/login,
    * wired to POST /auth/mobile/login instead. Stores the returned session
-   * token via the configured NativeSessionStore and returns everything the
-   * response carries *except* the token, so callers never need to (and
-   * cannot accidentally) handle the raw token themselves. */
+   * token (and long-lived device/renewal token — see native-session-store's
+   * NativeSession.deviceToken) via the configured NativeSessionStore and
+   * returns everything the response carries *except* those tokens, so
+   * callers never need to (and cannot accidentally) handle them
+   * themselves. */
   async login(email: string, password: string): Promise<User> {
-    const result = await this.postUnauthenticated<User & { session_token: string }>(
-      "/auth/mobile/login",
-      { email, password },
-    );
-    const { session_token, ...user } = result;
-    await this.store.set({ token: session_token });
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/login", { email, password });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
     return user;
   }
 
@@ -81,12 +82,11 @@ export class NativeMyKhayaClient {
    * login (a Session row with kind=managed_child); no separate child auth
    * architecture exists here or on the backend — see ADR 0010. */
   async childLogin(homeCode: string, username: string, pin: string): Promise<User> {
-    const result = await this.postUnauthenticated<User & { session_token: string }>(
-      "/auth/mobile/child/login",
-      { home_code: homeCode, username, pin },
-    );
-    const { session_token, ...user } = result;
-    await this.store.set({ token: session_token });
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/child/login", { home_code: homeCode, username, pin });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
     return user;
   }
 
@@ -111,8 +111,53 @@ export class NativeMyKhayaClient {
       headers,
       cache: "no-store",
     });
-    const result = await parseApiResponse<{ session_token: string }>(response);
-    await this.store.set({ token: result.session_token });
+    const result = await parseApiResponse<{ session_token: string; device_token?: string }>(
+      response,
+    );
+    // Rotation never returns a new device_token (see routers.auth's
+    // rotate_mobile_session) — explicitly carry the existing one forward
+    // rather than relying on the store to merge it in, so this is correct
+    // regardless of whether a given NativeSessionStore implementation
+    // overwrites wholesale or merges (InMemoryNativeSessionStore does the
+    // former).
+    await this.store.set({
+      token: result.session_token,
+      deviceToken: result.device_token ?? current.deviceToken,
+    });
+  }
+
+  /**
+   * Silently mints a fresh session from the long-lived device/renewal
+   * credential once the session token itself has expired — the
+   * bearer-transport equivalent of the browser's silent /auth/renew (see
+   * routers.auth.renew_mobile_session). Unlike `rotate()`, this does not
+   * require a currently-valid session token at all, only a deviceToken; it
+   * is what makes "terminate the app, reopen it days later" work without a
+   * password. Throws (and leaves the store untouched) if there is no
+   * deviceToken to renew from, or if the server rejects it
+   * (revoked/expired/unknown) — callers should treat either as "this
+   * native session cannot be silently restored," the same signed-out
+   * outcome bootstrapSession() already returns for an outright-missing
+   * session.
+   *
+   * `deviceTokenOverride`, read from the store itself when omitted, exists
+   * for bootstrapSession(): a prior 401 on this same bootstrap pass may
+   * already have triggered request()'s compare-and-clear, wiping the store
+   * (deviceToken included) before renewal is even attempted — passing the
+   * token captured *before* that happened is what lets renewal still
+   * succeed in that case.
+   */
+  async renew(deviceTokenOverride?: string): Promise<User> {
+    const deviceToken = deviceTokenOverride ?? (await this.store.get())?.deviceToken;
+    if (!deviceToken) {
+      throw new ApiError(401, "No renewable native session is currently stored.");
+    }
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/sessions/renew", { device_token: deviceToken });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token ?? deviceToken });
+    return user;
   }
 
   /**
@@ -181,12 +226,27 @@ export class NativeMyKhayaClient {
    * if a session exists, validate it against the API, recognise
    * invalid/revoked sessions, cleanly enter a signed-out state"). Returns
    * the current user if a stored token is still valid, or `null` if there
-   * is no stored token or the server has rejected/expired it — in the
-   * `null` case, `request()`'s own compare-and-clear has already removed
-   * the stale token from the store, so the caller can treat `null` as
-   * "signed out" without any further cleanup step. Any other failure
-   * (network error, 5xx) is rethrown rather than treated as signed-out,
-   * since that is a transient condition, not proof the session is invalid.
+   * is no stored session at all, or the server has rejected it and it
+   * couldn't be silently renewed either — in the `null` case the store has
+   * already been left in a clean signed-out state (either via `request()`'s
+   * compare-and-clear, or by an explicit `clear()` if renewal was attempted
+   * and also failed), so the caller can treat `null` as "signed out"
+   * without any further cleanup step.
+   *
+   * On a 401 (the session_token has expired or been revoked), this
+   * attempts exactly one `renew()` using the stored deviceToken before
+   * giving up — this is what lets "terminate the app, reopen it days
+   * later" skip the login screen entirely, the same as a browser tab that
+   * outlives its own short session cookie via the silent /auth/renew.
+   * There is deliberately no retry loop beyond this single attempt: a
+   * renew() failure means the device credential itself was rejected
+   * (revoked/expired/unknown), which retrying cannot fix.
+   *
+   * Any other failure (network error, 5xx) is rethrown rather than treated
+   * as signed-out, since that is a transient condition, not proof the
+   * session is invalid — see Phase 12's authenticated-but-offline
+   * distinction: a network error here must never clear a valid stored
+   * session.
    */
   async bootstrapSession(): Promise<User | null> {
     const current = await this.store.get();
@@ -194,8 +254,23 @@ export class NativeMyKhayaClient {
     try {
       return await this.request<User>("/users/me");
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) return null;
-      throw error;
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    }
+    // Captured from `current` (read above, before request()'s own
+    // compare-and-clear could have wiped the store) rather than re-read
+    // here — see renew()'s docstring.
+    if (!current.deviceToken) {
+      await this.store.clear();
+      return null;
+    }
+    try {
+      return await this.renew(current.deviceToken);
+    } catch (renewError) {
+      if (renewError instanceof ApiError && renewError.status === 401) {
+        await this.store.clear();
+        return null;
+      }
+      throw renewError;
     }
   }
 

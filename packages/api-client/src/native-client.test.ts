@@ -181,6 +181,235 @@ describe("NativeMyKhayaClient — rotation", () => {
     await expect(client.rotate()).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("carries the existing deviceToken forward even though rotate's own response never returns one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { session_token: "token-b" }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "token-a", deviceToken: "device-a" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await client.rotate();
+
+    expect(await store.get()).toEqual({ token: "token-b", deviceToken: "device-a" });
+  });
+});
+
+describe("NativeMyKhayaClient — login/childLogin store the device token", () => {
+  it("login stores the device_token alongside the session token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "u1",
+        email: "a@example.com",
+        display_name: "Adult",
+        email_verified: true,
+        birth_month: null,
+        birth_day: null,
+        birth_year: null,
+        avatar_version: null,
+        principal_type: "adult",
+        session_token: "raw-token-value",
+        device_token: "raw-device-value",
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.login("a@example.com", "correct horse");
+
+    expect(user).not.toHaveProperty("device_token");
+    expect(await store.get()).toEqual({ token: "raw-token-value", deviceToken: "raw-device-value" });
+  });
+
+  it("childLogin stores the device_token alongside the session token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "c1",
+        email: null,
+        display_name: "Kid",
+        email_verified: false,
+        birth_month: null,
+        birth_day: null,
+        birth_year: null,
+        avatar_version: null,
+        principal_type: "managed_child",
+        session_token: "child-token",
+        device_token: "child-device-token",
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await client.childLogin("ABC123", "kiddo", "4242");
+
+    expect(await store.get()).toEqual({ token: "child-token", deviceToken: "child-device-token" });
+  });
+});
+
+describe("NativeMyKhayaClient — renew", () => {
+  it("posts the stored deviceToken (never the Authorization header) and persists the new tokens", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "u1",
+        email: "a@example.com",
+        display_name: "Adult",
+        email_verified: true,
+        birth_month: null,
+        birth_day: null,
+        birth_year: null,
+        avatar_version: null,
+        principal_type: "adult",
+        session_token: "new-session-token",
+        device_token: "new-device-token",
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "expired-token", deviceToken: "old-device-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.renew();
+
+    expect(user.id).toBe("u1");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}/auth/mobile/sessions/renew`);
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    expect(JSON.parse(init.body as string)).toEqual({ device_token: "old-device-token" });
+    expect(await store.get()).toEqual({
+      token: "new-session-token",
+      deviceToken: "new-device-token",
+    });
+  });
+
+  it("accepts an explicit deviceToken override instead of reading the store", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "u1",
+        email: "a@example.com",
+        display_name: "Adult",
+        email_verified: true,
+        birth_month: null,
+        birth_day: null,
+        birth_year: null,
+        avatar_version: null,
+        principal_type: "adult",
+        session_token: "new-session-token",
+      }),
+    );
+    // The store is empty — the override must still be used, exactly the
+    // scenario bootstrapSession() relies on after compare-and-clear has
+    // already wiped the store.
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await client.renew("captured-device-token");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ device_token: "captured-device-token" });
+  });
+
+  it("throws without calling the network when there is no deviceToken anywhere", async () => {
+    const fetchMock = vi.fn();
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "some-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.renew()).rejects.toBeInstanceOf(ApiError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates a rejected/expired device token as an ApiError without touching the store", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "Expired." }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "some-token", deviceToken: "revoked-device-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.renew()).rejects.toBeInstanceOf(ApiError);
+    // renew() itself never clears anything on failure — bootstrapSession()
+    // (the only caller) decides what to do with a rejected renewal.
+    expect(await store.get()).toEqual({ token: "some-token", deviceToken: "revoked-device-token" });
+  });
+});
+
+describe("NativeMyKhayaClient — bootstrapSession renews an expired session", () => {
+  function userBody(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "u1",
+      email: "a@example.com",
+      display_name: "Adult",
+      email_verified: true,
+      birth_month: null,
+      birth_day: null,
+      birth_year: null,
+      avatar_version: null,
+      principal_type: "adult",
+      ...overrides,
+    };
+  }
+
+  it("falls back to renew() on a 401 and returns the user on success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "Expired." })) // GET /users/me
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          ...userBody(),
+          session_token: "renewed-session-token",
+          device_token: "renewed-device-token",
+        }),
+      ); // POST /auth/mobile/sessions/renew
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "expired-token", deviceToken: "still-valid-device-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.bootstrapSession();
+
+    expect(user?.id).toBe("u1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await store.get()).toEqual({
+      token: "renewed-session-token",
+      deviceToken: "renewed-device-token",
+    });
+  });
+
+  it("returns null and clears the store when the device token has also been rejected", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "Expired." }))
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "Revoked." }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "expired-token", deviceToken: "revoked-device-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.bootstrapSession();
+
+    expect(user).toBeNull();
+    expect(await store.get()).toBeNull();
+  });
+
+  it("returns null without attempting renewal when there was never a deviceToken", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "Expired." }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "expired-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const user = await client.bootstrapSession();
+
+    expect(user).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await store.get()).toBeNull();
+  });
+
+  it("still rethrows a non-401 (network/5xx) failure without attempting renewal", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "some-token", deviceToken: "some-device-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.bootstrapSession()).rejects.toThrow("network down");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // A transient network failure must never clear a valid stored session —
+    // see Phase 12's authenticated-but-offline distinction.
+    expect(await store.get()).toEqual({ token: "some-token", deviceToken: "some-device-token" });
+  });
 });
 
 describe("NativeMyKhayaClient — logout", () => {

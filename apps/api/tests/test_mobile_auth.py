@@ -2,6 +2,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -724,3 +725,246 @@ async def test_adult_only_endpoint_rejects_bearer_managed_child_session(
             "/api/v1/groups", json={"name": "Should Not Exist"}, headers=bearer(token)
         )
         assert denied.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Native persistent sign-in: TrustedDevice-backed session renewal.
+#
+# A bearer Session on its own only lasts settings.session_minutes — before
+# this, a native app that hadn't been opened in that long had no way back in
+# without a password, unlike the browser/PWA's 90-day mk_device cookie. Every
+# /auth/mobile/* login now also issues a TrustedDevice (the same table/row
+# shape the browser's "remember this device" already uses) linked via
+# Session.trusted_device_id, and POST /auth/mobile/sessions/renew is the
+# bearer-transport equivalent of the browser's /auth/renew — see
+# issue_mobile_session's docstring in routers/auth.py.
+# ---------------------------------------------------------------------------
+
+
+async def mobile_login_full(client: AsyncClient, email: str) -> dict[str, Any]:
+    response = await client.post(
+        "/api/v1/auth/mobile/login", json={"email": email, "password": PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+    return dict(response.json())
+
+
+@pytest.mark.asyncio
+async def test_mobile_login_issues_a_device_token_and_a_linked_trusted_device(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"devicetoken-{suffix}@example.com"
+    await register_and_verify(client, email, "Device Token User")
+
+    body = await mobile_login_full(client, email)
+    assert body["device_token"]
+    assert body["device_token"] != body["session_token"]
+
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        session_row = await db.scalar(select(SessionRow).where(SessionRow.user_id == user.id))
+        assert session_row is not None
+        assert session_row.trusted_device_id is not None
+        device = await db.get(TrustedDevice, session_row.trusted_device_id)
+        assert device is not None
+        assert device.revoked_at is None
+
+
+@pytest.mark.asyncio
+async def test_mobile_logout_also_revokes_the_linked_trusted_device(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"logoutdevice-{suffix}@example.com"
+    await register_and_verify(client, email, "Logout Device User")
+    body = await mobile_login_full(client, email)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as bearer_client:
+        logout = await bearer_client.post(
+            "/api/v1/auth/mobile/logout", headers=bearer(body["session_token"])
+        )
+        assert logout.status_code == 204
+
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        session_row = await db.scalar(select(SessionRow).where(SessionRow.user_id == user.id))
+        assert session_row is not None
+        device = await db.get(TrustedDevice, session_row.trusted_device_id)
+        assert device is not None
+        assert device.revoked_at is not None
+
+    # The now-revoked device credential can no longer renew a session either.
+    renewed = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": body["device_token"]}
+    )
+    assert renewed.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_mobile_rotation_reuses_the_existing_device_rather_than_minting_a_new_one(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"rotatedevice-{suffix}@example.com"
+    await register_and_verify(client, email, "Rotate Device User")
+    body = await mobile_login_full(client, email)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as bearer_client:
+        rotated = await bearer_client.post(
+            "/api/v1/auth/mobile/sessions/rotate", headers=bearer(body["session_token"])
+        )
+        assert rotated.status_code == 200, rotated.text
+        # Rotation never touches the device credential — nothing new to persist.
+        assert rotated.json()["device_token"] is None
+
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        devices = (
+            await db.scalars(
+                select(TrustedDevice).where(
+                    TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
+                )
+            )
+        ).all()
+        assert len(devices) == 1
+
+
+@pytest.mark.asyncio
+async def test_renew_mints_a_fresh_session_after_the_bearer_session_has_expired(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"renew-{suffix}@example.com"
+    await register_and_verify(client, email, "Renew User")
+    body = await mobile_login_full(client, email)
+
+    async with SessionFactory() as db:
+        await db.execute(
+            update(SessionRow)
+            .where(SessionRow.user_id.in_(select(User.id).where(User.email == email)))
+            .values(expires_at=datetime.now(UTC) - timedelta(minutes=1))
+        )
+        await db.commit()
+
+    # The expired session_token alone can no longer reach anything...
+    denied = await client.get(
+        "/api/v1/users/me", headers=bearer(body["session_token"])
+    )
+    assert denied.status_code == 401
+
+    # ...but the long-lived device_token silently mints a working replacement,
+    # with no password re-entry, exactly like the browser's /auth/renew.
+    renewed = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": body["device_token"]}
+    )
+    assert renewed.status_code == 200, renewed.text
+    new_body = renewed.json()
+    assert new_body["session_token"] != body["session_token"]
+    assert new_body["device_token"] and new_body["device_token"] != body["device_token"]
+
+    accepted = await client.get("/api/v1/users/me", headers=bearer(new_body["session_token"]))
+    assert accepted.status_code == 200
+    assert accepted.json()["email"] == email
+
+
+@pytest.mark.asyncio
+async def test_renew_device_token_is_single_use(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"renewreplay-{suffix}@example.com"
+    await register_and_verify(client, email, "Renew Replay User")
+    body = await mobile_login_full(client, email)
+
+    first = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": body["device_token"]}
+    )
+    assert first.status_code == 200
+
+    replay = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": body["device_token"]}
+    )
+    assert replay.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_renew_rejects_a_revoked_or_unknown_device_token(client: AsyncClient) -> None:
+    unknown = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": "not-a-real-device-token"}
+    )
+    assert unknown.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_renew_still_works_for_a_legacy_session_that_predates_device_linkage(
+    client: AsyncClient,
+) -> None:
+    """Backward compatibility: a bearer Session created before this feature
+    existed has trusted_device_id=None. Rotating it must not crash — it
+    should transparently gain a TrustedDevice (via issue_mobile_session's
+    existing_device_id=None fallback), so even an already-issued native
+    session upgrades to renewable persistence the next time the app talks to
+    the server, with no migration needed for existing sessions."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"legacy-{suffix}@example.com"
+    await register_and_verify(client, email, "Legacy Session User")
+    body = await mobile_login_full(client, email)
+
+    async with SessionFactory() as db:
+        await db.execute(
+            update(SessionRow)
+            .where(SessionRow.user_id.in_(select(User.id).where(User.email == email)))
+            .values(trusted_device_id=None)
+        )
+        await db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as bearer_client:
+        rotated = await bearer_client.post(
+            "/api/v1/auth/mobile/sessions/rotate", headers=bearer(body["session_token"])
+        )
+        assert rotated.status_code == 200, rotated.text
+        # Unlike an ordinary rotation, this one *does* mint a fresh device,
+        # since there was none to reuse.
+        assert rotated.json()["device_token"]
+
+
+@pytest.mark.asyncio
+async def test_renew_rejects_a_managed_child_device_after_login_is_disabled(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    group_id, membership_id, home_code = await _make_family_home_with_child(client, suffix)
+    configured = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": True, "username": "erin", "pin": "4242"},
+        headers=csrf_header(client),
+    )
+    assert configured.status_code == 200, configured.text
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as child_client:
+        login = await child_client.post(
+            "/api/v1/auth/mobile/child/login",
+            json={"home_code": home_code, "username": "erin", "pin": "4242"},
+        )
+        assert login.status_code == 200, login.text
+        device_token = login.json()["device_token"]
+
+    disabled = await client.put(
+        f"/api/v1/groups/{group_id}/children/{membership_id}/login",
+        json={"enabled": False},
+        headers=csrf_header(client),
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    renewed = await client.post(
+        "/api/v1/auth/mobile/sessions/renew", json={"device_token": device_token}
+    )
+    assert renewed.status_code == 401

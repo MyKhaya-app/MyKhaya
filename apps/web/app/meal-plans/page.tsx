@@ -40,6 +40,7 @@ import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
+import { useDaySwipe } from "./use-day-swipe";
 
 // Meal Plans is a native MyKhaya module, not a bolted-on mini-app — this
 // page reuses AppShell, BottomSheet, Avatar/AvatarStack, .card/.button/
@@ -94,7 +95,12 @@ function startOfWeek(iso: string): string {
 }
 function dayHeading(iso: string): string {
   const date = new Date(`${iso}T00:00:00Z`);
-  return date.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return date.toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
 function dayNumber(iso: string): number {
   return Number(iso.slice(8, 10));
@@ -126,8 +132,12 @@ function entryTitle(entry: MealPlanEntry): string {
   return entry.meal_name ?? entry.quick_meal_name ?? "Meal";
 }
 
-function ingredientLine(ingredient: MealIngredient | MealIngredientInput): string {
-  return [ingredient.quantity, ingredient.unit, ingredient.text].filter(Boolean).join(" ");
+function ingredientLine(
+  ingredient: MealIngredient | MealIngredientInput,
+): string {
+  return [ingredient.quantity, ingredient.unit, ingredient.text]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // What PlanFromMealSheet actually needs — satisfied by both the library's
@@ -175,12 +185,20 @@ export default function MealPlansPage() {
 
   useEffect(() => {
     if (!activeHomeId) return;
-    api.billingStatus(activeHomeId).then(setBilling).catch(() => setBilling(null));
-    api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
+    api
+      .billingStatus(activeHomeId)
+      .then(setBilling)
+      .catch(() => setBilling(null));
+    api
+      .members(activeHomeId)
+      .then(setMembers)
+      .catch(() => setMembers([]));
     api
       .featureMatrix(activeHomeId)
       .then((matrix) =>
-        setModuleReleased(matrix.features.some((row) => row.feature === "meals" && row.enabled)),
+        setModuleReleased(
+          matrix.features.some((row) => row.feature === "meals" && row.enabled),
+        ),
       )
       .catch(() => setModuleReleased(false));
   }, [activeHomeId]);
@@ -224,7 +242,10 @@ export default function MealPlansPage() {
               <h1>Meal Plans</h1>
             </div>
           </div>
-          <p className="empty-mini">Meal Plans isn't available for this Home yet. Please check back soon.</p>
+          <p className="empty-mini">
+            Meal Plans isn't available for this Home yet. Please check back
+            soon.
+          </p>
         </main>
       </AppShell>
     );
@@ -242,7 +263,11 @@ export default function MealPlansPage() {
           </div>
         </div>
         <FormStatus error={error} />
-        <div className="meal-tabs" role="tablist" aria-label="Meal Plans sections">
+        <div
+          className="meal-tabs"
+          role="tablist"
+          aria-label="Meal Plans sections"
+        >
           <button
             type="button"
             role="tab"
@@ -263,7 +288,11 @@ export default function MealPlansPage() {
           </button>
         </div>
         {tab === "plan" ? (
-          <PlannerTab homeId={activeHomeId} members={members} onError={setError} />
+          <PlannerTab
+            homeId={activeHomeId}
+            members={members}
+            onError={setError}
+          />
         ) : (
           <MealsLibraryTab homeId={activeHomeId} onError={setError} />
         )}
@@ -288,7 +317,9 @@ function PlannerTab({
   const [view, setView] = useState<"day" | "week">("day");
   const [focusDate, setFocusDate] = useState(isoToday());
   const [dayEntries, setDayEntries] = useState<MealPlanEntry[]>([]);
-  const [weekDays, setWeekDays] = useState<{ date: string; entries: MealPlanEntry[] }[]>([]);
+  const [weekDays, setWeekDays] = useState<
+    { date: string; entries: MealPlanEntry[] }[]
+  >([]);
   const [sheet, setSheet] = useState<
     | { mode: "view"; entry: MealPlanEntry }
     | { mode: "edit"; entry: MealPlanEntry }
@@ -296,7 +327,9 @@ function PlannerTab({
     | null
   >(null);
   const [copyingWeek, setCopyingWeek] = useState(false);
-  const [addingIngredientsFor, setAddingIngredientsFor] = useState<string | null>(null);
+  const [addingIngredientsFor, setAddingIngredientsFor] = useState<
+    string | null
+  >(null);
   const [editingMealId, setEditingMealId] = useState<string | null>(null);
 
   async function loadDay() {
@@ -333,7 +366,11 @@ function PlannerTab({
       setSheet(null);
       await refresh();
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not remove that meal.");
+      onError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not remove that meal.",
+      );
     }
   }
 
@@ -343,7 +380,11 @@ function PlannerTab({
       setSheet(null);
       await refresh();
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not save this to your Meals library.");
+      onError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not save this to your Meals library.",
+      );
     }
   }
 
@@ -352,6 +393,12 @@ function PlannerTab({
     return Array.from({ length: 7 }, (_, index) => addDays(start, index));
   }, [focusDate]);
 
+  const daySwipeHandlers = useDaySwipe({
+    onSwipeLeft: () => setFocusDate((current) => addDays(current, 1)),
+    onSwipeRight: () => setFocusDate((current) => addDays(current, -1)),
+    disabled: view !== "day",
+  });
+
   return (
     <section>
       <header className="calendar-toolbar-compact meal-plan-toolbar">
@@ -359,16 +406,24 @@ function PlannerTab({
           <button
             className="icon-button secondary"
             type="button"
-            onClick={() => setFocusDate(addDays(focusDate, view === "day" ? -1 : -7))}
+            onClick={() =>
+              setFocusDate(addDays(focusDate, view === "day" ? -1 : -7))
+            }
             aria-label={view === "day" ? "Previous day" : "Previous week"}
           >
             <ChevronLeft size={18} aria-hidden="true" />
           </button>
-          <strong>{view === "day" ? dayHeading(focusDate) : `Week of ${dayHeading(week[0]!)}`}</strong>
+          <strong>
+            {view === "day"
+              ? dayHeading(focusDate)
+              : `Week of ${dayHeading(week[0]!)}`}
+          </strong>
           <button
             className="icon-button secondary"
             type="button"
-            onClick={() => setFocusDate(addDays(focusDate, view === "day" ? 1 : 7))}
+            onClick={() =>
+              setFocusDate(addDays(focusDate, view === "day" ? 1 : 7))
+            }
             aria-label={view === "day" ? "Next day" : "Next week"}
           >
             <ChevronRight size={18} aria-hidden="true" />
@@ -376,11 +431,19 @@ function PlannerTab({
         </div>
         <div className="meal-plan-toolbar-actions">
           {focusDate !== isoToday() && (
-            <button type="button" className="tertiary" onClick={() => setFocusDate(isoToday())}>
+            <button
+              type="button"
+              className="tertiary"
+              onClick={() => setFocusDate(isoToday())}
+            >
               Today
             </button>
           )}
-          <div className="meal-view-toggle" role="tablist" aria-label="Choose view">
+          <div
+            className="meal-view-toggle"
+            role="tablist"
+            aria-label="Choose view"
+          >
             <button
               type="button"
               role="tab"
@@ -414,7 +477,9 @@ function PlannerTab({
               className={`week-strip-day${iso === focusDate ? " active" : ""}${iso === isoToday() ? " today" : ""}`}
               onClick={() => setFocusDate(iso)}
             >
-              <span className="week-strip-letter">{WEEKDAY_LETTERS[index]}</span>
+              <span className="week-strip-letter">
+                {WEEKDAY_LETTERS[index]}
+              </span>
               <span className="week-strip-number">{dayNumber(iso)}</span>
             </button>
           ))}
@@ -422,29 +487,37 @@ function PlannerTab({
       )}
 
       {view === "day" ? (
-        <div className="meal-slot-list">
-          {SLOTS.map((slot) => (
-            <div className="meal-slot-section" key={slot.key}>
-              <h2>{slot.label}</h2>
-              {dayEntries
-                .filter((entry) => entry.meal_slot === slot.key)
-                .map((entry) => (
-                  <MealEntryCard
-                    key={entry.id}
-                    entry={entry}
-                    members={members}
-                    onOpen={() => setSheet({ mode: "view", entry })}
-                  />
-                ))}
-              <button
-                type="button"
-                className="meal-add-button"
-                onClick={() => setSheet({ mode: "create", date: focusDate, slot: slot.key })}
-              >
-                <Plus size={16} aria-hidden="true" /> Add
-              </button>
-            </div>
-          ))}
+        <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
+          <div className="meal-slot-list">
+            {SLOTS.map((slot) => (
+              <div className="meal-slot-section" key={slot.key}>
+                <h2>{slot.label}</h2>
+                {dayEntries
+                  .filter((entry) => entry.meal_slot === slot.key)
+                  .map((entry) => (
+                    <MealEntryCard
+                      key={entry.id}
+                      entry={entry}
+                      members={members}
+                      onOpen={() => setSheet({ mode: "view", entry })}
+                    />
+                  ))}
+                <button
+                  type="button"
+                  className="meal-add-button"
+                  onClick={() =>
+                    setSheet({
+                      mode: "create",
+                      date: focusDate,
+                      slot: slot.key,
+                    })
+                  }
+                >
+                  <Plus size={16} aria-hidden="true" /> Add
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <>
@@ -460,7 +533,9 @@ function PlannerTab({
               <div className="card meal-week-day" key={day.date}>
                 <h2>{dayHeading(day.date)}</h2>
                 {SLOTS.map((slot) => {
-                  const entry = day.entries.find((row) => row.meal_slot === slot.key);
+                  const entry = day.entries.find(
+                    (row) => row.meal_slot === slot.key,
+                  );
                   return (
                     <button
                       type="button"
@@ -469,12 +544,20 @@ function PlannerTab({
                       onClick={() =>
                         entry
                           ? setSheet({ mode: "view", entry })
-                          : setSheet({ mode: "create", date: day.date, slot: slot.key })
+                          : setSheet({
+                              mode: "create",
+                              date: day.date,
+                              slot: slot.key,
+                            })
                       }
                     >
                       <span className="meal-week-slot">{slot.label}</span>
                       <span className="meal-week-name">
-                        {entry ? entryTitle(entry) : <span className="quiet-state">+ Add</span>}
+                        {entry ? (
+                          entryTitle(entry)
+                        ) : (
+                          <span className="quiet-state">+ Add</span>
+                        )}
                       </span>
                     </button>
                   );
@@ -548,7 +631,9 @@ function MealEntryCard({
   const stackPeople = entry.member_ids
     .map((id) => members.find((member) => member.user_id === id))
     .filter((member): member is Member => Boolean(member));
-  const cook = members.find((member) => member.user_id === entry.cook_member_id);
+  const cook = members.find(
+    (member) => member.user_id === entry.cook_member_id,
+  );
   return (
     <button type="button" className="card meal-entry-card" onClick={onOpen}>
       {entry.meal_image_url && (
@@ -557,7 +642,13 @@ function MealEntryCard({
       <div className="meal-entry-main">
         <div className="meal-entry-heading">
           <strong>{entryTitle(entry)}</strong>
-          {entry.is_favourite && <Star size={14} aria-hidden="true" className="meal-favourite-star" />}
+          {entry.is_favourite && (
+            <Star
+              size={14}
+              aria-hidden="true"
+              className="meal-favourite-star"
+            />
+          )}
         </div>
         <div className="meal-entry-meta">
           {time && (
@@ -565,13 +656,18 @@ function MealEntryCard({
               <Clock size={13} aria-hidden="true" /> {time}
             </span>
           )}
-          {stackPeople.length > 0 && <span>{memberNamesFor(entry.member_ids, members)}</span>}
+          {stackPeople.length > 0 && (
+            <span>{memberNamesFor(entry.member_ids, members)}</span>
+          )}
           {cook && (
             <span>
-              <ChefHat size={13} aria-hidden="true" /> {cook.display_name} cooking
+              <ChefHat size={13} aria-hidden="true" /> {cook.display_name}{" "}
+              cooking
             </span>
           )}
-          {entry.makes_leftovers && <span className="quiet-state">Leftovers</span>}
+          {entry.makes_leftovers && (
+            <span className="quiet-state">Leftovers</span>
+          )}
         </div>
       </div>
       {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
@@ -613,32 +709,51 @@ function MealEntrySheet({
   const [source, setSource] = useState<"saved" | "quick">(
     state.mode !== "create" && state.entry.meal_id ? "saved" : "quick",
   );
-  const [mealId, setMealId] = useState(state.mode !== "create" ? (state.entry.meal_id ?? "") : "");
+  const [mealId, setMealId] = useState(
+    state.mode !== "create" ? (state.entry.meal_id ?? "") : "",
+  );
   const [quickName, setQuickName] = useState(
     state.mode !== "create" ? (state.entry.quick_meal_name ?? "") : "",
   );
-  const [date, setDate] = useState(state.mode === "create" ? state.date : state.entry.date);
-  const [slot, setSlot] = useState<MealSlot>(state.mode === "create" ? state.slot : state.entry.meal_slot);
-  const [time, setTime] = useState(state.mode !== "create" ? formatTime(state.entry.time) ?? "" : "");
+  const [date, setDate] = useState(
+    state.mode === "create" ? state.date : state.entry.date,
+  );
+  const [slot, setSlot] = useState<MealSlot>(
+    state.mode === "create" ? state.slot : state.entry.meal_slot,
+  );
+  const [time, setTime] = useState(
+    state.mode !== "create" ? (formatTime(state.entry.time) ?? "") : "",
+  );
   const [everyone, setEveryone] = useState(
     state.mode === "create" || state.entry.member_ids.length === members.length,
   );
   const [memberIds, setMemberIds] = useState<string[]>(
-    state.mode !== "create" ? state.entry.member_ids : members.map((member) => member.user_id),
+    state.mode !== "create"
+      ? state.entry.member_ids
+      : members.map((member) => member.user_id),
   );
-  const [cookId, setCookId] = useState(state.mode !== "create" ? (state.entry.cook_member_id ?? "") : "");
-  const [leftovers, setLeftovers] = useState(state.mode !== "create" ? state.entry.makes_leftovers : false);
+  const [cookId, setCookId] = useState(
+    state.mode !== "create" ? (state.entry.cook_member_id ?? "") : "",
+  );
+  const [leftovers, setLeftovers] = useState(
+    state.mode !== "create" ? state.entry.makes_leftovers : false,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.meals(homeId).then((result) => setSavedMeals(result.items)).catch(() => setSavedMeals([]));
+    api
+      .meals(homeId)
+      .then((result) => setSavedMeals(result.items))
+      .catch(() => setSavedMeals([]));
   }, [homeId]);
 
   if (state.mode === "view") {
     const entry = state.entry;
     const time = formatTime(entry.time);
-    const cook = members.find((member) => member.user_id === entry.cook_member_id);
+    const cook = members.find(
+      (member) => member.user_id === entry.cook_member_id,
+    );
     const people = entry.member_ids
       .map((id) => members.find((member) => member.user_id === id))
       .filter((member): member is Member => Boolean(member));
@@ -659,7 +774,11 @@ function MealEntrySheet({
       >
         <div className="meal-view-details">
           {entry.meal_image_url && (
-            <img className="meal-view-image" src={entry.meal_image_url} alt="" />
+            <img
+              className="meal-view-image"
+              src={entry.meal_image_url}
+              alt=""
+            />
           )}
           {entry.is_favourite && (
             <p className="quiet-state">
@@ -679,10 +798,13 @@ function MealEntrySheet({
           )}
           {cook && (
             <p>
-              <ChefHat size={14} aria-hidden="true" /> {cook.display_name} cooking
+              <ChefHat size={14} aria-hidden="true" /> {cook.display_name}{" "}
+              cooking
             </p>
           )}
-          {entry.makes_leftovers && <p className="quiet-state">Makes leftovers</p>}
+          {entry.makes_leftovers && (
+            <p className="quiet-state">Makes leftovers</p>
+          )}
 
           <div className="meal-view-actions">
             {entry.meal_id ? (
@@ -692,15 +814,24 @@ function MealEntrySheet({
                   className="secondary"
                   onClick={() => onAddIngredients(entry.meal_id!)}
                 >
-                  <ListPlus size={16} aria-hidden="true" /> Add ingredients to list
+                  <ListPlus size={16} aria-hidden="true" /> Add ingredients to
+                  list
                 </button>
-                <button type="button" className="tertiary" onClick={() => onEditMeal(entry.meal_id!)}>
+                <button
+                  type="button"
+                  className="tertiary"
+                  onClick={() => onEditMeal(entry.meal_id!)}
+                >
                   <Pencil size={14} aria-hidden="true" /> Edit saved meal
                 </button>
               </>
             ) : (
               entry.quick_meal_name && (
-                <button type="button" className="secondary" onClick={() => onSaveAsMeal(entry)}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onSaveAsMeal(entry)}
+                >
                   <Star size={16} aria-hidden="true" /> Save to Meals
                 </button>
               )
@@ -710,7 +841,11 @@ function MealEntrySheet({
           {/* Removing this occurrence from the plan is a distinct action
               from deleting the saved Meal it references — that lives only
               in the Meals library's own overflow menu, never here. */}
-          <button type="button" className="secondary" onClick={() => onDelete(entry)}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onDelete(entry)}
+          >
             <Trash2 size={16} aria-hidden="true" /> Remove from plan
           </button>
         </div>
@@ -751,14 +886,19 @@ function MealEntrySheet({
       }
       await onSaved();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not save this meal.");
+      setError(
+        cause instanceof ApiError ? cause.message : "Could not save this meal.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <BottomSheet title={state.mode === "edit" ? "Edit meal" : "Add meal"} onDismiss={onClose}>
+    <BottomSheet
+      title={state.mode === "edit" ? "Edit meal" : "Add meal"}
+      onDismiss={onClose}
+    >
       <form className="event-form" onSubmit={submit}>
         <div className="form-wide meal-source-toggle">
           <button
@@ -779,7 +919,10 @@ function MealEntrySheet({
         {source === "saved" ? (
           <label className="form-wide">
             Meal
-            <select value={mealId} onChange={(event) => setMealId(event.target.value)}>
+            <select
+              value={mealId}
+              onChange={(event) => setMealId(event.target.value)}
+            >
               <option value="">Choose a saved meal…</option>
               {savedMeals.map((meal) => (
                 <option key={meal.id} value={meal.id}>
@@ -791,7 +934,8 @@ function MealEntrySheet({
           </label>
         ) : (
           <label className="form-wide">
-            What's for {SLOTS.find((row) => row.key === slot)?.label.toLowerCase()}?
+            What's for{" "}
+            {SLOTS.find((row) => row.key === slot)?.label.toLowerCase()}?
             <input
               value={quickName}
               onChange={(event) => setQuickName(event.target.value)}
@@ -803,12 +947,20 @@ function MealEntrySheet({
 
         <label className="form-wide">
           Date
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+          <input
+            type="date"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+            required
+          />
         </label>
         <div className="form-wide meal-time-row">
           <label>
             Meal
-            <select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)}>
+            <select
+              value={slot}
+              onChange={(event) => setSlot(event.target.value as MealSlot)}
+            >
               {SLOTS.map((row) => (
                 <option key={row.key} value={row.key}>
                   {row.label}
@@ -818,7 +970,11 @@ function MealEntrySheet({
           </label>
           <label>
             Time (optional)
-            <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
+            <input
+              type="time"
+              value={time}
+              onChange={(event) => setTime(event.target.value)}
+            />
           </label>
         </div>
 
@@ -830,7 +986,8 @@ function MealEntrySheet({
               checked={everyone}
               onChange={(event) => {
                 setEveryone(event.target.checked);
-                if (event.target.checked) setMemberIds(members.map((member) => member.user_id));
+                if (event.target.checked)
+                  setMemberIds(members.map((member) => member.user_id));
               }}
             />
             Everyone
@@ -867,7 +1024,10 @@ function MealEntrySheet({
 
         <label className="form-wide">
           Cooking (optional)
-          <select value={cookId} onChange={(event) => setCookId(event.target.value)}>
+          <select
+            value={cookId}
+            onChange={(event) => setCookId(event.target.value)}
+          >
             <option value="">No one set</option>
             {members.map((member) => (
               <option key={member.user_id} value={member.user_id}>
@@ -913,10 +1073,15 @@ function CopyPreviousWeekSheet({
   onCopied: () => Promise<void>;
 }) {
   const sourceStartDate = addDays(targetStartDate, -7);
-  const [preview, setPreview] = useState<{ copied: number; skipped: number } | null>(null);
+  const [preview, setPreview] = useState<{
+    copied: number;
+    skipped: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [done, setDone] = useState<{ copied: number; skipped: number } | null>(null);
+  const [done, setDone] = useState<{ copied: number; skipped: number } | null>(
+    null,
+  );
 
   useEffect(() => {
     api
@@ -925,9 +1090,18 @@ function CopyPreviousWeekSheet({
         target_start_date: targetStartDate,
         dry_run: true,
       })
-      .then((result) => setPreview({ copied: result.copied_count, skipped: result.skipped_count }))
+      .then((result) =>
+        setPreview({
+          copied: result.copied_count,
+          skipped: result.skipped_count,
+        }),
+      )
       .catch((cause) =>
-        setError(cause instanceof ApiError ? cause.message : "Could not preview last week's plan."),
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Could not preview last week's plan.",
+        ),
       );
   }, [homeId, sourceStartDate, targetStartDate]);
 
@@ -942,7 +1116,11 @@ function CopyPreviousWeekSheet({
       setDone({ copied: result.copied_count, skipped: result.skipped_count });
       await onCopied();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not copy last week's plan.");
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not copy last week's plan.",
+      );
     } finally {
       setBusy(false);
     }
@@ -961,18 +1139,22 @@ function CopyPreviousWeekSheet({
           {preview ? (
             preview.copied === 0 ? (
               <p className="empty-mini">
-                {sourceStartDate} to {addDays(sourceStartDate, 6)} has nothing planned to copy.
+                {sourceStartDate} to {addDays(sourceStartDate, 6)} has nothing
+                planned to copy.
               </p>
             ) : (
               <p>
-                This will copy {preview.copied} planned meal{preview.copied === 1 ? "" : "s"} from{" "}
-                {dayHeading(sourceStartDate)}–{dayHeading(addDays(sourceStartDate, 6))} into{" "}
-                {dayHeading(targetStartDate)}–{dayHeading(addDays(targetStartDate, 6))}.
+                This will copy {preview.copied} planned meal
+                {preview.copied === 1 ? "" : "s"} from{" "}
+                {dayHeading(sourceStartDate)}–
+                {dayHeading(addDays(sourceStartDate, 6))} into{" "}
+                {dayHeading(targetStartDate)}–
+                {dayHeading(addDays(targetStartDate, 6))}.
                 {preview.skipped > 0 && (
                   <>
                     {" "}
-                    {preview.skipped} day/slot{preview.skipped === 1 ? "" : "s"} already planned won't
-                    be overwritten.
+                    {preview.skipped} day/slot{preview.skipped === 1 ? "" : "s"}{" "}
+                    already planned won't be overwritten.
                   </>
                 )}
               </p>
@@ -1021,14 +1203,20 @@ function AddIngredientsToListSheet({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [confirmState, setConfirmState] = useState<AddIngredientsToListResult | null>(null);
+  const [confirmState, setConfirmState] =
+    useState<AddIngredientsToListResult | null>(null);
   const [result, setResult] = useState<AddIngredientsToListResult | null>(null);
 
   useEffect(() => {
-    api.meal(homeId, mealId).then((row) => {
-      setMeal(row);
-      setSelected(new Set(row.ingredients.map((ingredient) => ingredient.id)));
-    }).catch(() => setMeal(null));
+    api
+      .meal(homeId, mealId)
+      .then((row) => {
+        setMeal(row);
+        setSelected(
+          new Set(row.ingredients.map((ingredient) => ingredient.id)),
+        );
+      })
+      .catch(() => setMeal(null));
     api
       .lists(homeId)
       .then((response) => {
@@ -1044,7 +1232,9 @@ function AddIngredientsToListSheet({
     setBusy(true);
     setError("");
     try {
-      const created = await api.createList(homeId, { name: newListName.trim() });
+      const created = await api.createList(homeId, {
+        name: newListName.trim(),
+      });
       setLists((current) => [
         ...current,
         { ...created, item_count: 0, remaining_count: 0 },
@@ -1053,7 +1243,11 @@ function AddIngredientsToListSheet({
       setCreatingList(false);
       setNewListName("");
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not create that list.");
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not create that list.",
+      );
     } finally {
       setBusy(false);
     }
@@ -1079,7 +1273,11 @@ function AddIngredientsToListSheet({
         setResult(response);
       }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not add these ingredients.");
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not add these ingredients.",
+      );
     } finally {
       setBusy(false);
     }
@@ -1090,7 +1288,9 @@ function AddIngredientsToListSheet({
   if (meal && meal.ingredients.length === 0) {
     return (
       <BottomSheet title="Add ingredients to list" onDismiss={onClose}>
-        <p className="empty-mini">This meal doesn't have any ingredients yet.</p>
+        <p className="empty-mini">
+          This meal doesn't have any ingredients yet.
+        </p>
       </BottomSheet>
     );
   }
@@ -1099,7 +1299,8 @@ function AddIngredientsToListSheet({
     return (
       <BottomSheet title="Add ingredients to list" onDismiss={onClose}>
         <p className="notice success" role="status">
-          Added {result.added_count} item{result.added_count === 1 ? "" : "s"} to {listName}.
+          Added {result.added_count} item{result.added_count === 1 ? "" : "s"}{" "}
+          to {listName}.
           {result.duplicate_count > 0 &&
             ` ${result.duplicate_count} ${result.duplicate_count === 1 ? "was" : "were"} already there.`}
         </p>
@@ -1107,7 +1308,10 @@ function AddIngredientsToListSheet({
           <button type="button" className="secondary" onClick={onClose}>
             Done
           </button>
-          <Link className="button sheet-primary" href={`/lists/${result.list_id}`}>
+          <Link
+            className="button sheet-primary"
+            href={`/lists/${result.list_id}`}
+          >
             View {listName}
           </Link>
         </div>
@@ -1120,8 +1324,9 @@ function AddIngredientsToListSheet({
       <BottomSheet title="Some items already exist" onDismiss={onClose}>
         <div className="meal-view-details">
           <p>
-            {confirmState.duplicate_count} item{confirmState.duplicate_count === 1 ? " is" : "s are"}{" "}
-            already on {listName}.
+            {confirmState.duplicate_count} item
+            {confirmState.duplicate_count === 1 ? " is" : "s are"} already on{" "}
+            {listName}.
           </p>
           <ul className="meal-duplicate-list">
             {confirmState.duplicate_texts.map((text) => (
@@ -1130,11 +1335,18 @@ function AddIngredientsToListSheet({
           </ul>
           <p>
             Add the remaining {selected.size - confirmState.duplicate_count}
-            {selected.size - confirmState.duplicate_count === 1 ? " item" : " items"}?
+            {selected.size - confirmState.duplicate_count === 1
+              ? " item"
+              : " items"}
+            ?
           </p>
           <FormStatus error={error} />
           <div className="meal-copy-week-actions">
-            <button type="button" className="secondary" onClick={() => setConfirmState(null)}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setConfirmState(null)}
+            >
               Cancel
             </button>
             <button
@@ -1164,7 +1376,12 @@ function AddIngredientsToListSheet({
                 placeholder="e.g. Groceries"
                 maxLength={160}
               />
-              <button type="button" className="secondary" disabled={busy} onClick={() => void createList()}>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={() => void createList()}
+              >
                 Create
               </button>
             </div>
@@ -1215,10 +1432,14 @@ function AddIngredientsToListSheet({
         <button
           type="button"
           className="sheet-primary"
-          disabled={busy || selected.size === 0 || !listId || listId === "__new__"}
+          disabled={
+            busy || selected.size === 0 || !listId || listId === "__new__"
+          }
           onClick={() => void addIngredients(false)}
         >
-          {busy ? "Adding…" : `Add ${selected.size} item${selected.size === 1 ? "" : "s"}`}
+          {busy
+            ? "Adding…"
+            : `Add ${selected.size} item${selected.size === 1 ? "" : "s"}`}
         </button>
       </div>
     </BottomSheet>
@@ -1229,7 +1450,13 @@ function AddIngredientsToListSheet({
 // Meals library tab
 // ---------------------------------------------------------------------------
 
-function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (message: string) => void }) {
+function MealsLibraryTab({
+  homeId,
+  onError,
+}: {
+  homeId: string;
+  onError: (message: string) => void;
+}) {
   const [meals, setMeals] = useState<MealSummary[]>([]);
   const [recent, setRecent] = useState<RecentMeal[]>([]);
   const [favouritesOnly, setFavouritesOnly] = useState(false);
@@ -1240,7 +1467,9 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
   const [viewingMealId, setViewingMealId] = useState<string | null>(null);
   const [planning, setPlanning] = useState<PlannableMeal | null>(null);
   const [actionsFor, setActionsFor] = useState<MealSummary | null>(null);
-  const [addingIngredientsFor, setAddingIngredientsFor] = useState<string | null>(null);
+  const [addingIngredientsFor, setAddingIngredientsFor] = useState<
+    string | null
+  >(null);
 
   async function load() {
     try {
@@ -1278,19 +1507,32 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
       setActionsFor(null);
       await load();
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not update that meal.");
+      onError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not update that meal.",
+      );
     }
   }
 
   async function removeMeal(meal: MealSummary) {
-    if (!window.confirm(`Delete ${meal.name}? Any past or planned entries keep its name.`)) return;
+    if (
+      !window.confirm(
+        `Delete ${meal.name}? Any past or planned entries keep its name.`,
+      )
+    )
+      return;
     try {
       await api.deleteMeal(homeId, meal.id);
       setActionsFor(null);
       await load();
       await loadRecent();
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Could not delete that meal.");
+      onError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not delete that meal.",
+      );
     }
   }
 
@@ -1308,7 +1550,11 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
           <Plus size={16} aria-hidden="true" /> Add meal
         </button>
       </div>
-      <div className="meal-view-toggle meal-library-filter" role="tablist" aria-label="Filter meals">
+      <div
+        className="meal-view-toggle meal-library-filter"
+        role="tablist"
+        aria-label="Filter meals"
+      >
         <button
           type="button"
           role="tab"
@@ -1341,7 +1587,9 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
                 onClick={() => setViewingMealId(row.meal.id)}
               >
                 <span>{row.meal.name}</span>
-                <span className="quiet-state">Last planned {relativeWeeksAgo(row.last_planned)}</span>
+                <span className="quiet-state">
+                  Last planned {relativeWeeksAgo(row.last_planned)}
+                </span>
               </button>
             ))}
           </div>
@@ -1356,8 +1604,14 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
             <p>
               <strong>No saved meals yet</strong>
             </p>
-            <p className="muted">Save family favourites so they're quick to plan again.</p>
-            <button type="button" className="secondary" onClick={() => setEditingMealId("")}>
+            <p className="muted">
+              Save family favourites so they're quick to plan again.
+            </p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setEditingMealId("")}
+            >
               <Plus size={16} aria-hidden="true" /> Add your first meal
             </button>
           </div>
@@ -1374,7 +1628,11 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
                 <div className="meal-library-heading">
                   <h3>{meal.name}</h3>
                   {meal.is_favourite && (
-                    <Star size={15} aria-hidden="true" className="meal-favourite-star" />
+                    <Star
+                      size={15}
+                      aria-hidden="true"
+                      className="meal-favourite-star"
+                    />
                   )}
                 </div>
                 <p className="quiet-state">
@@ -1384,7 +1642,11 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
                 </p>
               </button>
               <div className="meal-library-actions">
-                <button type="button" className="secondary" onClick={() => setPlanning(meal)}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setPlanning(meal)}
+                >
                   Plan meal
                 </button>
                 <button
@@ -1449,7 +1711,11 @@ function MealsLibraryTab({ homeId, onError }: { homeId: string; onError: (messag
         />
       )}
       {planning && (
-        <PlanFromMealSheet homeId={homeId} meal={planning} onClose={() => setPlanning(null)} />
+        <PlanFromMealSheet
+          homeId={homeId}
+          meal={planning}
+          onClose={() => setPlanning(null)}
+        />
       )}
       {addingIngredientsFor && (
         <AddIngredientsToListSheet
@@ -1484,7 +1750,8 @@ function MealActionsSheet({
           <Pencil size={16} aria-hidden="true" /> Edit
         </button>
         <button type="button" className="secondary" onClick={onFavourite}>
-          <Star size={16} aria-hidden="true" /> {meal.is_favourite ? "Unfavourite" : "Favourite"}
+          <Star size={16} aria-hidden="true" />{" "}
+          {meal.is_favourite ? "Unfavourite" : "Favourite"}
         </button>
         <button type="button" className="secondary" onClick={onAddIngredients}>
           <ListPlus size={16} aria-hidden="true" /> Add ingredients to list
@@ -1515,7 +1782,10 @@ function MealDetailSheet({
   const [meal, setMeal] = useState<Meal | null>(null);
 
   useEffect(() => {
-    api.meal(homeId, mealId).then(setMeal).catch(() => setMeal(null));
+    api
+      .meal(homeId, mealId)
+      .then(setMeal)
+      .catch(() => setMeal(null));
   }, [homeId, mealId]);
 
   if (!meal) {
@@ -1543,7 +1813,9 @@ function MealDetailSheet({
       fullHeight
     >
       <div className="meal-view-details">
-        {meal.image_url && <img className="meal-view-image" src={meal.image_url} alt="" />}
+        {meal.image_url && (
+          <img className="meal-view-image" src={meal.image_url} alt="" />
+        )}
         <p className="quiet-state">
           {[
             meal.prep_minutes ? `${meal.prep_minutes} min prep` : null,
@@ -1578,10 +1850,18 @@ function MealDetailSheet({
           </>
         )}
 
-        <button type="button" className="sheet-primary" onClick={() => onPlan(meal)}>
+        <button
+          type="button"
+          className="sheet-primary"
+          onClick={() => onPlan(meal)}
+        >
           Plan this meal
         </button>
-        <button type="button" className="secondary" onClick={() => onAddIngredients(meal)}>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onAddIngredients(meal)}
+        >
           <ListPlus size={16} aria-hidden="true" /> Add ingredients to list
         </button>
       </div>
@@ -1645,13 +1925,22 @@ function MealFormSheet({
     setSourceUrl(meal.source_url ?? "");
     setIsFavourite(meal.is_favourite);
     setIngredients(
-      meal.ingredients.map((row) => ({ text: row.text, quantity: row.quantity, unit: row.unit })),
+      meal.ingredients.map((row) => ({
+        text: row.text,
+        quantity: row.quantity,
+        unit: row.unit,
+      })),
     );
   }, [meal]);
 
-  function updateIngredient(index: number, patch: Partial<MealIngredientInput>) {
+  function updateIngredient(
+    index: number,
+    patch: Partial<MealIngredientInput>,
+  ) {
     setIngredients((current) =>
-      current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)),
+      current.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, ...patch } : row,
+      ),
     );
   }
 
@@ -1682,13 +1971,18 @@ function MealFormSheet({
         ingredients: ingredients.filter((row) => row.text.trim()),
       };
       if (meal) {
-        await api.updateMeal(homeId, meal.id, { ...payload, expected_updated_at: meal.updated_at });
+        await api.updateMeal(homeId, meal.id, {
+          ...payload,
+          expected_updated_at: meal.updated_at,
+        });
       } else {
         await api.createMeal(homeId, payload);
       }
       await onSaved();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not save this meal.");
+      setError(
+        cause instanceof ApiError ? cause.message : "Could not save this meal.",
+      );
     } finally {
       setBusy(false);
     }
@@ -1703,16 +1997,28 @@ function MealFormSheet({
   }
 
   return (
-    <BottomSheet title={meal ? "Edit meal" : "Add meal"} onDismiss={onClose} fullHeight>
+    <BottomSheet
+      title={meal ? "Edit meal" : "Add meal"}
+      onDismiss={onClose}
+      fullHeight
+    >
       <form onSubmit={submit}>
         <label>
           Name
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} required />
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={160}
+            required
+          />
         </label>
         <div className="meal-form-row">
           <label>
             Category
-            <select value={mealType} onChange={(event) => setMealType(event.target.value as MealType)}>
+            <select
+              value={mealType}
+              onChange={(event) => setMealType(event.target.value as MealType)}
+            >
               {MEAL_TYPES.map((row) => (
                 <option key={row.key} value={row.key}>
                   {row.label}
@@ -1786,7 +2092,11 @@ function MealFormSheet({
                   type="button"
                   className="icon-button secondary meal-ingredient-remove"
                   aria-label="Remove ingredient"
-                  onClick={() => setIngredients((current) => current.filter((_, i) => i !== index))}
+                  onClick={() =>
+                    setIngredients((current) =>
+                      current.filter((_, i) => i !== index),
+                    )
+                  }
                 >
                   <X size={14} aria-hidden="true" />
                 </button>
@@ -1796,7 +2106,11 @@ function MealFormSheet({
                     <input
                       placeholder="e.g. 500"
                       value={row.quantity ?? ""}
-                      onChange={(event) => updateIngredient(index, { quantity: event.target.value })}
+                      onChange={(event) =>
+                        updateIngredient(index, {
+                          quantity: event.target.value,
+                        })
+                      }
                     />
                   </label>
                   <label>
@@ -1804,7 +2118,9 @@ function MealFormSheet({
                     <input
                       placeholder="e.g. g"
                       value={row.unit ?? ""}
-                      onChange={(event) => updateIngredient(index, { unit: event.target.value })}
+                      onChange={(event) =>
+                        updateIngredient(index, { unit: event.target.value })
+                      }
                     />
                   </label>
                 </div>
@@ -1813,7 +2129,9 @@ function MealFormSheet({
                   <input
                     placeholder="e.g. Beef mince"
                     value={row.text}
-                    onChange={(event) => updateIngredient(index, { text: event.target.value })}
+                    onChange={(event) =>
+                      updateIngredient(index, { text: event.target.value })
+                    }
                   />
                 </label>
               </div>
@@ -1822,7 +2140,12 @@ function MealFormSheet({
           <button
             type="button"
             className="tertiary"
-            onClick={() => setIngredients((current) => [...current, { text: "", quantity: "", unit: "" }])}
+            onClick={() =>
+              setIngredients((current) => [
+                ...current,
+                { text: "", quantity: "", unit: "" },
+              ])
+            }
           >
             <Plus size={14} aria-hidden="true" /> Add ingredient
           </button>
@@ -1896,7 +2219,9 @@ function PlanFromMealSheet({
 }) {
   const [date, setDate] = useState(isoToday());
   const [slot, setSlot] = useState<MealSlot>(
-    meal.meal_type === "breakfast" || meal.meal_type === "lunch" || meal.meal_type === "dinner"
+    meal.meal_type === "breakfast" ||
+      meal.meal_type === "lunch" ||
+      meal.meal_type === "dinner"
       ? meal.meal_type
       : "dinner",
   );
@@ -1909,10 +2234,18 @@ function PlanFromMealSheet({
     setBusy(true);
     setError("");
     try {
-      await api.createMealPlanEntry(homeId, { meal_id: meal.id, date, meal_slot: slot });
+      await api.createMealPlanEntry(homeId, {
+        meal_id: meal.id,
+        date,
+        meal_slot: slot,
+      });
       setDone(true);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not add this to your plan.");
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Could not add this to your plan.",
+      );
     } finally {
       setBusy(false);
     }
@@ -1930,7 +2263,11 @@ function PlanFromMealSheet({
             <label>
               Date
               <span className="plan-meal-field">
-                <CalendarDays className="plan-meal-field-icon" size={18} aria-hidden="true" />
+                <CalendarDays
+                  className="plan-meal-field-icon"
+                  size={18}
+                  aria-hidden="true"
+                />
                 <input
                   className="plan-meal-field-input"
                   type="date"
@@ -1954,7 +2291,11 @@ function PlanFromMealSheet({
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="plan-meal-field-chevron" size={16} aria-hidden="true" />
+                <ChevronDown
+                  className="plan-meal-field-chevron"
+                  size={16}
+                  aria-hidden="true"
+                />
               </span>
             </label>
           </div>

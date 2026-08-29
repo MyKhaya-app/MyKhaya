@@ -5302,6 +5302,10 @@ button.danger,
   display: grid;
   gap: 0.75rem;
 }
+.meal-day-swipe-surface {
+  min-width: 0;
+  touch-action: pan-y;
+}
 .meal-slot-section h2 {
   font-size: var(--font-body);
   margin: 0 0 0.35rem;
@@ -5352,6 +5356,8 @@ button.danger,
   gap: 0.4rem;
 }
 .meal-entry-heading strong {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

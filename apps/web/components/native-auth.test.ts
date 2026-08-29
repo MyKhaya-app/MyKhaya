@@ -19,8 +19,10 @@ vi.mock("@mykhaya/api-client", () => ({
 }));
 
 let nativeShell = false;
+let platform: "ios" | "android" | "web" = "web";
 vi.mock("./native-runtime", () => ({
   isNativeShell: () => nativeShell,
+  nativePlatform: () => platform,
 }));
 
 vi.mock("./keychain-native-session-store", () => ({
@@ -29,11 +31,17 @@ vi.mock("./keychain-native-session-store", () => ({
   }),
 }));
 
+const setBiometricSignInEnabled = vi.fn<(enabled: boolean) => Promise<void>>(async () => {});
+vi.mock("./native-biometric-preference", () => ({
+  setBiometricSignInEnabled: (enabled: boolean) => setBiometricSignInEnabled(enabled),
+}));
+
 describe("native-auth", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
     nativeShell = false;
+    platform = "web";
   });
 
   it("bootstrapNativeSession delegates to the client's bootstrapSession", async () => {
@@ -64,12 +72,13 @@ describe("native-auth", () => {
     expect(childLogin).toHaveBeenCalledWith("ABC123", "kiddo", "4242");
   });
 
-  it("nativeLogout delegates to the client's logout", async () => {
+  it("nativeLogout delegates to the client's logout and clears the biometric preference", async () => {
     const { nativeLogout } = await import("./native-auth");
 
     await nativeLogout();
 
     expect(logout).toHaveBeenCalledTimes(1);
+    expect(setBiometricSignInEnabled).toHaveBeenCalledWith(false);
   });
 
   it("reuses the same client instance across calls", async () => {
@@ -91,6 +100,7 @@ describe("native-auth", () => {
     expect(nativeClientCtor).toHaveBeenCalledWith(
       "https://api.dev.mykhaya.app/api/v1",
       { kind: "keychain" },
+      expect.anything(),
     );
   });
 
@@ -103,6 +113,73 @@ describe("native-auth", () => {
     expect(nativeClientCtor).toHaveBeenCalledWith(
       "https://api.dev.mykhaya.app/api/v1",
       { kind: "in-memory" },
+      expect.anything(),
     );
+  });
+});
+
+describe("native-auth — device identification headers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    nativeShell = false;
+    platform = "web";
+  });
+
+  it("sends iOS client/platform headers so signed-in devices show as iOS, not a raw user agent", async () => {
+    platform = "ios";
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+
+    expect(nativeClientCtor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { clientHeaders: { client: "MyKhaya iOS", platform: "iOS" } },
+    );
+  });
+
+  it("sends no client headers outside the native shell — device_platform's own server-side default (Web/PWA) applies", async () => {
+    platform = "web";
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+
+    expect(nativeClientCtor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { clientHeaders: undefined },
+    );
+  });
+});
+
+describe("native-auth — nativeRenewSession", () => {
+  const renew = vi.fn();
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    nativeShell = false;
+    platform = "web";
+  });
+
+  it("delegates to the client's renew", async () => {
+    renew.mockResolvedValue({ id: "u1" });
+    vi.doMock("@mykhaya/api-client", () => ({
+      InMemoryNativeSessionStore: vi.fn().mockImplementation(() => ({ kind: "in-memory" })),
+      NativeMyKhayaClient: vi.fn().mockImplementation(() => ({
+        bootstrapSession,
+        login,
+        childLogin,
+        logout,
+        renew,
+      })),
+      nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
+    }));
+    const { nativeRenewSession } = await import("./native-auth");
+
+    const user = await nativeRenewSession();
+
+    expect(user).toEqual({ id: "u1" });
+    expect(renew).toHaveBeenCalledTimes(1);
   });
 });

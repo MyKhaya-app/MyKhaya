@@ -5,8 +5,9 @@ import {
   nativeApiBaseUrlForWebHost,
   type NativeSessionStore,
 } from "@mykhaya/api-client";
-import { isNativeShell } from "./native-runtime";
+import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
+import { setBiometricSignInEnabled } from "./native-biometric-preference";
 
 // Native auth bootstrap (task §7/§9/§10, Keychain wiring in Phase 4 §11).
 // This module is the only place `apps/web` constructs a
@@ -27,6 +28,20 @@ import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
 
+// Device-friendly labelling for the Security page's "Signed-in devices"
+// list (Phase 9) — read server-side via mobile_client_descriptor/
+// device_platform (see routers.auth) into Session.user_agent /
+// TrustedDevice.platform. A native login with these headers present shows
+// as "iOS" there instead of a raw WKWebView user-agent string; an ordinary
+// browser/PWA request never sends them at all (device_platform's own
+// server-side default is "Web/PWA"), so existing devices are unaffected.
+function clientHeaders(): { client: string; platform: string } | undefined {
+  const platform = nativePlatform();
+  if (platform === "web") return undefined;
+  const label = platform === "ios" ? "iOS" : "Android";
+  return { client: `MyKhaya ${label}`, platform: label };
+}
+
 function client(): NativeMyKhayaClient {
   if (!sharedClient) {
     sharedStore ??= isNativeShell()
@@ -35,6 +50,7 @@ function client(): NativeMyKhayaClient {
     sharedClient = new NativeMyKhayaClient(
       nativeApiBaseUrlForWebHost(window.location.hostname),
       sharedStore,
+      { clientHeaders: clientHeaders() },
     );
   }
   return sharedClient;
@@ -59,6 +75,26 @@ export function nativeChildLogin(
   return client().childLogin(homeCode, username, pin);
 }
 
-export function nativeLogout(): Promise<void> {
-  return client().logout();
+/** Explicit sign-out (Phase 8): revokes the server-side session (and its
+ * linked long-lived device credential — see routers.auth.mobile_logout),
+ * removes the local Keychain credential (NativeMyKhayaClient.logout()
+ * always clears the store even if the network call fails), and clears the
+ * Quick Sign-In preference — a device that's been signed out of should not
+ * still offer "unlock with Face ID" on its next launch. Never touches any
+ * other signed-in device. */
+export async function nativeLogout(): Promise<void> {
+  await client().logout();
+  await setBiometricSignInEnabled(false);
+}
+
+/** Explicit foreground/lifecycle renewal (Phase 6/11) — distinct from
+ * bootstrapSession()'s own automatic renew-on-401 fallback: this is for a
+ * caller (e.g. an app-resume handler) that wants to proactively refresh a
+ * session that might have quietly expired while backgrounded, without
+ * first taking the round-trip cost of a failed /users/me call. Throws if
+ * there is no renewable device credential or the server rejects it —
+ * callers should treat that the same as bootstrapNativeSession() returning
+ * null (session cannot be silently restored; fall back to Login). */
+export function nativeRenewSession(): Promise<User> {
+  return client().renew();
 }
