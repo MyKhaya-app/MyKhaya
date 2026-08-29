@@ -217,26 +217,30 @@ export function calendarDateAfter(key: string, days: number): string {
   return dateKey(date);
 }
 
-/** The first calendar date "Coming up" may show — the day after today, in
- *  `timeZone` — with deliberately no upper bound: Home -> "Coming up" shows
- *  the next N eligible occurrences however far out they fall, never a fixed
- *  future window (see calendar_occurrences.upcoming_candidate_filter on the
- *  backend for the matching "no horizon" rule). */
-export function tomorrowDateKey(timeZone: string, now: Date = new Date()): string {
-  return calendarDateAfter(dateKey(zonedToday(timeZone, now)), 1);
-}
-
-/** Whether `event`'s occurrence starts on/after `dateKeyThreshold` — the
- *  exact, timezone-correct inclusion test "Coming up" applies to whatever
- *  candidate occurrences the backend already selected as upcoming; unlike
- *  the old bounded eventInDateWindow, this has no upper edge. */
-export function eventOnOrAfterDate(
+/** Whether `event`'s occurrence hasn't finished yet, as of `now` — the
+ *  eligibility test Home -> "Coming up" applies to whatever candidate
+ *  occurrences the backend already selected. Deliberately a plain instant
+ *  comparison against the occurrence's own `end_at`, never a calendar-date
+ *  comparison: comparing calendar dates (as this used to, via a "starts on
+ *  or after tomorrow's date" rule) can't distinguish "already finished
+ *  earlier today" from "still to come later today" — both fall on the same
+ *  date — which is exactly what caused Coming Up to skip every remaining
+ *  event on the current day. `end_at` is a real UTC instant for a timed
+ *  event, and (per the timed-vs-all-day note above) an equally real,
+ *  timezone-independent instant for an all-day event's stored exclusive-end
+ *  boundary, so no separate all-day case or `timeZone` parameter is needed
+ *  here — comparing two real instants is inherently timezone-correct.
+ *  Naturally includes an occurrence currently in progress (started before
+ *  `now`, ends after it) and excludes one that has already ended, whatever
+ *  day it falls on. No upper bound: this only ever checks "not yet over",
+ *  never "not too far in the future" — see
+ *  calendar_occurrences.upcoming_candidate_filter on the backend for the
+ *  matching "no horizon" rule its own cursor-based query already applies. */
+export function isEventStillUpcoming(
   event: EventOccurrence,
-  timeZone: string,
-  dateKeyThreshold: string,
+  now: Date = new Date(),
 ): boolean {
-  const { startKey } = eventDateBounds(event, timeZone);
-  return startKey >= dateKeyThreshold;
+  return new Date(event.end_at).getTime() > now.getTime();
 }
 
 /** Converts a wall-clock date/time as seen in `timeZone` (e.g. "14 Aug 2026,

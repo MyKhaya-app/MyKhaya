@@ -38,11 +38,7 @@ import {
   upcomingBirthdayLabel,
 } from "./birthday-utils";
 import { routineDueLabel } from "./routine-utils";
-import {
-  eventDateBounds,
-  eventOnOrAfterDate,
-  tomorrowDateKey,
-} from "../calendar/calendar-utils";
+import { eventDateBounds, isEventStillUpcoming } from "../calendar/calendar-utils";
 
 function eventTime(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -60,18 +56,13 @@ function eventDateStack(value: string, timezone: string) {
   };
 }
 
-function isComingUp(event: EventOccurrence): boolean {
-  const timeZone = event.timezone;
-  return eventOnOrAfterDate(event, timeZone, tomorrowDateKey(timeZone));
-}
-
 // The backend answers "next N occurrences on/after a cursor" per source
 // (Home + each externally shared calendar) with no future-date horizon —
 // see calendar_occurrences.upcoming_candidate_filter/next_occurrence_on_or_after.
 // The cursor here is a generous 24h-back UTC buffer (comfortably more than
 // any real UTC offset) so a boundary occurrence is never missed before the
-// exact, timezone-correct isComingUp/compareUpcoming pass below narrows it
-// down to the real "after today" set; UPCOMING_FETCH_LIMIT similarly asks
+// exact isEventStillUpcoming/compareUpcoming pass below narrows it down to
+// the real "hasn't finished yet" set; UPCOMING_FETCH_LIMIT similarly asks
 // for more than the 3 ultimately shown so that pass always has enough to
 // choose from.
 const UPCOMING_FETCH_LIMIT = 8;
@@ -303,15 +294,18 @@ export default function HomePage() {
         if (calendarData) {
           const [homeSummary, upcomingRows] = calendarData;
           setSummary(homeSummary);
-          const todayOccurrenceIds = new Set(
-            homeSummary.today_events.map((event) => event.occurrence_id),
-          );
+          // Deliberately no "already shown in Today" exclusion here — Today
+          // and Coming Up answer different questions (Today: everything
+          // today, past and future; Coming Up: the next 3 events from this
+          // exact moment) and are expected to overlap on a day that still
+          // has events left to come. Filtering by isEventStillUpcoming alone
+          // is also what makes the two never disagree with each other:
+          // excluding "already in Today" previously hid every one of
+          // today's remaining events from Coming Up too, since Today lists
+          // the whole day, not just its past.
           setUpcoming(
             upcomingRows
-              .filter(
-                (event) =>
-                  !todayOccurrenceIds.has(event.occurrence_id) && isComingUp(event),
-              )
+              .filter((event) => isEventStillUpcoming(event))
               .sort(compareUpcoming)
               .slice(0, 3),
           );

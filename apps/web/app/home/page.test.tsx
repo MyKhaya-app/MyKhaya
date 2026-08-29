@@ -299,14 +299,24 @@ describe("Home — Routines shortcut", () => {
   });
 });
 
+// Relative to whenever the suite actually runs, not a fixed calendar date —
+// a hardcoded absolute date here would eventually become "the past" and
+// silently start failing every test below that doesn't override start_at/
+// end_at, now that Coming up genuinely filters on real elapsed time (see
+// app/calendar/calendar-utils.ts's isEventStillUpcoming). Exported for the
+// "Home — Coming up" tests below, which build their own scenarios around it.
+function minutesFromNow(minutes: number): string {
+  return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
 function occurrence(overrides: Record<string, unknown>) {
   return {
     occurrence_id: "occ-1",
     event_id: "event-1",
     calendar_id: "cal-1",
     title: "Event",
-    start_at: "2026-08-26T10:00:00+00:00",
-    end_at: "2026-08-26T11:00:00+00:00",
+    start_at: minutesFromNow(60),
+    end_at: minutesFromNow(120),
     is_all_day: false,
     timezone: "UTC",
     description: null,
@@ -343,27 +353,205 @@ describe("Home — Coming up", () => {
     expect(await screen.findByText("Nothing else planned yet.")).toBeInTheDocument();
   });
 
-  it("never duplicates an event already shown in Today", async () => {
+  // Coming up must show the next 3 chronological events from right now —
+  // including whatever's left of today — not skip straight to tomorrow.
+  // See app/calendar/calendar-utils.ts's isEventStillUpcoming, the shared
+  // eligibility rule this whole describe block exercises end to end
+  // (minutesFromNow is the module-level helper defined above, next to
+  // occurrence()).
+
+  it("includes an event later today, even though Today's own card also shows it", async () => {
     enableCalendarOnly();
-    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    const laterToday = minutesFromNow(60);
     (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
-      today_events: [occurrence({ occurrence_id: "occ-today", title: "Today's event" })],
+      // Today's own summary lists the whole day, past and future alike —
+      // Coming up must not treat that as a reason to hide the same event.
+      today_events: [occurrence({ occurrence_id: "occ-later", title: "Breakfast @ Jacks", start_at: laterToday, end_at: laterToday })],
       next_event: null,
     });
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
-        // The backend's generous cursor can re-include the same occurrence
-        // already shown in Today — the frontend must filter it back out.
-        occurrence({ occurrence_id: "occ-today", title: "Today's event" }),
-        occurrence({ occurrence_id: "occ-tomorrow", title: "Tomorrow's event", start_at: tomorrow }),
+        occurrence({ occurrence_id: "occ-later", title: "Breakfast @ Jacks", start_at: laterToday, end_at: laterToday }),
       ],
       next_page: null,
     });
 
     render(<HomePage />);
 
-    await screen.findByText("Tomorrow's event");
-    expect(screen.getAllByText("Today's event")).toHaveLength(1);
+    // Appears twice, deliberately: once in Today's own list (the whole day,
+    // past and future) and once in Coming up (the next 3 events from now) —
+    // the two cards answer different questions and are expected to overlap
+    // on a day that still has events left, not dedupe each other away.
+    await screen.findAllByText("Breakfast @ Jacks");
+    expect(screen.getAllByText("Breakfast @ Jacks")).toHaveLength(2);
+  });
+
+  it("excludes an event earlier today that has already finished", async () => {
+    enableCalendarOnly();
+    const finishedEarlier = minutesFromNow(-120);
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-past",
+          title: "Fergie Juniors",
+          start_at: finishedEarlier,
+          end_at: minutesFromNow(-60),
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Nothing else planned yet.");
+    expect(screen.queryByText("Fergie Juniors")).not.toBeInTheDocument();
+  });
+
+  it("returns two events later today before tomorrow's event, in chronological order", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        // Deliberately out of order in the API response — the page must
+        // still sort by actual start time.
+        occurrence({
+          occurrence_id: "occ-tomorrow",
+          title: "Tomorrow's event",
+          start_at: minutesFromNow(60 * 30),
+          end_at: minutesFromNow(60 * 30 + 30),
+        }),
+        occurrence({
+          occurrence_id: "occ-erin",
+          title: "Erin Drumming",
+          start_at: minutesFromNow(150),
+          end_at: minutesFromNow(180),
+        }),
+        occurrence({
+          occurrence_id: "occ-breakfast",
+          title: "Breakfast @ Jacks",
+          start_at: minutesFromNow(60),
+          end_at: minutesFromNow(90),
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Breakfast @ Jacks");
+    const titles = screen
+      .getAllByText(/Breakfast @ Jacks|Erin Drumming|Tomorrow's event/)
+      .map((node) => node.textContent);
+    expect(titles).toEqual(["Breakfast @ Jacks", "Erin Drumming", "Tomorrow's event"]);
+  });
+
+  it("falls back to tomorrow/next future events when nothing is left today", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-past",
+          title: "Finished earlier",
+          start_at: minutesFromNow(-120),
+          end_at: minutesFromNow(-60),
+        }),
+        occurrence({
+          occurrence_id: "occ-future",
+          title: "Next week's event",
+          start_at: minutesFromNow(60 * 24 * 8),
+          end_at: minutesFromNow(60 * 24 * 8 + 30),
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Next week's event")).toBeInTheDocument();
+    expect(screen.queryByText("Finished earlier")).not.toBeInTheDocument();
+  });
+
+  it("includes an all-day event covering today", async () => {
+    enableCalendarOnly();
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const tomorrowKey = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-allday",
+          title: "Sports Day",
+          is_all_day: true,
+          start_at: `${todayKey}T00:00:00+00:00`,
+          end_at: `${tomorrowKey}T00:00:00+00:00`,
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Sports Day")).toBeInTheDocument();
+  });
+
+  it("includes an event currently in progress", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-inprogress",
+          title: "Swimming lesson",
+          start_at: minutesFromNow(-15),
+          end_at: minutesFromNow(15),
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Swimming lesson")).toBeInTheDocument();
+  });
+
+  it("includes a recurring occurrence later today", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "event-recurring:2026-08-29T18:00:00+00:00",
+          title: "Weekly Piano",
+          recurrence: "weekly",
+          start_at: minutesFromNow(90),
+          end_at: minutesFromNow(120),
+        }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Weekly Piano")).toBeInTheDocument();
+  });
+
+  it("returns exactly 3 results when more than 3 future occurrences exist", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [1, 2, 3, 4, 5].map((n) =>
+        occurrence({
+          occurrence_id: `occ-${n}`,
+          title: `Event ${n}`,
+          start_at: minutesFromNow(n * 30),
+          end_at: minutesFromNow(n * 30 + 15),
+        }),
+      ),
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Event 1");
+    expect(screen.getByText("Event 2")).toBeInTheDocument();
+    expect(screen.getByText("Event 3")).toBeInTheDocument();
+    expect(screen.queryByText("Event 4")).not.toBeInTheDocument();
+    expect(screen.queryByText("Event 5")).not.toBeInTheDocument();
   });
 
   it("merges in an event from a calendar shared into this Home", async () => {

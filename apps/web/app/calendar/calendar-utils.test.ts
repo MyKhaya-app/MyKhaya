@@ -13,12 +13,12 @@ import {
   DEFAULT_EVENT_START_TIME,
   emptyStateMessage,
   eventDateBounds,
-  eventOnOrAfterDate,
   eventsForDay,
   filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
   isCalendarVisible,
+  isEventStillUpcoming,
   monthCells,
   monthRange,
   parseLocalInputValue,
@@ -31,7 +31,6 @@ import {
   zonedDateKey,
   zonedTimeToUtc,
   zonedToday,
-  tomorrowDateKey,
 } from "./calendar-utils";
 
 function event(overrides: Partial<EventOccurrence>): EventOccurrence {
@@ -75,37 +74,108 @@ function member(overrides: Partial<Member>): Member {
 }
 
 describe("Calendar presentation", () => {
-  it("defines Coming up as starting the day after today, with no upper bound", () => {
-    // 22:30 UTC is already 23:30 local in Europe/London (BST) on 2026-08-17,
-    // so "today" locally is still the 17th and tomorrow is the 18th.
-    const now = new Date("2026-08-17T22:30:00Z");
-    const threshold = tomorrowDateKey("Europe/London", now);
-    expect(threshold).toBe("2026-08-18");
-    // An event starting locally just before local midnight on the 17th is
-    // still "today", not "Coming up".
-    expect(
-      eventOnOrAfterDate(
-        event({ start_at: "2026-08-17T22:00:00Z", end_at: "2026-08-17T23:30:00Z" }),
-        "Europe/London",
-        threshold,
-      ),
-    ).toBe(false);
-    // Tomorrow (the 18th) qualifies...
-    expect(
-      eventOnOrAfterDate(
-        event({ start_at: "2026-08-18T10:00:00Z", end_at: "2026-08-18T11:00:00Z" }),
-        "Europe/London",
-        threshold,
-      ),
-    ).toBe(true);
-    // ...and so does an event many months away — there is no fixed future window.
-    expect(
-      eventOnOrAfterDate(
-        event({ start_at: "2027-02-21T10:00:00Z", end_at: "2027-02-21T11:00:00Z" }),
-        "Europe/London",
-        threshold,
-      ),
-    ).toBe(true);
+  describe("isEventStillUpcoming — Home 'Coming up' eligibility", () => {
+    // 08:48 UTC on 2026-08-29 — matches the reported bug's exact scenario.
+    const now = new Date("2026-08-29T08:48:00Z");
+
+    it("excludes an event earlier today that has already finished", () => {
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-08-29T07:00:00Z", end_at: "2026-08-29T07:45:00Z" }),
+          now,
+        ),
+      ).toBe(false);
+    });
+
+    it("includes an event later today", () => {
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-08-29T10:00:00Z", end_at: "2026-08-29T10:30:00Z" }),
+          now,
+        ),
+      ).toBe(true);
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-08-29T11:20:00Z", end_at: "2026-08-29T12:00:00Z" }),
+          now,
+        ),
+      ).toBe(true);
+    });
+
+    it("includes an event currently in progress (started before now, ends after it)", () => {
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-08-29T08:00:00Z", end_at: "2026-08-29T09:00:00Z" }),
+          now,
+        ),
+      ).toBe(true);
+    });
+
+    it("includes an all-day event covering today", () => {
+      expect(
+        isEventStillUpcoming(
+          event({
+            is_all_day: true,
+            start_at: "2026-08-29T00:00:00+00:00",
+            end_at: "2026-08-30T00:00:00+00:00",
+          }),
+          now,
+        ),
+      ).toBe(true);
+    });
+
+    it("excludes an all-day event that covered a previous day only", () => {
+      expect(
+        isEventStillUpcoming(
+          event({
+            is_all_day: true,
+            start_at: "2026-08-28T00:00:00+00:00",
+            end_at: "2026-08-29T00:00:00+00:00",
+          }),
+          now,
+        ),
+      ).toBe(false);
+    });
+
+    it("includes a multi-day event currently in progress", () => {
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-08-28T10:00:00Z", end_at: "2026-08-31T10:00:00Z" }),
+          now,
+        ),
+      ).toBe(true);
+    });
+
+    it("has no upper bound — an event many months away still qualifies", () => {
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2027-02-21T10:00:00Z", end_at: "2027-02-21T11:00:00Z" }),
+          now,
+        ),
+      ).toBe(true);
+    });
+
+    it("handles the midnight boundary correctly regardless of local calendar date", () => {
+      // 23:50 on New Year's Eve UTC — an event ending 20 minutes later
+      // crosses into the next UTC calendar date but is still in progress now.
+      const lateNow = new Date("2026-12-31T23:50:00Z");
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-12-31T23:30:00Z", end_at: "2027-01-01T00:10:00Z" }),
+          lateNow,
+        ),
+      ).toBe(true);
+      // An event that finished 5 minutes before midnight is excluded, even
+      // though "now" and the event share no calendar date confusion here —
+      // this is exactly the date-vs-instant distinction the old
+      // date-key-based rule got wrong.
+      expect(
+        isEventStillUpcoming(
+          event({ start_at: "2026-12-31T22:30:00Z", end_at: "2026-12-31T23:45:00Z" }),
+          lateNow,
+        ),
+      ).toBe(false);
+    });
   });
   it("builds a stable six-week Monday-first month", () => {
     const cells = monthCells(new Date("2026-08-15T00:00:00Z"));
