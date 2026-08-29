@@ -1154,7 +1154,26 @@ html.native-shell .app-content-scroll-region {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
+/* iOS's native rubber-band bounce visually shifts this region's own content
+   down past its real top edge when someone pulls beyond scrollTop 0 — the
+   gap that briefly opens up above the (real, unmoved) content shows
+   whatever's painted *behind* the scroll region, which by default is the
+   page's own cream background (html's base colour) showing through, not
+   the green hero the user was just looking at. overscroll-behavior-y:
+   contain (above) only stops that pull from chaining up into the page
+   itself; it doesn't touch what colour shows in the bounce gap, which is
+   what this rule is for.
+   :has(.home-hero) scopes this to only the one page that actually has a
+   green hero (currently just Home — see AppShell's optional `hero` prop)
+   rather than recolouring every native-shell screen green. .app-main
+   keeps its own explicit cream background immediately below so the
+   ordinary card/content area is never affected — only the sliver directly
+   behind the hero (and revealed above it during the bounce) is green. */
+html.native-shell .app-content-scroll-region:has(.home-hero) {
+  background: var(--colour-forest);
+}
 html.native-shell .app-main {
+  background: var(--colour-cream-light);
   /* .bottom-nav is a real flex sibling here (see below), not an overlay —
      it already reserves its own space, so app-main only needs ordinary
      breathing room, not the browser layout's bottom-nav-height offset. */
@@ -1208,6 +1227,35 @@ html.native-shell .bottom-nav {
   display: flex;
   gap: 0.6rem;
   margin-top: 1rem;
+}
+/* Native shell only: the browser/PWA hero's generous padding and full
+   --font-hero size are fine on an infinitely-scrollable page, but inside
+   the bounded native-app viewport (see the "Native shell viewport model"
+   block above) they push the first real content card well below the fold
+   on a standard-height iPhone, purely from fixed px/rem spacing that never
+   scales down. Nothing here is removed, just tightened, and only inside
+   .native-shell — browser/PWA keeps the original spacing untouched. The
+   h1's clamp() scales between the existing --font-display and --font-hero
+   tokens by viewport width, so it stays smaller on an iPhone SE-width
+   screen and reaches the full hero size on a Pro Max, with no
+   device-specific breakpoint or hardcoded iPhone dimension. */
+html.native-shell .home-hero {
+  padding: 14px 24px 44px;
+}
+html.native-shell .home-hero h1 {
+  font-size: clamp(var(--font-display), 8vw, var(--font-hero));
+  margin: 0.15rem 0 0.3rem;
+}
+html.native-shell .home-family-strip {
+  margin-top: 0.65rem;
+}
+/* Matches the reduced hero bottom padding above: the first content card
+   still tucks up into the hero's rounded bottom edge (the same visual
+   relationship as browser/PWA), just by a proportionally smaller amount,
+   so a comfortable strip of green still shows above the card rather than
+   the card butting straight up against the greeting/avatars. */
+html.native-shell .home-section-overlap {
+  margin-top: -28px;
 }
 .home-family-strip .avatar {
   box-shadow:

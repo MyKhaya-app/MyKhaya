@@ -343,6 +343,45 @@ function enableCalendarOnly() {
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
 }
 
+// The native-shell hero-density and top-overscroll-background fixes
+// (app/styles.css's `html.native-shell .home-hero`/`.home-family-strip`/
+// `.app-content-scroll-region:has(.home-hero)` rules) are CSS-only —
+// nothing here renders differently between native and browser. What
+// actually keeps those selectors correct is this exact DOM contract:
+// `.home-hero` and `.home-family-strip` must keep existing, with the
+// avatar strip nested inside the hero. This guards that contract against
+// a future refactor silently renaming/removing the hooks that CSS depends
+// on, in either environment.
+describe("Home — hero markup contract", () => {
+  it("renders the hero and family strip with the classNames styles.css depends on", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        membership_id: "m1",
+        user_id: "u2",
+        display_name: "Erin",
+        email: null,
+        role: "adult_member",
+        relationship: "partner",
+        permission_profile: "standard_partner",
+        permission_overrides: {},
+        shared_resources: [],
+        colour: "sky",
+        avatar_version: null,
+      },
+    ]);
+
+    render(<HomePage />);
+    await screen.findByText("Routines");
+
+    const hero = document.querySelector(".home-hero");
+    expect(hero).not.toBeNull();
+    expect(hero?.querySelector("h1")).not.toBeNull();
+    const strip = hero?.querySelector(".home-family-strip");
+    expect(strip).not.toBeNull();
+    expect(strip?.querySelector(".avatar")).not.toBeNull();
+  });
+});
+
 describe("Home — Coming up", () => {
   it("shows the empty-state copy when there are genuinely no future events", async () => {
     enableCalendarOnly();

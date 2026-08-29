@@ -105,4 +105,25 @@ describe("AppShell — content scroll region", () => {
     expect(region?.querySelector(".app-header")).toBeNull();
     expect(region?.querySelector(".bottom-nav")).toBeNull();
   });
+
+  // The native-shell top-overscroll background fix (styles.css:
+  // `html.native-shell .app-content-scroll-region:has(.home-hero)`) depends
+  // structurally on a `.home-hero` element being a descendant of
+  // `.app-content-scroll-region` — this is what actually keeps that CSS
+  // selector's precondition true regardless of native/browser mode, since
+  // there's no conditional rendering involved, only CSS scoping.
+  it("keeps .home-hero nested inside the scroll region identically in native shell and browser", async () => {
+    for (const native of [true, false]) {
+      nativeShell = native;
+      const { unmount } = render(
+        <AppShell hero={<div className="home-hero">greeting</div>}>content</AppShell>,
+      );
+      await screen.findByText("content");
+
+      const region = document.querySelector(".app-content-scroll-region");
+      expect(region?.querySelector(".home-hero")).not.toBeNull();
+
+      unmount();
+    }
+  });
 });
