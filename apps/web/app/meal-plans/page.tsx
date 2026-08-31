@@ -641,7 +641,7 @@ function MealEntryCard({
       )}
       <div className="meal-entry-main">
         <div className="meal-entry-heading">
-          <strong>{entryTitle(entry)}</strong>
+          <strong className="text-clamp-2">{entryTitle(entry)}</strong>
           {entry.is_favourite && (
             <Star
               size={14}

@@ -63,7 +63,7 @@ function firePointerEvent(
   fireEvent(element, event);
 }
 
-function member(): Member {
+function member(overrides: Partial<Member> = {}): Member {
   return {
     membership_id: "m1",
     user_id: "u1",
@@ -76,6 +76,7 @@ function member(): Member {
     shared_resources: [],
     colour: null,
     avatar_version: null,
+    ...overrides,
   };
 }
 
@@ -276,7 +277,7 @@ describe("Meal Plans — Family plan access", () => {
           quick_meal_name: null,
           meal_image_url: null,
           time: null,
-          member_ids: ["u1"],
+          member_ids: ["u1", "u2", "u3"],
           cook_member_id: null,
           makes_leftovers: false,
           is_favourite: false,
@@ -284,6 +285,11 @@ describe("Meal Plans — Family plan access", () => {
       ],
     });
 
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      member(),
+      member({ user_id: "u2", display_name: "Alex" }),
+      member({ user_id: "u3", display_name: "Sam" }),
+    ]);
     render(<MealPlansPage />);
     const card = await screen.findByRole("button", {
       name: /fish\/mozzarella sticks with chips and broccoli/i,
@@ -295,6 +301,7 @@ describe("Meal Plans — Family plan access", () => {
       "Fish/Mozzarella Sticks with Chips and Broccoli",
     );
     expect(card.querySelector(".avatar")).toBeInTheDocument();
+    expect(card.querySelector(".avatar-stack")).toBeInTheDocument();
     // jsdom does not perform layout; CSS min-width/flex sizing is verified by
     // the rendered hierarchy here and by the simulator retest.
   });

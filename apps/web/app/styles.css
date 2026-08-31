@@ -83,6 +83,29 @@ textarea:focus-visible {
   outline: 3px solid var(--colour-mustard);
   outline-offset: 3px;
 }
+/* Shared dynamic-content layout primitives. Apply these to the text side of
+   rows with fixed icons/actions, and choose clamping only for compact cards.
+   Detail views should use normal wrapping instead of hiding content. */
+.text-shrinkable {
+  min-width: 0;
+}
+.text-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.text-clamp-2 {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.text-wrap-anywhere {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .brand {
   align-items: center;
   display: inline-flex;
@@ -5359,8 +5382,7 @@ button.danger,
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 .meal-favourite-star {
   color: var(--colour-mustard);
