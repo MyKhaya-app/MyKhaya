@@ -18,6 +18,7 @@ import type {
   EventOccurrence,
   HomeSummary,
   Member,
+  Reminder,
   Routine,
   User,
 } from "@mykhaya/shared-types";
@@ -212,7 +213,8 @@ export default function HomePage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
-  const [routinesExpanded, setRoutinesExpanded] = useState(false);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [todoExpanded, setTodoExpanded] = useState(false);
   const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
@@ -313,11 +315,15 @@ export default function HomePage() {
           setSummary(null);
           setUpcoming([]);
         }
-        const routineData = notificationsEnabled
-          ? await api.routines(activeHomeId, { home: true }).catch(() => null)
-          : null;
+        const [routineData, reminderData] = notificationsEnabled
+          ? await Promise.all([
+              api.routines(activeHomeId, { home: true }).catch(() => null),
+              api.reminders(activeHomeId, { home: true }).catch(() => null),
+            ])
+          : [null, null];
         setRoutines(routineData?.items ?? []);
-        setRoutinesExpanded(false);
+        setReminders(reminderData?.items ?? []);
+        setTodoExpanded(false);
       })
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
@@ -363,6 +369,30 @@ export default function HomePage() {
     }
   }
 
+  async function completeReminder(reminder: Reminder) {
+    if (!activeHomeId || !reminder.home_occurrence_date || reminder.home_completed_at) return;
+    const previous = reminders;
+    const completedAt = new Date().toISOString();
+    setReminders((current) =>
+      current.map((item) =>
+        item.id === reminder.id
+          ? {
+              ...item,
+              home_completed_at: completedAt,
+              home_completed_by_user_id: user?.id ?? null,
+              home_completed_by_display_name: user?.display_name ?? "You",
+            }
+          : item,
+      ),
+    );
+    try {
+      await api.completeReminder(activeHomeId, reminder.id, reminder.home_occurrence_date);
+    } catch (cause) {
+      setReminders(previous);
+      setError((cause as Error).message);
+    }
+  }
+
   // Requesting push permission before the app is installed leads nowhere useful on
   // iOS Safari (Notification.requestPermission works, but there is no way to receive
   // push while the tab is closed) — so the prompt only appears once installed.
@@ -371,11 +401,31 @@ export default function HomePage() {
   const showInstallFirstNotice =
     notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
-  // The API's home=true view already returns routines in Home's exact
-  // priority order (overdue, due today, upcoming, then completed) — see
-  // household_routines.list_routines — so this only slices for the
-  // show-more/show-less toggle, it doesn't re-sort.
-  const visibleRoutines = routinesExpanded ? routines : routines.slice(0, 3);
+  // Each of routines/reminders is already in its own Home priority order
+  // (overdue, due today, upcoming, then completed today) — see
+  // household_routines.list_routines and routers.reminders.list_reminders,
+  // both built on the same select_home_occurrence priority. Merging two
+  // separately-sorted lists needs its own combined sort key here, since
+  // neither response exposes its internal priority number — completed items
+  // always sort last, then by occurrence date, then title, so Routines and
+  // Reminders interleave sensibly on one shared list rather than routines
+  // always coming first.
+  type TodoItem =
+    | { kind: "routine"; id: string; data: Routine }
+    | { kind: "reminder"; id: string; data: Reminder };
+  const todoItems: TodoItem[] = [
+    ...routines.map((data): TodoItem => ({ kind: "routine", id: `routine:${data.id}`, data })),
+    ...reminders.map((data): TodoItem => ({ kind: "reminder", id: `reminder:${data.id}`, data })),
+  ].sort((a, b) => {
+    const aDone = Boolean(a.data.home_completed_at);
+    const bDone = Boolean(b.data.home_completed_at);
+    if (aDone !== bDone) return aDone ? 1 : -1;
+    const aDate = a.data.home_occurrence_date ?? "";
+    const bDate = b.data.home_occurrence_date ?? "";
+    if (aDate !== bDate) return aDate < bDate ? -1 : 1;
+    return a.data.title.localeCompare(b.data.title);
+  });
+  const visibleTodoItems = todoExpanded ? todoItems : todoItems.slice(0, 3);
 
   return (
     <AppShell
@@ -476,7 +526,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {routines.length > 0 && (
+        {todoItems.length > 0 && (
           <section className="card home-section home-todo-section">
             <div className="section-heading">
               <h2>To do</h2>
@@ -485,45 +535,53 @@ export default function HomePage() {
               </Link>
             </div>
             <div className="home-routine-list" id="home-routine-list">
-              {visibleRoutines.map((routine) => {
-                const completed = Boolean(routine.home_completed_at);
+              {visibleTodoItems.map((item) => {
+                const { data } = item;
+                const completed = Boolean(data.home_completed_at);
+                const href = item.kind === "routine" ? "/settings/routines" : "/settings/reminders";
                 return (
-                  <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={routine.id}>
+                  <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={item.id}>
                     <button
                       className="home-routine-check"
                       type="button"
-                      aria-label={`${completed ? "Completed" : "Complete"} ${routine.title}`}
+                      aria-label={`${completed ? "Completed" : "Complete"} ${data.title}`}
                       aria-pressed={completed}
-                      onClick={() => completeRoutine(routine)}
+                      onClick={() =>
+                        item.kind === "routine" ? completeRoutine(item.data) : completeReminder(item.data)
+                      }
                       disabled={completed}
                     >
                       <span className="home-routine-check-dot" aria-hidden="true">
                         {completed && <Check size={10} />}
                       </span>
                     </button>
-                    <Link className="home-routine-copy" href="/settings/routines">
-                      <strong>{routine.title}</strong>
+                    <Link className="home-routine-copy" href={href}>
+                      <strong>{data.title}</strong>
                       <small>
                         {completed
-                          ? routine.scope === "household" && routine.home_completed_by_display_name
-                            ? `Done by ${routine.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
-                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(routine.home_completed_at!))}`
-                          : `${routineDueLabel(routine.home_occurrence_date)} · ${routine.scope === "household" ? "Household" : "Personal"}`}
+                          ? data.scope === "household" && data.home_completed_by_display_name
+                            ? `Done by ${data.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`
+                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`
+                          : `${routineDueLabel(data.home_occurrence_date)} · ${data.scope === "household" ? "Household" : "Personal"}`}
+                        {" · "}
+                        <span className="home-todo-kind">
+                          {item.kind === "routine" ? "Routine" : "Reminder"}
+                        </span>
                       </small>
                     </Link>
                   </div>
                 );
               })}
             </div>
-            {routines.length > 3 && (
+            {todoItems.length > 3 && (
               <button
                 className="home-routine-expand tertiary"
                 type="button"
-                aria-expanded={routinesExpanded}
+                aria-expanded={todoExpanded}
                 aria-controls="home-routine-list"
-                onClick={() => setRoutinesExpanded((expanded) => !expanded)}
+                onClick={() => setTodoExpanded((expanded) => !expanded)}
               >
-                {routinesExpanded ? "Show less" : "Show more"}
+                {todoExpanded ? "Show less" : "Show more"}
               </button>
             )}
           </section>

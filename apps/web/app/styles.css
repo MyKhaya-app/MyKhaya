@@ -1413,6 +1413,14 @@ html.native-shell .home-section-overlap {
   color: var(--colour-muted);
   font-size: 0.625rem;
 }
+/* A subtle, text-only Routine/Reminder distinction on the combined Home To-do
+   list — deliberately not a coloured badge/pill, which would be visual noise
+   at this size next to the due-date/scope text it sits beside. */
+.home-todo-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.75;
+}
 /* Completed rows recede — smaller/muted text on top of the already-smaller
    completed dot above, so an outstanding item is always the visual anchor. */
 .home-routine-row.is-complete .home-routine-copy strong {

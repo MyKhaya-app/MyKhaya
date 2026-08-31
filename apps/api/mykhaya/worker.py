@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from pywebpush import WebPushException
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -24,6 +25,9 @@ from mykhaya.notifications.briefing import deliver_daily_briefing
 from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
+from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
+
+log = structlog.get_logger()
 
 # Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
 # 3 -> 120s ... capped at MAX_BACKOFF_SECONDS. After MAX_ATTEMPTS the event
@@ -185,6 +189,15 @@ async def process(event_id: uuid.UUID) -> None:
                     event.payload["owner_id"],
                     event.payload["year"],
                 )
+            elif event.topic == "notification.standalone_reminder":
+                await deliver_standalone_reminder(
+                    db,
+                    settings,
+                    event.payload["reminder_id"],
+                    event.payload["occurrence_date"],
+                    event.payload["cadence"],
+                    event.payload["slot"],
+                )
 
             job.status = "completed"
             job.finished_at = datetime.now(UTC)
@@ -230,7 +243,19 @@ async def run() -> None:
                 payload = json.loads(item[1])
                 try:
                     await process(uuid.UUID(payload["event_id"]))
-                except Exception:
+                except Exception as exc:
+                    # process() already recorded the failure on the OutboxEvent/
+                    # WorkerJobRecord rows and re-raised — this is the last chance
+                    # to make it visible anywhere at all, since the loop must not
+                    # die on one bad job. Previously this was a bare `except
+                    # Exception: pass`-equivalent, which is why a large backlog of
+                    # failing jobs (e.g. email delivery misconfiguration) could
+                    # build up completely silently with nothing in the logs.
+                    log.error(
+                        "worker.job_failed",
+                        event_id=str(payload.get("event_id")),
+                        error=type(exc).__name__,
+                    )
                     await asyncio.sleep(2)
     finally:
         await redis.aclose()

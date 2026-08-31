@@ -26,6 +26,7 @@ from mykhaya.routers import (
     meal_plans,
     notifications,
     platform,
+    reminders,
     users,
     wishlists,
 )
@@ -112,6 +113,7 @@ for router in (
     children.router,
     features.router,
     household_routines.router,
+    reminders.router,
     meal_plans.router,
     lists.router,
     wishlists.router,

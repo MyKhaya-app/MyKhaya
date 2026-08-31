@@ -149,8 +149,8 @@ MODULES: tuple[ModuleDefinition, ...] = (
         "Push, email and in-app reminders — event reminders, daily briefings and "
         "household routines.",
         "Communication",
-        ReleaseState.beta,
-        False,
+        ReleaseState.released,
+        True,
         "0.1.0",
         route="/notifications",
     ),

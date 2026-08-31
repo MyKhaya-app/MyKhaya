@@ -486,6 +486,55 @@ export interface RoutineListResponse {
   items: Routine[];
 }
 
+// A standalone Reminder — a lightweight thing to remember, deliberately
+// separate from a Routine (a recurring responsibility with its own
+// reminder_timing) and from a calendar event's reminder_minutes. Reuses
+// RoutineScope verbatim (personal/household mean the same thing here).
+export type ReminderRepeat = "never" | "daily" | "weekly";
+export type ReminderCadence = "once" | "hourly" | "daily" | "weekly";
+
+export interface Reminder {
+  id: string;
+  title: string;
+  description: string | null;
+  scope: RoutineScope;
+  owner_user_id: string | null;
+  due_date: string;
+  due_time: string;
+  repeat: ReminderRepeat;
+  cadence: ReminderCadence;
+  enabled: boolean;
+  member_ids: string[];
+  next_occurrence_date: string | null;
+  completed_today: boolean;
+  home_occurrence_date?: string | null;
+  home_completed_at?: string | null;
+  home_completed_by_user_id?: string | null;
+  home_completed_by_display_name?: string | null;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface ReminderPayload {
+  title: string;
+  description?: string | null;
+  scope: RoutineScope;
+  due_date: string;
+  due_time: string;
+  repeat: ReminderRepeat;
+  cadence: ReminderCadence;
+  member_ids: string[];
+}
+
+export interface ReminderUpdatePayload extends ReminderPayload {
+  enabled: boolean;
+  expected_updated_at: string;
+}
+
+export interface ReminderListResponse {
+  items: Reminder[];
+}
+
 // ---------------------------------------------------------------------------
 // Meal Plans (Family-only)
 // ---------------------------------------------------------------------------

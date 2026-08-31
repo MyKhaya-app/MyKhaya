@@ -16,6 +16,7 @@ const links = [
   ["Security", "Password, biometric sign-in and signed-in devices", "/settings/security"],
   ["Home settings", "Name and membership controls", "/settings/home"],
   ["Plan & Billing", "Your Home's plan, and payment status if applicable", "/settings/billing"],
+  ["Reminders", "Lightweight one-off and repeating things to remember", "/settings/reminders"],
 ] as const;
 // Not part of a managed Child's restricted surface — a Child has no password, no
 // household administration rights, and no invite/membership controls. Any adult

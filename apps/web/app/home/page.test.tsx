@@ -49,6 +49,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       listUpcomingSharedEvents: vi.fn(),
       routines: vi.fn(),
       completeRoutine: vi.fn(),
+      reminders: vi.fn(),
+      completeReminder: vi.fn(),
       mealPlanDay: vi.fn(),
     },
   };
@@ -78,6 +80,8 @@ beforeEach(() => {
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.completeRoutine as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.completeReminder as ReturnType<typeof vi.fn>).mockResolvedValue({});
   (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({ date: "2026-08-20", entries: [] });
   (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
     today_events: [],
@@ -738,6 +742,166 @@ describe("Home — household routines", () => {
     expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
     await user.click(screen.getByRole("button", { name: "Show less" }));
     expect(screen.queryByText("Take Tablet")).not.toBeInTheDocument();
+  });
+});
+
+describe("Home — reminders on the combined To-do list", () => {
+  function reminder(overrides: Record<string, unknown> = {}) {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      id: "reminder-1",
+      title: "Call the dentist",
+      description: null,
+      scope: "personal" as const,
+      owner_user_id: "u1",
+      due_date: today,
+      due_time: "09:00:00",
+      repeat: "never" as const,
+      cadence: "once" as const,
+      enabled: true,
+      member_ids: [],
+      next_occurrence_date: today,
+      completed_today: false,
+      home_occurrence_date: today,
+      home_completed_at: null,
+      home_completed_by_user_id: null,
+      home_completed_by_display_name: null,
+      created_by: "u1",
+      updated_at: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+  const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
+  it("shows Routines and Reminders together, each subtly labelled", async () => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "notifications", enabled: true },
+      ],
+    });
+    (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "routine-1",
+          title: "Put bins out",
+          description: null,
+          scope: "household",
+          owner_user_id: null,
+          interval_weeks: 1,
+          repeat_unit: "weekly",
+          week_anchor_date: tomorrow(),
+          reminder_timing: "evening_before",
+          is_critical: false,
+          pinned: false,
+          enabled: true,
+          start_date: tomorrow(),
+          end_date: null,
+          member_ids: [],
+          next_occurrence_date: tomorrow(),
+          completed_today: false,
+          home_occurrence_date: tomorrow(),
+          home_completed_at: null,
+          home_completed_by_user_id: null,
+          home_completed_by_display_name: null,
+          created_by: "u1",
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    });
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [reminder()],
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Put bins out")).toBeInTheDocument();
+    expect(screen.getByText("Call the dentist")).toBeInTheDocument();
+    const rows = document.querySelectorAll(".home-routine-row");
+    expect(rows).toHaveLength(2);
+    expect(document.querySelectorAll(".home-todo-kind")).toHaveLength(2);
+    expect(screen.getByText("Routine")).toBeInTheDocument();
+    expect(screen.getByText("Reminder")).toBeInTheDocument();
+  });
+
+  it("completes a reminder from Home without affecting an unrelated routine", async () => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "notifications", enabled: true },
+      ],
+    });
+    (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "routine-1",
+          title: "Feed the dog",
+          description: null,
+          scope: "household",
+          owner_user_id: null,
+          interval_weeks: 1,
+          repeat_unit: "daily",
+          week_anchor_date: new Date().toISOString().slice(0, 10),
+          reminder_timing: "same_day",
+          is_critical: false,
+          pinned: false,
+          enabled: true,
+          start_date: new Date().toISOString().slice(0, 10),
+          end_date: null,
+          member_ids: [],
+          next_occurrence_date: new Date().toISOString().slice(0, 10),
+          completed_today: false,
+          home_occurrence_date: new Date().toISOString().slice(0, 10),
+          home_completed_at: null,
+          home_completed_by_user_id: null,
+          home_completed_by_display_name: null,
+          created_by: "u1",
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    });
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [reminder()],
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Call the dentist");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /complete call the dentist/i }));
+
+    expect(api.completeReminder).toHaveBeenCalledWith(
+      "home-1",
+      "reminder-1",
+      reminder().home_occurrence_date,
+    );
+    expect(api.completeRoutine).not.toHaveBeenCalled();
+    await screen.findByText(/Done/);
+    // The unrelated routine stays exactly as it was — not marked done too.
+    expect(screen.getByRole("button", { name: /complete feed the dog/i })).not.toBeDisabled();
+  });
+
+  it("restores the reminder and shows an error if completion fails", async () => {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "notifications", enabled: true },
+      ],
+    });
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [reminder()] });
+    (api.completeReminder as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Could not complete that reminder."),
+    );
+
+    render(<HomePage />);
+
+    await screen.findByText("Call the dentist");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /complete call the dentist/i }));
+
+    expect(await screen.findByText("Could not complete that reminder.")).toBeInTheDocument();
+    // Rolled back to not-completed — the check button is enabled again.
+    expect(screen.getByRole("button", { name: /complete call the dentist/i })).not.toBeDisabled();
   });
 });
 

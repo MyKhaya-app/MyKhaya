@@ -34,6 +34,7 @@ class Capability(StrEnum):
     household_export = "household.export"
     security_manage = "security.manage"
     household_manage_routines = "household.manage_routines"
+    household_manage_reminders = "household.manage_reminders"
     # Starting Stripe Checkout, opening the Customer Portal, and (future)
     # cancellation actions — home_admin only, matching household.manage and
     # features.manage. A standard_partner belonging to the Home is not
@@ -76,6 +77,7 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.calendar_edit_all,
             Capability.calendar_delete,
             Capability.household_manage_routines,
+            Capability.household_manage_reminders,
             Capability.meals_view,
             Capability.meals_manage,
             Capability.lists_view,

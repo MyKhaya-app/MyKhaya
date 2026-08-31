@@ -16,6 +16,8 @@ from mykhaya.models import (
     MealType,
     PermissionProfile,
     RecurrencePattern,
+    ReminderCadence,
+    ReminderRepeat,
     Role,
     RoutineReminderTiming,
     RoutineScope,
@@ -853,6 +855,72 @@ class RoutineListResponse(BaseModel):
 
 
 class RoutineCompletionRequest(StrictModel):
+    occurrence_date: date
+
+
+class ReminderCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat = ReminderRepeat.never
+    cadence: ReminderCadence = ReminderCadence.once
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "ReminderCreate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal reminder cannot have explicit members")
+        return self
+
+
+class ReminderUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat = ReminderRepeat.never
+    cadence: ReminderCadence = ReminderCadence.once
+    enabled: bool = True
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "ReminderUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal reminder cannot have explicit members")
+        return self
+
+
+class ReminderResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat
+    cadence: ReminderCadence
+    enabled: bool
+    member_ids: list[uuid.UUID]
+    next_occurrence_date: date | None
+    completed_today: bool
+    home_occurrence_date: date | None = None
+    home_completed_at: datetime | None = None
+    home_completed_by_user_id: uuid.UUID | None = None
+    home_completed_by_display_name: str | None = None
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class ReminderListResponse(BaseModel):
+    items: list[ReminderResponse]
+
+
+class ReminderCompletionRequest(StrictModel):
     occurrence_date: date
 
 

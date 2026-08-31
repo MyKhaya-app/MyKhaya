@@ -569,6 +569,42 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/routines/${encodeURIComponent(routineId)}/complete/${encodeURIComponent(occurrenceDate)}`,
       { method: "DELETE" },
     );
+  reminders = (homeId: string, params?: { home?: boolean }) =>
+    this.request<import("@mykhaya/shared-types").ReminderListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/reminders${params?.home ? "?home=true" : ""}`,
+    );
+  createReminder = (
+    homeId: string,
+    body: import("@mykhaya/shared-types").ReminderPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Reminder>(
+      `/homes/${encodeURIComponent(homeId)}/reminders`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateReminder = (
+    homeId: string,
+    reminderId: string,
+    body: import("@mykhaya/shared-types").ReminderUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Reminder>(
+      `/homes/${encodeURIComponent(homeId)}/reminders/${encodeURIComponent(reminderId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteReminder = (homeId: string, reminderId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/reminders/${encodeURIComponent(reminderId)}`,
+      { method: "DELETE" },
+    );
+  completeReminder = (homeId: string, reminderId: string, occurrenceDate: string) =>
+    this.request<import("@mykhaya/shared-types").Reminder>(
+      `/homes/${encodeURIComponent(homeId)}/reminders/${encodeURIComponent(reminderId)}/complete`,
+      { method: "POST", body: JSON.stringify({ occurrence_date: occurrenceDate }) },
+    );
+  uncompleteReminder = (homeId: string, reminderId: string, occurrenceDate: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/reminders/${encodeURIComponent(reminderId)}/complete/${encodeURIComponent(occurrenceDate)}`,
+      { method: "DELETE" },
+    );
   // --- Meal Plans (Family-only) -------------------------------------------
   meals = (homeId: string, params?: { favourite?: boolean; q?: string }) => {
     const search = new URLSearchParams();

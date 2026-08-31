@@ -260,6 +260,19 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="routines",
         channel=NotificationChannel.in_app,
     ),
+    # --- Standalone reminders ---------------------------------------------------
+    "reminder.due": TemplateDefault(
+        subject="{{reminder_title}}",
+        body="Reminder: {{reminder_title}}.",
+        allowed_variables=frozenset({"reminder_title"}),
+        description=(
+            "A standalone Reminder's due (or repeat-nag) notification — the same "
+            "wording is reused for every cadence tick until the reminder is "
+            "completed."
+        ),
+        module="reminders",
+        channel=NotificationChannel.in_app,
+    ),
     # --- Daily briefing (wording fragments only — see briefing.py) -----------
     # Deliberately NOT templated: which events/meals/birthdays appear, their
     # ordering, the empty-day rotation, and the "+N more" overflow line —
@@ -390,6 +403,7 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "event_location": " at Riverside School",
     },
     "routine.due": {"routine_title": "Put the bins out"},
+    "reminder.due": {"reminder_title": "Call the dentist"},
     "briefing.title": {"count_phrase": "3 events"},
     "briefing.intro": {},
     "birthday.reminder.self": {},

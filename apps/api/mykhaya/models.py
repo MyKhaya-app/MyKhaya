@@ -1398,6 +1398,116 @@ class HouseholdRoutineCompletion(UuidTimeMixin, Base):
     )
 
 
+class ReminderRepeat(StrEnum):
+    """Never: a single occurrence on due_date. Daily/weekly: an occurrence every day
+    (or every same-weekday week) from due_date onward, indefinitely — unlike
+    HouseholdRoutine there is no interval_weeks/end_date; keep the model small
+    and let `enabled=False` (or deletion) be the only way to stop a series."""
+
+    never = "never"
+    daily = "daily"
+    weekly = "weekly"
+
+
+class ReminderCadence(StrEnum):
+    """How often an uncompleted, due occurrence re-notifies. `once` fires a single
+    notification at due_time and never again for that occurrence. The other three
+    keep nagging — hourly/daily/weekly — until the occurrence is completed; see
+    mykhaya.notifications.standalone_reminders for exactly how a missed cadence
+    window is resumed (not replayed) after downtime."""
+
+    once = "once"
+    hourly = "hourly"
+    daily = "daily"
+    weekly = "weekly"
+
+
+class Reminder(UuidTimeMixin, Base):
+    """A lightweight, standalone thing to remember — deliberately not a Routine (a
+    recurring responsibility with its own reminder_timing) and not a calendar event
+    reminder (attached to an Event). See docs/architecture/notification-engine.md.
+    Mirrors HouseholdRoutine's scope/owner/member shape (RoutineScope is reused
+    verbatim, not duplicated, via create_type=False on the `scope` column below)."""
+
+    __tablename__ = "reminders"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_reminder_title_nonempty"),
+        # Same ownership invariant as ck_routine_scope_owner: a personal reminder's
+        # sole notification recipient is its owner; a household reminder's recipients
+        # come from ReminderMember/whole-household instead, so it must not also carry
+        # an owner that notification targeting could mistake for the recipient.
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_reminder_scope_owner",
+        ),
+        Index("ix_reminder_group_enabled", "group_id", "enabled"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    # Set only for scope=personal — the sole notification recipient. Never trusted
+    # from client input; always inferred from the authenticated actor. See
+    # HouseholdRoutine.owner_user_id, the same convention.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    due_date: Mapped[date] = mapped_column(Date)
+    due_time: Mapped[time] = mapped_column(Time)
+    repeat: Mapped[ReminderRepeat] = mapped_column(
+        Enum(ReminderRepeat, name="reminder_repeat"),
+        default=ReminderRepeat.never,
+        server_default=ReminderRepeat.never.value,
+    )
+    cadence: Mapped[ReminderCadence] = mapped_column(
+        Enum(ReminderCadence, name="reminder_cadence"),
+        default=ReminderCadence.once,
+        server_default=ReminderCadence.once.value,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class ReminderMember(UuidTimeMixin, Base):
+    __tablename__ = "reminder_members"
+    __table_args__ = (UniqueConstraint("reminder_id", "user_id", name="uq_reminder_member"),)
+    reminder_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reminders.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+class ReminderCompletion(UuidTimeMixin, Base):
+    """One row per completed occurrence — mirrors HouseholdRoutineCompletion exactly.
+    A repeating reminder's next occurrence is unaffected by completing this one;
+    only the deletion of this row (uncomplete) or a fresh occurrence_date makes it
+    due again."""
+
+    __tablename__ = "reminder_completions"
+    __table_args__ = (
+        UniqueConstraint("reminder_id", "occurrence_date", name="uq_reminder_occurrence"),
+    )
+    reminder_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reminders.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_date: Mapped[date] = mapped_column(Date, index=True)
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class MealType(StrEnum):
     """A saved Meal's category — deliberately the same short, closed list a
     household actually thinks in, not a cuisine/dietary taxonomy. See
