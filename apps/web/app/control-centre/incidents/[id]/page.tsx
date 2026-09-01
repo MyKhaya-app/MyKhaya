@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
@@ -29,6 +30,7 @@ const LIFECYCLE_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function IncidentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter();
   const { id } = use(params);
   const [data, setData] = useState<StatusIncidentDetail | null>(null);
   const [error, setError] = useState("");
@@ -108,7 +110,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
         reason: formData.get("audit_reason"),
         confirmed: true,
       });
-      window.location.href = "/incidents";
+      router.push("/incidents");
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(cause instanceof ApiError ? cause.message : "Could not delete this incident.");

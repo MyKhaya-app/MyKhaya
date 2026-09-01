@@ -1,47 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import type { User } from "@mykhaya/shared-types";
-import { api, ApiError } from "@mykhaya/api-client";
+import { useAuth } from "./auth-provider";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
-import { bootstrapNativeSession } from "./native-auth";
 import { isNativeShell } from "./native-runtime";
 import { useActiveHome } from "./use-active-home";
-import { useUserUpdatedListener } from "./user-events";
-
-const AUTH_DIAGNOSTICS_KEY = "mykhaya.auth-diagnostics";
-const AUTH_BOOT_ID =
-  typeof window === "undefined"
-    ? "server"
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-
-function recordAuthDiagnostic(event: string, fields: Record<string, unknown> = {}) {
-  if (typeof window === "undefined") return;
-  const entry = {
-    event,
-    bootId: AUTH_BOOT_ID,
-    origin: window.location.origin,
-    pathname: window.location.pathname,
-    standalone:
-      window.matchMedia("(display-mode: standalone)").matches ||
-      ("standalone" in navigator && Boolean(navigator.standalone)),
-    at: new Date().toISOString(),
-    ...fields,
-  };
-  console.info("[AUTH_DIAG]", entry);
-  try {
-    const stored = window.localStorage.getItem(AUTH_DIAGNOSTICS_KEY);
-    const previous: unknown = stored ? JSON.parse(stored) : [];
-    const entries: unknown[] = Array.isArray(previous)
-      ? (previous as unknown[]).slice(-49)
-      : [];
-    window.localStorage.setItem(AUTH_DIAGNOSTICS_KEY, JSON.stringify([...entries, entry]));
-  } catch {
-    // Diagnostics must never affect authentication startup.
-  }
-}
 
 export function AppShell({
   children,
@@ -56,122 +21,8 @@ export function AppShell({
 }) {
   const path = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [authState, setAuthState] = useState<"loading" | "ready" | "offline" | "signed_out">("loading");
-  const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
-
-  const redirectToLogin = useCallback(() => {
-    // Preserve where the user was trying to go (e.g. a calendar-share
-    // accept link's ?token=) so login can return them there instead
-    // of silently losing it — see app/login/page.tsx's `next` handling.
-    // window.location, not useSearchParams(), specifically so AppShell
-    // doesn't need a Suspense boundary just for this one redirect.
-    const destination =
-      typeof window === "undefined" ? "" : `${window.location.pathname}${window.location.search}`;
-    router.replace(
-      destination && destination !== "/login"
-        ? `/login?next=${encodeURIComponent(destination)}`
-        : "/login",
-    );
-  }, [router]);
-
-  const bootstrap = useCallback(async () => {
-    recordAuthDiagnostic("APP_BOOT");
-    setAuthState("loading");
-    if (isNativeShell()) {
-      // Native source of truth: a Keychain-backed bearer session (see
-      // components/native-auth.ts), never the browser cookie /users/me
-      // flow below — the two transports are never merged. This is what
-      // makes "terminate the app, reopen it" restore the signed-in state
-      // instead of always bouncing to /login: bootstrapNativeSession()
-      // reads the Keychain, validates the token (and silently renews it
-      // from the long-lived device credential if it had expired) before
-      // this component ever decides the user is signed out. A network/5xx
-      // failure here is deliberately NOT treated as signed-out — see
-      // NativeMyKhayaClient.bootstrapSession's own docstring — a valid
-      // stored session must never be cleared just because the device is
-      // briefly offline.
-      recordAuthDiagnostic("NATIVE_BOOTSTRAP_STARTED");
-      try {
-        const restored = await bootstrapNativeSession();
-        if (restored) {
-          setUser(restored);
-          setAuthState("ready");
-          recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_AUTHENTICATED");
-          return;
-        }
-        recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
-        setAuthState("signed_out");
-        redirectToLogin();
-      } catch {
-        // Plugin/network failure — fail closed into the existing "offline"
-        // state (retry button, no redirect loop, no insecure fallback)
-        // rather than crashing or silently treating this as signed-out.
-        recordAuthDiagnostic("NATIVE_BOOTSTRAP_ERROR");
-        setAuthState("offline");
-      }
-      return;
-    }
-    try {
-      recordAuthDiagnostic("ME_REQUEST_STARTED");
-      setUser(await api.me());
-      setAuthState("ready");
-      recordAuthDiagnostic("ME_RESULT_200");
-      recordAuthDiagnostic("AUTHENTICATED");
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 401) {
-        recordAuthDiagnostic("ME_RESULT_401");
-        try {
-          recordAuthDiagnostic("RENEW_STARTED");
-          setUser(await api.renew());
-          setAuthState("ready");
-          recordAuthDiagnostic("RENEW_RESULT_200");
-          recordAuthDiagnostic("AUTHENTICATED");
-          return;
-        } catch (renewalCause) {
-          if (renewalCause instanceof ApiError) {
-            recordAuthDiagnostic(
-              renewalCause.status === 401
-                ? "RENEW_RESULT_401"
-                : renewalCause.status === 403
-                ? "RENEW_RESULT_403"
-                : renewalCause.status >= 500
-                ? "RENEW_RESULT_5XX"
-                : "RENEW_FAILED",
-              { status: renewalCause.status },
-            );
-          } else {
-            recordAuthDiagnostic("RENEW_NETWORK_ERROR");
-          }
-          if (renewalCause instanceof ApiError && renewalCause.status === 401) {
-            setAuthState("signed_out");
-            recordAuthDiagnostic("LOGIN_REDIRECT");
-            redirectToLogin();
-          } else {
-            setAuthState("offline");
-          }
-          return;
-        }
-      }
-      if (cause instanceof ApiError) {
-        recordAuthDiagnostic(
-          cause.status >= 500
-            ? "ME_RESULT_5XX"
-            : cause.status === 403
-            ? "ME_RESULT_403"
-            : "ME_FAILED",
-          { status: cause.status },
-        );
-      } else {
-        recordAuthDiagnostic("ME_NETWORK_ERROR");
-      }
-      setAuthState("offline");
-    }
-  }, [redirectToLogin]);
-
-  useEffect(() => {
-    void bootstrap();
-  }, [bootstrap]);
+  const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
+  const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: status === "ready" });
 
   useEffect(() => {
     // A Home-less user has a legitimate reason to be here: a brand-new Free
@@ -183,7 +34,7 @@ export function AppShell({
     // account UX." They may still choose "Create your own Home" from there;
     // it's just never forced.
     if (
-      authState === "ready" &&
+      status === "ready" &&
       !homesError &&
       !loading &&
       !homes.length &&
@@ -192,9 +43,7 @@ export function AppShell({
       path !== "/calendar/shared"
     )
       router.replace("/onboarding");
-  }, [authState, homes, homesError, loading, path, router]);
-
-  useUserUpdatedListener(setUser);
+  }, [status, homes, homesError, loading, path, router]);
 
   // Marks <html> with the class styles.css uses to switch from ordinary
   // document scrolling (browser/PWA) to the bounded native-app-viewport
@@ -204,7 +53,7 @@ export function AppShell({
   // pre-auth pages that render no header/bottom-nav (login, register,
   // onboarding, ...) render no AppShell either, and are left with ordinary
   // scrolling either way, native shell or not. Runs regardless of
-  // authState (placed before the early returns below, like every other
+  // auth status (placed before the early returns below, like every other
   // hook here) since even the loading/offline screens should get the
   // stable native viewport rather than flash between two scroll models.
   useEffect(() => {
@@ -213,19 +62,19 @@ export function AppShell({
     return () => document.documentElement.classList.remove("native-shell");
   }, []);
 
-  if (authState === "loading") {
+  if (initialSessionLoading) {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
-  if (authState === "offline") {
+  if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">
         <h1>MyKhaya is temporarily unavailable</h1>
         <p>Your sign-in is still safe. Check your connection and try again.</p>
-        <button onClick={() => void bootstrap()}>Try again</button>
+        <button onClick={retryInitialSession}>Try again</button>
       </main>
     );
   }
-  if (authState === "signed_out") return null;
+  if (status === "signed_out") return null;
 
   return (
     <div className="app-shell">

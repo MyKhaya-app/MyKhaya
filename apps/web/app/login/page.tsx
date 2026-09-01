@@ -20,12 +20,15 @@ import {
 import { isSafeInternalPath } from "@/components/internal-path";
 import { isNativeShell } from "@/components/native-runtime";
 import { nativeLogin } from "@/components/native-auth";
+import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
+import { useAuth } from "@/components/auth-provider";
 
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
   const calendarShare = params.get("calendar_share");
+  const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
   // the exact protected path (e.g. a calendar-share accept link's
   // ?token=...) the user was trying to reach, so a plain expired-session
@@ -106,6 +109,7 @@ export default function Login() {
   }, [calendarShare]);
 
   async function afterSignedIn(user: User) {
+    setAuthenticatedUser(user);
     setBiometricHint({
       userId: user.id,
       displayName: user.display_name,
@@ -182,6 +186,13 @@ export default function Login() {
         : await api.post<User>("/auth/login", { email, password });
       await afterSignedIn(user);
     } catch (err) {
+      // The user-facing message stays generic on purpose (never reveal
+      // which layer failed to a potential attacker) — recordLoginFailureDiagnostic
+      // is the operator/dev-facing signal that distinguishes invalid
+      // credentials from a server/network/CORS-configuration failure. See
+      // components/auth-diagnostics.ts's docstring for exactly what each
+      // category means; no credential or token value is ever recorded.
+      recordLoginFailureDiagnostic(isNativeShell() ? "native_login" : "browser_login", err);
       setError(
         err instanceof ApiError
           ? err.message

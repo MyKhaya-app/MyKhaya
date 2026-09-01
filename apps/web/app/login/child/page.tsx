@@ -15,6 +15,7 @@ import {
 } from "@/components/child-login-client";
 import { isNativeShell } from "@/components/native-runtime";
 import { nativeChildLogin } from "@/components/native-auth";
+import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 
 // Matches mykhaya.security.generate_home_code() exactly (8 chars, from a
 // fixed alphabet) — every real Home code is this length, so the input must
@@ -87,6 +88,7 @@ export default function ChildLogin() {
       });
       router.push("/home");
     } catch (err) {
+      recordLoginFailureDiagnostic(isNativeShell() ? "native_child_login" : "browser_child_login", err);
       setError(
         err instanceof ApiError
           ? err.message
@@ -121,6 +123,7 @@ export default function ChildLogin() {
       });
       router.push("/home");
     } catch (err) {
+      recordLoginFailureDiagnostic(isNativeShell() ? "native_child_login" : "browser_child_login", err);
       setError(
         err instanceof ApiError
           ? err.message

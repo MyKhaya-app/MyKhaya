@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import {
   startRegistration,
@@ -677,6 +677,7 @@ function SessionsTab({
   onChanged: (message: string) => void;
   setError: (value: string) => void;
 }) {
+  const router = useRouter();
   async function revokeOne(sessionId: string) {
     const run = async () => {
       setError("");
@@ -702,7 +703,7 @@ function SessionsTab({
       setError("");
       try {
         await platformApi.post("/auth/revoke-all", { reason, confirmed: true });
-        window.location.href = "/login";
+        router.push("/login");
       } catch (cause) {
         if (cause instanceof ApiError && cause.status === 403) throw cause;
         setError(cause instanceof ApiError ? cause.message : "Sessions could not be revoked.");

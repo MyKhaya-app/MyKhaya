@@ -3,7 +3,7 @@ import "./styles.css";
 import type { Metadata, Viewport } from "next";
 import { ServiceWorkerRegister } from "../components/service-worker-register";
 import { InstallPrompt } from "../components/install-prompt";
-import { NativePublicShell } from "../components/native-public-shell";
+import { AuthProvider } from "../components/auth-provider";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: { default: "MyKhaya", template: "%s · MyKhaya" },
@@ -18,7 +18,13 @@ export const viewport: Viewport = {
   // indicator instead of Safari/WKWebView letterboxing around them, so
   // env(safe-area-inset-*) actually resolves to the real inset instead of
   // 0 — required for both the native Capacitor shell and an iOS PWA added
-  // to the home screen. See app/styles.css's native-shell viewport rules.
+  // to the home screen. See app/styles.css's :root --safe-top/--safe-bottom/
+  // --safe-left/--safe-right — the one shared safe-area strategy every
+  // top-level page container (public marketing header, auth pages,
+  // AppShell's own header/bottom-nav, sheets) reads from, unconditionally
+  // and without any JS-toggled class — env() alone already resolves to 0 on
+  // a browser/PWA tab with no notch, so nothing here needs native-shell
+  // detection just to apply safe-area padding.
   viewportFit: "cover",
 };
 export default function RootLayout({
@@ -27,8 +33,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        {children}
-        <NativePublicShell />
+        <AuthProvider>{children}</AuthProvider>
         <ServiceWorkerRegister />
         <InstallPrompt />
       </body>

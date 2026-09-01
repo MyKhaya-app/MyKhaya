@@ -65,9 +65,23 @@ class Settings(BaseSettings):
     status_url: str = "http://status.localhost:8080"
     # The direct-to-API origin for native/bearer clients (ADR 0010) — never
     # proxied through the Next.js web app the way public_web_url/admin_url
-    # are. Its host must be listed in trusted_hosts (validated below) but,
-    # unlike admin_url, does not need to be in cors_origins: a native client
-    # sends no Origin header and isn't subject to CORS at all.
+    # are. Its host must be listed in trusted_hosts (validated below) but
+    # this value itself — the API's own origin — never needs to appear in
+    # cors_origins, which lists allowed *caller* origins, not the API's own.
+    #
+    # The caller origin that DOES need to be in cors_origins is
+    # public_web_url (dev.mykhaya.app / mykhaya.app): the Capacitor iOS
+    # shell is a *live-frontend* WKWebView (apps/ios-shell) that loads that
+    # exact real web page and runs its JS in it, so a native login/session
+    # request is a genuine cross-origin fetch from a loaded web page —
+    # exactly as CORS-subject as any browser tab, complete with a real
+    # Origin header and preflight for non-simple requests (see
+    # NativeMyKhayaClient in packages/api-client/src/native-client.ts). It
+    # is NOT a raw native HTTP client outside a web-page context, which is
+    # the (false, for this architecture) assumption a previous version of
+    # this comment made — that mistaken assumption was the root cause of
+    # native iOS login failing silently (CORS preflight rejected, before
+    # the request ever reached an endpoint).
     native_api_url: str = "http://api.localhost:8080"
     cors_origins: list[str] = ["http://localhost:8080"]
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "api", "api.mykhaya.app"]

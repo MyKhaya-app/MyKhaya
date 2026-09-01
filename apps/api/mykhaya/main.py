@@ -48,7 +48,30 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
+    # X-MyKhaya-Client/-Platform/-App-Version: the native-shell "session
+    # metadata" headers NativeMyKhayaClient attaches to every bearer-transport
+    # request (see packages/api-client/src/native-client.ts's clientHeaders
+    # option and apps/web/components/native-auth.ts's clientHeaders()). The
+    # Capacitor iOS shell is a *live-frontend* WKWebView — it loads the real
+    # dev.mykhaya.app/mykhaya.app page and that page's own JS calls
+    # api.dev.mykhaya.app/api.mykhaya.app directly (ADR 0010), which is a
+    # genuine cross-origin fetch from a loaded web page and therefore fully
+    # subject to CORS/preflight, same as any browser tab — not exempt from it
+    # (see the now-corrected comment on Settings.native_api_url). Without
+    # these three headers allow-listed, the browser's CORS preflight for
+    # every native login/session request silently failed and the actual
+    # POST never reached the server at all, surfacing in the app only as a
+    # generic "We couldn't sign you in" — this was the confirmed root cause
+    # of native iOS login failing with valid credentials.
+    allow_headers=[
+        "Accept",
+        "Content-Type",
+        "X-CSRF-Token",
+        "X-Request-ID",
+        "X-MyKhaya-Client",
+        "X-MyKhaya-Platform",
+        "X-MyKhaya-App-Version",
+    ],
 )
 
 

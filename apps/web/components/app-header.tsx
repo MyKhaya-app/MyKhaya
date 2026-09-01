@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { ChevronDown, LogOut, Settings, User as UserIcon } from "lucide-react";
 import type { Home, User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
@@ -43,9 +44,9 @@ export function AppHeader({
 
   return (
     <header className={`app-header${flush ? " app-header-flush" : ""}`}>
-      <a className="app-header-logo" href="/home" aria-label="Go to Home">
+      <Link className="app-header-logo" href="/home" aria-label="Go to Home">
         <Logo compact />
-      </a>
+      </Link>
       <button
         type="button"
         className="app-header-home"
@@ -75,14 +76,14 @@ export function AppHeader({
             {user?.display_name}
           </p>
           <nav className="sheet-menu">
-            <a href="/settings/profile" className="sheet-menu-item">
+            <Link href="/settings/profile" className="sheet-menu-item">
               <UserIcon size={20} aria-hidden="true" />
               Profile
-            </a>
-            <a href="/settings" className="sheet-menu-item">
+            </Link>
+            <Link href="/settings" className="sheet-menu-item">
               <Settings size={20} aria-hidden="true" />
               Settings
-            </a>
+            </Link>
             <button type="button" className="sheet-menu-item danger" onClick={logout}>
               <LogOut size={20} aria-hidden="true" />
               Sign out

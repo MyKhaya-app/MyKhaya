@@ -2,6 +2,7 @@
 
 import { FormEvent, use, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChevronLeft, Copy, ExternalLink, Image as ImageIcon, LockKeyhole, MoreVertical, Plus, Share2, Trash2, Users } from "lucide-react";
 import type {
   GuestShareCreateResponse,
@@ -239,6 +240,7 @@ function WishlistSharingLabel({ detail }: { detail: WishlistOwnerDetail }) {
 }
 
 export default function WishlistDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter();
   const { id: wishlistId } = use(params);
   const { activeHomeId } = useActiveHome();
   const [me, setMe] = useState<User | null>(null);
@@ -510,7 +512,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
                     if (!window.confirm(`Delete "${detail.title}"? This will remove the wishlist and its items.`))
                       return;
                     await api.deleteWishlist(activeHomeId, wishlistId);
-                    window.location.href = "/wish-lists";
+                    router.push("/wish-lists");
                   }, "Could not delete this wishlist.")
                 }
               >
