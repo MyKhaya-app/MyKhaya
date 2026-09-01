@@ -66,6 +66,7 @@ app.add_middleware(
     allow_headers=[
         "Accept",
         "Content-Type",
+        "Authorization",
         "X-CSRF-Token",
         "X-Request-ID",
         "X-MyKhaya-Client",

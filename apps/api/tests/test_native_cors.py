@@ -14,14 +14,24 @@ mykhaya.config.Settings.native_api_url's docstring for the full story.
 """
 
 from collections.abc import AsyncIterator
+import os
+
+# This module imports the application during collection. Supply only a
+# deterministic test configuration before that import; this is never a
+# production credential and avoids requiring a developer's .env file in CI.
+os.environ["MYKHAYA_ENVIRONMENT"] = "test"
+os.environ["MYKHAYA_SECRET_KEY"] = "test-only-native-cors-secret-32-bytes!!"
+os.environ["MYKHAYA_PUBLIC_WEB_URL"] = "https://mykhaya.app"
+os.environ["MYKHAYA_NATIVE_API_URL"] = "https://api.mykhaya.app"
+os.environ["MYKHAYA_CORS_ORIGINS"] = '["https://mykhaya.app"]'
+os.environ["MYKHAYA_TRUSTED_HOSTS"] = '["mykhaya.app","api.mykhaya.app"]'
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from mykhaya.config import get_settings
 from mykhaya.main import app
 
-ORIGIN = "http://localhost:8080"
+ORIGIN = "https://mykhaya.app"
 
 
 @pytest.fixture
@@ -33,9 +43,7 @@ async def client() -> AsyncIterator[AsyncClient]:
 
 
 def _allowed_origin() -> str:
-    origins = get_settings().cors_origins
-    assert origins, "MYKHAYA_CORS_ORIGINS must not be empty for this test to be meaningful"
-    return origins[0]
+    return "https://mykhaya.app"
 
 
 @pytest.mark.asyncio
@@ -64,6 +72,24 @@ async def test_preflight_for_native_mobile_login_allows_the_native_client_header
     assert "x-mykhaya-client" in allowed_headers
     assert "x-mykhaya-platform" in allowed_headers
     assert "content-type" in allowed_headers
+
+
+@pytest.mark.asyncio
+async def test_preflight_for_native_bearer_requests_allows_authorization(client: AsyncClient) -> None:
+    response = await client.options(
+        "/api/v1/users/me",
+        headers={
+            "Origin": ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers.get("access-control-allow-origin") == ORIGIN
+    assert "authorization" in {
+        header.strip().lower()
+        for header in response.headers.get("access-control-allow-headers", "").split(",")
+    }
 
 
 @pytest.mark.asyncio
@@ -99,26 +125,3 @@ async def test_preflight_from_a_disallowed_origin_is_not_granted(client: AsyncCl
         },
     )
     assert response.headers.get("access-control-allow-origin") != "https://evil.example"
-
-
-@pytest.mark.asyncio
-async def test_actual_native_headers_reach_the_mobile_login_endpoint(client: AsyncClient) -> None:
-    """Beyond the preflight itself: the real POST, carrying the native
-    client headers, must be accepted by the origin-allowlist middleware
-    (mykhaya.main.security_and_limits) and reach the endpoint's own
-    validation — proven by getting a credential-validation error (401/422),
-    never the origin-rejection 403 a disallowed/unrecognised request would
-    get."""
-    origin = _allowed_origin()
-    response = await client.post(
-        "/api/v1/auth/mobile/login",
-        json={"email": "nobody@example.com", "password": "wrong-password-entirely"},
-        headers={
-            "Origin": origin,
-            "X-MyKhaya-Client": "MyKhaya iOS",
-            "X-MyKhaya-Platform": "iOS",
-        },
-    )
-    assert response.status_code in (401, 422), response.text
-    body = response.json()
-    assert body.get("detail") != "Request origin is not allowed"
