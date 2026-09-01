@@ -38,7 +38,9 @@ services:
       - "caddy_data:/data"
       - "caddy_config:/config"
   api:
-    environment: *dev-api-environment
+    environment:
+      <<: *dev-api-environment
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
   web:
     environment:
       MYKHAYA_ENVIRONMENT: development
@@ -52,9 +54,13 @@ services:
       MYKHAYA_APNS_BUNDLE_ID: "${MYKHAYA_APNS_BUNDLE_ID:-app.mykhaya.mobile}"
       MYKHAYA_APNS_PRIVATE_KEY: "${MYKHAYA_APNS_PRIVATE_KEY:-}"
   scheduler:
-    environment: *dev-api-environment
+    environment:
+      <<: *dev-api-environment
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
   migrate:
-    environment: *dev-api-environment
+    environment:
+      <<: *dev-api-environment
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
   mailpit:
     ports:
       - "127.0.0.1:${MYKHAYA_DEV_MAILPIT_PORT:-8025}:8025"
