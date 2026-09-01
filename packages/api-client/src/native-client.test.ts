@@ -26,6 +26,22 @@ describe("NativeMyKhayaClient — construction", () => {
 });
 
 describe("NativeMyKhayaClient — login", () => {
+  it("binds an injected Window.fetch-like implementation to globalThis", async () => {
+    const receiverSensitiveFetch = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Can only call Window.fetch on instances of Window");
+      return Promise.resolve(jsonResponse(401, { detail: "invalid" }));
+    });
+    const client = new NativeMyKhayaClient(
+      BASE_URL,
+      new InMemoryNativeSessionStore(),
+      { fetch: receiverSensitiveFetch as typeof fetch },
+    );
+
+    await expect(client.login("a@example.com", "wrong")).rejects.toMatchObject({ status: 401 });
+    expect(receiverSensitiveFetch).toHaveBeenCalledTimes(1);
+    expect(receiverSensitiveFetch.mock.instances[0]).toBe(globalThis);
+  });
+
   it("posts to /auth/mobile/login, stores the token, and never returns it to the caller", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {

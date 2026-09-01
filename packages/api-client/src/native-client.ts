@@ -36,7 +36,12 @@ export class NativeMyKhayaClient {
   }
 
   private get fetchImpl(): typeof fetch {
-    return this.options.fetch ?? fetch;
+    // Calling `this.fetchImpl(...)` gives the returned function the client
+    // instance as `this`. WKWebView's Window.fetch rejects that receiver with
+    // "Can only call Window.fetch on instances of Window". Bind both the
+    // injected test implementation and the real global implementation at the
+    // boundary; in a browser globalThis is the Window instance.
+    return (this.options.fetch ?? globalThis.fetch).bind(globalThis);
   }
 
   private baseHeaders(): Headers {
