@@ -38,12 +38,21 @@ export default function Security() {
   const [biometricAvailable, setBiometricAvailable] = useState<boolean | null>(null);
   const [labelText, setLabelText] = useState("biometrics");
 
+  const native = isNativeShell();
+
   useEffect(() => {
     api.devices().then(setDevices).catch(() => setError("Could not load your signed-in devices."));
     api.passkeys().then(setPasskeys).catch(() => setError("Could not load your biometric sign-in status."));
+    // Browser WebAuthn feature-detection only — the native shell renders
+    // QuickSignIn (native Face ID/Touch ID, no WebAuthn involved) instead
+    // of this passkey card below, and must never invoke
+    // navigator.credentials/PublicKeyCredential at all: that API has been
+    // observed to hang inside the Capacitor WKWebView, which is exactly
+    // the "Quick Sign-In freezes the app" defect this guard fixes.
+    if (native) return;
     biometricSignInAvailable().then(setBiometricAvailable);
     setLabelText(biometricLabel());
-  }, []);
+  }, [native]);
 
   // "Enabled on this device" — precisely the credential this browser
   // created (see getEnrolledPasskeyId), not just "the account has some
@@ -155,7 +164,6 @@ export default function Security() {
   // ID/Touch ID card (QuickSignIn) instead. Neither the passkey card's code
   // nor its behaviour changes for an actual browser/PWA user — isNativeShell()
   // is always false there.
-  const native = isNativeShell();
 
   return (
     <SettingsPage title="Security">

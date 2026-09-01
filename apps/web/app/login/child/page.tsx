@@ -13,6 +13,8 @@ import {
   rememberChildAccount,
   type RememberedChildAccount,
 } from "@/components/child-login-client";
+import { isNativeShell } from "@/components/native-runtime";
+import { nativeChildLogin } from "@/components/native-auth";
 
 // Matches mykhaya.security.generate_home_code() exactly (8 chars, from a
 // fixed alphabet) — every real Home code is this length, so the input must
@@ -69,7 +71,12 @@ export default function ChildLogin() {
     const username = formText(d, "username").trim();
     const pin = formText(d, "pin");
     try {
-      const user = await api.childLogin({ home_code, username, pin });
+      // Native source of truth: /auth/mobile/child/login + Keychain, never
+      // the browser cookie /auth/child/login — see app/login/page.tsx's
+      // submit() for the same split on the adult sign-in path.
+      const user = isNativeShell()
+        ? await nativeChildLogin(home_code, username, pin)
+        : await api.childLogin({ home_code, username, pin });
       rememberChildAccount({
         homeCode: home_code,
         username: username.toLowerCase(),
@@ -98,11 +105,13 @@ export default function ChildLogin() {
     const d = new FormData(e.currentTarget);
     const pin = formText(d, "pin");
     try {
-      const user = await api.childLogin({
-        home_code: selected.homeCode,
-        username: selected.username,
-        pin,
-      });
+      const user = isNativeShell()
+        ? await nativeChildLogin(selected.homeCode, selected.username, pin)
+        : await api.childLogin({
+            home_code: selected.homeCode,
+            username: selected.username,
+            pin,
+          });
       rememberChildAccount({
         ...selected,
         userId: user.id,

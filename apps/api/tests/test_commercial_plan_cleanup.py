@@ -284,6 +284,11 @@ async def test_disabling_a_personal_routine_frees_up_the_limit(client: AsyncClie
 
 @pytest.mark.asyncio
 async def test_free_home_cannot_create_a_household_routine(client: AsyncClient) -> None:
+    """A rejected Household create must never silently fall back to
+    persisting the routine as Personal instead — see the live-verification
+    investigation in the Routines & Reminders consolidation task, which
+    confirmed this rejection path (not a silent scope downgrade) is what
+    actually happens here."""
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
     response = await unsafe(
@@ -296,6 +301,10 @@ async def test_free_home_cannot_create_a_household_routine(client: AsyncClient) 
     detail = response.json()["detail"]
     assert detail["code"] == "plan_feature_unavailable"
     assert detail["entitlement"] == "routines.household.enabled"
+
+    # Confirm nothing was persisted at all — not even as a Personal routine.
+    listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert listing.json()["items"] == []
 
 
 @pytest.mark.asyncio
@@ -310,6 +319,163 @@ async def test_family_home_can_create_a_household_routine(client: AsyncClient) -
         json=_routine_body(scope="household"),
     )
     assert response.status_code == 201
+    body = response.json()
+    # The persisted value, not just the status code — a Household create
+    # must round-trip as scope=household with no owner, both in the create
+    # response and on a fresh refetch (proves it wasn't just an in-memory
+    # response quirk).
+    assert body["scope"] == "household"
+    assert body["owner_user_id"] is None
+
+    refetched = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    items = refetched.json()["items"]
+    assert len(items) == 1
+    assert items[0]["scope"] == "household"
+    assert items[0]["owner_user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_family_home_household_routine_visible_to_other_member(
+    client: AsyncClient,
+) -> None:
+    """Household scope must actually mean household-visible, not just
+    'not rejected' — a second adult member of the same Home should see it
+    too, unlike a Personal routine (see
+    test_household_routines.test_list_routines_excludes_other_members_personal_routines
+    for the Personal-stays-private side of this contract)."""
+    home_id = await _make_home(client, _suffix())
+    await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json=_routine_body(scope="household", title="Put bins out"),
+    )
+    assert created.status_code == 201
+
+    invitee_email = f"member-{_suffix()}@example.com"
+    invitation = await unsafe(
+        client,
+        "POST",
+        "/api/v1/invitations",
+        json={"group_id": str(home_id), "email": invitee_email},
+    )
+    assert invitation.status_code == 201
+    raw_invitation = derived_token(
+        uuid.UUID(invitation.json()["id"]),
+        "invitation",
+        get_settings().secret_key.get_secret_value(),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as member:
+        await create_verified_user(member, invitee_email, "Second Adult")
+        accepted = await unsafe(
+            member, "POST", "/api/v1/invitations/accept", json={"token": raw_invitation}
+        )
+        assert accepted.status_code == 200
+        listing = await unsafe(member, "GET", f"/api/v1/homes/{home_id}/routines")
+        titles = [item["title"] for item in listing.json()["items"]]
+        assert "Put bins out" in titles
+
+
+@pytest.mark.asyncio
+async def test_editing_a_routine_from_personal_to_household_persists(client: AsyncClient) -> None:
+    home_id = await _make_home(client, _suffix())
+    await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json=_routine_body(scope="personal", title="Water plants"),
+    )
+    assert created.status_code == 201
+    assert created.json()["scope"] == "personal"
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/routines/{created.json()['id']}",
+        json=_routine_body(
+            scope="household",
+            title="Water plants",
+            expected_updated_at=created.json()["updated_at"],
+        ),
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["scope"] == "household"
+    assert updated.json()["owner_user_id"] is None
+
+    refetched = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert refetched.json()["items"][0]["scope"] == "household"
+
+
+@pytest.mark.asyncio
+async def test_editing_a_routine_from_household_to_personal_persists(client: AsyncClient) -> None:
+    home_id = await _make_home(client, _suffix())
+    await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json=_routine_body(scope="household", title="Put bins out"),
+    )
+    assert created.status_code == 201
+    assert created.json()["scope"] == "household"
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/routines/{created.json()['id']}",
+        json=_routine_body(
+            scope="personal",
+            title="Put bins out",
+            expected_updated_at=created.json()["updated_at"],
+        ),
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["scope"] == "personal"
+    assert updated.json()["owner_user_id"] is not None
+
+    refetched = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert refetched.json()["items"][0]["scope"] == "personal"
+
+
+@pytest.mark.asyncio
+async def test_editing_a_routine_to_household_without_entitlement_is_rejected(
+    client: AsyncClient,
+) -> None:
+    """Same silent-downgrade guard as create, but on the edit path — a Free
+    Home must not be able to flip an existing Personal routine to Household
+    by PATCH either."""
+    home_id = await _make_home(client, _suffix())
+    await _enable_notifications(home_id)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json=_routine_body(scope="personal", title="Water plants"),
+    )
+    assert created.status_code == 201
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/routines/{created.json()['id']}",
+        json=_routine_body(
+            scope="household",
+            title="Water plants",
+            expected_updated_at=created.json()["updated_at"],
+        ),
+    )
+    assert updated.status_code == 403
+    assert updated.json()["detail"]["entitlement"] == "routines.household.enabled"
+
+    refetched = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert refetched.json()["items"][0]["scope"] == "personal"
 
 
 @pytest.mark.asyncio

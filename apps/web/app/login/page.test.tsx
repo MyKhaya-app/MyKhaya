@@ -32,6 +32,16 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   };
 });
 
+let nativeShell = false;
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+}));
+
+const nativeLogin = vi.fn<(email: string, password: string) => Promise<unknown>>();
+vi.mock("@/components/native-auth", () => ({
+  nativeLogin: (email: string, password: string) => nativeLogin(email, password),
+}));
+
 vi.mock("@/components/passkey-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/passkey-client")>();
   return {
@@ -51,6 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   searchParams = new URLSearchParams();
   window.localStorage.clear();
+  nativeShell = false;
   (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: "home-1" }]);
   // Re-asserted every test (clearAllMocks clears call history but not a
   // previous test's mockResolvedValue/mockRejectedValue implementation) —
@@ -252,5 +263,81 @@ describe("Login — post-login destination preservation (?next=)", () => {
     await waitFor(() =>
       expect(push).toHaveBeenCalledWith("/calendar-shares/accept?token=share-token"),
     );
+  });
+});
+
+// Persistent-login fix: inside the native shell, sign-in must go through
+// the Keychain-backed bearer transport (components/native-auth.ts), never
+// the browser cookie /auth/login — see components/app-shell.tsx's matching
+// native bootstrap path for the other half of this lifecycle.
+describe("Login — native shell uses the native bearer transport, never the browser cookie flow", () => {
+  it("submits via nativeLogin, not api.post('/auth/login'), and never shows the WebAuthn biometric screen even with a prior enrolment hint", async () => {
+    nativeShell = true;
+    nativeLogin.mockResolvedValue(user);
+    passkeyClient.setBiometricHint({
+      userId: "user-1",
+      displayName: "Anthony",
+      avatarVersion: null,
+    });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use face id/i })).not.toBeInTheDocument();
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(nativeLogin).toHaveBeenCalledWith("anthony@example.com", "correct horse");
+    expect(api.post).not.toHaveBeenCalledWith("/auth/login", expect.anything());
+  });
+
+  it("never fetches api.homes() (cookie-only) to decide the post-login destination — always /home", async () => {
+    nativeShell = true;
+    nativeLogin.mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(api.homes).not.toHaveBeenCalled();
+  });
+
+  it("a native login storage/network failure shows an error banner and never redirects", async () => {
+    nativeShell = true;
+    nativeLogin.mockRejectedValue(new Error("Could not persist the session."));
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await screen.findByText(/we couldn.t sign you in/i);
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("Login — browser/PWA still uses the cookie transport when not native", () => {
+  it("submits via api.post('/auth/login'), never nativeLogin", async () => {
+    nativeShell = false;
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(api.post).toHaveBeenCalledWith("/auth/login", {
+      email: "anthony@example.com",
+      password: "correct horse",
+    });
+    expect(nativeLogin).not.toHaveBeenCalled();
   });
 });

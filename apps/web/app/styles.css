@@ -1214,6 +1214,26 @@ html.native-shell .bottom-nav {
   max-width: 640px;
   padding: 1.75rem 1.25rem 2.5rem;
 }
+/* Native public-shell safe area (components/native-public-shell.tsx) —
+   covers every pre-auth/public route, not just AppShell-mounted ones (see
+   that component's own comment for exactly why it's a separate class from
+   AppShell's `.native-shell`). `.auth-page` already gets safe-area top/
+   bottom padding from its own `@media (max-width: 800px)` rule below,
+   independent of this class; these three rules are what actually close the
+   gap for `.standard-page` (e.g. app/calendar-shares/accept) and
+   `.platform-login` (e.g. app/control-centre/accept-invitation), which had
+   no safe-area handling at all, plus a width-independent guarantee for
+   `.auth-page` itself as defence in depth. `max()` against the existing
+   non-safe-area padding value everywhere, never a hardcoded device size —
+   on a browser/PWA tab (this class is never added there) or a device with
+   no inset (env() resolves to 0), these are no-ops. */
+html.native-public-shell .standard-page {
+  padding-top: max(1.75rem, env(safe-area-inset-top));
+}
+html.native-public-shell .auth-page {
+  padding-top: max(2rem, env(safe-area-inset-top));
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+}
 .home-page {
   margin: auto;
   max-width: 640px;
@@ -1991,6 +2011,92 @@ html.native-shell .home-section-overlap {
 .routine-form-actions {
   display: flex;
   gap: 0.5rem;
+}
+/* Combined Routines & Reminders list — same visual language as the Home
+   To-do row (check dot + copy) plus an actions column for Edit/Delete,
+   which the compact Home row has no room for. */
+.rr-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.rr-list {
+  display: grid;
+}
+.rr-row {
+  align-items: center;
+  border-bottom: 1px solid #f1ece1;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 0.5rem 0.1rem;
+}
+.rr-row:last-child {
+  border-bottom: 0;
+}
+.rr-row-check {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--colour-sage);
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  padding: 0;
+  width: 40px;
+}
+.rr-row-check-dot {
+  align-items: center;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  box-sizing: border-box;
+  color: inherit;
+  display: inline-flex;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+.rr-row-check:disabled .rr-row-check-dot {
+  background: var(--colour-sage);
+  border-color: var(--colour-sage);
+  color: var(--colour-white);
+  height: 12px;
+  width: 12px;
+}
+.rr-row-body {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rr-row-done {
+  color: var(--colour-muted);
+  text-decoration: line-through;
+}
+/* Text-only kind label — Routine vs Reminder must never rely on colour
+   alone (see accessibility requirements), so this is uppercase/tracked
+   type styling, not a coloured badge. */
+.rr-row-kind {
+  letter-spacing: 0.03em;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+.rr-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+.rr-create {
+  position: relative;
+}
+.rr-create-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 .details dl > div,
 .session {
@@ -3697,6 +3803,10 @@ select.icon-row-control {
   min-height: 100vh;
   padding: 2rem;
 }
+/* See the native public-shell safe-area comment above `.standard-page`. */
+html.native-public-shell .platform-login {
+  padding-top: max(2rem, env(safe-area-inset-top));
+}
 .platform-login section {
   background: white;
   border-radius: 0.65rem;
@@ -4819,6 +4929,17 @@ button.danger,
     bottom: 0;
     background: var(--colour-surface, #fff);
     padding: 0.75rem 0 calc(0.75rem + env(safe-area-inset-bottom));
+  }
+  .rr-row {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+  .rr-row-actions {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+  .rr-tabs button,
+  .rr-row-actions button {
+    min-height: 44px;
   }
   .platform-shell {
     display: block;

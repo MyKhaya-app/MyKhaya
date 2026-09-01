@@ -6,6 +6,7 @@ import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
+import { bootstrapNativeSession } from "./native-auth";
 import { isNativeShell } from "./native-runtime";
 import { useActiveHome } from "./use-active-home";
 import { useUserUpdatedListener } from "./user-events";
@@ -59,9 +60,58 @@ export function AppShell({
   const [authState, setAuthState] = useState<"loading" | "ready" | "offline" | "signed_out">("loading");
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: authState === "ready" });
 
+  const redirectToLogin = useCallback(() => {
+    // Preserve where the user was trying to go (e.g. a calendar-share
+    // accept link's ?token=) so login can return them there instead
+    // of silently losing it — see app/login/page.tsx's `next` handling.
+    // window.location, not useSearchParams(), specifically so AppShell
+    // doesn't need a Suspense boundary just for this one redirect.
+    const destination =
+      typeof window === "undefined" ? "" : `${window.location.pathname}${window.location.search}`;
+    router.replace(
+      destination && destination !== "/login"
+        ? `/login?next=${encodeURIComponent(destination)}`
+        : "/login",
+    );
+  }, [router]);
+
   const bootstrap = useCallback(async () => {
     recordAuthDiagnostic("APP_BOOT");
     setAuthState("loading");
+    if (isNativeShell()) {
+      // Native source of truth: a Keychain-backed bearer session (see
+      // components/native-auth.ts), never the browser cookie /users/me
+      // flow below — the two transports are never merged. This is what
+      // makes "terminate the app, reopen it" restore the signed-in state
+      // instead of always bouncing to /login: bootstrapNativeSession()
+      // reads the Keychain, validates the token (and silently renews it
+      // from the long-lived device credential if it had expired) before
+      // this component ever decides the user is signed out. A network/5xx
+      // failure here is deliberately NOT treated as signed-out — see
+      // NativeMyKhayaClient.bootstrapSession's own docstring — a valid
+      // stored session must never be cleared just because the device is
+      // briefly offline.
+      recordAuthDiagnostic("NATIVE_BOOTSTRAP_STARTED");
+      try {
+        const restored = await bootstrapNativeSession();
+        if (restored) {
+          setUser(restored);
+          setAuthState("ready");
+          recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_AUTHENTICATED");
+          return;
+        }
+        recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
+        setAuthState("signed_out");
+        redirectToLogin();
+      } catch {
+        // Plugin/network failure — fail closed into the existing "offline"
+        // state (retry button, no redirect loop, no insecure fallback)
+        // rather than crashing or silently treating this as signed-out.
+        recordAuthDiagnostic("NATIVE_BOOTSTRAP_ERROR");
+        setAuthState("offline");
+      }
+      return;
+    }
     try {
       recordAuthDiagnostic("ME_REQUEST_STARTED");
       setUser(await api.me());
@@ -96,20 +146,7 @@ export function AppShell({
           if (renewalCause instanceof ApiError && renewalCause.status === 401) {
             setAuthState("signed_out");
             recordAuthDiagnostic("LOGIN_REDIRECT");
-            // Preserve where the user was trying to go (e.g. a calendar-share
-            // accept link's ?token=) so login can return them there instead
-            // of silently losing it — see app/login/page.tsx's `next` handling.
-            // window.location, not useSearchParams(), specifically so AppShell
-            // doesn't need a Suspense boundary just for this one redirect.
-            const destination =
-              typeof window === "undefined"
-                ? ""
-                : `${window.location.pathname}${window.location.search}`;
-            router.replace(
-              destination && destination !== "/login"
-                ? `/login?next=${encodeURIComponent(destination)}`
-                : "/login",
-            );
+            redirectToLogin();
           } else {
             setAuthState("offline");
           }
@@ -130,7 +167,7 @@ export function AppShell({
       }
       setAuthState("offline");
     }
-  }, [router]);
+  }, [redirectToLogin]);
 
   useEffect(() => {
     void bootstrap();

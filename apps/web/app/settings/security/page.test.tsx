@@ -91,8 +91,19 @@ vi.mock("@/components/native-biometric-preference", () => ({
   setBiometricSignInEnabled: vi.fn(async () => {}),
 }));
 
+// AppShell (rendered by SettingsPage, which every settings page — including
+// Security — wraps in) now bootstraps a native session instead of the
+// cookie-based api.me() whenever isNativeShell() is true (see
+// components/app-shell.tsx) — without this mock, the native-shell tests
+// below would exercise the real NativeMyKhayaClient/fetch and land on
+// AppShell's "offline" state instead of ever rendering Security's content.
+vi.mock("@/components/native-auth", () => ({
+  bootstrapNativeSession: vi.fn(),
+}));
+
 const { api } = await import("@mykhaya/api-client");
 const passkeyClient = await import("@/components/passkey-client");
+const { bootstrapNativeSession } = await import("@/components/native-auth");
 
 const meResponse = {
   id: "user-1",
@@ -122,6 +133,7 @@ beforeEach(() => {
   window.localStorage.clear();
   nativeShell = false;
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
+  (bootstrapNativeSession as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(true);
@@ -271,6 +283,14 @@ describe("Security — native shell shows Quick Sign-In instead of the browser p
     expect(authenticateWithBiometrics).toHaveBeenCalled();
     expect(setBiometricSignInEnabled).toHaveBeenCalledWith(true);
     await screen.findByText(/face id is ready/i);
+  });
+
+  it("never invokes browser WebAuthn feature-detection inside the native shell — the observed crash trigger", async () => {
+    nativeShell = true;
+    render(<Security />);
+
+    await screen.findByRole("button", { name: /enable face id/i });
+    expect(passkeyClient.biometricSignInAvailable).not.toHaveBeenCalled();
   });
 
   it("a cancelled biometric prompt never records the preference and shows no error", async () => {

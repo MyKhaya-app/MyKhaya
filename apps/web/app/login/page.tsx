@@ -18,6 +18,8 @@ import {
   setBiometricHint,
 } from "@/components/passkey-client";
 import { isSafeInternalPath } from "@/components/internal-path";
+import { isNativeShell } from "@/components/native-runtime";
+import { nativeLogin } from "@/components/native-auth";
 
 export default function Login() {
   const router = useRouter(),
@@ -41,7 +43,12 @@ export default function Login() {
     // resolves. The hint is a UX shortcut only; nothing security-sensitive
     // ever depends on it — a failed/declined biometric prompt always falls
     // back to the password form below.
-    [showBiometric, setShowBiometric] = useState(() => getBiometricHint() !== null),
+    // Never optimistic inside the native shell — native passkeys/Face ID
+    // login are not implemented yet (see components/quick-sign-in.tsx for
+    // the separate, already-native Settings → Security → Quick Sign-In
+    // feature). This screen's biometric-first flow is the browser/PWA
+    // WebAuthn passkey path; the native shell must never attempt it.
+    [showBiometric, setShowBiometric] = useState(() => !isNativeShell() && getBiometricHint() !== null),
     [biometricLabelText, setBiometricLabelText] = useState("biometrics"),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
@@ -60,6 +67,15 @@ export default function Login() {
   // identity every render — it only ever needs to run once, on mount, and
   // only ever narrows showBiometric from true to false, never the reverse.
   useEffect(() => {
+    // The native shell never invokes browser WebAuthn (isUserVerifyingPlatformAuthenticatorAvailable
+    // et al) — that API is unsupported/unconfigured inside the Capacitor
+    // WKWebView and has been observed to hang the native app rather than
+    // resolve. Native Quick Sign-In is a wholly separate feature (Settings →
+    // Security), never reachable from this screen.
+    if (isNativeShell()) {
+      setShowBiometric(false);
+      return;
+    }
     setBiometricLabelText(biometricLabel());
     if (getBiometricHint() === null) {
       setShowBiometric(false);
@@ -95,6 +111,18 @@ export default function Login() {
       displayName: user.display_name,
       avatarVersion: user.avatar_version,
     });
+    // Invitation/calendar-share acceptance and the has-a-Home check below
+    // are all cookie-authenticated calls (see packages/api-client's
+    // MyKhayaClient) — meaningless over the native bearer transport, which
+    // never establishes a session cookie. Native login always lands
+    // straight on /home; AppShell's own native bootstrap (see
+    // components/app-shell.tsx) re-establishes the session there. Fully
+    // wiring invitations/calendar-shares/onboarding into the native
+    // transport is out of scope for this task.
+    if (isNativeShell()) {
+      router.push("/home");
+      return;
+    }
     if (invitation) await api.post("/invitations/accept", { token: invitation });
     // A calendar share, unlike a household invitation, isn't auto-accepted
     // here — the recipient chooses notification/briefing preferences as
@@ -142,11 +170,16 @@ export default function Login() {
     setBusy(true);
     setError("");
     const d = new FormData(e.currentTarget);
+    const email = ((d.get("email") as string | null) ?? "").trim();
+    const password = (d.get("password") as string | null) ?? "";
     try {
-      const user = await api.post<User>("/auth/login", {
-        email: d.get("email"),
-        password: d.get("password"),
-      });
+      // Native source of truth: inside Capacitor this is a bearer-token
+      // sign-in against /auth/mobile/login, persisted to the iOS Keychain
+      // (see components/native-auth.ts) — never the browser cookie
+      // /auth/login. The two transports are never merged.
+      const user = isNativeShell()
+        ? await nativeLogin(email, password)
+        : await api.post<User>("/auth/login", { email, password });
       await afterSignedIn(user);
     } catch (err) {
       setError(

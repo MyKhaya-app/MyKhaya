@@ -3,10 +3,11 @@ import { render, screen } from "@testing-library/react";
 import { SettingsPage } from "./settings-page";
 
 // Coverage for the new Lists entry on More → Settings — it must sit directly
-// below Routines and above Meal Plans, and reuse the existing Lists route
-// (/lists) rather than a new settings-only screen. See the Home "Around the
-// house" Routines-shortcut coverage in app/home/page.test.tsx for the
-// equivalent navigation-only addition on the Home screen.
+// below Routines & Reminders and above Meal Plans, and reuse the existing
+// Lists route (/lists) rather than a new settings-only screen. See the Home
+// "Around the house" Routines & Reminders shortcut coverage in
+// app/home/page.test.tsx for the equivalent navigation-only addition on the
+// Home screen.
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -47,18 +48,28 @@ beforeEach(() => {
 });
 
 describe("Settings — Lists entry", () => {
-  it("places Lists directly below Routines and above Meal Plans", async () => {
+  it("places Lists directly below Routines & Reminders and above Meal Plans", async () => {
     render(<SettingsPage />);
 
     const headings = await screen.findAllByRole("heading", { level: 2 });
     const names = headings.map((heading) => heading.textContent);
-    const routinesIndex = names.indexOf("Routines");
+    const routinesIndex = names.indexOf("Routines & Reminders");
     const listsIndex = names.indexOf("Lists");
     const mealPlansIndex = names.indexOf("Meal Plans");
 
     expect(routinesIndex).toBeGreaterThanOrEqual(0);
     expect(listsIndex).toBe(routinesIndex + 1);
     expect(mealPlansIndex).toBe(listsIndex + 1);
+  });
+
+  it("shows a single combined Routines & Reminders entry, not two separate ones", async () => {
+    render(<SettingsPage />);
+
+    const heading = await screen.findByRole("heading", { name: "Routines & Reminders" });
+    const card = heading.closest("a");
+    expect(card).toHaveAttribute("href", "/settings/routines-reminders");
+    expect(screen.queryByRole("heading", { name: "Routines" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Reminders" })).not.toBeInTheDocument();
   });
 
   it("routes the Lists card to the existing Lists experience", async () => {

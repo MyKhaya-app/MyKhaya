@@ -164,6 +164,16 @@ If any of the above fails, check that Xcode's generated project actually
 resolved the `@aparajita/capacitor-secure-storage` native pod/package (see
 `npx cap sync ios`'s output) — a missing native dependency is the most
 likely cause of a working JS-side adapter with no real persistence.
+`apps/ios-shell/package.json` now explicitly declares
+`@aparajita/capacitor-secure-storage`, `@aparajita/capacitor-biometric-auth`,
+`@capacitor/app` and `@capacitor/browser` itself (previously only
+`apps/web/package.json` did, which `cap sync ios` — run from
+`apps/ios-shell` — never reads for plugin auto-discovery) — this was the
+confirmed root cause of the first physical-device TestFlight build's
+persistent-login and Quick Sign-In failures. Re-run `npx cap sync ios` (or
+`npx cap add ios` if `ios/` doesn't exist yet on this Mac) after pulling
+this change, and confirm the resulting `Podfile`/`Package.swift` now lists
+all four plugins before building again.
 
 ## What is deliberately still open after this checklist
 

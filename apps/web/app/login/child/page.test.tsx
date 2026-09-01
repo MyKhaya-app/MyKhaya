@@ -28,6 +28,17 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   };
 });
 
+let nativeShell = false;
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+}));
+
+const nativeChildLogin = vi.fn<(homeCode: string, username: string, pin: string) => Promise<unknown>>();
+vi.mock("@/components/native-auth", () => ({
+  nativeChildLogin: (homeCode: string, username: string, pin: string) =>
+    nativeChildLogin(homeCode, username, pin),
+}));
+
 const { api, ApiError } = await import("@mykhaya/api-client");
 
 const FULL_HOME_CODE = "ABCD2345"; // 8 chars — the real generated length
@@ -36,6 +47,7 @@ const child = { id: "child-1", display_name: "Alyssa", avatar_version: null } as
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  nativeShell = false;
 });
 
 describe("Child sign-in — Home code field", () => {
@@ -243,5 +255,45 @@ describe("Child sign-in — returning device with multiple remembered accounts",
     expect(screen.getByText("Welcome back")).toBeInTheDocument();
     expect(screen.getByLabelText("PIN")).toBeInTheDocument();
     expect(screen.getByText(new RegExp(FULL_HOME_CODE))).toBeInTheDocument();
+  });
+});
+
+describe("Child sign-in — native shell uses the native bearer transport", () => {
+  it("submits via nativeChildLogin, not api.childLogin, from the manual form", async () => {
+    nativeShell = true;
+    nativeChildLogin.mockResolvedValue(child);
+    const typist = userEvent.setup();
+    render(<ChildLogin />);
+
+    await typist.type(screen.getByLabelText("Home code"), FULL_HOME_CODE);
+    await typist.type(screen.getByLabelText("Username"), "alyssa");
+    await typist.type(screen.getByLabelText("PIN"), "4242");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(nativeChildLogin).toHaveBeenCalledWith(FULL_HOME_CODE, "alyssa", "4242");
+    expect(api.childLogin).not.toHaveBeenCalled();
+  });
+
+  it("submits via nativeChildLogin from the returning-account PIN screen too", async () => {
+    nativeShell = true;
+    nativeChildLogin.mockResolvedValue(child);
+    rememberChildAccount({
+      homeCode: FULL_HOME_CODE,
+      username: "alyssa",
+      userId: "child-1",
+      displayName: "Alyssa",
+      avatarVersion: null,
+      lastUsedAt: new Date().toISOString(),
+    });
+    const typist = userEvent.setup();
+    render(<ChildLogin />);
+
+    await typist.type(await screen.findByLabelText("PIN"), "4242");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(nativeChildLogin).toHaveBeenCalledWith(FULL_HOME_CODE, "alyssa", "4242");
+    expect(api.childLogin).not.toHaveBeenCalled();
   });
 });

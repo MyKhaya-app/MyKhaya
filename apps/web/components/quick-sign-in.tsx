@@ -12,6 +12,32 @@ import {
   setBiometricSignInEnabled,
 } from "./native-biometric-preference";
 
+// A native Capacitor plugin call whose iOS implementation isn't actually
+// linked into the compiled binary can reject immediately — or, observed on
+// a real device, simply never resolve at all. Nothing in this component
+// (or the underlying plugin wrappers) can distinguish "slow" from "will
+// never come back," so every native call this card makes races against a
+// generous fixed timeout and falls back to a safe, inert value rather than
+// leaving the UI waiting forever. This never fires for a plugin that's
+// actually linked and responding normally.
+const NATIVE_CALL_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), NATIVE_CALL_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 // The native iOS Security page's biometric card — deliberately a distinct
 // component from the browser/PWA "Biometric sign-in" (WebAuthn passkey)
 // card in app/settings/security/page.tsx, which is rendered instead of
@@ -36,8 +62,32 @@ export function QuickSignIn() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    getBiometricCapability().then(setCapability).catch(() => setCapability(null));
-    isBiometricSignInEnabled().then(setEnabled);
+    let cancelled = false;
+    // Defence-in-depth against a native plugin whose iOS implementation
+    // isn't actually linked into the compiled binary (see
+    // apps/ios-shell/package.json) — such a bridge call can reject, but has
+    // also been observed to simply never resolve, which would otherwise
+    // leave `capability`/`enabled` stuck pending forever and this card
+    // looking frozen. Racing against a short timeout guarantees this effect
+    // always settles into a safe state either way; it never affects a call
+    // that resolves normally well within the window.
+    const timedOutCapability: BiometricCapability = {
+      kind: "none",
+      label: "Face ID",
+      available: false,
+      lockedOut: false,
+      notEnrolled: false,
+      reason: "Timed out waiting for a response.",
+    };
+    withTimeout(getBiometricCapability(), timedOutCapability).then((result) => {
+      if (!cancelled) setCapability(result);
+    });
+    withTimeout(isBiometricSignInEnabled(), false).then((result) => {
+      if (!cancelled) setEnabled(result);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function enable() {
@@ -46,7 +96,11 @@ export function QuickSignIn() {
     setMessage("");
     try {
       const label = capability?.label ?? "Face ID";
-      const result = await authenticateWithBiometrics(`Enable ${label} for MyKhaya`);
+      const result = await withTimeout(authenticateWithBiometrics(`Enable ${label} for MyKhaya`), {
+        ok: false,
+        code: "unknown",
+        message: "Timed out waiting for a response.",
+      });
       if (!result.ok) {
         if (!isBiometricCancellation(result)) {
           setError(`Could not confirm ${label}. Please try again.`);

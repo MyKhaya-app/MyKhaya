@@ -234,7 +234,7 @@ describe("Home — Wishlists shortcut", () => {
 });
 
 describe("Home — Routines shortcut", () => {
-  it("always links to the existing Routines settings screen, with no feature flag or lock", async () => {
+  it("always links to the combined Routines & Reminders settings screen, with no feature flag or lock", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
@@ -246,8 +246,8 @@ describe("Home — Routines shortcut", () => {
 
     render(<HomePage />);
 
-    const link = await screen.findByRole("link", { name: /^routines$/i });
-    expect(link).toHaveAttribute("href", "/settings/routines");
+    const link = await screen.findByRole("link", { name: /routines & reminders/i });
+    expect(link).toHaveAttribute("href", "/settings/routines-reminders");
     expect(link.className).not.toMatch(/quick-action-locked/);
   });
 
@@ -294,7 +294,7 @@ describe("Home — Routines shortcut", () => {
 
     const { container } = render(<HomePage />);
 
-    await screen.findByRole("link", { name: /^routines$/i });
+    await screen.findByRole("link", { name: /routines & reminders/i });
     const bottomRow = container.querySelector(".quick-actions-row-1");
     expect(bottomRow).not.toBeNull();
     expect(bottomRow?.children).toHaveLength(1);
@@ -375,7 +375,7 @@ describe("Home — hero markup contract", () => {
     ]);
 
     render(<HomePage />);
-    await screen.findByText("Routines");
+    await screen.findByText("Routines & Reminders");
 
     const hero = document.querySelector(".home-hero");
     expect(hero).not.toBeNull();
@@ -734,7 +734,10 @@ describe("Home — household routines", () => {
     expect(screen.queryByText("Take Tablet")).not.toBeInTheDocument();
     expect(screen.getByText(/Done by Megan/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show more" })).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("link", { name: "See all" })).toHaveAttribute("href", "/settings/routines");
+    expect(screen.getByRole("link", { name: "See all" })).toHaveAttribute(
+      "href",
+      "/settings/routines-reminders",
+    );
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Show more" }));
@@ -925,7 +928,7 @@ describe("Home — Invite family is capability-gated, not role-gated", () => {
 
     render(<HomePage />);
 
-    await screen.findByText("Routines");
+    await screen.findByText("Routines & Reminders");
     expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
   });
 
@@ -949,7 +952,7 @@ describe("Home — Invite family is capability-gated, not role-gated", () => {
 
     render(<HomePage />);
 
-    await screen.findByText("Routines");
+    await screen.findByText("Routines & Reminders");
     expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
   });
 });
@@ -982,7 +985,7 @@ describe("Home — a denied member roster degrades gracefully (Child parity)", (
 
     render(<HomePage />);
 
-    await screen.findByText("Routines");
+    await screen.findByText("Routines & Reminders");
     expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
   });
 });

@@ -30,11 +30,18 @@ const config: CapacitorConfig = {
     allowNavigation: allowedNavigationHosts(environment),
   },
   ios: {
-    // Content extends under the status bar/notch/Dynamic Island by
-    // default in Capacitor's iOS template; apps/web's own safe-area CSS
-    // (env(safe-area-inset-*), audited in Phase 1) already accounts for
-    // this, so no additional native inset handling is configured here yet.
-    contentInset: "automatic",
+    // "automatic" lets UIKit's own scroll-view content-inset adjustment
+    // handle the status bar/notch/Dynamic Island natively — but that
+    // silently prevents `env(safe-area-inset-*)` from ever resolving to a
+    // real, nonzero value in the page's own CSS (a well-documented
+    // Capacitor/WKWebView interaction, confirmed as the root cause of the
+    // public/login pages rendering under the status bar on a real device).
+    // "never" turns native inset adjustment off entirely, so 100% of
+    // safe-area handling is left to apps/web's own CSS
+    // (env(safe-area-inset-*) + viewport-fit=cover, audited in Phase 1) —
+    // which is what this setting's comment always claimed was already
+    // happening.
+    contentInset: "never",
   },
 };
 

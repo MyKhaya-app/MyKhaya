@@ -3,6 +3,7 @@ import "./styles.css";
 import type { Metadata, Viewport } from "next";
 import { ServiceWorkerRegister } from "../components/service-worker-register";
 import { InstallPrompt } from "../components/install-prompt";
+import { NativePublicShell } from "../components/native-public-shell";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: { default: "MyKhaya", template: "%s · MyKhaya" },
@@ -27,6 +28,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
+        <NativePublicShell />
         <ServiceWorkerRegister />
         <InstallPrompt />
       </body>

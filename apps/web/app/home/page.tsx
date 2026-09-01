@@ -530,7 +530,7 @@ export default function HomePage() {
           <section className="card home-section home-todo-section">
             <div className="section-heading">
               <h2>To do</h2>
-              <Link className="tertiary" href="/settings/routines">
+              <Link className="tertiary" href="/settings/routines-reminders">
                 See all
               </Link>
             </div>
@@ -538,7 +538,10 @@ export default function HomePage() {
               {visibleTodoItems.map((item) => {
                 const { data } = item;
                 const completed = Boolean(data.home_completed_at);
-                const href = item.kind === "routine" ? "/settings/routines" : "/settings/reminders";
+                const href =
+                  item.kind === "routine"
+                    ? "/settings/routines-reminders?type=routines"
+                    : "/settings/routines-reminders?type=reminders";
                 return (
                   <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={item.id}>
                     <button
@@ -643,14 +646,15 @@ export default function HomePage() {
                 </Link>
               )}
             </QuickActionsRow>
-            {/* Routines has no feature flag of its own — same as its More →
-                Settings entry, the shortcut always links through to
-                /settings/routines, which owns the personal-vs-household
-                (Free vs Family) gating itself. */}
+            {/* Routines & Reminders has no feature flag of its own — same as
+                its More → Settings entry, the shortcut always links through
+                to the combined /settings/routines-reminders module, which
+                owns the personal-vs-household (Free vs Family) gating
+                itself. */}
             <QuickActionsRow>
-              <Link className="quick-action" href="/settings/routines">
+              <Link className="quick-action" href="/settings/routines-reminders">
                 <ClipboardList size={20} aria-hidden="true" />
-                Routines
+                Routines & Reminders
               </Link>
               {mealsFeatureOn && (
                 <Link

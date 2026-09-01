@@ -8,6 +8,8 @@ import { api } from "@mykhaya/api-client";
 import { Logo } from "./logo";
 import { Avatar } from "./avatar";
 import { BottomSheet } from "./bottom-sheet";
+import { nativeLogout } from "./native-auth";
+import { isNativeShell } from "./native-runtime";
 
 export function AppHeader({
   user,
@@ -28,7 +30,14 @@ export function AppHeader({
 
   async function logout() {
     setMenuOpen(false);
-    await api.post("/auth/logout", {});
+    // Native source of truth: revokes the Keychain-backed bearer session
+    // (see components/native-auth.ts), never the browser cookie
+    // /auth/logout — the two transports are never merged.
+    if (isNativeShell()) {
+      await nativeLogout();
+    } else {
+      await api.post("/auth/logout", {});
+    }
     router.push("/login");
   }
 
