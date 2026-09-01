@@ -49,16 +49,50 @@ export class NativeMyKhayaClient {
     return headers;
   }
 
+  private diagnostic(path: string, fields: Record<string, unknown>): void {
+    // Safe native diagnostics: never include request bodies, bearer tokens,
+    // cookies, or authorization headers. This is intentionally console-only
+    // so a TestFlight device can expose the failing stage in Xcode logs.
+    console.info("[NATIVE AUTH]", {
+      native: true,
+      platform: this.options.clientHeaders?.platform ?? "unknown",
+      requestUrl: `${this.baseUrl}${path}`,
+      ...fields,
+    });
+  }
+
   private async postUnauthenticated<T>(path: string, body: unknown): Promise<T> {
     const headers = this.baseHeaders();
     headers.set("Content-Type", "application/json");
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+    } catch (error) {
+      this.diagnostic(path, {
+        errorCategory: "network_or_cors",
+        exceptionType: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
+    }
+    this.diagnostic(path, {
       method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      cache: "no-store",
+      status: response.status,
+      responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
     });
-    return parseApiResponse<T>(response);
+    try {
+      return await parseApiResponse<T>(response);
+    } catch (error) {
+      this.diagnostic(path, {
+        errorCategory: error instanceof ApiError ? "http" : "response_parse",
+        ...(error instanceof ApiError ? { errorCode: error.code, errorMessage: error.message } : {}),
+      });
+      throw error;
+    }
   }
 
   /** Adult sign-in — native equivalent of the browser's POST /auth/login,
