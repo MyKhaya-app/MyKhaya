@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Bell } from "lucide-react";
 import type {
   NotificationPreferences,
@@ -10,8 +10,15 @@ import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
 import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
-import { enableNativePush, nativePushPermission, type NativePushStatus } from "@/components/native-push";
-import { isNativeShell } from "@/components/native-runtime";
+import {
+  enableNativePush,
+  getNativePushDiagnostic,
+  nativePushDiagnosticsText,
+  nativePushPermission,
+  subscribeNativePushDiagnostics,
+  type NativePushStatus,
+} from "@/components/native-push";
+import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 
 const STAGE_LABELS: Record<SubscribeStage, string> = {
   "checking-support": "Checking browser support…",
@@ -41,6 +48,12 @@ export default function NotificationSettings() {
   const [subscribing, setSubscribing] = useState(false);
   const [subscribeStage, setSubscribeStage] = useState<SubscribeStage | null>(null);
   const [nativeStatus, setNativeStatus] = useState<NativePushStatus>("prompt");
+  const nativeDiagnostic = useSyncExternalStore(
+    subscribeNativePushDiagnostics,
+    getNativePushDiagnostic,
+    () => null,
+  );
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const load = useCallback(async () => {
     const [preferences, subscriptions] = await Promise.all([
@@ -158,6 +171,11 @@ export default function NotificationSettings() {
     }
   }
 
+  async function copyNativeDiagnostics() {
+    await navigator.clipboard.writeText(nativePushDiagnosticsText(nativeDiagnostic));
+    setDiagnosticsCopied(true);
+  }
+
   async function removeDevice(id: string) {
     await api.deletePushSubscription(id);
     setDevices((current) => current.filter((device) => device.id !== id));
@@ -201,6 +219,17 @@ export default function NotificationSettings() {
               <button type="button" className="secondary" onClick={enableNativeOnThisDevice} disabled={nativeStatus === "registering"}>
                 <Bell size={16} aria-hidden="true" /> Enable notifications
               </button>
+            )}
+            {isNativeShell() && nativePlatform() === "ios" && (
+              <details style={{ marginTop: "0.75rem", fontSize: "0.8rem" }}>
+                <summary>Temporary registration diagnostics</summary>
+                <pre style={{ whiteSpace: "pre-wrap", margin: "0.5rem 0" }}>
+                  {nativePushDiagnosticsText(nativeDiagnostic)}
+                </pre>
+                <button type="button" className="secondary" onClick={() => void copyNativeDiagnostics()}>
+                  {diagnosticsCopied ? "Diagnostics copied" : "Copy diagnostics"}
+                </button>
+              </details>
             )}
           </>
         ) : !isStandalone() ? (

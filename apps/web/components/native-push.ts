@@ -11,6 +11,15 @@ import { isNativeShell, nativePlatform } from "./native-runtime";
 
 export type NativePushStatus = "unsupported" | "prompt" | "granted" | "denied" | "registering" | "registered" | "error";
 
+export type NativePushDiagnostic = {
+  stage: string;
+  permission?: string;
+  tokenPresent?: boolean;
+  registrationPresent?: boolean;
+  errorCategory?: string;
+  status?: number;
+};
+
 let listenersReady: Promise<void> | undefined;
 let lastRegistrationId: string | null = null;
 let lastToken: string | null = null;
@@ -23,11 +32,42 @@ let registrationActive = false;
 let cleanupRequested = false;
 let actionHandler: ((path: string) => void) | undefined;
 let listenerHandles: PluginListenerHandle[] = [];
+let latestDiagnostic: NativePushDiagnostic | null = null;
+const diagnosticListeners = new Set<() => void>();
 
 type DiagnosticValue = boolean | number | string | undefined;
 
 function nativePushDiagnostic(stage: string, details: Record<string, DiagnosticValue> = {}): void {
+  latestDiagnostic = {
+    stage,
+    permission: typeof details.permission === "string" ? details.permission : undefined,
+    tokenPresent: typeof details.token_present === "boolean" ? details.token_present : undefined,
+    registrationPresent: typeof details.registration_present === "boolean" ? details.registration_present : undefined,
+    errorCategory: typeof details.error_category === "string" ? details.error_category : undefined,
+    status: typeof details.status === "number" ? details.status : undefined,
+  };
+  diagnosticListeners.forEach((listener) => listener());
   console.info("[MyKhaya native push]", { stage, ...details });
+}
+
+export function getNativePushDiagnostic(): NativePushDiagnostic | null {
+  return latestDiagnostic;
+}
+
+export function subscribeNativePushDiagnostics(listener: () => void): () => void {
+  diagnosticListeners.add(listener);
+  return () => diagnosticListeners.delete(listener);
+}
+
+export function nativePushDiagnosticsText(diagnostic: NativePushDiagnostic | null = latestDiagnostic): string {
+  if (!diagnostic) return "native_push_stage=not_started";
+  const lines = [`native_push_stage=${diagnostic.stage}`];
+  if (diagnostic.permission) lines.push(`permission=${diagnostic.permission}`);
+  if (diagnostic.tokenPresent !== undefined) lines.push(`token_present=${diagnostic.tokenPresent}`);
+  if (diagnostic.registrationPresent !== undefined) lines.push(`registration_present=${diagnostic.registrationPresent}`);
+  if (diagnostic.errorCategory) lines.push(`error_category=${diagnostic.errorCategory}`);
+  if (diagnostic.status !== undefined) lines.push(`status=${diagnostic.status}`);
+  return lines.join("\n");
 }
 
 function errorStatus(error: unknown): number | undefined {
