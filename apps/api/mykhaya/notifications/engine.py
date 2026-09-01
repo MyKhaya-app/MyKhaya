@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
 from mykhaya.models import (
+    NativePushDevice,
     Notification,
     NotificationChannel,
     NotificationDelivery,
@@ -302,6 +303,49 @@ async def _enqueue_push(
                 idempotency_key=push_key,
                 outbox_event_id=event.id,
                 push_subscription_id=subscription.id,
+                scheduled_at=datetime.now(UTC),
+            )
+        )
+    native_devices = (
+        await db.scalars(
+            select(NativePushDevice).where(
+                NativePushDevice.user_id == recipient_user_id,
+                NativePushDevice.platform == "ios",
+                NativePushDevice.disabled_at.is_(None),
+            )
+        )
+    ).all()
+    for device in native_devices:
+        native_key = f"{idempotency_key}:native:{device.id}"
+        duplicate = await db.scalar(
+            select(NotificationDelivery.id).where(
+                NotificationDelivery.idempotency_key == native_key
+            )
+        )
+        if duplicate:
+            continue
+        event = OutboxEvent(
+            topic="notification.native_push",
+            payload={
+                "native_push_device_id": str(device.id),
+                "title": title,
+                "body": body,
+                "deep_link": dict(deep_link) if deep_link else None,
+                "delivery_idempotency_key": native_key,
+                "notification_type": notification_type,
+                "recipient_user_id": str(recipient_user_id),
+            },
+        )
+        db.add(event)
+        await db.flush()
+        db.add(
+            NotificationDelivery(
+                channel=NotificationChannel.push,
+                recipient_user_id=recipient_user_id,
+                notification_type=notification_type,
+                idempotency_key=native_key,
+                outbox_event_id=event.id,
+                native_push_device_id=device.id,
                 scheduled_at=datetime.now(UTC),
             )
         )

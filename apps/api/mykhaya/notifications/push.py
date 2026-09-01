@@ -9,17 +9,21 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from typing import Literal
 
-from cryptography.hazmat.primitives import serialization
+import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from py_vapid import Vapid
 from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import PlatformPushSettings, PushSubscription
+from mykhaya.models import NativePushDevice, PlatformPushSettings, PushSubscription
 from mykhaya.secrets_crypto import SecretDecryptionError, decrypt_secret
 
 PushSource = Literal["environment", "platform_admin", "unconfigured"]
@@ -32,6 +36,19 @@ class PushConfig:
     public_key: str | None = None
     private_key: str | None = None
     subject: str | None = None
+
+
+@dataclass(frozen=True)
+class ApnsConfig:
+    configured: bool
+    team_id: str | None = None
+    key_id: str | None = None
+    bundle_id: str | None = None
+    private_key: str | None = None
+
+
+class ApnsPermanentError(Exception):
+    pass
 
 
 def generate_vapid_keypair() -> tuple[str, str]:
@@ -111,3 +128,62 @@ def is_subscription_gone(exc: WebPushException) -> bool:
     as transient and left to the worker's normal retry/backoff."""
     response = getattr(exc, "response", None)
     return bool(response is not None and response.status_code in (404, 410))
+
+
+def resolve_apns_config(settings: Settings) -> ApnsConfig:
+    return ApnsConfig(
+        configured=settings.apns_delivery_configured
+        and bool(settings.apns_team_id and settings.apns_key_id and settings.apns_private_key),
+        team_id=settings.apns_team_id,
+        key_id=settings.apns_key_id,
+        bundle_id=settings.apns_bundle_id,
+        private_key=(
+            settings.apns_private_key.get_secret_value()
+            if settings.apns_private_key
+            else None
+        ),
+    )
+
+
+def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, object]) -> None:
+    if not config.configured or not config.team_id or not config.key_id or not config.private_key:
+        raise RuntimeError("APNs delivery is not configured")
+    def b64(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+    header = b64(
+        json.dumps({"alg": "ES256", "kid": config.key_id}, separators=(",", ":")).encode()
+    )
+    claims = b64(
+        json.dumps(
+            {"iss": config.team_id, "iat": int(time.time())}, separators=(",", ":")
+        ).encode()
+    )
+    signing_input = f"{header}.{claims}".encode("ascii")
+    key = load_pem_private_key(config.private_key.encode("utf-8"), password=None)
+    if not isinstance(key, ec.EllipticCurvePrivateKey):
+        raise RuntimeError("APNs key is not an elliptic-curve private key")
+    signature = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    # APNs expects the JOSE raw r||s signature, not ASN.1 DER.
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    r, s = decode_dss_signature(signature)
+    bearer = f"{header}.{claims}.{b64(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
+    topic = config.bundle_id or "app.mykhaya.mobile"
+    request_payload = {
+        "aps": {
+            "alert": {"title": payload["title"], "body": payload["body"]},
+            "sound": "default",
+        },
+        "deep_link": payload.get("deep_link"),
+        "notification_type": payload.get("notification_type"),
+    }
+    with httpx.Client(http2=True, timeout=10) as client:
+        response = client.post(
+            f"https://api.push.apple.com/3/device/{device.token}",
+            headers={"authorization": f"bearer {bearer}", "apns-topic": topic},
+            json=request_payload,
+        )
+    if response.status_code in (400, 404, 410):
+        raise ApnsPermanentError("APNs rejected this device registration")
+    response.raise_for_status()

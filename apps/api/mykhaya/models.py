@@ -1205,6 +1205,26 @@ class PushSubscription(UuidTimeMixin, Base):
     disabled_reason: Mapped[str | None] = mapped_column(String(200))
 
 
+class NativePushDevice(UuidTimeMixin, Base):
+    """Authenticated native APNs/FCM registration, separate from Web Push keys."""
+
+    __tablename__ = "native_push_devices"
+    __table_args__ = (
+        UniqueConstraint("platform", "installation_id", name="uq_native_push_device_installation"),
+        Index("ix_native_push_devices_user", "user_id", "disabled_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20))
+    token: Mapped[str] = mapped_column(String(512))
+    installation_id: Mapped[str] = mapped_column(String(128))
+    device_label: Mapped[str | None] = mapped_column(String(120))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(200))
+
+
 class Notification(UuidTimeMixin, Base):
     """In-app notification centre row."""
 
@@ -1249,6 +1269,9 @@ class NotificationDelivery(Base):
     )
     push_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("push_subscriptions.id", ondelete="SET NULL")
+    )
+    native_push_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("native_push_devices.id", ondelete="SET NULL")
     )
     scheduled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

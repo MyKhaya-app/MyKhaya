@@ -8,11 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.models import BriefingDays, LockScreenPreviewLevel, Notification, PushSubscription
+from mykhaya.models import (
+    BriefingDays,
+    LockScreenPreviewLevel,
+    NativePushDevice,
+    Notification,
+    PushSubscription,
+)
 from mykhaya.notifications.deep_links import resolve_path
 from mykhaya.notifications.engine import get_or_create_preferences
 from mykhaya.notifications.push import resolve_push_config
 from mykhaya.schemas import (
+    NativePushDeviceCreate,
+    NativePushDeviceResponse,
     NotificationListResponse,
     NotificationPreferencesResponse,
     NotificationPreferencesUpdate,
@@ -25,6 +33,71 @@ from mykhaya.schemas import (
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 PAGE_SIZE = 30
+
+
+def native_device_response(row: NativePushDevice) -> NativePushDeviceResponse:
+    return NativePushDeviceResponse(
+        id=row.id,
+        platform=row.platform,
+        device_label=row.device_label,
+        created_at=row.created_at,
+        last_seen_at=row.last_seen_at,
+        disabled_at=row.disabled_at,
+    )
+
+
+@router.post("/native-devices", status_code=status.HTTP_201_CREATED)
+async def register_native_device(
+    body: NativePushDeviceCreate,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> NativePushDeviceResponse:
+    row = await db.scalar(
+        select(NativePushDevice).where(
+            NativePushDevice.platform == body.platform,
+            NativePushDevice.installation_id == body.installation_id,
+        )
+    )
+    now = datetime.now(UTC)
+    if row is None:
+        row = NativePushDevice(
+            user_id=auth.user.id,
+            platform=body.platform,
+            token=body.token,
+            installation_id=body.installation_id,
+            device_label=body.device_label,
+            last_seen_at=now,
+        )
+        db.add(row)
+    else:
+        row.user_id = auth.user.id
+        row.token = body.token
+        row.device_label = body.device_label
+        row.last_seen_at = now
+        row.disabled_at = None
+        row.disabled_reason = None
+    await db.commit()
+    await db.refresh(row)
+    return native_device_response(row)
+
+
+@router.delete("/native-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_native_device(
+    device_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    row = await db.scalar(
+        select(NativePushDevice).where(
+            NativePushDevice.id == device_id,
+            NativePushDevice.user_id == auth.user.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Native device not found.")
+    row.disabled_at = datetime.now(UTC)
+    row.disabled_reason = "Removed by account owner."
+    await db.commit()
 
 
 def _time_str(value: time | None) -> str | None:

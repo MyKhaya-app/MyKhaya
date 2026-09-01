@@ -6,6 +6,7 @@ import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
 import { recordAuthDiagnostic } from "./auth-diagnostics";
 import { bootstrapNativeSession } from "./native-auth";
+import { initializeNativePush, reconcileNativePush } from "./native-push";
 import { isNativeShell } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
@@ -113,6 +114,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [path, status, loadSession]);
 
   useUserUpdatedListener(setUser);
+
+  useEffect(() => {
+    if (!isNativeShell() || status !== "ready") return;
+    void initializeNativePush((destination) => router.push(destination));
+    void reconcileNativePush();
+  }, [router, status]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user,

@@ -13,6 +13,7 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
+    NativePushDevice,
     NotificationDelivery,
     NotificationDeliveryStatus,
     OperationalHeartbeat,
@@ -22,7 +23,14 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
-from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
+from mykhaya.notifications.push import (
+    ApnsPermanentError,
+    is_subscription_gone,
+    resolve_apns_config,
+    resolve_push_config,
+    send_apns,
+    send_push,
+)
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
 from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
@@ -88,6 +96,45 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.cancelled
         delivery.sanitised_failure_reason = "This device's push registration is invalid."
+
+
+async def _process_native_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
+    delivery = await db.scalar(
+        select(NotificationDelivery).where(
+            NotificationDelivery.idempotency_key
+            == event.payload["delivery_idempotency_key"]
+        )
+    )
+    device = await db.get(NativePushDevice, uuid.UUID(event.payload["native_push_device_id"]))
+    if delivery is None or device is None or device.disabled_at is not None:
+        return
+    payload = {
+        "title": event.payload["title"],
+        "body": event.payload["body"],
+        "deep_link": event.payload.get("deep_link"),
+        "notification_type": event.payload.get("notification_type"),
+    }
+    try:
+        await asyncio.to_thread(send_apns, resolve_apns_config(settings), device, payload)
+        delivery.status = NotificationDeliveryStatus.sent
+        delivery.attempted_at = datetime.now(UTC)
+        device.last_seen_at = datetime.now(UTC)
+    except ApnsPermanentError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This native device registration is invalid."
+        device.disabled_at = datetime.now(UTC)
+        device.disabled_reason = "APNs rejected this device registration."
+    except RuntimeError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "Native push delivery is not configured."
+    except Exception:
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.sanitised_failure_reason = "Native push service temporarily unavailable."
+        raise
 
 
 async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
@@ -161,6 +208,8 @@ async def process(event_id: uuid.UUID) -> None:
                 await _process_email(db, settings, event)
             elif event.topic == "notification.push":
                 await _process_push(db, settings, event)
+            elif event.topic == "notification.native_push":
+                await _process_native_push(db, settings, event)
             elif event.topic == "notification.event_reminder":
                 await deliver_event_reminder(
                     db,

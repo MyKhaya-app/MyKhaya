@@ -535,6 +535,14 @@ export class MyKhayaClient {
       `/notifications/push-subscriptions/${encodeURIComponent(subscriptionId)}`,
       { method: "DELETE" },
     );
+  registerNativePushDevice = (body: {
+    platform: "ios" | "android";
+    token: string;
+    installation_id: string;
+    device_label?: string;
+  }) => this.request<{ id: string }>("/notifications/native-devices", { method: "POST", body: JSON.stringify(body) });
+  deleteNativePushDevice = (deviceId: string) =>
+    this.request<void>(`/notifications/native-devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
   notificationPreferences = () =>
     this.request<import("@mykhaya/shared-types").NotificationPreferences>(
       "/notifications/preferences",

@@ -1288,6 +1288,22 @@ class PushSubscriptionCreate(StrictModel):
     endpoint: str = Field(min_length=1, max_length=4000)
     keys: PushSubscriptionKeys
     device_label: str | None = Field(default=None, max_length=120)
+
+
+class NativePushDeviceCreate(StrictModel):
+    platform: Literal["ios", "android"]
+    token: str = Field(min_length=1, max_length=512)
+    installation_id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    device_label: str | None = Field(default=None, max_length=120)
+
+
+class NativePushDeviceResponse(BaseModel):
+    id: uuid.UUID
+    platform: Literal["ios", "android"]
+    device_label: str | None
+    created_at: datetime
+    last_seen_at: datetime | None
+    disabled_at: datetime | None
     user_agent: str | None = Field(default=None, max_length=300)
 
 

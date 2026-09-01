@@ -10,6 +10,8 @@ import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
 import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
+import { enableNativePush, nativePushPermission, type NativePushStatus } from "@/components/native-push";
+import { isNativeShell } from "@/components/native-runtime";
 
 const STAGE_LABELS: Record<SubscribeStage, string> = {
   "checking-support": "Checking browser support…",
@@ -38,6 +40,7 @@ export default function NotificationSettings() {
   const [error, setError] = useState("");
   const [subscribing, setSubscribing] = useState(false);
   const [subscribeStage, setSubscribeStage] = useState<SubscribeStage | null>(null);
+  const [nativeStatus, setNativeStatus] = useState<NativePushStatus>("prompt");
 
   const load = useCallback(async () => {
     const [preferences, subscriptions] = await Promise.all([
@@ -53,6 +56,14 @@ export default function NotificationSettings() {
   useEffect(() => {
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
+
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    nativePushPermission().then((permission) => {
+      if (!permission) return;
+      setNativeStatus(permission.receive === "granted" ? "granted" : permission.receive === "denied" ? "denied" : "prompt");
+    }).catch(() => setNativeStatus("error"));
+  }, []);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -133,6 +144,20 @@ export default function NotificationSettings() {
     }
   }
 
+  async function enableNativeOnThisDevice() {
+    setNativeStatus("registering");
+    setError("");
+    const result = await enableNativePush();
+    if (result.ok) {
+      setNativeStatus("registered");
+      setMessage("Notifications are enabled on this iPhone.");
+    } else {
+      setNativeStatus(result.status);
+      if (result.status === "denied") setError("Notifications are disabled for MyKhaya in iOS Settings.");
+      else if (result.status === "error") setError("We couldn't register this iPhone for notifications.");
+    }
+  }
+
   async function removeDevice(id: string) {
     await api.deletePushSubscription(id);
     setDevices((current) => current.filter((device) => device.id !== id));
@@ -161,7 +186,24 @@ export default function NotificationSettings() {
 
       <section className="card details">
         <h2>This device</h2>
-        {!isStandalone() ? (
+        {isNativeShell() ? (
+          <>
+            <p>
+              {nativeStatus === "registered"
+                ? "Notifications are enabled on this iPhone."
+                : nativeStatus === "denied"
+                  ? "Notifications are disabled for MyKhaya in iOS Settings."
+                  : nativeStatus === "registering"
+                    ? "Setting up notificationsâ€¦"
+                    : "Notifications are available on this iPhone."}
+            </p>
+            {nativeStatus !== "denied" && nativeStatus !== "registered" && (
+              <button type="button" className="secondary" onClick={enableNativeOnThisDevice} disabled={nativeStatus === "registering"}>
+                <Bell size={16} aria-hidden="true" /> Enable notifications
+              </button>
+            )}
+          </>
+        ) : !isStandalone() ? (
           <p>Install MyKhaya to your Home Screen first to enable notifications.</p>
         ) : (
           <button type="button" className="secondary" onClick={enableOnThisDevice} disabled={subscribing}>

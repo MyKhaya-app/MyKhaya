@@ -61,3 +61,23 @@ native API uses the same frontend origin's `/api/v1` route in both environments.
 There is no separate `.env` file for this package; it is a single named
 variable, set when running `cap sync`/opening the relevant Xcode scheme, the
 same MYKHAYA_-prefixed convention used throughout the backend.
+
+## Native push / APNs
+
+The native shell uses `@capacitor/push-notifications`; it does not use the
+service-worker/VAPID Web Push path. The API worker requires these backend-only
+secrets for real iOS delivery:
+
+```text
+MYKHAYA_APNS_DELIVERY_CONFIGURED=true
+MYKHAYA_APNS_TEAM_ID=...
+MYKHAYA_APNS_KEY_ID=...
+MYKHAYA_APNS_BUNDLE_ID=app.mykhaya.mobile
+MYKHAYA_APNS_PRIVATE_KEY="-----BEGIN PRIVATE KEY----- ..."
+```
+
+Never commit the `.p8` key or expose these values to the web bundle. TestFlight
+uses Apple's production APNs endpoint. The Mac-generated Xcode project must
+have the Push Notifications capability and an `aps-environment` entitlement
+with the production signing profile before archiving; Background Modes is not
+required for ordinary alert delivery.

@@ -121,6 +121,9 @@ export function nativeChildLogin(
  * other signed-in device. */
 export async function nativeLogout(): Promise<void> {
   try {
+    const { cleanupNativePush, revokeNativePush } = await import("./native-push");
+    await revokeNativePush();
+    await cleanupNativePush();
     await client().logout();
   } finally {
     api.setRequestTransport(null);

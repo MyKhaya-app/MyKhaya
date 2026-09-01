@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     vapid_private_key: SecretStr | None = None
     vapid_subject: str | None = None
     push_delivery_configured: bool = False
+    apns_team_id: str | None = None
+    apns_key_id: str | None = None
+    apns_bundle_id: str = "app.mykhaya.mobile"
+    apns_private_key: SecretStr | None = None
+    apns_delivery_configured: bool = False
     # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
     # which also support a Platform-Admin-managed DB override. A payment
     # provider's credentials are rotated through infrastructure, not typed into

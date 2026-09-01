@@ -21,12 +21,27 @@ importers:
 
   apps/ios-shell:
     dependencies:
+      '@aparajita/capacitor-biometric-auth':
+        specifier: 10.0.0
+        version: 10.0.0
+      '@aparajita/capacitor-secure-storage':
+        specifier: 8.0.0
+        version: 8.0.0
+      '@capacitor/app':
+        specifier: 8.1.1
+        version: 8.1.1(@capacitor/core@8.5.0)
+      '@capacitor/browser':
+        specifier: 8.0.4
+        version: 8.0.4(@capacitor/core@8.5.0)
       '@capacitor/core':
         specifier: 8.5.0
         version: 8.5.0
       '@capacitor/ios':
         specifier: 8.5.0
         version: 8.5.0(@capacitor/core@8.5.0)
+      '@capacitor/push-notifications':
+        specifier: 8.0.0
+        version: 8.0.0(@capacitor/core@8.5.0)
     devDependencies:
       '@capacitor/cli':
         specifier: 8.5.0
@@ -58,6 +73,9 @@ importers:
       '@capacitor/core':
         specifier: 8.5.0
         version: 8.5.0
+      '@capacitor/push-notifications':
+        specifier: 8.0.0
+        version: 8.0.0(@capacitor/core@8.5.0)
       '@mykhaya/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
@@ -253,6 +271,11 @@ packages:
 
   '@capacitor/keyboard@8.0.5':
     resolution: {integrity: sha512-oFXygC4eKYA5l2MdpTR06L2M/4x6e2SLD5yS1T9+UBDKTkzyvhWKEhbYLUaTIBPpLKqlfGudJw1X73S1H9eUzQ==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/push-notifications@8.0.0':
+    resolution: {integrity: sha512-xJWQLqAfC8b2ETqAPmwDnkKB4t/lVrbYc2D8VpA2fSu10JFSL/R722Vk0Lfl9Lo9WusmyIiQbVfILNQ3iFNGKw==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
 
@@ -2501,6 +2524,10 @@ snapshots:
       '@capacitor/core': 8.5.0
 
   '@capacitor/keyboard@8.0.5(@capacitor/core@8.5.0)':
+    dependencies:
+      '@capacitor/core': 8.5.0
+
+  '@capacitor/push-notifications@8.0.0(@capacitor/core@8.5.0)':
     dependencies:
       '@capacitor/core': 8.5.0
 
