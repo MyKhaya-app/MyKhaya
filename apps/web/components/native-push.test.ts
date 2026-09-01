@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Token } from "@capacitor/push-notifications";
 
 const push = vi.hoisted(() => ({
@@ -21,8 +21,23 @@ vi.mock("./native-runtime", () => ({
   nativePlatform: () => platform.value,
 }));
 
+function listenerFor<T>(event: string): (value: T) => void {
+  const calls = push.addListener.mock.calls as unknown[][];
+  const listener = calls.find((call) => call[0] === event)?.[1];
+  if (typeof listener !== "function") throw new Error(`Missing ${event} listener`);
+  return listener as (value: T) => void;
+}
+
 describe("native push platform boundary", () => {
+  beforeEach(() => {
+    push.checkPermissions.mockResolvedValue({ receive: "granted" });
+    push.requestPermissions.mockResolvedValue({ receive: "granted" });
+    push.register.mockResolvedValue(undefined);
+    api.registerNativePushDevice.mockResolvedValue({ id: "registration-1" });
+    api.deleteNativePushDevice.mockResolvedValue(undefined);
+  });
   afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
     platform.native = true;
@@ -37,23 +52,78 @@ describe("native push platform boundary", () => {
     expect(push.register).not.toHaveBeenCalled();
   });
 
-  it("requests permission and registers the native token without PushManager", async () => {
+  it("attaches listeners before register and registers the native token", async () => {
     push.checkPermissions.mockResolvedValue({ receive: "prompt" });
     push.requestPermissions.mockResolvedValue({ receive: "granted" });
-    push.register.mockImplementation(async () => {
-      const registration = push.addListener.mock.calls.find(([name]) => name === "registration") as
-        | [string, (token: Token) => void]
-        | undefined;
-      registration?.[1]({ value: "native-token" });
-    });
+    push.register.mockImplementation(async () => { listenerFor<Token>("registration")({ value: "native-token" }); });
     const { enableNativePush } = await import("./native-push");
 
     await expect(enableNativePush()).resolves.toEqual({ ok: true, status: "registered" });
     expect(push.requestPermissions).toHaveBeenCalledTimes(1);
     expect(push.register).toHaveBeenCalledTimes(1);
+    const registerOrder = push.register.mock.invocationCallOrder[0];
+    const listenerOrder = push.addListener.mock.invocationCallOrder.at(-1);
+    expect(registerOrder).toBeDefined();
+    expect(listenerOrder).toBeDefined();
+    expect(registerOrder!).toBeGreaterThan(listenerOrder!);
     expect(api.registerNativePushDevice).toHaveBeenCalledWith(
       expect.objectContaining({ platform: "ios", token: "native-token" }),
     );
+  });
+
+  it("reports an OS registration error and does not call the backend", async () => {
+    push.register.mockImplementation(async () => {
+      listenerFor<unknown>("registrationError")({ message: "registration failed" });
+    });
+    const { enableNativePush } = await import("./native-push");
+
+    await expect(enableNativePush()).resolves.toEqual({ ok: false, status: "error" });
+    expect(api.registerNativePushDevice).not.toHaveBeenCalled();
+  });
+
+  it("preserves an error result when backend registration fails", async () => {
+    api.registerNativePushDevice.mockRejectedValueOnce(new Error("backend unavailable"));
+    push.register.mockImplementation(async () => { listenerFor<Token>("registration")({ value: "native-token" }); });
+    const { enableNativePush } = await import("./native-push");
+
+    await expect(enableNativePush()).resolves.toEqual({ ok: false, status: "error" });
+  });
+
+  it("returns an error when registration times out", async () => {
+    vi.useFakeTimers();
+    const { enableNativePush } = await import("./native-push");
+    const pending = enableNativePush();
+    await vi.advanceTimersByTimeAsync(10_001);
+
+    await expect(pending).resolves.toEqual({ ok: false, status: "error" });
+  });
+
+  it("does not remove listeners while registration is pending", async () => {
+    vi.useFakeTimers();
+    const removers: Array<ReturnType<typeof vi.fn>> = [];
+    push.addListener.mockImplementation(async () => {
+      const remove = vi.fn();
+      removers.push(remove);
+      return { remove };
+    });
+    const { cleanupNativePush, enableNativePush } = await import("./native-push");
+    const pending = enableNativePush();
+    await Promise.resolve();
+    await Promise.resolve();
+    await cleanupNativePush();
+    expect(removers.every((remove) => !remove.mock.calls.length)).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(pending).resolves.toEqual({ ok: false, status: "error" });
+    expect(removers.every((remove) => remove.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("never logs the APNs token", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    push.register.mockImplementation(async () => { listenerFor<Token>("registration")({ value: "secret-apns-token" }); });
+    const { enableNativePush } = await import("./native-push");
+
+    await enableNativePush();
+    expect(JSON.stringify(info.mock.calls)).not.toContain("secret-apns-token");
   });
 
   it("keeps notification tap destinations on the internal allowlist", async () => {

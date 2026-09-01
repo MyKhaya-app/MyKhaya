@@ -194,7 +194,7 @@ export default function NotificationSettings() {
                 : nativeStatus === "denied"
                   ? "Notifications are disabled for MyKhaya in iOS Settings."
                   : nativeStatus === "registering"
-                    ? "Setting up notificationsâ€¦"
+                    ? "Setting up notifications…"
                     : "Notifications are available on this iPhone."}
             </p>
             {nativeStatus !== "denied" && nativeStatus !== "registered" && (
