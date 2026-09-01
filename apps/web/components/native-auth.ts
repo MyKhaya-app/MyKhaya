@@ -38,6 +38,10 @@ export async function runNativeNetworkDiagnostics(): Promise<string[]> {
   return client().diagnosticProbe();
 }
 
+export function fetchNativeImage(path: string): Promise<Blob> {
+  return client().image(path);
+}
+
 // Device-friendly labelling for the Security page's "Signed-in devices"
 // list (Phase 9) — read server-side via mobile_client_descriptor/
 // device_platform (see routers.auth) into Session.user_agent /

@@ -354,6 +354,42 @@ export class NativeMyKhayaClient {
     return parseApiResponse<T>(response);
   }
 
+  /** Fetch protected media with the same current bearer session as API JSON.
+   * Direct <img> requests cannot attach Authorization in the native shell. */
+  async image(path: string): Promise<Blob> {
+    const current = await this.store.get();
+    if (!current) throw new ApiError(401, "Not signed in.");
+    const headers = this.baseHeaders();
+    headers.set("Authorization", `Bearer ${current.token}`);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      });
+    } catch (error) {
+      this.diagnostic(path, {
+        method: "GET",
+        errorCategory: "network_or_cors",
+        exceptionType: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
+    }
+    this.diagnostic(path, {
+      method: "GET",
+      status: response.status,
+      responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
+    });
+    if (response.status === 401) await this.store.clearIfMatches(current.token);
+    if (!response.ok) throw new ApiError(response.status, "Could not load image.");
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
+    if (!contentType?.startsWith("image/")) {
+      throw new Error("Protected media response was not an image.");
+    }
+    return response.blob();
+  }
+
   /**
    * App-start native auth bootstrap (task: "read current token, determine
    * if a session exists, validate it against the API, recognise

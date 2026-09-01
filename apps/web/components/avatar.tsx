@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { contrastText, resolveColour } from "@mykhaya/design-tokens";
+import { fetchNativeImage } from "./native-auth";
+import { isNativeShell } from "./native-runtime";
 import {
   type AvatarStackPerson,
   avatarStackLabel,
@@ -38,7 +40,11 @@ const SIZES = { sm: 32, md: 44, lg: 56, xl: 72 } as const;
  *  means a changed avatar always invalidates any cached copy of the old URL, while
  *  the image itself is served with a long, immutable Cache-Control. */
 export function avatarUrl(id: string, version: string): string {
-  return `/api/v1/users/${encodeURIComponent(id)}/avatar?v=${encodeURIComponent(version)}`;
+  return `/api/v1${avatarPath(id, version)}`;
+}
+
+function avatarPath(id: string, version: string): string {
+  return `/users/${encodeURIComponent(id)}/avatar?v=${encodeURIComponent(version)}`;
 }
 
 export function Avatar({
@@ -59,20 +65,42 @@ export function Avatar({
   size?: keyof typeof SIZES;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [nativeImageUrl, setNativeImageUrl] = useState<string | null>(null);
   const bg = memberColour(id, colour);
   const text = contrastText(bg);
   const px = SIZES[size];
   const initial = name.trim().charAt(0).toUpperCase() || "?";
   const showImage = Boolean(avatarVersion) && !imageFailed;
+  useEffect(() => {
+    setImageFailed(false);
+    setNativeImageUrl(null);
+    if (!isNativeShell() || !avatarVersion) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void fetchNativeImage(avatarPath(id, avatarVersion))
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setNativeImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setImageFailed(true);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id, avatarVersion]);
+  const imageSrc = isNativeShell() ? nativeImageUrl : avatarVersion ? avatarUrl(id, avatarVersion) : null;
   return (
     <span
       className={`avatar avatar-${size}`}
       style={{ width: px, height: px, background: bg, color: text }}
       aria-hidden="true"
     >
-      {showImage ? (
+      {showImage && imageSrc ? (
         <img
-          src={avatarUrl(id, avatarVersion!)}
+          src={imageSrc}
           alt=""
           width={px}
           height={px}

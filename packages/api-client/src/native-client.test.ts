@@ -200,6 +200,46 @@ describe("NativeMyKhayaClient — authenticated requests", () => {
   });
 });
 
+describe("NativeMyKhayaClient — protected images", () => {
+  it("fetches image bytes with the current bearer and native headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/webp" },
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "access-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, {
+      fetch: fetchMock,
+      clientHeaders: { client: "MyKhaya iOS", platform: "iOS", appVersion: "1.0.0" },
+    });
+
+    const blob = await client.image("/users/u1/avatar?v=v1");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(blob.type).toBe("image/webp");
+    expect(headers.get("Authorization")).toBe("Bearer access-token");
+    expect(headers.get("X-MyKhaya-Client")).toBe("MyKhaya iOS");
+    expect(headers.get("X-MyKhaya-Platform")).toBe("iOS");
+    expect(headers.get("X-MyKhaya-App-Version")).toBe("1.0.0");
+  });
+
+  it("rejects API/HTML responses instead of treating them as images", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Unauthorized" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "access-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await expect(client.image("/users/u1/avatar?v=v1")).rejects.toThrow(/not an image/i);
+  });
+});
+
 describe("NativeMyKhayaClient — rotation", () => {
   it("persists the new token, replacing the old one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { session_token: "token-b" }));
