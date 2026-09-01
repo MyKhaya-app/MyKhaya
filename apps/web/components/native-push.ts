@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ActionPerformed,
   PermissionStatus,
   PushNotifications,
   Token,
@@ -21,6 +20,17 @@ let registrationWaiter: Promise<void> | undefined;
 let resolveRegistrationWaiter: (() => void) | undefined;
 let actionHandler: ((path: string) => void) | undefined;
 let listenerHandles: PluginListenerHandle[] = [];
+
+type NativeNotificationData = {
+  deep_link_path?: unknown;
+  deep_link?: unknown;
+};
+
+function nativeNotificationData(value: unknown): NativeNotificationData {
+  if (typeof value !== "object" || value === null) return {};
+  const record = value as Record<string, unknown>;
+  return { deep_link_path: record.deep_link_path, deep_link: record.deep_link };
+}
 
 export function safeNativePushPath(value: unknown): string {
   if (
@@ -47,7 +57,7 @@ function installationId(): string {
 async function ensureListeners(): Promise<void> {
   if (listenersReady) return listenersReady;
   listenersReady = (async () => {
-    listenerHandles.push(await PushNotifications.addListener("registration", async (token: Token) => {
+    async function registerToken(token: Token): Promise<void> {
       lastToken = token.value;
       resolveTokenWaiter?.();
       resolveTokenWaiter = undefined;
@@ -62,11 +72,16 @@ async function ensureListeners(): Promise<void> {
       lastRegistrationId = registration.id;
       resolveRegistrationWaiter?.();
       resolveRegistrationWaiter = undefined;
+    }
+
+    listenerHandles.push(await PushNotifications.addListener("registration", (token: Token) => {
+      void registerToken(token).catch(() => undefined);
     }));
     listenerHandles.push(await PushNotifications.addListener("registrationError", () => {}));
     listenerHandles.push(await PushNotifications.addListener("pushNotificationReceived", () => {}));
     listenerHandles.push(await PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
-      const value = action.notification.data?.deep_link_path ?? action.notification.data?.deep_link;
+      const data = nativeNotificationData(action.notification.data as unknown);
+      const value = data.deep_link_path ?? data.deep_link;
       actionHandler?.(safeNativePushPath(value));
     }));
   })();

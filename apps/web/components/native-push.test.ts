@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Token } from "@capacitor/push-notifications";
 
 const push = vi.hoisted(() => ({
   checkPermissions: vi.fn(),
@@ -40,8 +41,10 @@ describe("native push platform boundary", () => {
     push.checkPermissions.mockResolvedValue({ receive: "prompt" });
     push.requestPermissions.mockResolvedValue({ receive: "granted" });
     push.register.mockImplementation(async () => {
-      const registration = push.addListener.mock.calls.find(([name]) => name === "registration");
-      await registration?.[1]({ value: "native-token" });
+      const registration = push.addListener.mock.calls.find(([name]) => name === "registration") as
+        | [string, (token: Token) => void]
+        | undefined;
+      registration?.[1]({ value: "native-token" });
     });
     const { enableNativePush } = await import("./native-push");
 
