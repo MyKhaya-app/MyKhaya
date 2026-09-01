@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   allowedNavigationHosts,
+  iosShellConfiguration,
   liveFrontendOrigin,
+  nativeApiBaseUrl,
   resolveIosShellEnvironment,
 } from "./config";
 
 describe("resolveIosShellEnvironment", () => {
-  it("defaults to production when MYKHAYA_IOS_ENV is unset", () => {
-    expect(resolveIosShellEnvironment({})).toBe("production");
+  it("defaults to development when MYKHAYA_IOS_ENV is unset", () => {
+    expect(resolveIosShellEnvironment({})).toBe("development");
   });
 
   it("accepts an explicit production value", () => {
@@ -35,16 +37,36 @@ describe("liveFrontendOrigin", () => {
   });
 });
 
+describe("iosShellConfiguration", () => {
+  it("resolves development frontend and same-origin API route", () => {
+    expect(iosShellConfiguration("development")).toEqual({
+      environment: "development",
+      frontend: "https://dev.mykhaya.app",
+      api: "https://dev.mykhaya.app/api/v1",
+    });
+    expect(nativeApiBaseUrl("development")).toBe("https://dev.mykhaya.app/api/v1");
+  });
+
+  it("resolves production frontend and same-origin API route", () => {
+    expect(iosShellConfiguration("production")).toEqual({
+      environment: "production",
+      frontend: "https://mykhaya.app",
+      api: "https://mykhaya.app/api/v1",
+    });
+    expect(nativeApiBaseUrl("production")).toBe("https://mykhaya.app/api/v1");
+  });
+});
+
 describe("allowedNavigationHosts", () => {
   it("is a short, explicit, non-wildcard list for development", () => {
     const hosts = allowedNavigationHosts("development");
-    expect(hosts).toEqual(["dev.mykhaya.app", "api.dev.mykhaya.app"]);
+    expect(hosts).toEqual(["dev.mykhaya.app"]);
     expect(hosts.some((host) => host.includes("*"))).toBe(false);
   });
 
   it("is a short, explicit, non-wildcard list for production", () => {
     const hosts = allowedNavigationHosts("production");
-    expect(hosts).toEqual(["mykhaya.app", "api.mykhaya.app"]);
+    expect(hosts).toEqual(["mykhaya.app"]);
     expect(hosts.some((host) => host.includes("*"))).toBe(false);
   });
 

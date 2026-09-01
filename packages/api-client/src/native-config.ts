@@ -1,10 +1,8 @@
 /**
  * The single place a future native (Capacitor) shell's API origin is named.
- * See ADR 0008/0010: `api.mykhaya.app` (and its dev equivalent,
- * `api.dev.mykhaya.app`) is a direct-to-FastAPI origin that is never
- * proxied through the Next.js web app the way the browser's relative
- * `/api/v1` path is — a native client has no same-origin relationship with
- * the API to rely on, so it must be given an absolute base URL instead.
+ * The native shell loads the live frontend, so it uses that same origin's
+ * `/api/v1` route. This keeps native and web traffic on the proven gateway
+ * and avoids requiring a separate api.* service.
  *
  * This file does not attempt to auto-detect which environment a native
  * shell is running in — `NativeMyKhayaClient` has no reliable way to know
@@ -16,8 +14,8 @@
  * each time a native build needs one.
  */
 export const NATIVE_API_ORIGINS = {
-  development: "https://api.dev.mykhaya.app",
-  production: "https://api.mykhaya.app",
+  development: "https://dev.mykhaya.app",
+  production: "https://mykhaya.app",
 } as const;
 
 export type NativeApiEnvironment = keyof typeof NATIVE_API_ORIGINS;
@@ -42,13 +40,13 @@ export function nativeApiBaseUrl(environment: NativeApiEnvironment): string {
  * controls which origin the shell points its WebView at in the first
  * place — a build/Xcode-scheme concern, not a runtime-JS one).
  */
-const WEB_TO_NATIVE_API: Record<string, NativeApiEnvironment> = {
+const WEB_TO_NATIVE_ENVIRONMENT: Record<string, NativeApiEnvironment> = {
   "dev.mykhaya.app": "development",
   "mykhaya.app": "production",
 };
 
 export function nativeApiBaseUrlForWebHost(hostname: string): string {
-  const environment = WEB_TO_NATIVE_API[hostname];
+  const environment = WEB_TO_NATIVE_ENVIRONMENT[hostname];
   if (!environment) {
     throw new Error(
       `No native API origin is configured for web host ${JSON.stringify(hostname)}.`,

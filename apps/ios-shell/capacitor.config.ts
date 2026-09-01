@@ -1,7 +1,17 @@
 import type { CapacitorConfig } from "@capacitor/cli";
-import { allowedNavigationHosts, liveFrontendOrigin, resolveIosShellEnvironment } from "./src/config";
+import {
+  allowedNavigationHosts,
+  iosShellConfiguration,
+  liveFrontendOrigin,
+  resolveIosShellEnvironment,
+} from "./src/config";
 
 const environment = resolveIosShellEnvironment();
+const shellConfiguration = iosShellConfiguration(environment);
+
+console.log(`MyKhaya environment: ${shellConfiguration.environment}`);
+console.log(`Frontend: ${shellConfiguration.frontend}`);
+console.log(`API: ${shellConfiguration.api}`);
 
 // Reused from the retired apps/mobile Expo scaffold (ADR 0011) rather than
 // invented fresh — see docs/architecture/adr/0012-capacitor-ios-shell.md
@@ -24,9 +34,8 @@ const config: CapacitorConfig = {
     // Proxy in dev, Caddy in production); there is no "local plain-HTTP"
     // iOS target.
     cleartext: false,
-    // No wildcards. Only the live frontend's own origin and its paired
-    // native API origin (see src/config.ts's own docstring for exactly
-    // what is and is not included, and why).
+    // No wildcards. Only the live frontend's own origin is needed because
+    // native bearer requests use that same origin's /api/v1 route.
     allowNavigation: allowedNavigationHosts(environment),
   },
   ios: {

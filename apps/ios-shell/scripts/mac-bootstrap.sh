@@ -10,16 +10,12 @@
 set -euo pipefail
 
 # Phase 4 development bootstrap: this must point at the dev live frontend
-# (dev.mykhaya.app), not the capacitor.config.ts default of production
-# (mykhaya.app) — see apps/ios-shell/src/config.ts's
-# resolveIosShellEnvironment(). The default there is intentional production
-# architecture and is NOT changed by this script; this only fixes what this
-# *bootstrap script* exports, so `cap add`/`cap sync` below actually build
-# against dev.mykhaya.app unless you explicitly override it, e.g.:
+# (dev.mykhaya.app). The config also defaults safely to development; set
+# production explicitly when making a production archive, e.g.:
 #   MYKHAYA_IOS_ENV=production bash mac-bootstrap.sh
 export MYKHAYA_IOS_ENV="${MYKHAYA_IOS_ENV:-development}"
 echo "== MYKHAYA_IOS_ENV=$MYKHAYA_IOS_ENV =="
-echo "(unset it, or pass MYKHAYA_IOS_ENV=production, to build against the production frontend instead)"
+echo "Production requires MYKHAYA_IOS_ENV=production explicitly."
 
 echo "== 0. Tool versions (record these in the completion report) =="
 sw_vers

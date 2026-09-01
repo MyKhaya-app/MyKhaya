@@ -7,25 +7,25 @@ import {
 
 describe("native-config", () => {
   it("names exactly the dev and production native API origins", () => {
-    expect(NATIVE_API_ORIGINS.development).toBe("https://api.dev.mykhaya.app");
-    expect(NATIVE_API_ORIGINS.production).toBe("https://api.mykhaya.app");
+    expect(NATIVE_API_ORIGINS.development).toBe("https://dev.mykhaya.app");
+    expect(NATIVE_API_ORIGINS.production).toBe("https://mykhaya.app");
   });
 
   it("appends FastAPI's own /api/v1 mount prefix for each environment", () => {
-    expect(nativeApiBaseUrl("development")).toBe("https://api.dev.mykhaya.app/api/v1");
-    expect(nativeApiBaseUrl("production")).toBe("https://api.mykhaya.app/api/v1");
+    expect(nativeApiBaseUrl("development")).toBe("https://dev.mykhaya.app/api/v1");
+    expect(nativeApiBaseUrl("production")).toBe("https://mykhaya.app/api/v1");
   });
 });
 
 describe("nativeApiBaseUrlForWebHost", () => {
   it("resolves the dev live frontend host to the dev native API", () => {
     expect(nativeApiBaseUrlForWebHost("dev.mykhaya.app")).toBe(
-      "https://api.dev.mykhaya.app/api/v1",
+      "https://dev.mykhaya.app/api/v1",
     );
   });
 
   it("resolves the production live frontend host to the production native API", () => {
-    expect(nativeApiBaseUrlForWebHost("mykhaya.app")).toBe("https://api.mykhaya.app/api/v1");
+    expect(nativeApiBaseUrlForWebHost("mykhaya.app")).toBe("https://mykhaya.app/api/v1");
   });
 
   it("throws clearly for an unrecognised host rather than guessing", () => {

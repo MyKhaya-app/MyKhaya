@@ -30,7 +30,7 @@ export class NativeMyKhayaClient {
   ) {
     if (!/^https?:\/\//.test(baseUrl)) {
       throw new Error(
-        "NativeMyKhayaClient requires an absolute http(s) base URL (e.g. https://api.dev.mykhaya.app/api/v1) — see packages/api-client/src/native-config.ts.",
+        "NativeMyKhayaClient requires an absolute http(s) base URL (e.g. https://dev.mykhaya.app/api/v1) — see packages/api-client/src/native-config.ts.",
       );
     }
   }

@@ -54,8 +54,10 @@ npx cap open ios        # opens Xcode
 
 ## Environment selection
 
-`MYKHAYA_IOS_ENV` (`development` | `production`, default `production`)
+`MYKHAYA_IOS_ENV` (`development` | `production`, default `development`)
 selects which live frontend origin a build points at — see `src/config.ts`.
+Production archives must set `MYKHAYA_IOS_ENV=production` explicitly. The
+native API uses the same frontend origin's `/api/v1` route in both environments.
 There is no separate `.env` file for this package; it is a single named
 variable, set when running `cap sync`/opening the relevant Xcode scheme, the
 same MYKHAYA_-prefixed convention used throughout the backend.

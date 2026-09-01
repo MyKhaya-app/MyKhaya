@@ -17,16 +17,16 @@
 export type IosShellEnvironment = "development" | "production";
 
 /** MYKHAYA_IOS_ENV picks which live frontend this build points at — set by
- * whoever runs `cap sync ios`/opens the Xcode scheme, analogous to how the
- * backend's MYKHAYA_ENVIRONMENT selects behaviour. Defaults to production
- * so an accidental unset variable can never point a real build at a dev
- * server. */
+ * whoever runs `cap sync ios`/opens the Xcode scheme. Development is the
+ * safe pre-production default; production must be selected explicitly so an
+ * unset Archive environment cannot silently ship against production. */
 export function resolveIosShellEnvironment(
   env: Record<string, string | undefined> = process.env,
 ): IosShellEnvironment {
   const value = env.MYKHAYA_IOS_ENV;
   if (value === "development") return "development";
-  if (value === undefined || value === "production") return "production";
+  if (value === undefined) return "development";
+  if (value === "production") return "production";
   throw new Error(
     `MYKHAYA_IOS_ENV must be "development" or "production" (got ${JSON.stringify(value)}).`,
   );
@@ -41,6 +41,18 @@ export const LIVE_FRONTEND_ORIGINS: Record<IosShellEnvironment, string> = {
   production: "https://mykhaya.app",
 };
 
+export function nativeApiBaseUrl(environment: IosShellEnvironment): string {
+  return `${LIVE_FRONTEND_ORIGINS[environment]}/api/v1`;
+}
+
+export function iosShellConfiguration(environment: IosShellEnvironment) {
+  return {
+    environment,
+    frontend: LIVE_FRONTEND_ORIGINS[environment],
+    api: nativeApiBaseUrl(environment),
+  } as const;
+}
+
 /**
  * Hosts the WebView is permitted to navigate to at the top level, beyond
  * the live frontend origin itself. Deliberately short and explicit — no
@@ -54,9 +66,7 @@ export const LIVE_FRONTEND_ORIGINS: Record<IosShellEnvironment, string> = {
  * explicitly-flagged exception (Stripe Checkout/Portal) this creates.
  */
 export function allowedNavigationHosts(environment: IosShellEnvironment): string[] {
-  return environment === "development"
-    ? ["dev.mykhaya.app", "api.dev.mykhaya.app"]
-    : ["mykhaya.app", "api.mykhaya.app"];
+  return [new URL(LIVE_FRONTEND_ORIGINS[environment]).hostname];
 }
 
 export function liveFrontendOrigin(environment: IosShellEnvironment): string {
