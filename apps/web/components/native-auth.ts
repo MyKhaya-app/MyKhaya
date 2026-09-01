@@ -2,6 +2,7 @@ import type { User } from "@mykhaya/shared-types";
 import {
   InMemoryNativeSessionStore,
   NativeMyKhayaClient,
+  api,
   nativeApiBaseUrlForWebHost,
   type NativeSessionStore,
 } from "@mykhaya/api-client";
@@ -61,6 +62,7 @@ function client(): NativeMyKhayaClient {
       sharedStore,
       { clientHeaders: clientHeaders() },
     );
+    api.setRequestTransport(sharedClient.request.bind(sharedClient));
   }
   return sharedClient;
 }
@@ -114,8 +116,12 @@ export function nativeChildLogin(
  * still offer "unlock with Face ID" on its next launch. Never touches any
  * other signed-in device. */
 export async function nativeLogout(): Promise<void> {
-  await client().logout();
-  await setBiometricSignInEnabled(false);
+  try {
+    await client().logout();
+  } finally {
+    api.setRequestTransport(null);
+    await setBiometricSignInEnabled(false);
+  }
 }
 
 /** Explicit foreground/lifecycle renewal (Phase 6/11) — distinct from

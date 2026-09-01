@@ -69,3 +69,29 @@ describe("MyKhayaClient — browser transport", () => {
     expect(headers.has("Authorization")).toBe(false);
   });
 });
+
+describe("MyKhayaClient — native transport bridge", () => {
+  it("delegates API methods to the installed bearer transport", async () => {
+    const transport = vi.fn().mockResolvedValue([{ id: "home-1" }]);
+    const client = new MyKhayaClient();
+    client.setRequestTransport(transport);
+
+    await expect(client.homes()).resolves.toEqual([{ id: "home-1" }]);
+    expect(transport).toHaveBeenCalledWith("/groups", {});
+  });
+
+  it("returns to browser transport when the native bridge is cleared", async () => {
+    const transport = vi.fn().mockResolvedValue([]);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, []));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new MyKhayaClient();
+    client.setRequestTransport(transport);
+    client.setRequestTransport(null);
+
+    await client.homes();
+
+    expect(transport).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

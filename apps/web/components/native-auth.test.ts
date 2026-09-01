@@ -8,12 +8,13 @@ const logout = vi.fn();
 const nativeClientCtor = vi.fn();
 
 vi.mock("@mykhaya/api-client", () => ({
+  api: { setRequestTransport: vi.fn() },
   InMemoryNativeSessionStore: vi.fn().mockImplementation(function InMemoryNativeSessionStore() {
     return { kind: "in-memory" };
   }),
   NativeMyKhayaClient: vi.fn().mockImplementation((...args: unknown[]) => {
     nativeClientCtor(...args);
-    return { bootstrapSession, login, childLogin, logout };
+    return { bootstrapSession, login, childLogin, logout, request: vi.fn() };
   }),
   nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
 }));
@@ -165,6 +166,7 @@ describe("native-auth — nativeRenewSession", () => {
   it("delegates to the client's renew", async () => {
     renew.mockResolvedValue({ id: "u1" });
     vi.doMock("@mykhaya/api-client", () => ({
+      api: { setRequestTransport: vi.fn() },
       InMemoryNativeSessionStore: vi.fn().mockImplementation(() => ({ kind: "in-memory" })),
       NativeMyKhayaClient: vi.fn().mockImplementation(() => ({
         bootstrapSession,
@@ -172,6 +174,7 @@ describe("native-auth — nativeRenewSession", () => {
         childLogin,
         logout,
         renew,
+        request: vi.fn(),
       })),
       nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
     }));

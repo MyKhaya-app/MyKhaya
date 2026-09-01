@@ -5,7 +5,20 @@ export { ApiError } from "./errors";
 export class MyKhayaClient {
   constructor(private readonly baseUrl = "/api/v1") {}
 
+  private requestTransport:
+    | (<T>(path: string, init?: RequestInit) => Promise<T>)
+    | undefined;
+
+  /** Install the native bearer transport for the Capacitor shell. A null
+   * transport restores the ordinary browser/PWA cookie transport. */
+  setRequestTransport(
+    transport: (<T>(path: string, init?: RequestInit) => Promise<T>) | null,
+  ): void {
+    this.requestTransport = transport ?? undefined;
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (this.requestTransport) return this.requestTransport<T>(path, init);
     // Guest wishlist endpoints (`/wishlist/share/...verify`, `/wishlist/guest/...`)
     // use a separate, lower-privileged cookie pair (mk_wishlist_guest /
     // mk_wishlist_guest_csrf, see wishlist_guest.py) that is never the normal
