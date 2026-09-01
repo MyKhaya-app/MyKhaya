@@ -19,7 +19,7 @@ import {
 } from "@/components/passkey-client";
 import { isSafeInternalPath } from "@/components/internal-path";
 import { isNativeShell } from "@/components/native-runtime";
-import { getLastNativeLoginDiagnostic, nativeLogin } from "@/components/native-auth";
+import { getLastNativeLoginDiagnostic, nativeLogin, runNativeNetworkDiagnostics } from "@/components/native-auth";
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 
@@ -178,6 +178,10 @@ export default function Login() {
     const email = ((d.get("email") as string | null) ?? "").trim();
     const password = (d.get("password") as string | null) ?? "";
     try {
+      if (isNativeShell() && window.location.hostname === "dev.mykhaya.app") {
+        const probeResults = await runNativeNetworkDiagnostics();
+        setNativeDiagnostic(`probe: ${probeResults.join(" | ")}`);
+      }
       // Native source of truth: inside Capacitor this is a bearer-token
       // sign-in against /auth/mobile/login, persisted to the iOS Keychain
       // (see components/native-auth.ts) — never the browser cookie

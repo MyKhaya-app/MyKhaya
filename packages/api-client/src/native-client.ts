@@ -65,6 +65,96 @@ export class NativeMyKhayaClient {
     });
   }
 
+  /**
+   * DEV-only transport probe. It deliberately uses dummy credentials and
+   * returns metadata only, so the web shell can show whether WKWebView can
+   * make the request at all without exposing a request body or response body.
+   */
+  async diagnosticProbe(): Promise<string[]> {
+    const results: string[] = [];
+    const dummyBody = JSON.stringify({
+      email: "native-diagnostic-invalid@example.com",
+      password: "native-diagnostic-invalid",
+    });
+    const attempts: Array<{ label: string; init: RequestInit }> = [
+      { label: "GET base", init: { method: "GET", headers: { Accept: "application/json" } } },
+      {
+        label: "POST content-type",
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + client",
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "" },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + platform",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "",
+            "X-MyKhaya-Platform": this.options.clientHeaders?.platform ?? "",
+          },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + app-version",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "",
+            "X-MyKhaya-Platform": this.options.clientHeaders?.platform ?? "",
+            "X-MyKhaya-App-Version": this.options.clientHeaders?.appVersion ?? "diagnostic",
+          },
+          body: dummyBody,
+        },
+      },
+    ];
+    for (const { label, init } of attempts) {
+      const path = label === "GET base" ? "/" : "/auth/mobile/login";
+      const headers = new Headers(init.headers);
+      for (const [key, value] of [...headers.entries()]) {
+        if (!value) headers.delete(key);
+      }
+      try {
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+          ...init,
+          headers,
+          cache: "no-store",
+        });
+        const result = `${label}: status ${response.status}`;
+        results.push(result);
+        this.diagnostic(path, {
+          method: init.method,
+          status: response.status,
+          responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
+          probe: label,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        const result = `${label}: ${error instanceof Error ? error.name : "fetch_failed"}${message ? ` (${message})` : ""}`;
+        results.push(result);
+        this.diagnostic(path, {
+          errorCategory: "network_or_cors",
+          exceptionType: error instanceof Error ? error.name : "unknown",
+          errorMessage: message,
+          probe: label,
+        });
+      }
+    }
+    return results;
+  }
+
   private async postUnauthenticated<T>(path: string, body: unknown): Promise<T> {
     const headers = this.baseHeaders();
     headers.set("Content-Type", "application/json");

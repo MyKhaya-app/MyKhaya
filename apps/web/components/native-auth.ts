@@ -33,6 +33,10 @@ export function getLastNativeLoginDiagnostic(): string | null {
   return lastNativeLoginDiagnostic;
 }
 
+export async function runNativeNetworkDiagnostics(): Promise<string[]> {
+  return client().diagnosticProbe();
+}
+
 // Device-friendly labelling for the Security page's "Signed-in devices"
 // list (Phase 9) — read server-side via mobile_client_descriptor/
 // device_platform (see routers.auth) into Session.user_agent /
@@ -73,12 +77,25 @@ export function nativeLogin(email: string, password: string): Promise<User> {
   return client().login(email, password).catch((error: unknown) => {
     if (error instanceof Error && "status" in error && typeof error.status === "number") {
       const code = "code" in error && typeof error.code === "string" ? error.code : `http_${error.status}`;
-      lastNativeLoginDiagnostic = `stage: request; status: ${error.status}; code: ${code}`;
+      lastNativeLoginDiagnostic = diagnosticContext(`stage: request; status: ${error.status}; code: ${code}`);
     } else {
-      lastNativeLoginDiagnostic = `stage: network; status: none; error: ${error instanceof Error ? error.name : "fetch_failed"}`;
+      const message = error instanceof Error ? error.message : "";
+      lastNativeLoginDiagnostic = diagnosticContext(`stage: network; status: none; error: ${error instanceof Error ? error.name : "fetch_failed"}${message ? `; message: ${message}` : ""}`);
     }
     throw error;
   });
+}
+
+function diagnosticContext(summary: string): string {
+  const origin = typeof window === "undefined" ? "unknown" : window.location.origin;
+  const host = typeof window === "undefined" ? "unknown" : window.location.hostname;
+  const api = typeof window === "undefined"
+    ? "unknown"
+    : `${nativeApiBaseUrlForWebHost(host)}/auth/mobile/login`;
+  const native = typeof window !== "undefined" && isNativeShell();
+  const environment = host === "dev.mykhaya.app" ? "development" : host === "mykhaya.app" ? "production" : "unknown";
+  const online = typeof navigator === "undefined" ? "unknown" : String(navigator.onLine);
+  return `${summary}; origin: ${origin}; api: ${api}; native: ${native}; online: ${online}; environment: ${environment}`;
 }
 
 export function nativeChildLogin(

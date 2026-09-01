@@ -103,6 +103,30 @@ describe("NativeMyKhayaClient — login", () => {
   });
 });
 
+describe("NativeMyKhayaClient — DEV diagnostic probe", () => {
+  it("probes GET and progressively adds native headers without logging sensitive data", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "invalid" }));
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), {
+      fetch: fetchMock,
+      clientHeaders: { client: "MyKhaya iOS", platform: "iOS" },
+    });
+
+    await expect(client.diagnosticProbe()).resolves.toEqual([
+      "GET base: status 401",
+      "POST content-type: status 401",
+      "POST + client: status 401",
+      "POST + platform: status 401",
+      "POST + app-version: status 401",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const serializedLogs = JSON.stringify(info.mock.calls);
+    expect(serializedLogs).not.toContain("native-diagnostic-invalid");
+    expect(serializedLogs).not.toContain("password");
+    info.mockRestore();
+  });
+});
+
 describe("NativeMyKhayaClient — authenticated requests", () => {
   it("attaches Authorization: Bearer using the currently stored token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [] }));
