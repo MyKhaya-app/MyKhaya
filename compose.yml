@@ -69,6 +69,13 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+        # APNs is delivered by worker only. Explicit empty overrides prevent
+        # values inherited from env_file from reaching the API process.
+        MYKHAYA_APNS_DELIVERY_CONFIGURED: "",
+        MYKHAYA_APNS_TEAM_ID: "",
+        MYKHAYA_APNS_KEY_ID: "",
+        MYKHAYA_APNS_BUNDLE_ID: "",
+        MYKHAYA_APNS_PRIVATE_KEY: "",
       }
     depends_on:
       {
@@ -96,6 +103,14 @@ services:
     stop_grace_period: 30s
   worker:
     <<: *api
+    environment:
+      {
+        MYKHAYA_APNS_DELIVERY_CONFIGURED: "${MYKHAYA_APNS_DELIVERY_CONFIGURED:-false}",
+        MYKHAYA_APNS_TEAM_ID: "${MYKHAYA_APNS_TEAM_ID:-}",
+        MYKHAYA_APNS_KEY_ID: "${MYKHAYA_APNS_KEY_ID:-}",
+        MYKHAYA_APNS_BUNDLE_ID: "${MYKHAYA_APNS_BUNDLE_ID:-app.mykhaya.mobile}",
+        MYKHAYA_APNS_PRIVATE_KEY: "${MYKHAYA_APNS_PRIVATE_KEY:-}",
+      }
     command: ["python", "-m", "mykhaya.worker"]
     healthcheck: { disable: true }
   scheduler:
@@ -123,6 +138,11 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
+        MYKHAYA_APNS_DELIVERY_CONFIGURED: "",
+        MYKHAYA_APNS_TEAM_ID: "",
+        MYKHAYA_APNS_KEY_ID: "",
+        MYKHAYA_APNS_BUNDLE_ID: "",
+        MYKHAYA_APNS_PRIVATE_KEY: "",
       }
     command: ["alembic", "upgrade", "head"]
     depends_on: { postgres: { condition: service_healthy } }
@@ -136,6 +156,11 @@ services:
     environment:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: ""
+      MYKHAYA_APNS_TEAM_ID: ""
+      MYKHAYA_APNS_KEY_ID: ""
+      MYKHAYA_APNS_BUNDLE_ID: ""
+      MYKHAYA_APNS_PRIVATE_KEY: ""
       # Raised from the original 100/300 once the full suite's total
       # register+login volume (now several hundred, following Phase 3's
       # Stripe billing tests, each doing a full register/verify/login/create-Home

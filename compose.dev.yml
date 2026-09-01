@@ -44,7 +44,13 @@ services:
       MYKHAYA_ENVIRONMENT: development
       MYKHAYA_BUILD_CHANNEL: development
   worker:
-    environment: *dev-api-environment
+    environment:
+      <<: *dev-api-environment
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "${MYKHAYA_APNS_DELIVERY_CONFIGURED:-false}"
+      MYKHAYA_APNS_TEAM_ID: "${MYKHAYA_APNS_TEAM_ID:-}"
+      MYKHAYA_APNS_KEY_ID: "${MYKHAYA_APNS_KEY_ID:-}"
+      MYKHAYA_APNS_BUNDLE_ID: "${MYKHAYA_APNS_BUNDLE_ID:-app.mykhaya.mobile}"
+      MYKHAYA_APNS_PRIVATE_KEY: "${MYKHAYA_APNS_PRIVATE_KEY:-}"
   scheduler:
     environment: *dev-api-environment
   migrate:
