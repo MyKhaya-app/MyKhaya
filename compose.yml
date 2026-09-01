@@ -69,9 +69,9 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
-        # APNs is delivered by worker only. Explicit empty overrides prevent
+        # APNs is delivered by worker only. Explicit disabled overrides prevent
         # values inherited from env_file from reaching the API process.
-        MYKHAYA_APNS_DELIVERY_CONFIGURED: "",
+        MYKHAYA_APNS_DELIVERY_CONFIGURED: "false",
         MYKHAYA_APNS_TEAM_ID: "",
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
@@ -138,7 +138,7 @@ services:
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
-        MYKHAYA_APNS_DELIVERY_CONFIGURED: "",
+        MYKHAYA_APNS_DELIVERY_CONFIGURED: "false",
         MYKHAYA_APNS_TEAM_ID: "",
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
@@ -156,7 +156,7 @@ services:
     environment:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
-      MYKHAYA_APNS_DELIVERY_CONFIGURED: ""
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
       MYKHAYA_APNS_TEAM_ID: ""
       MYKHAYA_APNS_KEY_ID: ""
       MYKHAYA_APNS_BUNDLE_ID: ""
