@@ -48,6 +48,7 @@ services:
   worker:
     environment:
       <<: *dev-api-environment
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
       MYKHAYA_APNS_DELIVERY_CONFIGURED: "${MYKHAYA_APNS_DELIVERY_CONFIGURED:-false}"
       MYKHAYA_APNS_TEAM_ID: "${MYKHAYA_APNS_TEAM_ID:-}"
       MYKHAYA_APNS_KEY_ID: "${MYKHAYA_APNS_KEY_ID:-}"

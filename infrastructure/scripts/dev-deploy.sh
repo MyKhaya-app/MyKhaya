@@ -277,6 +277,11 @@ deploy() {
   say "Building new images while the current stack remains running"
   compose build || die "image build failed; currently running containers were left in place"
 
+  say "Validating merged backend runtime configuration"
+  if ! "$PYTHON" infrastructure/scripts/validate_backend_config.py; then
+    die "backend runtime configuration validation failed; currently running containers were left in place"
+  fi
+
   say "Starting private data services"
   compose up -d --no-build postgres redis || die "private data services failed to start"
   wait_healthy postgres
