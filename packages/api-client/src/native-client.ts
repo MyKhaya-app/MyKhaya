@@ -57,6 +57,10 @@ export class NativeMyKhayaClient {
       native: true,
       platform: this.options.clientHeaders?.platform ?? "unknown",
       requestUrl: `${this.baseUrl}${path}`,
+      requestOrigin: typeof location === "undefined" ? "unknown" : location.origin,
+      hasClientHeader: Boolean(this.options.clientHeaders?.client),
+      hasPlatformHeader: Boolean(this.options.clientHeaders?.platform),
+      hasContentType: path.includes("/login") || path.includes("/renew"),
       ...fields,
     });
   }

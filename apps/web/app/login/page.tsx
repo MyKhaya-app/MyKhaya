@@ -19,7 +19,7 @@ import {
 } from "@/components/passkey-client";
 import { isSafeInternalPath } from "@/components/internal-path";
 import { isNativeShell } from "@/components/native-runtime";
-import { nativeLogin } from "@/components/native-auth";
+import { getLastNativeLoginDiagnostic, nativeLogin } from "@/components/native-auth";
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 
@@ -37,6 +37,7 @@ export default function Login() {
   const nextParam = params.get("next");
   const next = isSafeInternalPath(nextParam) ? nextParam : null;
   const [error, setError] = useState(""),
+    [nativeDiagnostic, setNativeDiagnostic] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [biometricBusy, setBiometricBusy] = useState(false),
     // Starts optimistic (whatever the local hint already says) so a
@@ -193,6 +194,9 @@ export default function Login() {
       // components/auth-diagnostics.ts's docstring for exactly what each
       // category means; no credential or token value is ever recorded.
       recordLoginFailureDiagnostic(isNativeShell() ? "native_login" : "browser_login", err);
+      if (isNativeShell() && window.location.hostname === "dev.mykhaya.app") {
+        setNativeDiagnostic(getLastNativeLoginDiagnostic());
+      }
       setError(
         err instanceof ApiError
           ? err.message
@@ -295,6 +299,9 @@ export default function Login() {
           />
         </label>
         <FormStatus error={error} />
+        {nativeDiagnostic && (
+          <p className="notice" role="status">Auth diagnostic: {nativeDiagnostic}</p>
+        )}
         <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
     </AuthCard>

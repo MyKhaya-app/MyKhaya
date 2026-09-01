@@ -27,6 +27,11 @@ import { setBiometricSignInEnabled } from "./native-biometric-preference";
 // by this choice; it's a separate transport (see native-client.ts).
 let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
+let lastNativeLoginDiagnostic: string | null = null;
+
+export function getLastNativeLoginDiagnostic(): string | null {
+  return lastNativeLoginDiagnostic;
+}
 
 // Device-friendly labelling for the Security page's "Signed-in devices"
 // list (Phase 9) — read server-side via mobile_client_descriptor/
@@ -64,7 +69,16 @@ export function bootstrapNativeSession(): Promise<User | null> {
 }
 
 export function nativeLogin(email: string, password: string): Promise<User> {
-  return client().login(email, password);
+  lastNativeLoginDiagnostic = null;
+  return client().login(email, password).catch((error: unknown) => {
+    if (error instanceof Error && "status" in error && typeof error.status === "number") {
+      const code = "code" in error && typeof error.code === "string" ? error.code : `http_${error.status}`;
+      lastNativeLoginDiagnostic = `stage: request; status: ${error.status}; code: ${code}`;
+    } else {
+      lastNativeLoginDiagnostic = `stage: network; status: none; error: ${error instanceof Error ? error.name : "fetch_failed"}`;
+    }
+    throw error;
+  });
 }
 
 export function nativeChildLogin(
