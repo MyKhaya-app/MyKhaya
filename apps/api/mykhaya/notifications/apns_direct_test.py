@@ -64,7 +64,9 @@ def _send_apns_request(device: NativePushDevice, bearer: str, topic: str) -> htt
         )
 
 
-async def _run(user_id: uuid.UUID | None) -> tuple[int, str, str, bool]:
+async def _run(
+    user_id: uuid.UUID | None, supplied_jwt: str | None = None
+) -> tuple[int, str, str, bool]:
     settings = get_settings()
     config = resolve_apns_config(settings)
     if not config.configured:
@@ -75,11 +77,9 @@ async def _run(user_id: uuid.UUID | None) -> tuple[int, str, str, bool]:
         return 0, "no_active_ios_device", "unknown", False
 
     topic = config.bundle_id or "app.mykhaya.mobile"
-    bearer = _build_apns_bearer(
-        config,
-        topic=topic,
-        emit_diagnostics=False,
-    )
+    bearer = supplied_jwt
+    if bearer is None:
+        bearer = _build_apns_bearer(config, topic=topic, emit_diagnostics=False)
     try:
         response = await asyncio.to_thread(_send_apns_request, device, bearer, topic)
     except Exception:
@@ -106,9 +106,23 @@ def _parse_user_id(value: str | None) -> uuid.UUID | None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Temporary direct APNs test.")
     parser.add_argument("--user-id", help="Only use an active iOS registration for this user UUID.")
+    parser.add_argument(
+        "--jwt-stdin",
+        action="store_true",
+        help="Read one provider JWT from stdin instead of generating one.",
+    )
     args = parser.parse_args(argv)
+    supplied_jwt = sys.stdin.read().strip() if args.jwt_stdin else None
+    if args.jwt_stdin and not supplied_jwt:
+        print("status=0")
+        print("reason=missing_jwt")
+        print("request_id=unknown")
+        print("success=false")
+        return 1
     try:
-        status, reason, request_id, success = asyncio.run(_run(_parse_user_id(args.user_id)))
+        status, reason, request_id, success = asyncio.run(
+            _run(_parse_user_id(args.user_id), supplied_jwt)
+        )
     except Exception:
         status, reason, request_id, success = 0, "diagnostic_failed", "unknown", False
     print(f"status={status}")

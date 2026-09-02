@@ -1,6 +1,7 @@
 """Focused tests for the temporary direct APNs diagnostic."""
 
 import uuid
+from io import StringIO
 from types import SimpleNamespace
 
 import httpx
@@ -135,3 +136,34 @@ def test_direct_test_extracts_400_403_and_410_reasons(monkeypatch, capsys) -> No
         assert f"status={status}" in output
         assert f"reason={reason}" in output
         assert "success=false" in output
+
+
+def test_direct_test_jwt_stdin_changes_only_authorization(monkeypatch, capsys) -> None:
+    fake_db = _FakeDb(_device())
+    fake_client = _FakeClient()
+    supplied_jwt = "apple-generated-jwt"
+    monkeypatch.setattr(apns_direct_test, "get_settings", _settings)
+    monkeypatch.setattr(apns_direct_test, "SessionFactory", lambda: fake_db)
+    monkeypatch.setattr(apns_direct_test.httpx, "Client", lambda **kwargs: fake_client)
+    monkeypatch.setattr(
+        apns_direct_test,
+        "_build_apns_bearer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("signer called")),
+    )
+    monkeypatch.setattr("sys.stdin", StringIO(f"  {supplied_jwt}\n"))
+
+    assert apns_direct_test.main(["--jwt-stdin"]) == 0
+
+    output = capsys.readouterr().out
+    assert supplied_jwt not in output
+    assert "status=200" in output
+    assert "success=true" in output
+    assert fake_client.request is not None
+    request = fake_client.request
+    assert request.headers["authorization"] == f"bearer {supplied_jwt}"
+    assert request.url == "https://api.push.apple.com/3/device/secret-device-token"
+    assert request.headers["apns-topic"] == "app.mykhaya.mobile"
+    assert request.headers["apns-push-type"] == "alert"
+    assert request.headers["apns-priority"] == "10"
+    assert fake_client.payload == apns_direct_test.APNS_DIRECT_PAYLOAD
+    assert fake_client.http2_values[-1] is True
