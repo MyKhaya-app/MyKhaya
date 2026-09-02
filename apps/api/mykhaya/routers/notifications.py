@@ -119,6 +119,8 @@ async def get_preferences(
         event_invitations_enabled=prefs.event_invitations_enabled,
         event_changes_enabled=prefs.event_changes_enabled,
         household_reminders_enabled=prefs.household_reminders_enabled,
+        list_assignments_enabled=prefs.list_assignments_enabled,
+        wishlist_sharing_enabled=prefs.wishlist_sharing_enabled,
         daily_briefing_enabled=prefs.daily_briefing_enabled,
         briefing_time=_time_str(prefs.briefing_time) or "07:30",
         briefing_days=prefs.briefing_days.value,
@@ -144,6 +146,8 @@ async def update_preferences(
     prefs.event_invitations_enabled = body.event_invitations_enabled
     prefs.event_changes_enabled = body.event_changes_enabled
     prefs.household_reminders_enabled = body.household_reminders_enabled
+    prefs.list_assignments_enabled = body.list_assignments_enabled
+    prefs.wishlist_sharing_enabled = body.wishlist_sharing_enabled
     prefs.daily_briefing_enabled = body.daily_briefing_enabled
     prefs.briefing_time = time.fromisoformat(body.briefing_time)
     prefs.briefing_days = BriefingDays(body.briefing_days)

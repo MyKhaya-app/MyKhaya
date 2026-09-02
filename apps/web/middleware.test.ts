@@ -68,6 +68,17 @@ describe("hostname security boundaries", () => {
     );
   });
 
+  it("uses canonical PCC matching for case-insensitive host headers with ports", () => {
+    const response = middleware(
+      new NextRequest("http://admin.localhost:3000/users", {
+        headers: { host: "ADMIN.LOCALHOST:3000" },
+      }),
+    );
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/control-centre/users",
+    );
+  });
+
   it("rewrites every bare Notifications module path to its internal Control Centre route", () => {
     // Regression guard: the Notifications module's own links briefly hard-coded
     // "/control-centre"-prefixed hrefs, which this rewrite then doubled to

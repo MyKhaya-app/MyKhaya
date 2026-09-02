@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isPlatformControlCentreHost } from "./components/application-host";
 export function middleware(request: NextRequest) {
-  const host = (
-    (request.headers.get("host") ?? "").split(":")[0] ?? ""
-  ).toLowerCase();
-  const adminHost =
-    host === "admin.mykhaya.app" ||
-    host === "admin.dev.mykhaya.app" ||
-    host === "admin.localhost";
+  const host = request.headers.get("host") ?? "";
+  const adminHost = isPlatformControlCentreHost(host);
+  const normalizedHost = host.trim().toLowerCase().split(":", 1)[0] ?? "";
   const statusHost =
-    host === "status.mykhaya.app" ||
-    host === "status.dev.mykhaya.app" ||
-    host === "status.localhost";
+    normalizedHost === "status.mykhaya.app" ||
+    normalizedHost === "status.dev.mykhaya.app" ||
+    normalizedHost === "status.localhost";
   const internalAdminPath =
     request.nextUrl.pathname.startsWith("/control-centre");
   const internalStatusPath =

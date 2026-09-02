@@ -105,11 +105,19 @@ One `NotificationPreferences` row per user (`get_or_create_preferences` creates 
 lazily on first need — registration's verification email is usually what creates it).
 Besides the three channel toggles: per-category toggles
 (`event_reminders_enabled`, `event_invitations_enabled`, `event_changes_enabled`,
-`household_reminders_enabled`, `daily_briefing_enabled`), daily briefing scheduling
+`household_reminders_enabled`, `list_assignments_enabled`,
+`wishlist_sharing_enabled`, `daily_briefing_enabled`), daily briefing scheduling
 (`briefing_time`, `briefing_days`, `empty_day_briefing_enabled`), lock-screen preview
 level, and quiet hours (`quiet_hours_start`/`end`, `quiet_hours_critical_only`).
 `PREFERENCE_GATES` in `engine.py` maps a `notification_type` string to the category
 attribute that gates it; a type absent from that map is never category-gated.
+
+Lists and Wishlists use those two explicit categories for actionable access changes:
+assigning a shared list item notifies only the new assignee, while granting or
+revoking an authenticated Wishlist share notifies only the affected recipient.
+Ordinary list/wishlist CRUD, completion, reservation, release, purchase, and guest
+share actions remain silent. Wishlist owner responses and notifications never contain
+reservation or purchase state.
 
 ## Quiet hours
 

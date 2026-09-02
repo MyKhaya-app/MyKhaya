@@ -158,6 +158,36 @@ async def test_creating_event_with_a_member_notifies_exactly_that_member(
 
 
 @pytest.mark.asyncio
+async def test_creating_visible_shared_calendar_event_notifies_view_all_member(
+    client: AsyncClient,
+) -> None:
+    """A visible Home member need not be explicitly assigned to the event."""
+    creator_email = unique_email("creator-visible")
+    await create_verified_user(client, creator_email, "Creator")
+    home_id = await _home_with_calendar(client, "Visible Calendar Home")
+    viewer_id = await _join_home(home_id, unique_email("view-all"))
+    creator_id = await _user_id(creator_email)
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=await _event_body(home_id, []),
+    )
+    assert created.status_code == 201, created.text
+
+    notifications = await _notifications_for(viewer_id)
+    assert len(notifications) == 1
+    assert notifications[0].notification_type == "event_invitation"
+    assert notifications[0].body.startswith("Creator added Family dinner")
+    assert notifications[0].deep_link == {
+        "type": "calendar_event",
+        "id": created.json()["event_id"],
+    }
+    assert await _notifications_for(creator_id) == []
+
+
+@pytest.mark.asyncio
 async def test_creating_event_with_multiple_members_notifies_each_one(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("creator"), "Creator")
     home_id = await _home_with_calendar(client, "Multi Notify Home")
@@ -208,10 +238,8 @@ async def test_resaving_an_event_unchanged_does_not_duplicate_the_added_notifica
 
 
 @pytest.mark.asyncio
-async def test_title_only_edit_does_not_notify_assigned_members(client: AsyncClient) -> None:
-    """A wording/typo fix to the title alone is deliberately excluded from
-    "material change" — it shouldn't notify every assigned member the way an
-    actual date/time/location change should."""
+async def test_title_edit_notifies_assigned_members(client: AsyncClient) -> None:
+    """A title change is visible event activity and reaches assigned members."""
     await create_verified_user(client, unique_email("creator"), "Creator")
     home_id = await _home_with_calendar(client, "Title Only Edit Home")
     member_id = await _join_home(home_id, unique_email("member"))
@@ -241,11 +269,12 @@ async def test_title_only_edit_does_not_notify_assigned_members(client: AsyncCli
     assert retitled.status_code == 200, retitled.text
     assert retitled.json()["title"] == "Family dinner (corrected spelling)"
 
-    # Still just the one "added" notification — no "event updated" for a
-    # title-only change.
     member_notifications = await _notifications_for(member_id)
-    assert len(member_notifications) == 1
-    assert member_notifications[0].notification_type == "event_invitation"
+    assert len(member_notifications) == 2
+    assert {n.notification_type for n in member_notifications} == {
+        "event_invitation",
+        "event_updated",
+    }
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mykhaya.url_validation import is_valid_http_url
+
 _DISTRIBUTION_NAME = "mykhaya-api"
 
 
@@ -346,11 +348,12 @@ class Settings(BaseSettings):
             ("public_web_url", self.public_web_url),
             ("native_api_url", self.native_api_url),
         ):
-            parts = urlsplit(url)
-            if parts.scheme not in ("http", "https") or not parts.hostname:
+            if not is_valid_http_url(url):
                 raise ValueError(
                     f"MYKHAYA_{field_name.upper()} ({url!r}) is not a valid http(s) URL."
                 )
+            parts = urlsplit(url)
+            assert parts.hostname is not None  # guaranteed by is_valid_http_url above
             if self.environment == "production" and parts.scheme != "https":
                 raise ValueError(
                     f"MYKHAYA_{field_name.upper()} must use https in production "

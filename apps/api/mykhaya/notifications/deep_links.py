@@ -17,6 +17,8 @@ DeepLinkType = Literal[
     "calendar_today",
     "calendar_share",
     "meal_plan",
+    "list",
+    "wishlist",
     "member",
     "routine",
     "reminder",
@@ -56,6 +58,10 @@ def resolve_path(link: dict[str, Any] | None) -> str:
         return "/calendar/shared"
     if kind == "meal_plan":
         return "/meal-plans"
+    if kind == "list" and entity_id:
+        return f"/lists/{entity_id}"
+    if kind == "wishlist" and entity_id:
+        return f"/wish-lists/{entity_id}"
     if kind == "routine" and entity_id:
         return f"/home?routine={entity_id}"
     if kind == "reminder" and entity_id:

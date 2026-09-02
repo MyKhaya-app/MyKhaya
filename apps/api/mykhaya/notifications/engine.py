@@ -43,6 +43,9 @@ PREFERENCE_GATES: dict[str, str] = {
     "event_cancelled": "event_changes_enabled",
     "household_routine_reminder": "household_reminders_enabled",
     "birthday_reminder": "household_reminders_enabled",
+    "list_item_assigned": "list_assignments_enabled",
+    "wishlist_share_created": "wishlist_sharing_enabled",
+    "wishlist_share_revoked": "wishlist_sharing_enabled",
     "daily_briefing": "daily_briefing_enabled",
 }
 

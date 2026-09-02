@@ -19,6 +19,9 @@ NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "event_cancelled": "Event cancelled",
     "household_routine_reminder": "Routine reminder",
     "birthday_reminder": "Birthday reminder",
+    "list_item_assigned": "List item assigned",
+    "wishlist_share_created": "Wishlist shared",
+    "wishlist_share_revoked": "Wishlist access removed",
     "daily_briefing": "Morning briefing",
     "test_push": "Test push",
 }

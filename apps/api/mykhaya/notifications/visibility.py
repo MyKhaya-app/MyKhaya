@@ -147,3 +147,30 @@ async def viewer_ids_for_event(db: AsyncSession, event: CalendarEvent) -> set[uu
         ):
             viewer_ids.add(share.recipient_user_id)
     return viewer_ids
+
+
+async def home_viewer_ids_for_event(
+    db: AsyncSession, event: CalendarEvent
+) -> set[uuid.UUID]:
+    """Return active Home members who can currently see this event.
+
+    Calendar activity is broader than assignment: members with the
+    ``calendar_view_all`` capability can see shared-calendar events without a
+    CalendarEventMember row.  This deliberately considers Home members only;
+    accepted external CalendarShare recipients remain resolved by
+    ``calendar_shares.notify_calendar_share_recipients`` so their share-level
+    notification preference is applied exactly once.
+    """
+    member_ids = (
+        await db.scalars(
+            select(Membership.user_id).where(
+                Membership.group_id == event.group_id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    ).all()
+    visible: set[uuid.UUID] = set()
+    for user_id in member_ids:
+        if await can_view_event(db, event, user_id):
+            visible.add(user_id)
+    return visible

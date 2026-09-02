@@ -1849,8 +1849,12 @@ html.native-shell .home-section-overlap {
 .settings-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
+  gap: var(--space-card-stack);
   max-width: 760px;
+}
+.card-stack {
+  display: grid;
+  gap: var(--space-card-stack);
 }
 .settings-list > a {
   align-items: center;
@@ -4262,6 +4266,37 @@ select.icon-row-control {
 .action-panel small {
   color: #61727a;
 }
+.platform-settings-section {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+.settings-section-rows {
+  display: grid;
+  gap: 0.75rem;
+}
+.setting-row-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+.setting-row-key {
+  color: #8a969c;
+  font-family: monospace;
+}
+.setting-row-form {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 480px;
+}
+.setting-row-form input[type="checkbox"] {
+  width: auto;
+}
+.setting-row-caption {
+  color: #61727a;
+}
 .record-list,
 .flag-list {
   background: white;
@@ -6012,7 +6047,7 @@ select.plan-meal-field-input {
 }
 .lists-grid {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-card-stack);
 }
 .lists-card {
   align-items: center;
@@ -6195,7 +6230,7 @@ select.plan-meal-field-input {
 }
 .wishlists-grid {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-card-stack);
 }
 .wishlists-card {
   align-items: center;

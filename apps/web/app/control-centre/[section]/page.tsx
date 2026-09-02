@@ -6,15 +6,15 @@ import { platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { readableDate } from "@/components/platform-format";
 
-// "security", "administrators", "subscriptions" and "incidents" are
-// deliberately not listed here — they now have dedicated pages
-// (app/control-centre/security, .../administrators, .../subscriptions,
-// .../incidents), which Next.js resolves in preference to this dynamic
-// route for those exact segments. This generic table view remains for
-// sections with no bespoke UI.
+// "security", "administrators", "subscriptions", "incidents" and
+// "settings" are deliberately not listed here — they now have dedicated
+// pages (app/control-centre/security, .../administrators,
+// .../subscriptions, .../incidents, .../settings), which Next.js resolves
+// in preference to this dynamic route for those exact segments. This
+// generic table view remains for sections with no bespoke UI.
 const allowed: Record<string, string> = {
   users: "Users", homes: "Homes", health: "Health and diagnostics", jobs: "Jobs and scheduler",
-  settings: "Global settings", audit: "Administrative audit",
+  audit: "Administrative audit",
 };
 
 function flatten(payload: unknown): unknown[] {

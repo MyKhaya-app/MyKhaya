@@ -89,6 +89,8 @@ export default function NotificationSettings() {
         event_invitations_enabled: form.get("event_invitations_enabled") === "on",
         event_changes_enabled: form.get("event_changes_enabled") === "on",
         household_reminders_enabled: form.get("household_reminders_enabled") === "on",
+        list_assignments_enabled: form.get("list_assignments_enabled") === "on",
+        wishlist_sharing_enabled: form.get("wishlist_sharing_enabled") === "on",
         daily_briefing_enabled: form.get("daily_briefing_enabled") === "on",
         briefing_time: briefingTime,
         briefing_days: form.get("briefing_days") === "weekdays" ? "weekdays" : "daily",
@@ -284,6 +286,20 @@ export default function NotificationSettings() {
             defaultChecked={prefs.household_reminders_enabled}
           />{" "}
           Household reminders (bins, routines)
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            name="list_assignments_enabled"
+            defaultChecked={prefs.list_assignments_enabled}
+          /> List item assignments
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            name="wishlist_sharing_enabled"
+            defaultChecked={prefs.wishlist_sharing_enabled}
+          /> Wishlist sharing
         </label>
 
         <h2>Daily briefing</h2>

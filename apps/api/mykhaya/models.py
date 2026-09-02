@@ -1314,6 +1314,12 @@ class NotificationPreferences(UuidTimeMixin, Base):
     household_reminders_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    list_assignments_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    wishlist_sharing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     daily_briefing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

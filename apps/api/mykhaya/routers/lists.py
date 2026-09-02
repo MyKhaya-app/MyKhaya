@@ -27,12 +27,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import FeatureKey, HouseholdList, HouseholdListItem, Membership
+from mykhaya.notifications.lists_wishlists import notify_list_assignment
 from mykhaya.schemas import (
     ListCreate,
     ListDetailResponse,
@@ -296,6 +298,7 @@ async def add_list_item(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
@@ -303,17 +306,22 @@ async def add_list_item(
     if body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
     next_position = await _next_position(db, row.id)
-    db.add(
-        HouseholdListItem(
-            list_id=row.id,
-            position=next_position,
-            text=body.text.strip(),
-            quantity=body.quantity,
-            note=body.note,
-            assigned_member_id=body.assigned_member_id,
-            created_by=auth.user.id,
-        )
+    item = HouseholdListItem(
+        list_id=row.id,
+        position=next_position,
+        text=body.text.strip(),
+        quantity=body.quantity,
+        note=body.note,
+        assigned_member_id=body.assigned_member_id,
+        created_by=auth.user.id,
     )
+    db.add(item)
+    await db.flush()
+    if item.assigned_member_id is not None:
+        await notify_list_assignment(
+            db, settings=settings, item=item, list_row=row, actor=auth.user,
+            recipient_user_id=item.assigned_member_id,
+        )
     audit(db, request, "lists.item.added", auth.user.id, home_id, "list", row.id)
     await db.commit()
     return await _detail_response(db, row)
@@ -325,8 +333,10 @@ async def update_list_item(
     list_id: uuid.UUID,
     item_id: uuid.UUID,
     body: ListItemUpdate,
+    request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> ListDetailResponse:
     """One endpoint for both a quick checkbox toggle and a full edit — only
     the fields actually present in the request body are applied (see
@@ -344,6 +354,7 @@ async def update_list_item(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That item could not be found")
 
     fields = body.model_fields_set
+    previous_assignee = item.assigned_member_id
     if "assigned_member_id" in fields and body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
     if "text" in fields and body.text is not None:
@@ -364,6 +375,12 @@ async def update_list_item(
             item.completed_at = None
             item.completed_by = None
 
+    if item.assigned_member_id is not None and item.assigned_member_id != previous_assignee:
+        await notify_list_assignment(
+            db, settings=settings, item=item, list_row=row, actor=auth.user,
+            recipient_user_id=item.assigned_member_id,
+        )
+    audit(db, request, "lists.item.updated", auth.user.id, home_id, "list", row.id)
     await db.commit()
     return await _detail_response(db, row)
 

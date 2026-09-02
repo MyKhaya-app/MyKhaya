@@ -218,6 +218,12 @@ from mykhaya.platform_security import (
     resolve_admin_mfa_required,
     set_admin_cookies,
 )
+from mykhaya.platform_settings import (
+    ENVIRONMENT_ONLY_KEYS,
+    SETTINGS_SCHEMA,
+    resolve_environment_fallback,
+    validate_setting_value,
+)
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.secrets_crypto import (
     SecretDecryptionError,
@@ -3820,24 +3826,6 @@ async def retry_job(
     return {"id": job.id, "state": "queued"}
 
 
-SETTING_RULES: dict[str, tuple[type[Any], str]] = {
-    "platform_display_name": (str, "safe_live"),
-    "support_contact_address": (str, "safe_live"),
-    "registration_enabled": (bool, "sensitive_live"),
-    "invite_only_mode": (bool, "sensitive_live"),
-    "email_verification_required": (bool, "sensitive_live"),
-    "allowed_registration_domains": (list, "sensitive_live"),
-    "maximum_homes_per_user": (int, "safe_live"),
-    "maximum_members_per_home": (int, "safe_live"),
-    "invitation_expiry_days": (int, "safe_live"),
-    "maintenance_mode": (bool, "sensitive_live"),
-    "default_locale": (str, "safe_live"),
-    "default_timezone": (str, "safe_live"),
-    "privacy_notice_version": (str, "safe_live"),
-    "terms_version": (str, "safe_live"),
-}
-
-
 @router.get("/settings")
 async def settings_list(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
@@ -3845,16 +3833,32 @@ async def settings_list(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     rows = {row.key: row for row in (await db.scalars(select(PlatformSetting))).all()}
-    return {
-        "settings": [
+    items = []
+    for key, definition in SETTINGS_SCHEMA.items():
+        if key in rows:
+            value = rows[key].value.get("value")
+            state = "configured"
+        else:
+            fallback = resolve_environment_fallback(key, settings)
+            value = fallback
+            state = "default" if fallback is not None else "unset"
+        items.append(
             {
                 "key": key,
-                "value": rows[key].value.get("value") if key in rows else None,
-                "category": category,
+                "label": definition.label,
+                "description": definition.description,
+                "section": definition.section,
+                "value_type": definition.value_type,
+                "risk": definition.risk,
+                "runtime_effect": definition.runtime_effect,
+                "consumer_visible": definition.consumer_visible,
                 "editable": True,
+                "value": value,
+                "state": state,
             }
-            for key, (_, category) in SETTING_RULES.items()
-        ],
+        )
+    return {
+        "settings": items,
         "environment": [
             {
                 "key": "public_url",
@@ -3888,29 +3892,34 @@ async def update_setting(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    rule = SETTING_RULES.get(key)
-    if (
-        rule is None
-        or not isinstance(body.value, rule[0])
-        or (rule[0] is int and isinstance(body.value, bool))
-    ):
+    if key in ENVIRONMENT_ONLY_KEYS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "That setting or value is not valid."
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This setting is managed by the deployment environment and cannot be changed here.",
         )
-    if isinstance(body.value, int) and not 1 <= body.value <= 10_000:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "That numeric value is outside the allowed range."
-        )
+    definition = SETTINGS_SCHEMA.get(key)
+    if definition is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That setting does not exist.")
+    try:
+        validate_setting_value(definition, body.value)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     row = await db.scalar(
         select(PlatformSetting).where(PlatformSetting.key == key).with_for_update()
     )
-    previous = row.value.get("value") if row else None
     if row is None:
+        effective_previous = resolve_environment_fallback(key, settings)
+        previous_payload: dict[str, Any] = {
+            key: None,
+            "previous_effective_value": effective_previous,
+            "previous_source": "environment_default" if effective_previous is not None else "unset",
+        }
         row = PlatformSetting(
             key=key, value={"value": body.value}, updated_by=context.administrator.id
         )
         db.add(row)
     else:
+        previous_payload = {key: row.value.get("value"), "previous_source": "platform_admin"}
         row.value = {"value": body.value}
         row.updated_by = context.administrator.id
     platform_audit(
@@ -3920,11 +3929,11 @@ async def update_setting(
         "setting.updated",
         "setting",
         reason=body.reason,
-        previous={key: previous},
+        previous=previous_payload,
         new={key: body.value},
     )
     await db.commit()
-    return {"key": key, "value": body.value, "category": rule[1]}
+    return {"key": key, "value": body.value, "risk": definition.risk}
 
 
 @router.get("/modules")

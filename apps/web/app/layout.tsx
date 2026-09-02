@@ -5,7 +5,7 @@ import { ServiceWorkerRegister } from "../components/service-worker-register";
 import { InstallPrompt } from "../components/install-prompt";
 import { AuthProvider } from "../components/auth-provider";
 import { PersistentAppShell } from "../components/app-shell";
-import { isPlatformControlCentreHost } from "../components/native-runtime";
+import { isPlatformControlCentreHost } from "../components/application-host";
 import { headers } from "next/headers";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {

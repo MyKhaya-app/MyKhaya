@@ -412,6 +412,8 @@ export interface NotificationPreferences {
   event_invitations_enabled: boolean;
   event_changes_enabled: boolean;
   household_reminders_enabled: boolean;
+  list_assignments_enabled: boolean;
+  wishlist_sharing_enabled: boolean;
   daily_briefing_enabled: boolean;
   briefing_time: string;
   briefing_days: BriefingDays;

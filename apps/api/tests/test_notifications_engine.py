@@ -254,6 +254,23 @@ async def test_notify_respects_category_preference_gate() -> None:
         assert stored == []
 
 
+def test_lists_and_wishlists_have_explicit_preference_gates_and_links() -> None:
+    from mykhaya.models import NotificationPreferences
+    from mykhaya.notifications.engine import _category_enabled
+
+    prefs = NotificationPreferences(
+        user_id=uuid.uuid4(), list_assignments_enabled=True, wishlist_sharing_enabled=True
+    )
+    assert _category_enabled(prefs, "list_item_assigned") is True
+    assert _category_enabled(prefs, "wishlist_share_created") is True
+    prefs.list_assignments_enabled = False
+    prefs.wishlist_sharing_enabled = False
+    assert _category_enabled(prefs, "list_item_assigned") is False
+    assert _category_enabled(prefs, "wishlist_share_revoked") is False
+    assert resolve_path(target("list", uuid.UUID(int=1))) == "/lists/00000000-0000-0000-0000-000000000001"
+    assert resolve_path(target("wishlist", uuid.UUID(int=1))) == "/wish-lists/00000000-0000-0000-0000-000000000001"
+
+
 @pytest.mark.asyncio
 async def test_list_read_and_mark_all_read(client: AsyncClient) -> None:
     user_id = await create_verified_user(client, unique_email("list"), "List User")

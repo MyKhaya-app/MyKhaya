@@ -78,4 +78,6 @@
   --font-micro: 0.6875rem; /* nav labels, badges */
   --line-tight: 1.08;
   --line-body: 1.5;
+  /* Canonical separation between sibling cards/menu rows in one section. */
+  --space-card-stack: 1rem;
 }

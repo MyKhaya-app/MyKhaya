@@ -1,4 +1,7 @@
 import { Capacitor } from "@capacitor/core";
+import { isPlatformControlCentreHost } from "./application-host";
+
+export { isPlatformControlCentreHost } from "./application-host";
 
 // Single canonical place to ask "am I running inside the Capacitor native
 // iOS shell, or a normal browser/PWA tab?" Every future native-only
@@ -25,9 +28,4 @@ export function nativePlatform(): NativePlatform {
 export function isPlatformControlCentre(): boolean {
   if (typeof window === "undefined") return false;
   return isPlatformControlCentreHost(window.location.hostname);
-}
-
-export function isPlatformControlCentreHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().split(":", 1)[0];
-  return host === "admin.mykhaya.app" || host === "admin.dev.mykhaya.app" || host === "admin.localhost";
 }

@@ -14,7 +14,7 @@ Exceptional future content access requires a separate design: record scope, elev
 
 ## Control state
 
-- Implemented: hostname/network gates, isolated sessions, role authorization, recent-auth checks, confirmation/reason schemas, immutable application audit API, bounded metadata lists, suspension/session revocation, notes, health, jobs, typed settings, global feature flags, security/audit views, incident management, and Platform-Admin-managed SMTP and Web Push (VAPID) configuration.
+- Implemented: hostname/network gates, isolated sessions, role authorization, recent-auth checks, confirmation/reason schemas, immutable application audit API, bounded metadata lists, suspension/session revocation, notes, health, jobs, a schema-driven administrator-facing operational settings UI (see "Platform settings" below) with a consumer-safe allow-listed config endpoint, global feature flags, security/audit views, incident management, and Platform-Admin-managed SMTP and Web Push (VAPID) configuration.
 - Implemented feature controls: global and Home override management, role checks, recent authentication, explicit confirmation/reason and administrative audit events.
 - Designed but incomplete: mandatory MFA ceremony, job manual retry and independent status hosting.
 - Production blocker: no WebAuthn/passkey ceremony exists. Password-only production administration is not approved.
@@ -115,3 +115,85 @@ active mode — never a charge, customer, or subscription — and is rate-limite
 audited, and requires recent re-authentication, matching the SMTP test-email action's
 security posture. Every settings change, secret replacement/removal, mode change, and
 connection test is written to the platform audit log without secret values.
+
+## Platform settings (generic key/value)
+
+Ordinary administrator-managed operational configuration — the things a Platform Owner
+should be able to change during normal operation without editing `.env`, touching the
+database directly, or redeploying — lives in one generic table (`platform_settings`,
+one row per key, added in migration `0002_platform_control_centre`) with its schema
+defined centrally in `mykhaya.platform_settings.SETTINGS_SCHEMA`
+(`SettingDefinition`: key, label, description, section, value type, python type, risk,
+runtime effect, and whether it may be exposed to consumer clients). `GET`/`PUT
+/platform/settings/{key}` (`mykhaya.routers.platform`) are the only way to read or
+write it; both require an authenticated Platform Owner and `PUT` additionally requires
+recent re-authentication (`require_recent_auth`) — identical to every other sensitive
+PCC mutation. This is deliberately a much simpler model than SMTP/Push/Stripe above:
+there is exactly one generic table, not a bespoke one per integration, because these
+settings have no secret material and no complex per-integration resolution logic.
+
+**Precedence** (same "stored row wins, environment is only a fallback" shape as
+SMTP/Push):
+1. **Platform-Admin stored row** — once an Owner saves a value via PCC, it is
+   canonical and always wins.
+2. **Environment default** — used only when no stored row exists yet, and only for
+   the small number of keys that have one defined (see
+   `mykhaya.platform_settings.resolve_environment_fallback`; today only
+   `service_status_url`, which falls back to `Settings.status_url`).
+3. **Unset** — no stored row and no environment default. The PCC Settings page
+   (`apps/web/app/control-centre/settings/page.tsx`) renders this as a genuinely
+   empty control ("Not yet set") — never the word "Unavailable", which was a UI bug
+   in the previous generic-table rendering of this endpoint, not a real state.
+
+**`service_status_url`** — the page Help & Support sends consumers to for MyKhaya's
+status. Bootstraps from `Settings.status_url` (the same env var that also names the
+hardened `/status` host, `MYKHAYA_STATUS_URL` — e.g. `https://status.dev.mykhaya.app`
+in development) purely as a *default*; once a Platform Owner saves an explicit value
+via PCC, that stored value is canonical and fully independent of the env var from then
+on. **`Settings.status_url` itself is not, and must never become, live-editable** — it
+also gates `mykhaya.routers.status.enforce_status_host`'s Host-header check for the
+hardened status-hosting subdomain and is validated at startup
+(`validate_admin_and_status_url_configuration`) against `trusted_hosts`/`cors_origins`;
+changing it at runtime without redeploying would desynchronise it from those checks and
+break the hardened status host. `service_status_url` and `status_url` are two
+deliberately separate concepts: one is an administrator-facing informational link,
+the other is infrastructure/security configuration.
+
+**Consumer-safe exposure** — `GET /api/v1/config/public`
+(`mykhaya.routers.public_config`, unauthenticated) is the *only* window consumer
+clients have into `platform_settings`. It builds a brand-new response containing
+exclusively the keys `SETTINGS_SCHEMA` marks `consumer_visible=True` (today just
+`service_status_url`) — it never accepts a caller-supplied key list and never returns
+the full schema for a client to filter. Every `/api/v1/*` response already gets
+`Cache-Control: no-store` from `mykhaya.main`'s `security_and_limits` middleware, so a
+PCC change to a consumer-visible setting is effective on the very next request — no
+cache to invalidate, no restart required. The consumer Help & Support page
+(`apps/web/app/help-support/page.tsx`) fetches this endpoint and opens the URL via
+`openExternalUrl` (native `Browser.open`/browser `window.open`) — it never links to a
+hardcoded environment-specific URL.
+
+**Runtime enforcement is tracked explicitly, not assumed** — `SettingDefinition`'s
+`runtime_effect` field records whether a setting is actually consumed by running code
+today (`"effective"`), purely informational with no behavioural claim
+(`"informational"`), or a placeholder nothing reads yet (`"not_enforced"`). As of this
+writing: `registration_enabled`/`invite_only_mode` (the real gate is the env-only
+`Settings.registration_mode`), `email_verification_required` (the real gate is the
+similarly-but-confusingly-named env `Settings.email_verification_enabled`),
+`maintenance_mode` (no maintenance-mode mechanism exists at all), `maximum_homes_per_user`
+(nothing enforces it), `maximum_members_per_home` (the real per-plan limit is
+`entitlements.py`'s `home.max_members`), and `invitation_expiry_days` (invitations use a
+hardcoded `timedelta(days=7)` in `routers/invitations.py`) are all `"not_enforced"`. PCC
+renders this as an honest "Not yet enforced by the application" caption, and a
+sensitive+not-enforced setting's confirmation dialog says exactly that rather than
+describing an operational effect that doesn't currently exist. Wiring any of these up to
+real enforcement — and resolving the `registration_mode`/`registration_enabled`
+duplication in particular — is future work, not done here; when it happens, flip that
+key's `runtime_effect` to `"effective"` and the PCC confirmation copy for sensitive
+settings automatically switches to the stronger operational warning.
+
+**What stays environment/secret-only and must never become a PCC-editable
+`platform_settings` row**: database URL, Redis URL, `secret_key`, SMTP
+password/host/port (`platform_smtp_settings` already exists as the correct
+Platform-Admin-managed path for the *non-secret* SMTP fields — see above), VAPID/APNs
+private keys, Stripe secret/webhook keys, and any future OAuth client secret. Secrets
+never touch `platform_settings`, and no endpoint here returns one even read-only.

@@ -48,6 +48,7 @@ from mykhaya.notifications.calendar_shares import notify_calendar_share_recipien
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.visibility import home_viewer_ids_for_event
 from mykhaya.schemas import (
     CalendarListResponse,
     EventActivityResponse,
@@ -616,6 +617,46 @@ async def _notify_members_added(
             title=title,
             body=body,
             idempotency_key=f"calendar_event_member_added:{event.id}:{recipient_id}:{version_marker}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )
+
+
+async def _notify_visible_members_event_created(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    actor_id: uuid.UUID,
+    actor_name: str,
+    recipient_ids: set[uuid.UUID],
+) -> None:
+    """Notify visible Home members who were not explicitly assigned.
+
+    Explicit assignees keep the established "added to an event" copy. This
+    path covers members with calendar_view_all, who can see the event without
+    a CalendarEventMember row, and avoids implying that they were assigned.
+    """
+    if not recipient_ids:
+        return
+    when = _format_event_when(event)
+    title, body = await render_notification(
+        db,
+        "calendar.event.shared_created",
+        {"actor_name": actor_name, "event_title": event.title, "event_when": when},
+    )
+    for recipient_id in recipient_ids:
+        if recipient_id == actor_id:
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=recipient_id,
+            notification_type="event_invitation",
+            title=title,
+            body=body,
+            idempotency_key=f"calendar_event_visible_created:{event.id}:{recipient_id}",
             group_id=event.group_id,
             related_entity_type="calendar_event",
             related_entity_id=event.id,
@@ -1222,6 +1263,14 @@ async def create_event(
         set(requested_members),
         event.version,
     )
+    await _notify_visible_members_event_created(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        await home_viewer_ids_for_event(db, event) - set(requested_members),
+    )
     await notify_calendar_share_recipients(
         db,
         settings,
@@ -1424,15 +1473,20 @@ async def update_event(
     if genuinely_new_participants and len(requested_members) > 1:
         await require_entitlement(db, home_id, "events.shared.enabled")
 
-    # Deliberately excludes title: a wording/typo fix to an event's title
-    # shouldn't notify every assigned member the way a date/time/location
-    # change (something that actually affects whether/where they show up)
-    # should.
+    # Notify for user-visible event changes, including title and recurrence;
+    # description-only edits remain low-signal and are intentionally excluded.
     material_change = (
-        event.start_at != start_at
+        event.title != " ".join(body.title.strip().split())
+        or event.start_at != start_at
         or event.end_at != end_at
         or event.is_all_day != body.is_all_day
         or event.location_text != body.location_text
+        or event.timezone != body.timezone
+        or event.recurrence != body.recurrence
+        or event.recurrence_interval != body.recurrence_interval
+        or event.recurrence_until != body.recurrence_until
+        or event.recurrence_end_date != recurrence_end_date
+        or event.recurrence_count != body.recurrence_count
     )
 
     event.title = " ".join(body.title.strip().split())
@@ -1481,7 +1535,8 @@ async def update_event(
             event,
             auth.user.id,
             auth.user.display_name,
-            unchanged_member_ids,
+            unchanged_member_ids
+            | (await home_viewer_ids_for_event(db, event) - set(requested_members)),
             event.version,
         )
         await notify_calendar_share_recipients(
@@ -1549,13 +1604,19 @@ async def delete_event(
             )
         ).all()
     }
+    visible_member_ids = await home_viewer_ids_for_event(db, event)
     event.deleted_at = datetime.now(UTC)
     event.deleted_by = auth.user.id
     event.last_edited_by = auth.user.id
     await _record_activity(db, event, auth.user.id, "event.deleted", "deleted this event")
     audit(db, request, "calendar.event.deleted", auth.user.id, home_id, "event", event.id)
     await _notify_members_event_cancelled(
-        db, settings, event, auth.user.id, auth.user.display_name, member_ids
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        visible_member_ids | member_ids,
     )
     await notify_calendar_share_recipients(
         db,

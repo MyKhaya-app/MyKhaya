@@ -1229,6 +1229,8 @@ class NotificationPreferencesResponse(BaseModel):
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
+    list_assignments_enabled: bool = True
+    wishlist_sharing_enabled: bool = True
     daily_briefing_enabled: bool
     briefing_time: str
     briefing_days: str
@@ -1247,6 +1249,8 @@ class NotificationPreferencesUpdate(StrictModel):
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
+    list_assignments_enabled: bool = True
+    wishlist_sharing_enabled: bool = True
     daily_briefing_enabled: bool
     briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
     briefing_days: Literal["daily", "weekdays"]
