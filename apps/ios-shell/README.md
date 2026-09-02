@@ -82,6 +82,26 @@ have the Push Notifications capability and an `aps-environment` entitlement
 with the production signing profile before archiving; Background Modes is not
 required for ordinary alert delivery.
 
+The APNs Key ID and private `.p8` key must belong to the same Apple key. A
+previous delivery outage was caused by loading a valid, but different, `.p8`
+for the configured Key ID. If delivery is in doubt, compare public-key
+fingerprints without exposing private material. On the source machine, derive
+the fingerprint from the source key:
+
+```sh
+openssl pkey -in AuthKey_<KEY_ID>.p8 -pubout -outform DER | shasum -a 256
+```
+
+Derive the fingerprint from the key loaded by the worker (the command prints
+only the SHA-256 fingerprint):
+
+```sh
+docker compose exec worker python -c 'import hashlib; from cryptography.hazmat.primitives import serialization; from mykhaya.config import get_settings; s=get_settings(); k=serialization.load_pem_private_key(s.apns_private_key.get_secret_value().replace("\\n", "\n").encode(), password=None); print(hashlib.sha256(k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest())'
+```
+
+The two fingerprints must match. APNs credentials belong on the backend only;
+never commit or paste a `.p8` file, JWT, bearer token, or device token.
+
 ### Capacitor 8 AppDelegate wiring
 
 The installed Capacitor Push Notifications 8 plugin does not automatically

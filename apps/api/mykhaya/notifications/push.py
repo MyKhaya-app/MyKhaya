@@ -100,48 +100,21 @@ def _normalise_apns_private_key(private_key: str) -> str:
 def _build_apns_bearer(
     config: ApnsConfig,
     issued_at: int | None = None,
-    topic: str | None = None,
-    emit_diagnostics: bool = True,
 ) -> str:
     """Build one short-lived APNs provider JWT; deliberately does not cache it."""
     if not config.team_id or not config.key_id or not config.private_key:
         raise RuntimeError("APNs provider-token configuration is incomplete")
 
     issued_at = int(time.time()) if issued_at is None else int(issued_at)
-    key_parsed = False
-    try:
-        bearer = apns_jwt.encode(
-            {"alg": "ES256", "kid": config.key_id},
-            {"iss": config.team_id, "iat": issued_at},
-            _normalise_apns_private_key(config.private_key).encode("utf-8"),
-        )
-        if isinstance(bearer, bytes):
-            bearer = bearer.decode("ascii")
-        if not isinstance(bearer, str):
-            raise RuntimeError("APNs JWT library returned an invalid token")
-        key_parsed = True
-    except Exception:
-        if emit_diagnostics:
-            log.error(
-                "apns_jwt_diagnostics",
-                jwt_kid_matches_config=False,
-                jwt_iss_matches_config=False,
-                jwt_iat_age_seconds=0,
-                private_key_parsed=key_parsed,
-                apns_endpoint="production",
-                apns_topic_matches_bundle=False,
-            )
-        raise
-    if emit_diagnostics:
-        log.info(
-            "apns_jwt_diagnostics",
-            jwt_kid_matches_config=True,
-            jwt_iss_matches_config=True,
-            jwt_iat_age_seconds=max(0, int(time.time()) - issued_at),
-            private_key_parsed=True,
-            apns_endpoint="production",
-            apns_topic_matches_bundle=topic is not None and topic == config.bundle_id,
-        )
+    bearer = apns_jwt.encode(
+        {"alg": "ES256", "kid": config.key_id},
+        {"iss": config.team_id, "iat": issued_at},
+        _normalise_apns_private_key(config.private_key).encode("utf-8"),
+    )
+    if isinstance(bearer, bytes):
+        bearer = bearer.decode("ascii")
+    if not isinstance(bearer, str):
+        raise RuntimeError("APNs JWT library returned an invalid token")
     return bearer
 
 
@@ -243,7 +216,7 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
     if not config.configured or not config.team_id or not config.key_id or not config.private_key:
         raise RuntimeError("APNs delivery is not configured")
     topic = config.bundle_id or "app.mykhaya.mobile"
-    bearer = _build_apns_bearer(config, topic=topic)
+    bearer = _build_apns_bearer(config)
     request_payload = {
         "aps": {
             "alert": {"title": payload["title"], "body": payload["body"]},

@@ -11,15 +11,6 @@ import { isNativeShell, nativePlatform } from "./native-runtime";
 
 export type NativePushStatus = "unsupported" | "prompt" | "granted" | "denied" | "registering" | "registered" | "error";
 
-export type NativePushDiagnostic = {
-  stage: string;
-  permission?: string;
-  tokenPresent?: boolean;
-  registrationPresent?: boolean;
-  errorCategory?: string;
-  status?: number;
-};
-
 let listenersReady: Promise<void> | undefined;
 let lastRegistrationId: string | null = null;
 let lastToken: string | null = null;
@@ -32,54 +23,6 @@ let registrationActive = false;
 let cleanupRequested = false;
 let actionHandler: ((path: string) => void) | undefined;
 let listenerHandles: PluginListenerHandle[] = [];
-let latestDiagnostic: NativePushDiagnostic | null = null;
-const diagnosticListeners = new Set<() => void>();
-
-type DiagnosticValue = boolean | number | string | undefined;
-
-function nativePushDiagnostic(stage: string, details: Record<string, DiagnosticValue> = {}): void {
-  latestDiagnostic = {
-    stage,
-    permission: typeof details.permission === "string" ? details.permission : undefined,
-    tokenPresent: typeof details.token_present === "boolean" ? details.token_present : undefined,
-    registrationPresent: typeof details.registration_present === "boolean" ? details.registration_present : undefined,
-    errorCategory: typeof details.error_category === "string" ? details.error_category : undefined,
-    status: typeof details.status === "number" ? details.status : undefined,
-  };
-  diagnosticListeners.forEach((listener) => listener());
-  console.info("[MyKhaya native push]", { stage, ...details });
-}
-
-export function getNativePushDiagnostic(): NativePushDiagnostic | null {
-  return latestDiagnostic;
-}
-
-export function subscribeNativePushDiagnostics(listener: () => void): () => void {
-  diagnosticListeners.add(listener);
-  return () => diagnosticListeners.delete(listener);
-}
-
-export function nativePushDiagnosticsText(diagnostic: NativePushDiagnostic | null = latestDiagnostic): string {
-  if (!diagnostic) return "native_push_stage=not_started";
-  const lines = [`native_push_stage=${diagnostic.stage}`];
-  if (diagnostic.permission) lines.push(`permission=${diagnostic.permission}`);
-  if (diagnostic.tokenPresent !== undefined) lines.push(`token_present=${diagnostic.tokenPresent}`);
-  if (diagnostic.registrationPresent !== undefined) lines.push(`registration_present=${diagnostic.registrationPresent}`);
-  if (diagnostic.errorCategory) lines.push(`error_category=${diagnostic.errorCategory}`);
-  if (diagnostic.status !== undefined) lines.push(`status=${diagnostic.status}`);
-  return lines.join("\n");
-}
-
-function errorStatus(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null || !("status" in error)) return undefined;
-  const status = error.status;
-  return typeof status === "number" ? status : undefined;
-}
-
-function errorCategory(error: unknown): string {
-  return error instanceof Error ? error.name : "unknown";
-}
-
 type NativeNotificationData = {
   deep_link_path?: unknown;
   deep_link?: unknown;
@@ -118,12 +61,10 @@ async function ensureListeners(): Promise<void> {
   listenersReady = (async () => {
     async function registerToken(token: Token): Promise<void> {
       lastToken = token.value;
-      nativePushDiagnostic("os_token_received", { token_present: Boolean(token.value) });
       resolveTokenWaiter?.();
       resolveTokenWaiter = undefined;
       const platform = nativePlatform();
       if (platform !== "ios" && platform !== "android") return;
-      nativePushDiagnostic("backend_register_started", { token_present: Boolean(token.value) });
       try {
         const registration = await api.registerNativePushDevice({
           platform,
@@ -132,13 +73,8 @@ async function ensureListeners(): Promise<void> {
           device_label: platform === "ios" ? "iPhone" : "Android device",
         });
         lastRegistrationId = registration.id;
-        nativePushDiagnostic("backend_register_succeeded", { status: 200 });
       } catch (error) {
         registrationFailure = error;
-        nativePushDiagnostic("backend_register_failed", {
-          status: errorStatus(error),
-          error_category: errorCategory(error),
-        });
       } finally {
         resolveRegistrationWaiter?.();
         resolveRegistrationWaiter = undefined;
@@ -150,7 +86,6 @@ async function ensureListeners(): Promise<void> {
     }));
     listenerHandles.push(await PushNotifications.addListener("registrationError", (error) => {
       registrationFailure = error;
-      nativePushDiagnostic("os_registration_failed", { error_category: errorCategory(error) });
       resolveTokenWaiter?.();
       resolveTokenWaiter = undefined;
       resolveRegistrationWaiter?.();
@@ -162,7 +97,6 @@ async function ensureListeners(): Promise<void> {
       const value = data.deep_link_path ?? data.deep_link;
       actionHandler?.(safeNativePushPath(value));
     }));
-    nativePushDiagnostic("listeners_ready", { listener_count: listenerHandles.length });
   })();
   return listenersReady;
 }
@@ -177,7 +111,6 @@ export async function initializeNativePush(onAction: (path: string) => void): Pr
 export async function reconcileNativePush(): Promise<void> {
   if (!isNativeShell() || nativePlatform() !== "ios") return;
   const permission = await PushNotifications.checkPermissions();
-  nativePushDiagnostic("permission_checked", { permission: permission.receive });
   if (permission.receive === "granted") await enableNativePush();
 }
 
@@ -196,17 +129,12 @@ export async function enableNativePush(
   try {
     actionHandler = onAction;
     await ensureListeners();
-    nativePushDiagnostic("permission_check_started");
     let permission = await PushNotifications.checkPermissions();
-    nativePushDiagnostic("permission_checked", { permission: permission.receive });
     if (permission.receive === "denied") return { ok: false, status: "denied" };
     if (permission.receive !== "granted") {
-      nativePushDiagnostic("permission_request_started");
       permission = await PushNotifications.requestPermissions();
-      nativePushDiagnostic("permission_requested", { permission: permission.receive });
     }
     if (permission.receive !== "granted") return { ok: false, status: "denied" };
-    nativePushDiagnostic("os_register_requested");
     await PushNotifications.register();
     if (registrationFailure) return { ok: false, status: "error" };
     // The registration listener performs the authenticated API write. A token
@@ -214,7 +142,6 @@ export async function enableNativePush(
     if (!lastToken) {
       tokenWaiter ??= new Promise<void>((resolve) => { resolveTokenWaiter = resolve; });
       await Promise.race([tokenWaiter, new Promise<void>((resolve) => setTimeout(() => {
-        nativePushDiagnostic("token_timeout", { token_present: Boolean(lastToken) });
         resolve();
       }, 10_000))]);
     }
@@ -222,14 +149,12 @@ export async function enableNativePush(
     if (lastToken && !lastRegistrationId) {
       registrationWaiter ??= new Promise<void>((resolve) => { resolveRegistrationWaiter = resolve; });
       await Promise.race([registrationWaiter, new Promise<void>((resolve) => setTimeout(() => {
-        nativePushDiagnostic("backend_register_timeout", { token_present: true, registration_present: false });
         resolve();
       }, 10_000))]);
     }
     if (registrationFailure || !lastToken || !lastRegistrationId) return { ok: false, status: "error" };
     return { ok: true, status: "registered" };
-  } catch (error) {
-    nativePushDiagnostic("registration_failed", { error_category: errorCategory(error), status: errorStatus(error) });
+  } catch {
     return { ok: false, status: "error" };
   } finally {
     registrationActive = false;
@@ -249,7 +174,6 @@ export async function revokeNativePush(): Promise<void> {
 export async function cleanupNativePush(): Promise<void> {
   if (registrationActive) {
     cleanupRequested = true;
-    nativePushDiagnostic("cleanup_deferred", { registration_pending: true });
     return;
   }
   await finishCleanup();

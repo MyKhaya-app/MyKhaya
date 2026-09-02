@@ -126,21 +126,6 @@ describe("native push platform boundary", () => {
     expect(JSON.stringify(info.mock.calls)).not.toContain("secret-apns-token");
   });
 
-  it("formats diagnostics without sensitive values", async () => {
-    const { nativePushDiagnosticsText } = await import("./native-push");
-    const text = nativePushDiagnosticsText({
-      stage: "os_token_received",
-      tokenPresent: true,
-      errorCategory: "Error",
-      status: 401,
-    });
-
-    expect(text).toContain("token_present=true");
-    expect(text).not.toContain("secret-apns-token");
-    expect(text).not.toContain("bearer");
-    expect(text).not.toContain("authorization");
-  });
-
   it("keeps notification tap destinations on the internal allowlist", async () => {
     const { safeNativePushPath } = await import("./native-push");
 
