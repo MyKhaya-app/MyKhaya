@@ -11,8 +11,19 @@ const router = { replace: vi.fn<(url: string) => void>() };
 let pathname = "/home";
 vi.mock("next/navigation", () => ({ usePathname: () => pathname, useRouter: () => router }));
 vi.mock("@mykhaya/api-client", () => ({ api: { me: (...args: unknown[]) => me(...args), renew: (...args: unknown[]) => renew(...args) }, ApiError: class ApiError extends Error { status = 401; } }));
-vi.mock("./native-runtime", () => ({ isNativeShell: () => false }));
-vi.mock("./native-auth", () => ({ bootstrapNativeSession: vi.fn() }));
+const { nativeShellState, bootstrapNativeSession } = vi.hoisted(() => ({
+  nativeShellState: { value: false },
+  bootstrapNativeSession: vi.fn<() => Promise<unknown>>(),
+}));
+vi.mock("./native-runtime", () => ({
+  isNativeShell: () => nativeShellState.value,
+  nativePlatform: () => nativeShellState.value ? "ios" : "web",
+}));
+vi.mock("./native-auth", () => ({ bootstrapNativeSession }));
+vi.mock("./native-push", () => ({
+  initializeNativePush: vi.fn().mockResolvedValue(undefined),
+  reconcileNativePush: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("./auth-diagnostics", () => ({ recordAuthDiagnostic: vi.fn() }));
 
 function Probe() {
@@ -25,7 +36,9 @@ beforeEach(() => {
   renew.mockReset();
   router.replace.mockReset();
   pathname = "/home";
+  nativeShellState.value = false;
   me.mockResolvedValue({ id: "u1", display_name: "Owner", principal_type: "adult" });
+  bootstrapNativeSession.mockReset();
 });
 
 describe("AuthProvider", () => {
@@ -62,5 +75,22 @@ describe("AuthProvider", () => {
     await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
     expect(me).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("checking")).not.toBeInTheDocument();
+  });
+
+  it("restores a native session through the bearer client and keeps it offline on a transient startup failure", async () => {
+    nativeShellState.value = true;
+    bootstrapNativeSession.mockResolvedValue({ id: "native-u1", display_name: "Owner", principal_type: "adult" });
+    const view = render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+    expect(bootstrapNativeSession).toHaveBeenCalledTimes(1);
+
+    // A fresh provider models the new JS process after a hard-close. A
+    // transient Keychain/transport error must not become a login redirect.
+    bootstrapNativeSession.mockRejectedValueOnce(new Error("Keychain temporarily unavailable"));
+    view.unmount();
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText("offline")).toBeInTheDocument());
+    expect(router.replace).not.toHaveBeenCalled();
   });
 });

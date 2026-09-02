@@ -34,13 +34,11 @@ const KEY = "mykhaya.native.session.token";
 const DEVICE_KEY = "mykhaya.native.session.device_token";
 
 async function readString(key: string): Promise<string | null> {
-  let value: unknown;
-  try {
-    value = await SecureStorage.get(key, false, false);
-  } catch (error) {
-    if (error instanceof StorageError) return null;
-    throw error;
-  }
+  // SecureStorage.get() returns null for a missing key. Do not turn a
+  // Keychain/OS read failure into "no session": AuthProvider must preserve
+  // the credential and show its offline/retry state instead of redirecting
+  // a signed-in user to Login.
+  const value: unknown = await SecureStorage.get(key, false, false);
   return typeof value === "string" && value !== "" ? value : null;
 }
 

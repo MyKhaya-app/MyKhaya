@@ -62,11 +62,31 @@ describe("KeychainNativeSessionStore", () => {
     expect(await store.get()).toEqual({ token: "the-token", deviceToken: "the-device-token" });
   });
 
-  it("get() fails safe (returns null) if the Keychain read itself fails", async () => {
+  it("propagates a Keychain read failure so startup cannot mistake it for signed-out", async () => {
     storageGet.mockRejectedValue(new StorageError("boom", "osError" as StorageErrorType));
     const store = new KeychainNativeSessionStore();
 
-    expect(await store.get()).toBeNull();
+    await expect(store.get()).rejects.toBeInstanceOf(StorageError);
+  });
+
+  it("recovers the session across fresh store instances", async () => {
+    const values = new Map<string, unknown>();
+    storageSet.mockImplementation((key: string, value: unknown) => {
+      values.set(key, value);
+      return Promise.resolve();
+    });
+    storageGet.mockImplementation((key: string) => Promise.resolve(values.get(key) ?? null));
+
+    await new KeychainNativeSessionStore().set({
+      token: "persisted-session",
+      deviceToken: "persisted-device",
+    });
+    const newStore = new KeychainNativeSessionStore();
+
+    await expect(newStore.get()).resolves.toEqual({
+      token: "persisted-session",
+      deviceToken: "persisted-device",
+    });
   });
 
   it("set() writes with sync disabled and whenUnlockedThisDeviceOnly access, every time", async () => {
