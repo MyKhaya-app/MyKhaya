@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0049_list_wishlist_notification_preferences"
+revision: str = "0049_list_wishlist_notify_prefs"
 down_revision: str | None = "0048_native_push_devices"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
