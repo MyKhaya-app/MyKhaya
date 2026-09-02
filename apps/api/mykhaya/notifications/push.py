@@ -53,6 +53,9 @@ class ApnsPermanentError(Exception):
     pass
 
 
+APNS_PRODUCTION_ENDPOINT = "https://api.push.apple.com"
+
+
 def is_apns_response_retryable(status_code: int) -> bool:
     """Classify an APNs HTTP response without inspecting any request secrets."""
     return status_code in (408, 425, 429) or 500 <= status_code <= 599
@@ -88,6 +91,72 @@ def apns_failure_diagnostics(response: httpx.Response) -> dict[str, object]:
         "request_id": _safe_apns_log_value(response.headers.get("apns-id")),
         "retryable": is_apns_response_retryable(response.status_code),
     }
+
+
+def _normalise_apns_private_key(private_key: str) -> str:
+    """Accept PEM values from either multiline files or escaped environment vars."""
+    return private_key.replace("\\n", "\n").strip()
+
+
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _build_apns_bearer(
+    config: ApnsConfig, issued_at: int | None = None, topic: str | None = None
+) -> str:
+    """Build one short-lived APNs provider JWT; deliberately does not cache it."""
+    if not config.team_id or not config.key_id or not config.private_key:
+        raise RuntimeError("APNs provider-token configuration is incomplete")
+
+    issued_at = int(time.time()) if issued_at is None else int(issued_at)
+    header = _b64(
+        json.dumps({"alg": "ES256", "kid": config.key_id}, separators=(",", ":")).encode()
+    )
+    claims = _b64(
+        json.dumps(
+            {"iss": config.team_id, "iat": issued_at}, separators=(",", ":")
+        ).encode()
+    )
+    signing_input = f"{header}.{claims}".encode("ascii")
+    key_parsed = False
+    try:
+        key = load_pem_private_key(
+            _normalise_apns_private_key(config.private_key).encode("utf-8"), password=None
+        )
+        key_parsed = isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(
+            key.curve, ec.SECP256R1
+        )
+        if not key_parsed:
+            raise RuntimeError("APNs key is not an EC P-256 private key")
+        signature = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    except Exception:
+        log.error(
+            "apns_jwt_diagnostics",
+            jwt_kid_matches_config=False,
+            jwt_iss_matches_config=False,
+            jwt_iat_age_seconds=0,
+            private_key_parsed=key_parsed,
+            apns_endpoint="production",
+            apns_topic_matches_bundle=False,
+        )
+        raise
+
+    # APNs expects the JOSE raw r||s signature, not ASN.1 DER.
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    r, s = decode_dss_signature(signature)
+    bearer = f"{header}.{claims}.{_b64(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
+    log.info(
+        "apns_jwt_diagnostics",
+        jwt_kid_matches_config=True,
+        jwt_iss_matches_config=True,
+        jwt_iat_age_seconds=max(0, int(time.time()) - issued_at),
+        private_key_parsed=True,
+        apns_endpoint="production",
+        apns_topic_matches_bundle=topic is not None and topic == config.bundle_id,
+    )
+    return bearer
 
 
 def generate_vapid_keypair() -> tuple[str, str]:
@@ -187,28 +256,8 @@ def resolve_apns_config(settings: Settings) -> ApnsConfig:
 def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, object]) -> None:
     if not config.configured or not config.team_id or not config.key_id or not config.private_key:
         raise RuntimeError("APNs delivery is not configured")
-    def b64(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-    header = b64(
-        json.dumps({"alg": "ES256", "kid": config.key_id}, separators=(",", ":")).encode()
-    )
-    claims = b64(
-        json.dumps(
-            {"iss": config.team_id, "iat": int(time.time())}, separators=(",", ":")
-        ).encode()
-    )
-    signing_input = f"{header}.{claims}".encode("ascii")
-    key = load_pem_private_key(config.private_key.encode("utf-8"), password=None)
-    if not isinstance(key, ec.EllipticCurvePrivateKey):
-        raise RuntimeError("APNs key is not an elliptic-curve private key")
-    signature = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
-    # APNs expects the JOSE raw r||s signature, not ASN.1 DER.
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-
-    r, s = decode_dss_signature(signature)
-    bearer = f"{header}.{claims}.{b64(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
     topic = config.bundle_id or "app.mykhaya.mobile"
+    bearer = _build_apns_bearer(config, topic=topic)
     request_payload = {
         "aps": {
             "alert": {"title": payload["title"], "body": payload["body"]},
@@ -219,7 +268,7 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
     }
     with httpx.Client(http2=True, timeout=10) as client:
         response = client.post(
-            f"https://api.push.apple.com/3/device/{device.token}",
+            f"{APNS_PRODUCTION_ENDPOINT}/3/device/{device.token}",
             headers={"authorization": f"bearer {bearer}", "apns-topic": topic},
             json=request_payload,
         )

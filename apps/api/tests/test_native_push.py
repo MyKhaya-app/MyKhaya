@@ -96,6 +96,122 @@ def test_send_apns_uses_signed_bearer_and_safe_alert_payload(
     assert "authorization" not in json.dumps(fake.payload).lower()
 
 
+@pytest.mark.parametrize(
+    "private_key",
+    [_private_key_pem(), _private_key_pem().replace("\n", r"\n")],
+)
+def test_apns_accepts_multiline_and_escaped_newline_private_keys(
+    monkeypatch: pytest.MonkeyPatch, private_key: str
+) -> None:
+    fake = _FakeClient()
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        private_key=private_key,
+    )
+
+    send_apns(config, _device(), {"title": "T", "body": "B"})
+
+    assert fake.request is not None
+    assert fake.request.headers["authorization"].startswith("bearer ")
+
+
+def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeClient()
+    diagnostics: list[dict[str, object]] = []
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    monkeypatch.setattr(
+        push.log, "info", lambda *args, **kwargs: diagnostics.append(kwargs)
+    )
+    issued_at = 1_700_000_000
+    monkeypatch.setattr("mykhaya.notifications.push.time.time", lambda: issued_at)
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        bundle_id="app.mykhaya.mobile",
+        private_key=_private_key_pem(),
+    )
+
+    send_apns(config, _device(), {"title": "T", "body": "B"})
+
+    assert fake.request is not None
+    encoded = fake.request.headers["authorization"].removeprefix("bearer ").split(".")
+    def decode(value: str) -> dict[str, object]:
+        return json.loads(base64.urlsafe_b64decode(value + "=="))
+    assert decode(encoded[0]) == {"alg": "ES256", "kid": "KEY123"}
+    assert decode(encoded[1]) == {"iss": "TEAM123", "iat": issued_at}
+    assert len(base64.urlsafe_b64decode(encoded[2] + "==")) == 64
+    assert fake.request.headers["apns-topic"] == "app.mykhaya.mobile"
+    assert fake.request.url.host == "api.push.apple.com"
+    assert diagnostics == [
+        {
+            "jwt_kid_matches_config": True,
+            "jwt_iss_matches_config": True,
+            "jwt_iat_age_seconds": 0,
+            "private_key_parsed": True,
+            "apns_endpoint": "production",
+            "apns_topic_matches_bundle": True,
+        }
+    ]
+
+
+def test_apns_provider_token_is_not_cached_and_refreshes_before_one_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeClient()
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    now = 1_700_000_000
+    monkeypatch.setattr("mykhaya.notifications.push.time.time", lambda: now)
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        private_key=_private_key_pem(),
+    )
+
+    send_apns(config, _device(), {"title": "T", "body": "B"})
+    first = fake.request.headers["authorization"] if fake.request else ""
+    now += 3_500
+    send_apns(config, _device(), {"title": "T", "body": "B"})
+    second = fake.request.headers["authorization"] if fake.request else ""
+
+    assert first != second
+    assert json.loads(base64.urlsafe_b64decode(first.split(".")[1] + "=="))["iat"] == 1_700_000_000
+    assert json.loads(base64.urlsafe_b64decode(second.split(".")[1] + "=="))["iat"] == 1_700_003_500
+
+
+def test_apns_jwt_diagnostics_never_log_token_or_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        push.log, "info", lambda *args, **kwargs: captured.append((args, kwargs))
+    )
+    issued_at = 1_700_000_000
+    monkeypatch.setattr("mykhaya.notifications.push.time.time", lambda: issued_at)
+    private_key = _private_key_pem()
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        bundle_id="app.mykhaya.mobile",
+        private_key=private_key,
+    )
+
+    push._build_apns_bearer(config, topic="app.mykhaya.mobile")
+
+    logged = json.dumps(captured)
+    assert private_key not in logged
+    assert "TEAM123" not in logged
+    assert "KEY123" not in logged
+    assert "secret-device-token" not in logged
+
+
 def test_send_apns_classifies_device_rejection_as_permanent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
