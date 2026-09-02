@@ -11,13 +11,15 @@ const router = { replace: vi.fn<(url: string) => void>() };
 let pathname = "/home";
 vi.mock("next/navigation", () => ({ usePathname: () => pathname, useRouter: () => router }));
 vi.mock("@mykhaya/api-client", () => ({ api: { me: (...args: unknown[]) => me(...args), renew: (...args: unknown[]) => renew(...args) }, ApiError: class ApiError extends Error { status = 401; } }));
-const { nativeShellState, bootstrapNativeSession } = vi.hoisted(() => ({
+const { nativeShellState, platformSurface, bootstrapNativeSession } = vi.hoisted(() => ({
   nativeShellState: { value: false },
+  platformSurface: { value: false },
   bootstrapNativeSession: vi.fn<() => Promise<unknown>>(),
 }));
 vi.mock("./native-runtime", () => ({
   isNativeShell: () => nativeShellState.value,
   nativePlatform: () => nativeShellState.value ? "ios" : "web",
+  isPlatformControlCentre: () => platformSurface.value,
 }));
 vi.mock("./native-auth", () => ({ bootstrapNativeSession, NativeBiometricUnlockError: class NativeBiometricUnlockError extends Error {} }));
 vi.mock("./native-push", () => ({
@@ -37,6 +39,7 @@ beforeEach(() => {
   router.replace.mockReset();
   pathname = "/home";
   nativeShellState.value = false;
+  platformSurface.value = false;
   me.mockResolvedValue({ id: "u1", display_name: "Owner", principal_type: "adult" });
   bootstrapNativeSession.mockReset();
 });
@@ -92,5 +95,14 @@ describe("AuthProvider", () => {
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText("offline")).toBeInTheDocument());
     expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("does not run consumer auth bootstrap on the PCC surface", async () => {
+    platformSurface.value = true;
+    pathname = "/users";
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+    expect(me).not.toHaveBeenCalled();
+    expect(bootstrapNativeSession).not.toHaveBeenCalled();
   });
 });

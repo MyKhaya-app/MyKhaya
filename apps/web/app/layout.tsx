@@ -5,6 +5,8 @@ import { ServiceWorkerRegister } from "../components/service-worker-register";
 import { InstallPrompt } from "../components/install-prompt";
 import { AuthProvider } from "../components/auth-provider";
 import { PersistentAppShell } from "../components/app-shell";
+import { isPlatformControlCentreHost } from "../components/native-runtime";
+import { headers } from "next/headers";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: { default: "MyKhaya", template: "%s · MyKhaya" },
@@ -28,15 +30,20 @@ export const viewport: Viewport = {
   // detection just to apply safe-area padding.
   viewportFit: "cover",
 };
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const host = (await headers()).get("host") ?? "";
+  const platformSurface = isPlatformControlCentreHost(host);
+  const application = platformSurface ? children : (
+    <AuthProvider>
+      <PersistentAppShell>{children}</PersistentAppShell>
+    </AuthProvider>
+  );
   return (
     <html lang="en">
       <body>
-        <AuthProvider>
-          <PersistentAppShell>{children}</PersistentAppShell>
-        </AuthProvider>
+        {application}
         <ServiceWorkerRegister />
         <InstallPrompt />
       </body>

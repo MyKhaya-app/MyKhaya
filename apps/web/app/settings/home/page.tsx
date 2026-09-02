@@ -433,12 +433,13 @@ function CalendarsAndCategories({ homeId }: { homeId: string }) {
 
 export default function HomeSettings() {
   const [home, setHome] = useState<Home | null>(null);
-  const { activeHomeId } = useActiveHome();
+  const { activeHome, activeHomeId } = useActiveHome();
   useEffect(() => {
     if (!activeHomeId) return;
     api.homes().then((homes) => setHome(homes.find((row) => row.id === activeHomeId) ?? null));
   }, [activeHomeId]);
   const canManageCalendars = home?.capabilities.includes("calendar.edit_all") ?? false;
+  const isHomeAdmin = activeHome?.relationship === "home_admin";
   return (
     <SettingsPage title="Home settings">
       <section className="card details">
@@ -453,6 +454,17 @@ export default function HomeSettings() {
         </p>
       </section>
       {activeHomeId && canManageCalendars && <CalendarsAndCategories homeId={activeHomeId} />}
+      {isHomeAdmin && (
+        <div className="settings-list">
+          <Link className="card" href="/khaya-control-centre">
+            <div>
+              <h2>Khaya Control Centre</h2>
+              <p>Members, child permissions and household features</p>
+            </div>
+            <span>›</span>
+          </Link>
+        </div>
+      )}
     </SettingsPage>
   );
 }

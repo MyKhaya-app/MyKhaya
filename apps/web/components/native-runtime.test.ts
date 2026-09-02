@@ -9,7 +9,7 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 import { Capacitor } from "@capacitor/core";
-import { isNativeShell, nativePlatform } from "./native-runtime";
+import { isNativeShell, isPlatformControlCentre, isPlatformControlCentreHost, nativePlatform } from "./native-runtime";
 
 describe("isNativeShell", () => {
   afterEach(() => {
@@ -45,5 +45,22 @@ describe("nativePlatform", () => {
   it("falls back to web for the browser platform value", () => {
     vi.mocked(Capacitor.getPlatform).mockReturnValue("web");
     expect(nativePlatform()).toBe("web");
+  });
+});
+
+describe("platform surface detection", () => {
+  it("recognises admin hosts independently of the middleware rewrite path", () => {
+    Object.defineProperty(window, "location", { value: { hostname: "admin.dev.mykhaya.app" }, configurable: true });
+    expect(isPlatformControlCentre()).toBe(true);
+  });
+
+  it("does not classify the consumer host as PCC", () => {
+    Object.defineProperty(window, "location", { value: { hostname: "dev.mykhaya.app" }, configurable: true });
+    expect(isPlatformControlCentre()).toBe(false);
+  });
+
+  it("supports the server-side root-layout boundary", () => {
+    expect(isPlatformControlCentreHost("admin.dev.mykhaya.app:443")).toBe(true);
+    expect(isPlatformControlCentreHost("dev.mykhaya.app")).toBe(false);
   });
 });

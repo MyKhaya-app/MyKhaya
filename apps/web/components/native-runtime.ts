@@ -18,3 +18,16 @@ export function nativePlatform(): NativePlatform {
   const platform = Capacitor.getPlatform();
   return platform === "ios" || platform === "android" ? platform : "web";
 }
+
+/** The admin hostname is a separate application surface even though Next's
+ * middleware rewrites it to /control-centre internally. Keep consumer auth,
+ * AppShell, and native bearer startup out of that surface. */
+export function isPlatformControlCentre(): boolean {
+  if (typeof window === "undefined") return false;
+  return isPlatformControlCentreHost(window.location.hostname);
+}
+
+export function isPlatformControlCentreHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().split(":", 1)[0];
+  return host === "admin.mykhaya.app" || host === "admin.dev.mykhaya.app" || host === "admin.localhost";
+}

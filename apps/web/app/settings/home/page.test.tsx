@@ -252,6 +252,22 @@ describe("Home settings — Home calendar colour", () => {
   });
 });
 
+describe("Home settings — Khaya Control Centre access", () => {
+  beforeEach(() => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      category_usage: { count: 0, limit: null, over_limit: false },
+    });
+  });
+
+  it("shows a Khaya Control Centre card for a Home Admin", async () => {
+    render(<HomeSettings />);
+
+    const heading = await screen.findByRole("heading", { name: "Khaya Control Centre" });
+    expect(heading.closest("a")).toHaveAttribute("href", "/khaya-control-centre");
+  });
+});
+
 describe("Home settings — deleting a Calendar Tag", () => {
   const activityLabel = label({ id: "l1", name: "Activity", commercial_access: "normal" });
 

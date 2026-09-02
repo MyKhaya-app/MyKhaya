@@ -59,8 +59,10 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 });
 
 let nativeShell = false;
+let platformControlCentre = false;
 vi.mock("./native-runtime", () => ({
   isNativeShell: () => nativeShell,
+  isPlatformControlCentre: () => platformControlCentre,
 }));
 
 const bootstrapNativeSession = vi.fn<() => Promise<unknown>>();
@@ -75,6 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   replace.mockClear();
   nativeShell = false;
+  platformControlCentre = false;
   document.documentElement.classList.remove("native-shell");
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
     id: "u1",
@@ -181,5 +184,13 @@ describe("AppShell — authenticated navigation", () => {
     expect(document.querySelectorAll(".bottom-nav")).toHaveLength(1);
     expect(document.querySelector(".app-header")).toBe(header);
     expect(document.querySelector(".bottom-nav")).toBe(bottomNav);
+  });
+
+  it("never mounts the consumer AppShell when the PCC surface is selected", async () => {
+    platformControlCentre = true;
+    render(<PersistentAppShell><div>PCC</div></PersistentAppShell>);
+    expect(screen.getByText("PCC")).toBeInTheDocument();
+    expect(document.querySelector(".app-header")).toBeNull();
+    expect(document.querySelector(".bottom-nav")).toBeNull();
   });
 });

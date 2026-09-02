@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./auth-provider";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
-import { isNativeShell } from "./native-runtime";
+import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
 
@@ -146,9 +146,9 @@ function usesPersistentShell(path: string): boolean {
 export function PersistentAppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   useEffect(() => {
-    console.info("[BIOMETRIC DEBUG]", "persistent_shell_branch", { path, mounted: usesPersistentShell(path) });
+    console.info("[BIOMETRIC DEBUG]", "persistent_shell_branch", { path, platformControlCentre: isPlatformControlCentre(), mounted: usesPersistentShell(path) });
   }, [path]);
-  return !usesPersistentShell(path) ? (
+  return isPlatformControlCentre() || !usesPersistentShell(path) ? (
     <>{children}</>
   ) : (
     <ActiveHomeProvider>

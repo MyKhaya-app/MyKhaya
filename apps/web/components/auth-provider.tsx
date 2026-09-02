@@ -7,7 +7,7 @@ import { api, ApiError } from "@mykhaya/api-client";
 import { recordAuthDiagnostic } from "./auth-diagnostics";
 import { bootstrapNativeSession } from "./native-auth";
 import { initializeNativePush, reconcileNativePush } from "./native-push";
-import { isNativeShell } from "./native-runtime";
+import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
 type AuthStatus = "initializing" | "ready" | "offline" | "locked" | "signed_out";
@@ -32,10 +32,11 @@ function isPublicPath(path: string) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
+  const platformControlCentre = isPlatformControlCentre();
   // Native shells start at the live frontend origin (`/`) and restore their
   // bearer session asynchronously. Start in restoring state in that case so
   // the first render cannot be mistaken for an anonymous browser session.
-  const nativeStartup = isNativeShell() && !isPublicPath(path);
+  const nativeStartup = isNativeShell() && !isPublicPath(path) && !platformControlCentre;
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>(nativeStartup ? "initializing" : "signed_out");
   const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
@@ -114,7 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [redirectToLogin]);
 
   useEffect(() => {
-    if (isPublicPath(path)) {
+    if (platformControlCentre || isPublicPath(path)) {
       setInitialSessionLoading(false);
       if (status !== "ready") setStatus("signed_out");
       return;
@@ -124,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (bootstrapped.current || status === "ready") return;
     bootstrapped.current = true;
     void loadSession(true);
-  }, [path, status, loadSession]);
+  }, [path, status, loadSession, platformControlCentre]);
 
   useUserUpdatedListener(setUser);
 
