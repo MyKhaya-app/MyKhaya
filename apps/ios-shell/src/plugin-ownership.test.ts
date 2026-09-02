@@ -32,6 +32,7 @@ const REQUIRED_NATIVE_PLUGINS = [
   "@capacitor/browser",
   "@capacitor/core",
   "@capacitor/ios",
+  "@capacitor/push-notifications",
 ] as const;
 
 describe("apps/ios-shell package.json — native plugin ownership", () => {

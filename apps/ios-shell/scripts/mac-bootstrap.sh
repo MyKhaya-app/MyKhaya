@@ -50,6 +50,19 @@ fi
 echo "== 5. Sync capacitor.config.ts + www/ + native plugin deps into the Xcode project =="
 npx cap sync ios
 
+echo "== 5a. Ensure Capacitor Push Notifications 8 AppDelegate forwarding =="
+bash scripts/ensure-apns-appdelegate.sh
+
+echo "== 5b. Inspect APNs entitlements (signing is not changed by this script) =="
+ENTITLEMENTS_FILE="ios/App/App/App.entitlements"
+if [ -f "$ENTITLEMENTS_FILE" ]; then
+  grep -E 'aps-environment|<string>(development|production)</string>' "$ENTITLEMENTS_FILE" || {
+    echo "WARNING: $ENTITLEMENTS_FILE exists but has no aps-environment value"
+  }
+else
+  echo "WARNING: $ENTITLEMENTS_FILE not found; verify Push Notifications capability/signing in Xcode"
+fi
+
 echo "== 6. Verify the live-frontend config survived sync intact =="
 grep -A2 '"server"' ios/App/App/capacitor.config.json || true
 echo "^ confirm cleartext:false and allowNavigation is present and non-wildcard"

@@ -81,3 +81,21 @@ uses Apple's production APNs endpoint. The Mac-generated Xcode project must
 have the Push Notifications capability and an `aps-environment` entitlement
 with the production signing profile before archiving; Background Modes is not
 required for ordinary alert delivery.
+
+### Capacitor 8 AppDelegate wiring
+
+The installed Capacitor Push Notifications 8 plugin does not automatically
+intercept UIKit's remote-notification registration callbacks. Its
+`PushNotificationsPlugin.swift` observes these NotificationCenter names:
+
+- `.capacitorDidRegisterForRemoteNotifications`
+- `.capacitorDidFailToRegisterForRemoteNotifications`
+
+`apps/ios-shell/scripts/mac-bootstrap.sh` runs
+`scripts/ensure-apns-appdelegate.sh` after `cap sync ios`. That idempotent
+patch adds both AppDelegate callbacks and posts the exact plugin-supported
+notifications. It also logs only `token_present=true` on success or the safe
+category `error_category=apns_registration_failure` on failure; it never logs
+the token or the NSError text. If a generated/custom AppDelegate already has
+partial or custom APNs callbacks, the script stops for manual review rather
+than risking duplicate or intercepted methods.
