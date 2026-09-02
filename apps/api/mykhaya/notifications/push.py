@@ -15,9 +15,8 @@ from typing import Literal
 
 import httpx
 import structlog
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from authlib.jose import jwt as apns_jwt
+from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid
 from pywebpush import WebPushException, webpush
 from sqlalchemy import select
@@ -98,21 +97,6 @@ def _normalise_apns_private_key(private_key: str) -> str:
     return private_key.replace("\\n", "\n").strip()
 
 
-def _b64(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
-def _is_unpadded_base64url(value: str, expected: bytes) -> bool:
-    allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-    if not value or "=" in value or any(character not in allowed for character in value):
-        return False
-    try:
-        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except (ValueError, TypeError):
-        return False
-    return decoded == expected and _b64(decoded) == value
-
-
 def _build_apns_bearer(
     config: ApnsConfig,
     issued_at: int | None = None,
@@ -124,26 +108,18 @@ def _build_apns_bearer(
         raise RuntimeError("APNs provider-token configuration is incomplete")
 
     issued_at = int(time.time()) if issued_at is None else int(issued_at)
-    header = _b64(
-        json.dumps({"alg": "ES256", "kid": config.key_id}, separators=(",", ":")).encode()
-    )
-    claims = _b64(
-        json.dumps(
-            {"iss": config.team_id, "iat": issued_at}, separators=(",", ":")
-        ).encode()
-    )
-    signing_input = f"{header}.{claims}".encode("ascii")
     key_parsed = False
     try:
-        key = load_pem_private_key(
-            _normalise_apns_private_key(config.private_key).encode("utf-8"), password=None
+        bearer = apns_jwt.encode(
+            {"alg": "ES256", "kid": config.key_id},
+            {"iss": config.team_id, "iat": issued_at},
+            _normalise_apns_private_key(config.private_key).encode("utf-8"),
         )
-        key_parsed = isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(
-            key.curve, ec.SECP256R1
-        )
-        if not key_parsed:
-            raise RuntimeError("APNs key is not an EC P-256 private key")
-        signature = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        if isinstance(bearer, bytes):
+            bearer = bearer.decode("ascii")
+        if not isinstance(bearer, str):
+            raise RuntimeError("APNs JWT library returned an invalid token")
+        key_parsed = True
     except Exception:
         if emit_diagnostics:
             log.error(
@@ -156,36 +132,6 @@ def _build_apns_bearer(
                 apns_topic_matches_bundle=False,
             )
         raise
-
-    # APNs expects the JOSE raw r||s signature, not ASN.1 DER.
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-
-    r, s = decode_dss_signature(signature)
-    raw_signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
-    encoded_signature = _b64(raw_signature)
-    signature_self_verifies = False
-    try:
-        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-
-        key.public_key().verify(
-            encode_dss_signature(r, s), signing_input, ec.ECDSA(hashes.SHA256())
-        )
-        signature_self_verifies = True
-    except Exception:
-        signature_self_verifies = False
-    signature_base64url_valid = _is_unpadded_base64url(encoded_signature, raw_signature)
-    if emit_diagnostics:
-        log.info(
-            "apns_jwt_signature_diagnostics",
-            jwt_signature_bytes=len(raw_signature),
-            jwt_r_bytes=len(raw_signature[:32]),
-            jwt_s_bytes=len(raw_signature[32:]),
-            jwt_signature_self_verifies=signature_self_verifies,
-            jwt_base64url_valid=signature_base64url_valid,
-        )
-    if not signature_self_verifies or not signature_base64url_valid:
-        raise RuntimeError("APNs provider-token signature self-verification failed")
-    bearer = f"{header}.{claims}.{encoded_signature}"
     if emit_diagnostics:
         log.info(
             "apns_jwt_diagnostics",

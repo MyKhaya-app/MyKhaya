@@ -130,10 +130,18 @@ def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
 ) -> None:
     fake = _FakeClient()
     diagnostics: list[dict[str, object]] = []
+    signer_calls: list[tuple[object, object, object]] = []
     monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
     monkeypatch.setattr(
         push.log, "info", lambda *args, **kwargs: diagnostics.append(kwargs)
     )
+    real_encode = push.apns_jwt.encode
+
+    def encode(header: object, payload: object, key: object) -> object:
+        signer_calls.append((header, payload, key))
+        return real_encode(header, payload, key)
+
+    monkeypatch.setattr(push.apns_jwt, "encode", encode)
     issued_at = 1_700_000_000
     monkeypatch.setattr("mykhaya.notifications.push.time.time", lambda: issued_at)
     config = ApnsConfig(
@@ -146,11 +154,18 @@ def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
 
     send_apns(config, _device(), {"title": "T", "body": "B"})
 
+    assert signer_calls == [
+        (
+            {"alg": "ES256", "kid": "KEY123", "typ": "JWT"},
+            {"iss": "TEAM123", "iat": issued_at},
+            config.private_key.strip().encode(),
+        )
+    ]
     assert fake.request is not None
     encoded = fake.request.headers["authorization"].removeprefix("bearer ").split(".")
     def decode(value: str) -> dict[str, object]:
         return json.loads(base64.urlsafe_b64decode(value + "=="))
-    assert decode(encoded[0]) == {"alg": "ES256", "kid": "KEY123"}
+    assert decode(encoded[0]) == {"alg": "ES256", "kid": "KEY123", "typ": "JWT"}
     assert decode(encoded[1]) == {"iss": "TEAM123", "iat": issued_at}
     signature = base64.urlsafe_b64decode(encoded[2] + "==")
     assert len(signature) == 64
@@ -168,23 +183,14 @@ def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
     )
     assert fake.request.headers["apns-topic"] == "app.mykhaya.mobile"
     assert fake.request.url.host == "api.push.apple.com"
-    assert diagnostics == [
-        {
-            "jwt_signature_bytes": 64,
-            "jwt_r_bytes": 32,
-            "jwt_s_bytes": 32,
-            "jwt_signature_self_verifies": True,
-            "jwt_base64url_valid": True,
-        },
-        {
+    assert diagnostics == [{
             "jwt_kid_matches_config": True,
             "jwt_iss_matches_config": True,
             "jwt_iat_age_seconds": 0,
             "private_key_parsed": True,
             "apns_endpoint": "production",
             "apns_topic_matches_bundle": True,
-        }
-    ]
+        }]
 
 
 def test_apns_provider_token_is_not_cached_and_refreshes_before_one_hour(

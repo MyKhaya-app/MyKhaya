@@ -64,7 +64,7 @@ def test_compare_prints_safe_structure_and_never_prints_either_jwt(monkeypatch, 
     assert "apple.header_contains_typ=true" in output
     assert "apple.unexpected_claims=exp" in output
     assert "mykhaya.signature_bytes=64" in output
-    assert "header_keyset_equal=false" in output
+    assert "header_keyset_equal=true" in output
     assert "payload_keyset_equal=false" in output
     assert "signature_length_equal=false" in output
     assert "private" not in output.lower()
