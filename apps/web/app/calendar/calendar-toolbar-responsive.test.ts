@@ -14,6 +14,9 @@ describe("Calendar toolbar responsive layout", () => {
 
   it("scales controls progressively at 430px, 400px, and 380px", () => {
     expect(css).toMatch(
+      /@media\s*\(max-width:\s*430px\)[\s\S]*?\.calendar-page \.calendar-month-label\s*\{[\s\S]*?min-width:\s*7rem/s,
+    );
+    expect(css).toMatch(
       /@media\s*\(max-width:\s*430px\)[\s\S]*?min-width:\s*40px[\s\S]*?min-width:\s*36px/s,
     );
     expect(css).toMatch(/@media\s*\(max-width:\s*400px\)[\s\S]*?min-width:\s*32px/s);

@@ -2458,6 +2458,9 @@ html.native-shell .home-section-overlap {
   .calendar-page .calendar-month-row {
     gap: 0.3rem;
   }
+  .calendar-page .calendar-month-label {
+    min-width: 7rem;
+  }
   .calendar-page .calendar-month-row > .icon-button {
     min-height: 40px;
     min-width: 40px;
