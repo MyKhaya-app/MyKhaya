@@ -33,6 +33,10 @@ function NativeRootGate() {
   const { status, initialSessionLoading, retryInitialSession } = useAuth();
 
   useEffect(() => {
+    console.info("[BIOMETRIC DEBUG]", "root_route_state", { route: "/", status, initialSessionLoading });
+  }, [status, initialSessionLoading]);
+
+  useEffect(() => {
     if (status === "ready") router.replace("/home");
   }, [router, status]);
 

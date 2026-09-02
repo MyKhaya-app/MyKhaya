@@ -28,6 +28,11 @@ export function NativeBiometricOffer() {
     if (!isNativeShell() || !consumeBiometricOfferAfterLogin()) return;
     let cancelled = false;
     void Promise.all([getBiometricCapability(), getBiometricPreference()]).then(([result, preference]) => {
+      console.info("[BIOMETRIC DEBUG]", "offer_preference_result", {
+        available: result.available,
+        type: result.kind,
+        preference,
+      });
       if (!cancelled && result.available && preference === "undecided") {
         setCapability(result);
         setVisible(true);

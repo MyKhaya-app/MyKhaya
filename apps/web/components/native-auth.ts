@@ -9,7 +9,7 @@ import {
 import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 import { setBiometricSignInEnabled } from "./native-biometric-preference";
-import { authenticateWithBiometrics, isBiometricCancellation } from "./native-biometric";
+import { authenticateWithBiometrics, getBiometricCapability, isBiometricCancellation } from "./native-biometric";
 
 export class NativeBiometricUnlockError extends Error {
   readonly code: string;
@@ -41,6 +41,23 @@ let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
 let lastNativeLoginDiagnostic: string | null = null;
 let offerBiometricAfterLogin = false;
+
+function biometricDebug(event: string, fields: Record<string, unknown> = {}): void {
+  console.info("[BIOMETRIC DEBUG]", event, fields);
+}
+
+async function withNativeStartupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      biometricDebug("native_plugin_timeout", { operation: label });
+      reject(new NativeBiometricUnlockError("timeout", "Native biometric startup timed out."));
+    }, 10000);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => {
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error("Native startup operation failed."));
+    });
+  });
+}
 
 export function getLastNativeLoginDiagnostic(): string | null {
   return lastNativeLoginDiagnostic;
@@ -88,9 +105,21 @@ function client(): NativeMyKhayaClient {
  * exposes the bearer token — see `NativeMyKhayaClient.bootstrapSession`. */
 export function bootstrapNativeSession(): Promise<User | null> {
   return (async () => {
+    biometricDebug("native_platform_detected", { platform: nativePlatform() });
+    const nativeClient = client();
+    const sessionPresent = await withNativeStartupTimeout(nativeClient.hasStoredSession(), "keychain_session_check");
+    biometricDebug("keychain_session_present", { present: sessionPresent });
+    if (!sessionPresent) return null;
     const { isBiometricSignInEnabled } = await import("./native-biometric-preference");
-    if (await isBiometricSignInEnabled()) {
-      const result = await authenticateWithBiometrics("Unlock MyKhaya");
+    const biometricEnabled = await withNativeStartupTimeout(isBiometricSignInEnabled(), "biometric_preference");
+    biometricDebug("preference_result", { enabled: biometricEnabled });
+    if (biometricEnabled) {
+      const capability = await withNativeStartupTimeout(getBiometricCapability(), "biometric_availability");
+      biometricDebug("availability_result", { available: capability.available, type: capability.kind });
+      if (!capability.available) {
+        throw new NativeBiometricUnlockError("unavailable", "Biometric unlock is unavailable.");
+      }
+      const result = await withNativeStartupTimeout(authenticateWithBiometrics("Unlock MyKhaya"), "biometric_challenge");
       if (!result.ok) {
         throw new NativeBiometricUnlockError(
           isBiometricCancellation(result) ? "cancelled" : result.code,
@@ -98,7 +127,10 @@ export function bootstrapNativeSession(): Promise<User | null> {
         );
       }
     }
-    return client().bootstrapSession();
+    biometricDebug("session_restoration_started");
+    const restored = await nativeClient.bootstrapSession();
+    biometricDebug("session_restoration_completed", { authenticated: Boolean(restored) });
+    return restored;
   })();
 }
 

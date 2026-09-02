@@ -42,6 +42,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const bootstrapped = useRef(false);
 
+  useEffect(() => {
+    console.info("[BIOMETRIC DEBUG]", "auth_state", { route: path, native: nativeStartup, status, initialSessionLoading });
+  }, [path, nativeStartup, status, initialSessionLoading]);
+
   const redirectToLogin = useCallback(() => {
     const destination = typeof window === "undefined" ? "" : `${window.location.pathname}${window.location.search}`;
     router.replace(destination && destination !== "/login" ? `/login?next=${encodeURIComponent(destination)}` : "/login");

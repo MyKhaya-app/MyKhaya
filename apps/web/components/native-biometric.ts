@@ -26,6 +26,10 @@ export interface BiometricProvider {
   authenticate(reason: string): Promise<void>;
 }
 
+function biometricDebug(event: string, fields: Record<string, unknown> = {}): void {
+  console.info("[BIOMETRIC DEBUG]", event, fields);
+}
+
 const defaultProvider: BiometricProvider = {
   checkBiometry: () => BiometricAuth.checkBiometry(),
   // allowDeviceCredential: true — Phase 4's "device passcode fallback where
@@ -99,8 +103,10 @@ export function biometricLabel(kind: BiometricKind): string {
  * `available: false` with `reason` set, since "can't even tell" and "not
  * available" both lead to the same UI (no Quick Sign-In offer). */
 export async function getBiometricCapability(): Promise<BiometricCapability> {
+  biometricDebug("availability_check_started");
   const result = await provider.checkBiometry();
   const kind = kindFromType(result.biometryType);
+  biometricDebug("availability_result", { available: result.isAvailable, type: kind, code: result.code });
   return {
     kind,
     label: biometricLabel(kind),
@@ -122,13 +128,18 @@ export type BiometricAuthResult =
  * plain cancellation can never be mistaken for — or accidentally handled
  * like — a destroyed session. */
 export async function authenticateWithBiometrics(reason: string): Promise<BiometricAuthResult> {
+  biometricDebug("challenge_requested");
   try {
+    biometricDebug("challenge_started");
     await provider.authenticate(reason);
+    biometricDebug("challenge_resolved");
     return { ok: true };
   } catch (error) {
     if (error instanceof BiometryError) {
+      biometricDebug("challenge_rejected", { code: error.code });
       return { ok: false, code: error.code, message: error.message };
     }
+    biometricDebug("challenge_rejected", { code: "unknown" });
     return {
       ok: false,
       code: "unknown",

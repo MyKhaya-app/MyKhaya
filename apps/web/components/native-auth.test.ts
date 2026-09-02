@@ -14,7 +14,7 @@ vi.mock("@mykhaya/api-client", () => ({
   }),
   NativeMyKhayaClient: vi.fn().mockImplementation((...args: unknown[]) => {
     nativeClientCtor(...args);
-    return { bootstrapSession, login, childLogin, logout, request: vi.fn() };
+    return { bootstrapSession, hasStoredSession: vi.fn().mockResolvedValue(true), login, childLogin, logout, request: vi.fn() };
   }),
   nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
 }));
@@ -35,6 +35,7 @@ vi.mock("./keychain-native-session-store", () => ({
 const setBiometricSignInEnabled = vi.fn<(enabled: boolean) => Promise<void>>(async () => {});
 const isBiometricSignInEnabled = vi.fn<() => Promise<boolean>>(async () => false);
 const authenticateWithBiometrics = vi.fn<(reason: string) => Promise<{ ok: boolean; code?: string; message?: string }>>(async () => ({ ok: true }));
+const getBiometricCapability = vi.fn(async () => ({ available: true, kind: "faceId" }));
 const isBiometricCancellation = vi.fn<(result: unknown) => boolean>(() => false);
 vi.mock("./native-biometric-preference", () => ({
   setBiometricSignInEnabled: (enabled: boolean) => setBiometricSignInEnabled(enabled),
@@ -42,6 +43,7 @@ vi.mock("./native-biometric-preference", () => ({
 }));
 vi.mock("./native-biometric", () => ({
   authenticateWithBiometrics: (reason: string) => authenticateWithBiometrics(reason),
+  getBiometricCapability: () => getBiometricCapability(),
   isBiometricCancellation: (result: unknown) => isBiometricCancellation(result),
 }));
 
@@ -53,6 +55,7 @@ describe("native-auth", () => {
     platform = "web";
     isBiometricSignInEnabled.mockResolvedValue(false);
     authenticateWithBiometrics.mockResolvedValue({ ok: true });
+    getBiometricCapability.mockResolvedValue({ available: true, kind: "faceId" });
   });
 
   it("bootstrapNativeSession delegates to the client's bootstrapSession", async () => {
@@ -206,6 +209,7 @@ describe("native-auth — nativeRenewSession", () => {
         childLogin,
         logout,
         renew,
+        hasStoredSession: vi.fn().mockResolvedValue(true),
         request: vi.fn(),
       })),
       nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),

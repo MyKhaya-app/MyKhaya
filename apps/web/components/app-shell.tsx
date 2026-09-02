@@ -63,6 +63,10 @@ export function AppShell({
     return () => document.documentElement.classList.remove("native-shell");
   }, []);
 
+  useEffect(() => {
+    console.info("[BIOMETRIC DEBUG]", "app_shell_branch", { path, status, initialSessionLoading });
+  }, [path, status, initialSessionLoading]);
+
   if (initialSessionLoading) {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
@@ -141,6 +145,9 @@ function usesPersistentShell(path: string): boolean {
 
 export function PersistentAppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  useEffect(() => {
+    console.info("[BIOMETRIC DEBUG]", "persistent_shell_branch", { path, mounted: usesPersistentShell(path) });
+  }, [path]);
   return !usesPersistentShell(path) ? (
     <>{children}</>
   ) : (

@@ -44,6 +44,12 @@ export class NativeMyKhayaClient {
     return (this.options.fetch ?? globalThis.fetch).bind(globalThis);
   }
 
+  /** Metadata-only presence check used by the native startup gate. The
+   * credential value never leaves the store and is never returned. */
+  async hasStoredSession(): Promise<boolean> {
+    return (await this.store.get()) !== null;
+  }
+
   private baseHeaders(): Headers {
     const headers = new Headers();
     headers.set("Accept", "application/json");
