@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type { HouseholdListDetail, HouseholdListItem, Member } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
@@ -136,24 +136,24 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
 
   if (notFound) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <Link className="tertiary" href="/lists">
             <ChevronLeft size={16} aria-hidden="true" /> Lists
           </Link>
           <p className="empty-mini">That list could not be found.</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!activeHomeId || !list) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Loading list…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
@@ -162,7 +162,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
   const allComplete = list.item_count > 0 && list.remaining_count === 0;
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page lists-detail-page">
         <Link className="tertiary lists-back-link" href="/lists">
           <ChevronLeft size={16} aria-hidden="true" /> Lists
@@ -291,7 +291,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
           />
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 

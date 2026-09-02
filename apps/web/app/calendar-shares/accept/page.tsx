@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import type { CalendarSharePreview } from "@mykhaya/shared-types";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { FormStatus } from "@/components/form-status";
 
 type Outcome = { kind: "accepted" } | { kind: "declined" };
@@ -82,7 +82,7 @@ export default function AcceptCalendarSharePage() {
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page">
         <div className="page-heading">
           <div>
@@ -171,6 +171,6 @@ export default function AcceptCalendarSharePage() {
           </section>
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

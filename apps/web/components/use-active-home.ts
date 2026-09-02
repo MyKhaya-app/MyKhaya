@@ -1,12 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import type { Home } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
+import { useAuth } from "./auth-provider";
 
 const STORAGE_KEY = "mykhaya.activeHomeId";
 
-export function useActiveHome({ enabled = true }: { enabled?: boolean } = {}) {
+type ActiveHomeState = ReturnType<typeof useActiveHomeState>;
+const EMPTY_ACTIVE_HOME_STATE: ActiveHomeState = {
+  homes: [],
+  activeHome: null,
+  activeHomeId: null,
+  setActiveHomeId: () => undefined,
+  loading: true,
+  error: false,
+};
+const ActiveHomeContext = createContext<ActiveHomeState>(EMPTY_ACTIVE_HOME_STATE);
+
+function useActiveHomeState({ enabled = true }: { enabled?: boolean } = {}) {
   const [homes, setHomes] = useState<Home[]>([]);
   const [activeHomeId, setActiveHomeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,4 +60,14 @@ export function useActiveHome({ enabled = true }: { enabled?: boolean } = {}) {
     loading,
     error,
   };
+}
+
+export function ActiveHomeProvider({ children }: { children: React.ReactNode }) {
+  const { status } = useAuth();
+  const value = useActiveHomeState({ enabled: status === "ready" });
+  return createElement(ActiveHomeContext.Provider, { value }, children);
+}
+
+export function useActiveHome() {
+  return useContext(ActiveHomeContext);
 }

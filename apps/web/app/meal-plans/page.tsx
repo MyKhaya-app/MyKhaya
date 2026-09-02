@@ -34,7 +34,7 @@ import type {
   RecentMeal,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { Avatar, AvatarStack } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
@@ -205,17 +205,17 @@ export default function MealPlansPage() {
 
   if (!activeHomeId || !billing || moduleReleased === null) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Loading Meal Plans…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!billing.meals_enabled) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -228,13 +228,13 @@ export default function MealPlansPage() {
             description="Plan meals together, save family favourites and turn ingredients into shopping lists. Included with Family."
           />
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!moduleReleased) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -247,12 +247,12 @@ export default function MealPlansPage() {
             soon.
           </p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page meal-plans-page">
         <div className="page-heading">
           <div>
@@ -297,7 +297,7 @@ export default function MealPlansPage() {
           <MealsLibraryTab homeId={activeHomeId} onError={setError} />
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 

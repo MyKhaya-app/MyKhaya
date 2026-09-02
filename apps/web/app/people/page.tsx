@@ -11,7 +11,7 @@ import type {
 } from "@mykhaya/shared-types";
 import type { ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
@@ -273,7 +273,7 @@ export default function People() {
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page">
         <div className="page-heading">
           <div>
@@ -603,6 +603,6 @@ export default function People() {
           </div>
         </section>
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

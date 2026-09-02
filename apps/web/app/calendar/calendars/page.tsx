@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { CalendarShare, EventLabel, HomeCalendar } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
@@ -247,7 +247,7 @@ export default function CalendarsPage() {
   const activeShares = sharePanel ? (shares[sharePanel] ?? []) : [];
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page">
         <div className="page-heading">
           <div>
@@ -537,6 +537,6 @@ export default function CalendarsPage() {
           </BottomSheet>
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { AppShell } from "./app-shell";
+import { AppShellContent } from "./app-shell";
 import { useActiveHome } from "./use-active-home";
 
 const sections = [
@@ -35,16 +35,16 @@ export function KhayaControlShell({
 
   if (loading || !authorised) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Checking access…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page control-page">
         <header className="page-heading">
           <div>
@@ -73,6 +73,6 @@ export function KhayaControlShell({
         </nav>
         {children}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

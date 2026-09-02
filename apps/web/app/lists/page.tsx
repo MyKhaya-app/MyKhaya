@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ListChecks, MoreVertical, Plus } from "lucide-react";
 import type { BillingStatus, HouseholdList, ListIcon } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
@@ -75,17 +75,17 @@ export default function ListsPage() {
 
   if (!activeHomeId || !billing || moduleReleased === null) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Loading Lists…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!billing.lists_enabled) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -98,13 +98,13 @@ export default function ListsPage() {
             description="Keep groceries, packing, DIY and household bits together — shared with the whole family. Included with Family."
           />
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!moduleReleased) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -114,12 +114,12 @@ export default function ListsPage() {
           </div>
           <p className="empty-mini">Lists isn't available for this Home yet. Please check back soon.</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page lists-page">
         <div className="page-heading">
           <div>
@@ -236,7 +236,7 @@ export default function ListsPage() {
           />
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 

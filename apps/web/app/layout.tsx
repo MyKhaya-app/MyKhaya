@@ -4,6 +4,7 @@ import type { Metadata, Viewport } from "next";
 import { ServiceWorkerRegister } from "../components/service-worker-register";
 import { InstallPrompt } from "../components/install-prompt";
 import { AuthProvider } from "../components/auth-provider";
+import { PersistentAppShell } from "../components/app-shell";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: { default: "MyKhaya", template: "%s · MyKhaya" },
@@ -33,7 +34,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <PersistentAppShell>{children}</PersistentAppShell>
+        </AuthProvider>
         <ServiceWorkerRegister />
         <InstallPrompt />
       </body>

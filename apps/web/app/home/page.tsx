@@ -23,7 +23,7 @@ import type {
   User,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
@@ -428,8 +428,7 @@ export default function HomePage() {
   const visibleTodoItems = todoExpanded ? todoItems : todoItems.slice(0, 3);
 
   return (
-    <AppShell
-      hero={
+    <AppShellContent>
         <div className="home-hero">
           <p className="home-hero-eyebrow">🌿 {greeting()},</p>
           <h1>{user?.display_name?.split(" ")[0] ?? "there"}</h1>
@@ -453,8 +452,7 @@ export default function HomePage() {
             </div>
           )}
         </div>
-      }
-    >
+
       <main className="home-page">
         {error && <p className="notice error">{error}</p>}
 
@@ -729,6 +727,6 @@ export default function HomePage() {
           </section>
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

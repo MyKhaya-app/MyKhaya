@@ -32,7 +32,7 @@ import type {
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { resolveColour } from "@mykhaya/design-tokens";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
@@ -1551,11 +1551,11 @@ export default function CalendarPage() {
 
   if (!featureChecked || !featureEnabled) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Checking Calendar access...</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
@@ -1566,7 +1566,7 @@ export default function CalendarPage() {
   });
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page calendar-page">
         <header className="calendar-toolbar-compact">
           <div className="calendar-month-row">
@@ -2031,7 +2031,7 @@ export default function CalendarPage() {
           );
         })()}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 

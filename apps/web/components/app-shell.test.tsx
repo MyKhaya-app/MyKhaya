@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { AppShell } from "./app-shell";
+import type { ReactNode } from "react";
+import { AppShell, PersistentAppShell } from "./app-shell";
 
 vi.mock("./auth-provider", () => ({
   useAuth: () => ({
@@ -28,6 +29,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("./use-active-home", () => ({
+  ActiveHomeProvider: ({ children }: { children: ReactNode }) => children,
   useActiveHome: () => ({
     homes: [
       {
@@ -164,5 +166,19 @@ describe("AppShell — authenticated navigation", () => {
     expect(await screen.findByText("content")).toBeInTheDocument();
     expect(screen.queryByText(/checking your mykhaya session/i)).not.toBeInTheDocument();
     expect(bootstrapNativeSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the shell mounted while authenticated page content changes", async () => {
+    const first = render(<PersistentAppShell><div>Home</div></PersistentAppShell>);
+    const header = document.querySelector(".app-header");
+    const bottomNav = document.querySelector(".bottom-nav");
+
+    expect(document.querySelector(".app-main")?.textContent).toContain("Home");
+    first.rerender(<PersistentAppShell><div>Calendar</div></PersistentAppShell>);
+    expect(document.querySelector(".app-main")?.textContent).toContain("Calendar");
+    expect(document.querySelectorAll(".app-header")).toHaveLength(1);
+    expect(document.querySelectorAll(".bottom-nav")).toHaveLength(1);
+    expect(document.querySelector(".app-header")).toBe(header);
+    expect(document.querySelector(".bottom-nav")).toBe(bottomNav);
   });
 });

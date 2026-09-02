@@ -20,7 +20,7 @@ import type {
   WishlistUpdatePayload,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
 import { openExternalUrl } from "@/components/open-external-url";
@@ -311,24 +311,24 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
 
   if (notFound) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <Link className="tertiary" href="/wish-lists">
             <ChevronLeft size={16} aria-hidden="true" /> Wishlists
           </Link>
           <p className="empty-mini">That wishlist could not be found.</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!me || !detail) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Loading wishlist…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
@@ -336,7 +336,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
   const Glyph = occasionGlyph(detail.occasion);
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page wishlists-detail-page">
         <Link className="tertiary wishlists-back-link" href="/wish-lists">
           <ChevronLeft size={16} aria-hidden="true" /> Wishlists
@@ -585,7 +585,7 @@ export default function WishlistDetailPage({ params }: { params: Promise<{ id: s
           />
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 

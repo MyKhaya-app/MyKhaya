@@ -6,7 +6,7 @@ import { useAuth } from "./auth-provider";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { isNativeShell } from "./native-runtime";
-import { useActiveHome } from "./use-active-home";
+import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 
 export function AppShell({
   children,
@@ -22,7 +22,7 @@ export function AppShell({
   const path = usePathname();
   const router = useRouter();
   const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
-  const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome({ enabled: status === "ready" });
+  const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
 
   useEffect(() => {
     // A Home-less user has a legitimate reason to be here: a brand-new Free
@@ -83,7 +83,7 @@ export function AppShell({
         homes={homes}
         activeHome={activeHome}
         onSwitchHome={setActiveHomeId}
-        flush={Boolean(hero)}
+        flush={Boolean(hero) || path === "/home"}
       />
       <div className="app-content-scroll-region">
         {hero}
@@ -91,5 +91,46 @@ export function AppShell({
       </div>
       <BottomNav principalType={user?.principal_type} />
     </div>
+  );
+}
+
+/** Compatibility wrapper for pages while the authenticated shell is root-owned. */
+export function AppShellContent({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
+
+const PUBLIC_PATH_PREFIXES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
+  "/onboarding",
+];
+const EXCLUDED_SHELL_PATH_PREFIXES = [
+  "/control-centre",
+  "/wishlist/share",
+  "/offline",
+  "/service-status",
+];
+
+function isPublicPath(path: string): boolean {
+  return PUBLIC_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function usesPersistentShell(path: string): boolean {
+  return !isPublicPath(path) && !EXCLUDED_SHELL_PATH_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+}
+
+export function PersistentAppShell({ children }: { children: React.ReactNode }) {
+  const path = usePathname();
+  return !usesPersistentShell(path) ? (
+    <>{children}</>
+  ) : (
+    <ActiveHomeProvider>
+      <AppShell>{children}</AppShell>
+    </ActiveHomeProvider>
   );
 }

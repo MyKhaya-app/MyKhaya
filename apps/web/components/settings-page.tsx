@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
-import { AppShell } from "./app-shell";
+import { AppShellContent } from "./app-shell";
 import { AppVersion } from "./app-version";
 import { useActiveHome } from "./use-active-home";
 const links = [
@@ -38,7 +38,7 @@ export function SettingsPage({
   const isAdult = user?.principal_type !== "managed_child";
   const isHomeAdmin = isAdult && activeHome?.relationship === "home_admin";
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page">
         <div className="page-heading">
           <div>
@@ -72,6 +72,6 @@ export function SettingsPage({
         )}
         <AppVersion />
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Gift, LockKeyhole, Plus, Users } from "lucide-react";
 import type { WishlistCreatePayload, WishlistOccasion, WishlistSummary } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
+import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
@@ -75,17 +75,17 @@ export default function WishListsPage() {
 
   if (!activeHomeId || billingEnabled === null || moduleReleased === null) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <p role="status">Loading Wishlists…</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!billingEnabled) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -98,13 +98,13 @@ export default function WishListsPage() {
             description="Keep a wishlist for every occasion and see what family members would love — without ever finding out who bought your own gifts. Included with Family."
           />
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
   if (!moduleReleased) {
     return (
-      <AppShell>
+      <AppShellContent>
         <main className="standard-page">
           <div className="page-heading">
             <div>
@@ -114,7 +114,7 @@ export default function WishListsPage() {
           </div>
           <p className="empty-mini">Wishlists isn't available for this Home yet. Please check back soon.</p>
         </main>
-      </AppShell>
+      </AppShellContent>
     );
   }
 
@@ -144,7 +144,7 @@ export default function WishListsPage() {
   }
 
   return (
-    <AppShell>
+    <AppShellContent>
       <main className="standard-page wishlists-page">
         <div className="page-heading">
           <div>
@@ -206,7 +206,7 @@ export default function WishListsPage() {
           />
         )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }
 
