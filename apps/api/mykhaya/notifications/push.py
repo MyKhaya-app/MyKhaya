@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
+import structlog
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -27,6 +28,7 @@ from mykhaya.models import NativePushDevice, PlatformPushSettings, PushSubscript
 from mykhaya.secrets_crypto import SecretDecryptionError, decrypt_secret
 
 PushSource = Literal["environment", "platform_admin", "unconfigured"]
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,43 @@ class ApnsConfig:
 
 class ApnsPermanentError(Exception):
     pass
+
+
+def is_apns_response_retryable(status_code: int) -> bool:
+    """Classify an APNs HTTP response without inspecting any request secrets."""
+    return status_code in (408, 425, 429) or 500 <= status_code <= 599
+
+
+def _safe_apns_log_value(value: object, fallback: str = "unknown") -> str:
+    """Keep provider metadata single-line, bounded, and free of control characters."""
+    if not isinstance(value, str):
+        return fallback
+    value = value.strip()
+    if not value or len(value) > 128 or any(ord(character) < 0x20 for character in value):
+        return fallback
+    return value
+
+
+def apns_failure_diagnostics(response: httpx.Response) -> dict[str, object]:
+    """Extract only safe metadata from a non-successful APNs response.
+
+    The response body is parsed for Apple's documented ``reason`` field, but is
+    never included in logs. The APNs request ID is an opaque response header and
+    is bounded/sanitised before logging.
+    """
+    reason: object = None
+    try:
+        response_json = response.json()
+    except (TypeError, ValueError):
+        response_json = None
+    if isinstance(response_json, dict):
+        reason = response_json.get("reason")
+    return {
+        "status": response.status_code,
+        "reason": _safe_apns_log_value(reason),
+        "request_id": _safe_apns_log_value(response.headers.get("apns-id")),
+        "retryable": is_apns_response_retryable(response.status_code),
+    }
 
 
 def generate_vapid_keypair() -> tuple[str, str]:
@@ -184,6 +223,8 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
             headers={"authorization": f"bearer {bearer}", "apns-topic": topic},
             json=request_payload,
         )
+    if not 200 <= response.status_code < 300:
+        log.error("apns_delivery_failed", **apns_failure_diagnostics(response))
     if response.status_code in (400, 404, 410):
         raise ApnsPermanentError("APNs rejected this device registration")
     response.raise_for_status()

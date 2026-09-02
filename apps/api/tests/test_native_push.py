@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from mykhaya.models import NativePushDevice
+from mykhaya.notifications import push
 from mykhaya.notifications.push import ApnsConfig, ApnsPermanentError, send_apns
 
 
@@ -20,6 +21,8 @@ def _private_key_pem() -> str:
 
 class _FakeClient:
     response_status = 200
+    response_body: dict[str, str] | None = None
+    response_headers: dict[str, str] = {}
     request: httpx.Request | None = None
     payload: dict[str, object] | None = None
 
@@ -35,7 +38,12 @@ class _FakeClient:
     def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
         self.request = httpx.Request("POST", url, headers=headers, json=json)
         self.payload = json
-        return httpx.Response(self.response_status, request=self.request)
+        return httpx.Response(
+            self.response_status,
+            request=self.request,
+            headers=self.response_headers,
+            json=self.response_body,
+        )
 
 
 def _device() -> NativePushDevice:
@@ -103,3 +111,80 @@ def test_send_apns_classifies_device_rejection_as_permanent(
 
     with pytest.raises(ApnsPermanentError):
         send_apns(config, _device(), {"title": "T", "body": "B"})
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "retryable", "exception"),
+    [
+        (400, "BadDeviceToken", False, ApnsPermanentError),
+        (403, "InvalidProviderToken", False, httpx.HTTPStatusError),
+        (410, "Unregistered", False, ApnsPermanentError),
+        (500, "InternalServerError", True, httpx.HTTPStatusError),
+    ],
+)
+def test_send_apns_logs_safe_failure_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    reason: str,
+    retryable: bool,
+    exception: type[Exception],
+) -> None:
+    fake = _FakeClient()
+    fake.response_status = status
+    fake.response_body = {"reason": reason}
+    fake.response_headers = {"apns-id": "request-id-123"}
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(push.log, "error", lambda *args, **kwargs: captured.append((args, kwargs)))
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        private_key=_private_key_pem(),
+    )
+
+    with pytest.raises(exception):
+        send_apns(config, _device(), {"title": "T", "body": "B"})
+
+    assert captured == [
+        (
+            ("apns_delivery_failed",),
+            {
+                "status": status,
+                "reason": reason,
+                "request_id": "request-id-123",
+                "retryable": retryable,
+            },
+        )
+    ]
+
+
+def test_send_apns_failure_diagnostics_never_log_response_body_or_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeClient()
+    fake.response_status = 403
+    fake.response_body = {
+        "reason": "InvalidProviderToken",
+        "token": "secret-device-token",
+        "private_key": "-----BEGIN PRIVATE KEY----- secret-key",
+    }
+    fake.response_headers = {"apns-id": "safe-request-id"}
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    captured: list[object] = []
+    monkeypatch.setattr(push.log, "error", lambda *args, **kwargs: captured.append((args, kwargs)))
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        private_key=_private_key_pem(),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        send_apns(config, _device(), {"title": "T", "body": "B"})
+
+    logged = json.dumps(captured)
+    assert "secret-device-token" not in logged
+    assert "PRIVATE KEY" not in logged
+    assert "authorization" not in logged.lower()
+    assert "request_payload" not in logged
