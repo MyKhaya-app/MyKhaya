@@ -5,16 +5,19 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8");
 
 describe("Calendar toolbar responsive layout", () => {
-  it("wraps the action group below the month controls on narrow phones", () => {
+  it("keeps the complete toolbar on one non-wrapping row", () => {
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*480px\)[\s\S]*?\.calendar-page \.calendar-month-row\s*\{[\s\S]*?flex-wrap:\s*wrap[\s\S]*?\}[\s\S]*?\.calendar-page \.calendar-month-row-actions\s*\{[\s\S]*?flex:\s*1 0 100%[\s\S]*?min-width:\s*0/s,
+      /\.calendar-month-row\s*\{[\s\S]*?flex-wrap:\s*nowrap[\s\S]*?\}/s,
     );
+    expect(css).not.toContain("flex: 1 0 100%");
   });
 
-  it("reduces action controls to 40px without hiding any toolbar controls", () => {
+  it("scales controls progressively at 430px, 400px, and 380px", () => {
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*380px\)[\s\S]*?\.calendar-page \.calendar-month-row-actions \.icon-button\s*\{[\s\S]*?min-height:\s*40px[\s\S]*?min-width:\s*40px/s,
+      /@media\s*\(max-width:\s*430px\)[\s\S]*?min-width:\s*40px[\s\S]*?min-width:\s*36px/s,
     );
+    expect(css).toMatch(/@media\s*\(max-width:\s*400px\)[\s\S]*?min-width:\s*32px/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*380px\)[\s\S]*?min-width:\s*30px/s);
     expect(css).toContain(".calendar-page .calendar-month-row-actions .calendar-add-desktop");
   });
 });

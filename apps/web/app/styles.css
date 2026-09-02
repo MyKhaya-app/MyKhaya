@@ -2429,6 +2429,8 @@ html.native-shell .home-section-overlap {
   align-items: center;
   display: flex;
   gap: 0.4rem;
+  min-width: 0;
+  flex-wrap: nowrap;
 }
 .calendar-month-label {
   flex: 1;
@@ -2448,36 +2450,88 @@ html.native-shell .home-section-overlap {
   margin-left: auto;
 }
 
-/* There are more controls in this row than can share the narrowest phone
-   content width at their normal 44px touch target. Keep the month navigation
-   together and move the actions to a second, aligned row instead of allowing
-   flexbox to squeeze or clip the right-hand controls. */
-@media (max-width: 480px) {
+/* The complete toolbar must remain one row on phones. The usable width is
+   the viewport minus .standard-page's mobile side padding, so the controls
+   scale progressively instead of wrapping or allowing the month label to
+   push the action group outside its parent. */
+@media (max-width: 430px) {
   .calendar-page .calendar-month-row {
-    flex-wrap: wrap;
-    gap: 0.25rem;
+    gap: 0.3rem;
   }
-  .calendar-page .calendar-month-label {
-    flex: 1 1 0;
-  }
-  .calendar-page .calendar-month-row-actions {
-    flex: 1 0 100%;
-    gap: 0.2rem;
-    justify-content: flex-end;
-    margin-left: 0;
-    min-width: 0;
-  }
-}
-
-@media (max-width: 380px) {
-  .calendar-page .calendar-month-row-actions .icon-button {
+  .calendar-page .calendar-month-row > .icon-button {
     min-height: 40px;
     min-width: 40px;
     padding-inline: 0;
   }
+  .calendar-page .calendar-month-row-actions {
+    gap: 0.2rem;
+    margin-left: 0;
+    min-width: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 40px;
+    min-width: 36px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button svg {
+    height: 15px;
+    width: 15px;
+  }
   .calendar-page .calendar-month-row-actions .calendar-add-desktop {
     min-height: 40px;
-    padding-inline: 0.55rem;
+    padding-inline: 0.4rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .calendar-page .calendar-month-row {
+    gap: 3px;
+  }
+  .calendar-page .calendar-month-row > .icon-button {
+    min-height: 38px;
+    min-width: 36px;
+  }
+  .calendar-page .calendar-month-row-actions {
+    gap: 3px;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 38px;
+    min-width: 32px;
+  }
+  .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+    min-height: 38px;
+    padding-inline: 0.3rem;
+  }
+  .calendar-page .calendar-month-label {
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .calendar-page .calendar-month-row {
+    gap: 2px;
+  }
+  .calendar-page .calendar-month-row > .icon-button {
+    min-height: 36px;
+    min-width: 34px;
+  }
+  .calendar-page .calendar-month-row-actions {
+    gap: 2px;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 36px;
+    min-width: 30px;
+  }
+  .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+    min-height: 36px;
+    padding-inline: 0.2rem;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button svg {
+    height: 14px;
+    width: 14px;
+  }
+  .calendar-page .calendar-month-label {
+    font-size: 0.84rem;
   }
 }
 .calendar-add-desktop {
