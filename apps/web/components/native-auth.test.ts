@@ -33,8 +33,16 @@ vi.mock("./keychain-native-session-store", () => ({
 }));
 
 const setBiometricSignInEnabled = vi.fn<(enabled: boolean) => Promise<void>>(async () => {});
+const isBiometricSignInEnabled = vi.fn<() => Promise<boolean>>(async () => false);
+const authenticateWithBiometrics = vi.fn<(reason: string) => Promise<{ ok: boolean; code?: string; message?: string }>>(async () => ({ ok: true }));
+const isBiometricCancellation = vi.fn<(result: unknown) => boolean>(() => false);
 vi.mock("./native-biometric-preference", () => ({
   setBiometricSignInEnabled: (enabled: boolean) => setBiometricSignInEnabled(enabled),
+  isBiometricSignInEnabled: () => isBiometricSignInEnabled(),
+}));
+vi.mock("./native-biometric", () => ({
+  authenticateWithBiometrics: (reason: string) => authenticateWithBiometrics(reason),
+  isBiometricCancellation: (result: unknown) => isBiometricCancellation(result),
 }));
 
 describe("native-auth", () => {
@@ -43,6 +51,8 @@ describe("native-auth", () => {
     vi.resetModules();
     nativeShell = false;
     platform = "web";
+    isBiometricSignInEnabled.mockResolvedValue(false);
+    authenticateWithBiometrics.mockResolvedValue({ ok: true });
   });
 
   it("bootstrapNativeSession delegates to the client's bootstrapSession", async () => {
@@ -62,6 +72,28 @@ describe("native-auth", () => {
     await nativeLogin("a@example.com", "pw");
 
     expect(login).toHaveBeenCalledWith("a@example.com", "pw");
+  });
+
+  it("requires biometric unlock before restoring an enabled native session", async () => {
+    nativeShell = true;
+    isBiometricSignInEnabled.mockResolvedValue(true);
+    const { bootstrapNativeSession } = await import("./native-auth");
+
+    await bootstrapNativeSession();
+
+    expect(authenticateWithBiometrics).toHaveBeenCalledWith("Unlock MyKhaya");
+    expect(bootstrapSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read/restore the session when biometric unlock is cancelled", async () => {
+    nativeShell = true;
+    isBiometricSignInEnabled.mockResolvedValue(true);
+    authenticateWithBiometrics.mockResolvedValue({ ok: false, code: "userCancel", message: "cancelled" });
+    isBiometricCancellation.mockReturnValue(true);
+    const { bootstrapNativeSession, NativeBiometricUnlockError } = await import("./native-auth");
+
+    await expect(bootstrapNativeSession()).rejects.toBeInstanceOf(NativeBiometricUnlockError);
+    expect(bootstrapSession).not.toHaveBeenCalled();
   });
 
   it("nativeChildLogin delegates to the client's childLogin", async () => {

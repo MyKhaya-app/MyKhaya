@@ -33,7 +33,7 @@ Editing `capacitor.config.ts` / `apps/ios-shell/src/config.ts` (which live origi
 
 ## Native runtime detection
 
-`apps/web/components/native-runtime.ts` (`isNativeShell()`, `nativePlatform()`) wraps `Capacitor.isNativePlatform()`/`Capacitor.getPlatform()` behind SSR-safe guards, so shared frontend code has one canonical way to branch on browser/PWA vs. native shell instead of scattered `window.Capacitor` checks. Current consumers: the service-worker registration path and `openExternalUrl()`. Future consumers (not implemented this phase): native auth UI, native navigation, push, biometric unlock.
+`apps/web/components/native-runtime.ts` (`isNativeShell()`, `nativePlatform()`) wraps `Capacitor.isNativePlatform()`/`Capacitor.getPlatform()` behind SSR-safe guards, so shared frontend code has one canonical way to branch on browser/PWA vs. native shell instead of scattered `window.Capacitor` checks. Native authentication and biometric unlock use this boundary; browser/PWA authentication remains cookie/WebAuthn-based.
 
 ## Service worker separation
 
@@ -50,6 +50,10 @@ Phase 2 shipped only `InMemoryNativeSessionStore` — adequate for testing the a
 **Phase 4 decision:** `@aparajita/capacitor-secure-storage` (8.0.0). Its `src/definitions.ts` is plain, readable TypeScript (audited directly, not a black box) and exposes exactly what ADR 0010 requires: a `KeychainAccess.whenUnlockedThisDeviceOnly` enum value matching `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` precisely, a `sync` parameter that defaults to *not* synchronising with iCloud Keychain (must be explicitly opted into via `setSynchronize(true)`, which this integration never calls), and a `StorageError` it throws on an OS-level failure rather than silently degrading to an insecure fallback. The alternative considered, `@atroo/capacitor-secure-storage-plugin`, wraps a third-party `SwiftKeychainWrapper` dependency and has no publicly linked source repository for that scope — harder to audit for the same guarantees, so it was not chosen.
 
 `apps/web/components/keychain-native-session-store.ts` implements `NativeSessionStore` against this plugin: every `get`/`set`/`remove` call passes `sync: false` and (on `set`) `access: KeychainAccess.whenUnlockedThisDeviceOnly` explicitly on the call itself, rather than relying on the plugin's global configuration state, so these guarantees hold regardless of anything else in the app. `apps/web/components/native-auth.ts` selects this store when `isNativeShell()` is true and falls back to `InMemoryNativeSessionStore` everywhere else (browser tabs, tests) — browser/cookie authentication is untouched either way.
+
+Native biometric unlock is implemented through `@aparajita/capacitor-biometric-auth` and Apple's `LocalAuthentication` framework. On a cold native launch, an enabled preference is checked and the biometric challenge completes before `NativeMyKhayaClient.bootstrapSession()` reads or validates the bearer session. Cancellation/failure leaves the Keychain session intact and presents retry/password fallback. The preference is stored separately in the same non-synchronised Keychain-backed store; explicit native logout removes it.
+
+The secure-storage plugin does not expose `SecAccessControl` or `biometryCurrentSet`. Therefore the existing `whenUnlockedThisDeviceOnly` session protection is not weakened, and the pre-bootstrap biometric gate fails closed, but the session item is not yet directly bound to the biometric enrollment set. Adding that binding requires a small native Keychain bridge and is intentionally a separate follow-up.
 
 Building and running this against a real Keychain requires the generated `ios/` Xcode project (Phase 4's other deliverable) — the adapter above is fully unit-tested against a mocked plugin API, but end-to-end verification (sign in, force-kill, relaunch, confirm still signed in) needs the actual native runtime; see the completion report for what could and couldn't be verified without direct Mac/Xcode access in this session.
 
@@ -79,4 +83,4 @@ Building and running this against a real Keychain requires the generated `ios/` 
 
 - No `ios/` Xcode project exists yet — generating it is exactly the kind of macOS-only step deferred to Phase 4 (see the Mac handoff checklist).
 - Real Keychain-backed persistent login does not work yet; `InMemoryNativeSessionStore` means a native session does not currently survive app restart. The architecture is ready for the storage swap; the swap itself is Phase 4 work.
-- APNs, Face ID, native passkeys, Associated Domains/Universal Links, and App Store submission remain unimplemented, as explicitly scoped.
+- APNs, native passkeys, Associated Domains/Universal Links, and App Store submission remain separate work. Native biometric unlock is implemented but requires Mac/device verification.

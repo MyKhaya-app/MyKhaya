@@ -9,6 +9,17 @@ import {
 import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 import { setBiometricSignInEnabled } from "./native-biometric-preference";
+import { authenticateWithBiometrics, isBiometricCancellation } from "./native-biometric";
+
+export class NativeBiometricUnlockError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "NativeBiometricUnlockError";
+    this.code = code;
+  }
+}
 
 // Native auth bootstrap (task §7/§9/§10, Keychain wiring in Phase 4 §11).
 // This module is the only place `apps/web` constructs a
@@ -29,6 +40,7 @@ import { setBiometricSignInEnabled } from "./native-biometric-preference";
 let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
 let lastNativeLoginDiagnostic: string | null = null;
+let offerBiometricAfterLogin = false;
 
 export function getLastNativeLoginDiagnostic(): string | null {
   return lastNativeLoginDiagnostic;
@@ -75,12 +87,27 @@ function client(): NativeMyKhayaClient {
  * session is still valid, or null if there is none / it was rejected. Never
  * exposes the bearer token — see `NativeMyKhayaClient.bootstrapSession`. */
 export function bootstrapNativeSession(): Promise<User | null> {
-  return client().bootstrapSession();
+  return (async () => {
+    const { isBiometricSignInEnabled } = await import("./native-biometric-preference");
+    if (await isBiometricSignInEnabled()) {
+      const result = await authenticateWithBiometrics("Unlock MyKhaya");
+      if (!result.ok) {
+        throw new NativeBiometricUnlockError(
+          isBiometricCancellation(result) ? "cancelled" : result.code,
+          "Biometric unlock was not completed.",
+        );
+      }
+    }
+    return client().bootstrapSession();
+  })();
 }
 
 export function nativeLogin(email: string, password: string): Promise<User> {
   lastNativeLoginDiagnostic = null;
-  return client().login(email, password).catch((error: unknown) => {
+  return client().login(email, password).then((user) => {
+    offerBiometricAfterLogin = true;
+    return user;
+  }).catch((error: unknown) => {
     if (error instanceof Error && "status" in error && typeof error.status === "number") {
       const code = "code" in error && typeof error.code === "string" ? error.code : `http_${error.status}`;
       lastNativeLoginDiagnostic = diagnosticContext(`stage: request; status: ${error.status}; code: ${code}`);
@@ -90,6 +117,12 @@ export function nativeLogin(email: string, password: string): Promise<User> {
     }
     throw error;
   });
+}
+
+export function consumeBiometricOfferAfterLogin(): boolean {
+  const result = offerBiometricAfterLogin;
+  offerBiometricAfterLogin = false;
+  return result;
 }
 
 function diagnosticContext(summary: string): string {

@@ -21,7 +21,7 @@ vi.mock("@aparajita/capacitor-secure-storage", () => {
   };
 });
 
-const { isBiometricSignInEnabled, setBiometricSignInEnabled } = await import(
+const { getBiometricPreference, isBiometricSignInEnabled, setBiometricSignInEnabled, declineBiometricSignIn } = await import(
   "./native-biometric-preference"
 );
 const { StorageError } = await import("@aparajita/capacitor-secure-storage");
@@ -40,6 +40,18 @@ describe("isBiometricSignInEnabled", () => {
   it("fails safe (false) if the Keychain read itself fails", async () => {
     storageGet.mockRejectedValue(new StorageError("boom", "osError" as StorageErrorType));
     expect(await isBiometricSignInEnabled()).toBe(false);
+  });
+});
+
+describe("biometric preference lifecycle", () => {
+  it("distinguishes an undecided preference from a deliberate Not now", async () => {
+    storageGet.mockImplementation((key: string) => Promise.resolve(key.endsWith("declined") ? true : null));
+    await expect(getBiometricPreference()).resolves.toBe("declined");
+  });
+
+  it("records Not now without storing a credential", async () => {
+    await declineBiometricSignIn();
+    expect(storageSet).toHaveBeenCalledWith("mykhaya.native.biometric.declined", true, false, false);
   });
 });
 

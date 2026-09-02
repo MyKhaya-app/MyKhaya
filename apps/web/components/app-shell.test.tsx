@@ -66,6 +66,7 @@ vi.mock("./native-runtime", () => ({
 const bootstrapNativeSession = vi.fn<() => Promise<unknown>>();
 vi.mock("./native-auth", () => ({
   bootstrapNativeSession: () => bootstrapNativeSession(),
+  consumeBiometricOfferAfterLogin: () => false,
 }));
 
 const { api } = await import("@mykhaya/api-client");

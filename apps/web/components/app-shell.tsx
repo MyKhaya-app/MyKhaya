@@ -7,6 +7,7 @@ import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { isNativeShell } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
+import { NativeBiometricOffer } from "./native-biometric-offer";
 
 export function AppShell({
   children,
@@ -74,6 +75,16 @@ export function AppShell({
       </main>
     );
   }
+  if (status === "locked") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>Unlock MyKhaya</h1>
+        <p>Authenticate with Face ID, Touch ID, or your device passcode to continue.</p>
+        <button onClick={retryInitialSession}>Try again</button>
+        <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
+      </main>
+    );
+  }
   if (status === "signed_out") return null;
 
   return (
@@ -87,7 +98,7 @@ export function AppShell({
       />
       <div className="app-content-scroll-region">
         {hero}
-        <main className="app-main">{children}</main>
+        <main className="app-main"><NativeBiometricOffer />{children}</main>
       </div>
       <BottomNav principalType={user?.principal_type} />
     </div>

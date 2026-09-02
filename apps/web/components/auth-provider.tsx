@@ -10,7 +10,7 @@ import { initializeNativePush, reconcileNativePush } from "./native-push";
 import { isNativeShell } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
-type AuthStatus = "initializing" | "ready" | "offline" | "signed_out";
+type AuthStatus = "initializing" | "ready" | "offline" | "locked" | "signed_out";
 type AuthContextValue = {
   user: User | null;
   status: AuthStatus;
@@ -74,6 +74,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       recordAuthDiagnostic("AUTHENTICATED");
       return true;
     } catch (cause) {
+      if (isNativeShell() && cause instanceof Error && cause.name === "NativeBiometricUnlockError") {
+        setStatus("locked");
+        recordAuthDiagnostic("NATIVE_BIOMETRIC_LOCKED");
+        return false;
+      }
       if (!isNativeShell() && cause instanceof ApiError && cause.status === 401) {
         try {
           setUser(await api.renew());

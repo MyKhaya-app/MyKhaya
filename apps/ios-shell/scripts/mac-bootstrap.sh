@@ -53,7 +53,13 @@ npx cap sync ios
 echo "== 5a. Ensure Capacitor Push Notifications 8 AppDelegate forwarding =="
 bash scripts/ensure-apns-appdelegate.sh
 
-echo "== 5b. Inspect APNs entitlements (signing is not changed by this script) =="
+echo "== 5b. Ensure Face ID usage description =="
+INFO_PLIST="ios/App/App/Info.plist"
+if [ -f "$INFO_PLIST" ] && ! grep -q 'NSFaceIDUsageDescription' "$INFO_PLIST"; then
+  /usr/libexec/PlistBuddy -c "Add :NSFaceIDUsageDescription string Use Face ID to securely unlock MyKhaya and access your family information." "$INFO_PLIST"
+fi
+
+echo "== 5c. Inspect APNs entitlements (signing is not changed by this script) =="
 ENTITLEMENTS_FILE="ios/App/App/App.entitlements"
 if [ -f "$ENTITLEMENTS_FILE" ]; then
   grep -E 'aps-environment|<string>(development|production)</string>' "$ENTITLEMENTS_FILE" || {

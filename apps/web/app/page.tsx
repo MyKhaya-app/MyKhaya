@@ -45,6 +45,16 @@ function NativeRootGate() {
       </main>
     );
   }
+  if (status === "locked") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>Unlock MyKhaya</h1>
+        <p>Authenticate with Face ID, Touch ID, or your device passcode to continue.</p>
+        <button onClick={retryInitialSession}>Try again</button>
+        <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
+      </main>
+    );
+  }
   if (initialSessionLoading || status === "initializing" || status === "ready") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }

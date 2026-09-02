@@ -5,8 +5,8 @@ This is the exact, minimal list of steps to do **once**, on the Mac, to turn
 [ADR 0012](../architecture/adr/0012-capacitor-ios-shell.md)) into a runnable
 iOS app. It assumes **no prior Xcode experience** — every Xcode-specific
 term is explained inline. It does not cover App Store submission,
-TestFlight, APNs, Face ID, or native passkeys — those are separate, later
-work.
+TestFlight, APNs, or native passkeys are separate work. Native biometric
+unlock is covered below.
 
 ## Fastest path: copy-paste scripts, no Xcode GUI required
 
@@ -160,6 +160,42 @@ this checklist. On the Mac:
 5. Sign out — confirm the app returns to a clean signed-out state and a
    subsequent relaunch does **not** silently resume the old session.
 
+## Step 8 — Verify native biometric unlock
+
+The native shell uses `@aparajita/capacitor-biometric-auth`, whose iOS
+implementation invokes Apple's `LocalAuthentication` framework. The web
+browser/PWA continues to use its existing WebAuthn passkey path and never
+calls this native code.
+
+1. On an iPhone Face ID simulator, use **Features → Face ID → Enrolled**.
+2. Sign in normally in MyKhaya. On the first successful native login, choose
+   **Enable Face ID**, then authenticate successfully. Choosing **Not now**
+   records that decision and does not prompt again; enable it later under
+   **Settings → Security**.
+3. Force-terminate the app:
+   `xcrun simctl terminate "$SIM_NAME" app.mykhaya.mobile`
+4. Relaunch it:
+   `xcrun simctl launch "$SIM_NAME" app.mykhaya.mobile`
+5. Confirm only the neutral **Unlock MyKhaya** state is shown while the
+   biometric prompt is active. Use **Features → Face ID → Matching Face**;
+   Home should appear only after the successful unlock.
+6. Repeat and choose **Cancel**. Confirm the saved session is retained, the
+   fallback screen offers **Try again** and **Sign in with password**, and no
+   authenticated content is visible.
+7. Choose **Sign in with password**, then explicitly log out. Kill and relaunch
+   again; Face ID must not restore the old session.
+8. To test enrolment changes, disable/re-enrol Face ID in the simulator and
+   relaunch. The app must not silently bypass the unlock; normal sign-in or
+   re-enabling the setting is required.
+
+The current secure-storage plugin supports `whenUnlockedThisDeviceOnly`,
+which remains the session store's Keychain class. Version 8.0.0 does not
+expose Apple's `SecAccessControl`/`biometryCurrentSet` attribute, so this
+integration performs the LocalAuthentication challenge before reading and
+validating the persisted session and fails closed on errors. A future native
+Keychain bridge can add `biometryCurrentSet` without changing the shared
+startup state machine.
+
 If any of the above fails, check that Xcode's generated project actually
 resolved the `@aparajita/capacitor-secure-storage` native pod/package (see
 `npx cap sync ios`'s output) — a missing native dependency is the most
@@ -180,6 +216,6 @@ all four plugins before building again.
 - **The Stripe billing navigation question** flagged in ADR 0012 — needs a
   deliberate decision (allow-list relaxation vs. external-browser +
   Universal Links), not a mechanical fix.
-- APNs, Face ID, native passkeys, Associated Domains/Universal Links, App
+- APNs, native passkeys, Associated Domains/Universal Links, App
   Store screenshots, TestFlight, and App Store submission are all
   out of scope here — later, separate phases.

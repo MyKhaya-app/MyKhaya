@@ -19,7 +19,7 @@ vi.mock("./native-runtime", () => ({
   isNativeShell: () => nativeShellState.value,
   nativePlatform: () => nativeShellState.value ? "ios" : "web",
 }));
-vi.mock("./native-auth", () => ({ bootstrapNativeSession }));
+vi.mock("./native-auth", () => ({ bootstrapNativeSession, NativeBiometricUnlockError: class NativeBiometricUnlockError extends Error {} }));
 vi.mock("./native-push", () => ({
   initializeNativePush: vi.fn().mockResolvedValue(undefined),
   reconcileNativePush: vi.fn().mockResolvedValue(undefined),
