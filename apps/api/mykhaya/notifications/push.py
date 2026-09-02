@@ -102,6 +102,17 @@ def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def _is_unpadded_base64url(value: str, expected: bytes) -> bool:
+    allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    if not value or "=" in value or any(character not in allowed for character in value):
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (ValueError, TypeError):
+        return False
+    return decoded == expected and _b64(decoded) == value
+
+
 def _build_apns_bearer(
     config: ApnsConfig, issued_at: int | None = None, topic: str | None = None
 ) -> str:
@@ -146,7 +157,30 @@ def _build_apns_bearer(
     from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
     r, s = decode_dss_signature(signature)
-    bearer = f"{header}.{claims}.{_b64(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
+    raw_signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    encoded_signature = _b64(raw_signature)
+    signature_self_verifies = False
+    try:
+        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+        key.public_key().verify(
+            encode_dss_signature(r, s), signing_input, ec.ECDSA(hashes.SHA256())
+        )
+        signature_self_verifies = True
+    except Exception:
+        signature_self_verifies = False
+    signature_base64url_valid = _is_unpadded_base64url(encoded_signature, raw_signature)
+    log.info(
+        "apns_jwt_signature_diagnostics",
+        jwt_signature_bytes=len(raw_signature),
+        jwt_r_bytes=len(raw_signature[:32]),
+        jwt_s_bytes=len(raw_signature[32:]),
+        jwt_signature_self_verifies=signature_self_verifies,
+        jwt_base64url_valid=signature_base64url_valid,
+    )
+    if not signature_self_verifies or not signature_base64url_valid:
+        raise RuntimeError("APNs provider-token signature self-verification failed")
+    bearer = f"{header}.{claims}.{encoded_signature}"
     log.info(
         "apns_jwt_diagnostics",
         jwt_kid_matches_config=True,

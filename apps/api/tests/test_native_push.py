@@ -6,8 +6,15 @@ import uuid
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    load_pem_private_key,
+)
 
 from mykhaya.models import NativePushDevice
 from mykhaya.notifications import push
@@ -145,10 +152,30 @@ def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
         return json.loads(base64.urlsafe_b64decode(value + "=="))
     assert decode(encoded[0]) == {"alg": "ES256", "kid": "KEY123"}
     assert decode(encoded[1]) == {"iss": "TEAM123", "iat": issued_at}
-    assert len(base64.urlsafe_b64decode(encoded[2] + "==")) == 64
+    signature = base64.urlsafe_b64decode(encoded[2] + "==")
+    assert len(signature) == 64
+    assert len(signature[:32]) == 32
+    assert len(signature[32:]) == 32
+    assert "=" not in encoded[2]
+    key = load_pem_private_key(config.private_key.encode(), password=None)
+    assert isinstance(key, ec.EllipticCurvePrivateKey)
+    key.public_key().verify(
+        encode_dss_signature(
+            int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+        ),
+        f"{encoded[0]}.{encoded[1]}".encode("ascii"),
+        ec.ECDSA(hashes.SHA256()),
+    )
     assert fake.request.headers["apns-topic"] == "app.mykhaya.mobile"
     assert fake.request.url.host == "api.push.apple.com"
     assert diagnostics == [
+        {
+            "jwt_signature_bytes": 64,
+            "jwt_r_bytes": 32,
+            "jwt_s_bytes": 32,
+            "jwt_signature_self_verifies": True,
+            "jwt_base64url_valid": True,
+        },
         {
             "jwt_kid_matches_config": True,
             "jwt_iss_matches_config": True,
