@@ -119,7 +119,11 @@ function isPublicPath(path: string): boolean {
 }
 
 function usesPersistentShell(path: string): boolean {
-  return !isPublicPath(path) && !EXCLUDED_SHELL_PATH_PREFIXES.some(
+  // The Capacitor live URL starts at `/`, which is the public marketing
+  // route. It must not be placed inside the authenticated shell while native
+  // bearer restoration is still in progress; the native root gate sends a
+  // restored session to `/home`.
+  return path !== "/" && !isPublicPath(path) && !EXCLUDED_SHELL_PATH_PREFIXES.some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
 }

@@ -2447,6 +2447,39 @@ html.native-shell .home-section-overlap {
   gap: 0.3rem;
   margin-left: auto;
 }
+
+/* There are more controls in this row than can share the narrowest phone
+   content width at their normal 44px touch target. Keep the month navigation
+   together and move the actions to a second, aligned row instead of allowing
+   flexbox to squeeze or clip the right-hand controls. */
+@media (max-width: 480px) {
+  .calendar-page .calendar-month-row {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .calendar-page .calendar-month-label {
+    flex: 1 1 0;
+  }
+  .calendar-page .calendar-month-row-actions {
+    flex: 1 0 100%;
+    gap: 0.2rem;
+    justify-content: flex-end;
+    margin-left: 0;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 380px) {
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 40px;
+    min-width: 40px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+    min-height: 40px;
+    padding-inline: 0.55rem;
+  }
+}
 .calendar-add-desktop {
   align-items: center;
   display: inline-flex;

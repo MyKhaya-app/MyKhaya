@@ -2,6 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import Welcome from "./page";
 
+const { nativeState, authState, replace } = vi.hoisted(() => ({
+  nativeState: { value: false },
+  authState: {
+    status: "signed_out" as "initializing" | "ready" | "offline" | "signed_out",
+    initialSessionLoading: false,
+    retryInitialSession: vi.fn(),
+  },
+  replace: vi.fn(),
+}));
+
 // The public marketing homepage — composition/navigation coverage. Pricing
 // data/routing behaviour has its own dedicated test file
 // (components/marketing/public-pricing.test.tsx); this file is about the
@@ -9,8 +19,11 @@ import Welcome from "./page";
 // links, and no leftover admin/dashboard-style content.
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace }),
 }));
+
+vi.mock("@/components/native-runtime", () => ({ isNativeShell: () => nativeState.value }));
+vi.mock("@/components/auth-provider", () => ({ useAuth: () => authState }));
 
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
@@ -46,6 +59,9 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  nativeState.value = false;
+  authState.status = "signed_out";
+  authState.initialSessionLoading = false;
 });
 
 describe("Welcome (public marketing homepage)", () => {
@@ -133,5 +149,22 @@ describe("Welcome (public marketing homepage)", () => {
         link.getAttribute("href"),
       );
     }
+  });
+
+  it("gates the native root while restoring and redirects to authenticated Home after restore", async () => {
+    nativeState.value = true;
+    authState.status = "initializing";
+    authState.initialSessionLoading = true;
+    const view = render(<Welcome />);
+
+    expect(screen.getByText(/checking your mykhaya session/i)).toBeInTheDocument();
+    expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
+
+    authState.status = "ready";
+    authState.initialSessionLoading = false;
+    view.rerender(<Welcome />);
+
+    expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith("/home");
   });
 });
