@@ -20,6 +20,9 @@ describe("Calendar toolbar responsive layout", () => {
       /@media\s*\(max-width:\s*430px\)[\s\S]*?min-width:\s*40px[\s\S]*?min-width:\s*36px/s,
     );
     expect(css).toMatch(/@media\s*\(max-width:\s*400px\)[\s\S]*?min-width:\s*32px/s);
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*400px\)[\s\S]*?\.calendar-page \.calendar-month-label\s*\{[\s\S]*?font-size:\s*0\.84rem/s,
+    );
     expect(css).toMatch(/@media\s*\(max-width:\s*380px\)[\s\S]*?min-width:\s*30px/s);
     expect(css).toContain(".calendar-page .calendar-month-row-actions .calendar-add-desktop");
   });
