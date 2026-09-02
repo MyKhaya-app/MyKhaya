@@ -114,7 +114,10 @@ def _is_unpadded_base64url(value: str, expected: bytes) -> bool:
 
 
 def _build_apns_bearer(
-    config: ApnsConfig, issued_at: int | None = None, topic: str | None = None
+    config: ApnsConfig,
+    issued_at: int | None = None,
+    topic: str | None = None,
+    emit_diagnostics: bool = True,
 ) -> str:
     """Build one short-lived APNs provider JWT; deliberately does not cache it."""
     if not config.team_id or not config.key_id or not config.private_key:
@@ -142,15 +145,16 @@ def _build_apns_bearer(
             raise RuntimeError("APNs key is not an EC P-256 private key")
         signature = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
     except Exception:
-        log.error(
-            "apns_jwt_diagnostics",
-            jwt_kid_matches_config=False,
-            jwt_iss_matches_config=False,
-            jwt_iat_age_seconds=0,
-            private_key_parsed=key_parsed,
-            apns_endpoint="production",
-            apns_topic_matches_bundle=False,
-        )
+        if emit_diagnostics:
+            log.error(
+                "apns_jwt_diagnostics",
+                jwt_kid_matches_config=False,
+                jwt_iss_matches_config=False,
+                jwt_iat_age_seconds=0,
+                private_key_parsed=key_parsed,
+                apns_endpoint="production",
+                apns_topic_matches_bundle=False,
+            )
         raise
 
     # APNs expects the JOSE raw r||s signature, not ASN.1 DER.
@@ -170,26 +174,28 @@ def _build_apns_bearer(
     except Exception:
         signature_self_verifies = False
     signature_base64url_valid = _is_unpadded_base64url(encoded_signature, raw_signature)
-    log.info(
-        "apns_jwt_signature_diagnostics",
-        jwt_signature_bytes=len(raw_signature),
-        jwt_r_bytes=len(raw_signature[:32]),
-        jwt_s_bytes=len(raw_signature[32:]),
-        jwt_signature_self_verifies=signature_self_verifies,
-        jwt_base64url_valid=signature_base64url_valid,
-    )
+    if emit_diagnostics:
+        log.info(
+            "apns_jwt_signature_diagnostics",
+            jwt_signature_bytes=len(raw_signature),
+            jwt_r_bytes=len(raw_signature[:32]),
+            jwt_s_bytes=len(raw_signature[32:]),
+            jwt_signature_self_verifies=signature_self_verifies,
+            jwt_base64url_valid=signature_base64url_valid,
+        )
     if not signature_self_verifies or not signature_base64url_valid:
         raise RuntimeError("APNs provider-token signature self-verification failed")
     bearer = f"{header}.{claims}.{encoded_signature}"
-    log.info(
-        "apns_jwt_diagnostics",
-        jwt_kid_matches_config=True,
-        jwt_iss_matches_config=True,
-        jwt_iat_age_seconds=max(0, int(time.time()) - issued_at),
-        private_key_parsed=True,
-        apns_endpoint="production",
-        apns_topic_matches_bundle=topic is not None and topic == config.bundle_id,
-    )
+    if emit_diagnostics:
+        log.info(
+            "apns_jwt_diagnostics",
+            jwt_kid_matches_config=True,
+            jwt_iss_matches_config=True,
+            jwt_iat_age_seconds=max(0, int(time.time()) - issued_at),
+            private_key_parsed=True,
+            apns_endpoint="production",
+            apns_topic_matches_bundle=topic is not None and topic == config.bundle_id,
+        )
     return bearer
 
 
