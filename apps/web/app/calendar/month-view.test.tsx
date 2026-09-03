@@ -222,6 +222,45 @@ describe("MonthView — multi-day priority under the density/overflow cap", () =
   });
 });
 
+describe("MonthView — no blank rendered rows (corrective follow-up)", () => {
+  const focusDate = new Date(Date.UTC(2026, 0, 15));
+
+  it("a day with only a single-day event renders it at the topmost grid row, even though another day that week has a multi-day event in the top lane", () => {
+    const events = [
+      occurrence({
+        occurrence_id: "multi-wed-thu",
+        title: "Multi Wed-Thu",
+        start_at: "2026-01-07T00:00:00Z", // Wednesday
+        end_at: "2026-01-09T00:00:00Z",
+        is_all_day: true,
+      }),
+      occurrence({
+        occurrence_id: "monday-single",
+        title: "Monday only",
+        start_at: "2026-01-05T09:00:00Z", // Monday - never touched by the multi-day event
+        end_at: "2026-01-05T10:00:00Z",
+      }),
+    ];
+    const { container } = render(
+      <MonthView
+        cells={monthCells(focusDate)}
+        events={events}
+        focusDate={focusDate}
+        timeZone="UTC"
+        onDay={noop}
+        onEvent={noop}
+      />,
+    );
+    const mondayChip = Array.from(container.querySelectorAll(".month-event")).find(
+      (el) => el.textContent?.includes("Monday only"),
+    ) as HTMLElement;
+    expect(mondayChip).toBeDefined();
+    // Row 2 is the topmost event row (row 1 is the day-number row) - not
+    // pushed down just because Wed/Thu's multi-day bar occupies row 2 too.
+    expect(mondayChip.style.gridRow).toBe("2");
+  });
+});
+
 describe("MonthView — dynamic 5-week vs 6-week row count", () => {
   it("renders 5 week rows, tagged via --calendar-week-count, for a month that only needs 5", () => {
     // January 2026: 31 days starting on a Thursday — fits in 5 Monday-first

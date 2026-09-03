@@ -1322,22 +1322,47 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     expect(rowOf(rows, "multi")).toBeLessThan(rowOf(rows, "single"));
   });
 
-  it("2. a single-day event earlier in the input array/start date does not outrank the multi-day event", () => {
+  it("2. a single-day event earlier in the input array/start date does not outrank a multi-day event it actually shares a day with", () => {
     const single = event({
       occurrence_id: "single-early",
       start_at: "2026-01-05T09:00:00+00:00",
       end_at: "2026-01-05T10:00:00+00:00",
     });
     const multi = event({
-      occurrence_id: "multi-later",
-      start_at: "2026-01-06T00:00:00+00:00",
+      occurrence_id: "multi-overlap",
+      // Starts a day later, but its span reaches back to cover Jan 5 too -
+      // Jan 5-7 inclusive - so it genuinely competes with "single-early"
+      // for Jan 5's lane, unlike a multi-day event that never touches that
+      // day (see test 3b below, which is the compaction counterpart).
+      start_at: "2026-01-05T00:00:00+00:00",
       end_at: "2026-01-08T00:00:00+00:00",
       is_all_day: true,
     });
-    // single-day is both earlier in the array AND has an earlier start date
-    // - the classic case the old pure-chronological sort got wrong.
+    // single-day is both earlier in the array AND has an equal start date -
+    // the classic case the old pure-chronological sort got wrong.
     const rows = layout([single, multi]);
-    expect(rowOf(rows, "multi-later")).toBeLessThan(rowOf(rows, "single-early"));
+    expect(rowOf(rows, "multi-overlap")).toBeLessThan(rowOf(rows, "single-early"));
+  });
+
+  it("2b. corrective follow-up: a single-day event does NOT get pushed down by a multi-day event on a day the multi-day event never reaches", () => {
+    // This is the exact scenario the earlier "always floor single-day below
+    // every multi-day lane in the week" approach got wrong: Monday has no
+    // multi-day event on it at all, so its single-day event must be free
+    // to use lane 0, not be forced beneath a multi-day bar that only
+    // occupies Tuesday-Thursday.
+    const mondayOnly = event({
+      occurrence_id: "monday-single",
+      start_at: "2026-01-05T09:00:00+00:00", // Monday
+      end_at: "2026-01-05T10:00:00+00:00",
+    });
+    const tuesToThu = event({
+      occurrence_id: "multi-tue-thu",
+      start_at: "2026-01-06T00:00:00+00:00", // Tuesday
+      end_at: "2026-01-09T00:00:00+00:00", // exclusive end -> covers Tue-Thu
+      is_all_day: true,
+    });
+    const rows = layout([mondayOnly, tuesToThu]);
+    expect(rowOf(rows, "monday-single")).toBe(0);
   });
 
   it("3. two overlapping multi-day events both sit above single-day events", () => {
@@ -1380,7 +1405,7 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     expect(rows[0]!.row).toBe(0);
   });
 
-  it("5. a multi-day event crossing a week boundary gets priority in both week rows", () => {
+  it("5. a multi-day event crossing a week boundary gets priority in both week rows where it actually competes, without forcing a blank lane where it doesn't", () => {
     // Saturday 2026-01-10 through Tuesday 2026-01-13.
     const multi = event({
       occurrence_id: "multi",
@@ -1388,11 +1413,18 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
       end_at: "2026-01-14T00:00:00+00:00",
       is_all_day: true,
     });
+    // Thursday, week 1 - the multi-day event's week-1 segment only covers
+    // Sat/Sun, so this single-day event shares no day with it: it must
+    // compact to lane 0, not be pushed beneath a multi-day lane its own
+    // day never touches (the exact bug this fix corrects).
     const singleWeek1 = event({
       occurrence_id: "single-w1",
       start_at: "2026-01-08T09:00:00+00:00",
       end_at: "2026-01-08T10:00:00+00:00",
     });
+    // Monday, week 2 - the multi-day event's week-2 segment covers
+    // Mon/Tue, so this one DOES genuinely compete for Monday's lane and
+    // must still be pushed beneath it.
     const singleWeek2 = event({
       occurrence_id: "single-w2",
       start_at: "2026-01-12T09:00:00+00:00",
@@ -1407,9 +1439,13 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     const week1Rows = layoutWeekEvents(events, week1Days, bounds);
     const week2Rows = layoutWeekEvents(events, week2Days, bounds);
 
-    expect(week1Rows.find((r) => r.event.occurrence_id === "multi")!.row).toBeLessThan(
-      week1Rows.find((r) => r.event.occurrence_id === "single-w1")!.row,
-    );
+    // Week 1: multi still claims lane 0 (it's processed first), but
+    // single-w1 compacts into lane 0 too rather than being floored below
+    // it - they don't share a day, so there is nothing to contest.
+    expect(week1Rows.find((r) => r.event.occurrence_id === "multi")!.row).toBe(0);
+    expect(week1Rows.find((r) => r.event.occurrence_id === "single-w1")!.row).toBe(0);
+
+    // Week 2: multi and single-w2 do share Monday, so priority still holds.
     expect(week2Rows.find((r) => r.event.occurrence_id === "multi")!.row).toBeLessThan(
       week2Rows.find((r) => r.event.occurrence_id === "single-w2")!.row,
     );
@@ -1500,5 +1536,51 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     // Same-start multi-day events break ties by longer span first - multi-b
     // (4 days) must outrank multi-a (2 days) into the lower row number.
     expect(rowOf(forward, "multi-b")).toBeLessThan(rowOf(forward, "multi-a"));
+  });
+
+  it("10. no blank top row on a day with only single-day events while another day in the same week has a multi-day event in the top lane", () => {
+    // Regression: an earlier version floored every single-day event's lane
+    // at however many lanes multi-day events used anywhere in the week,
+    // so Monday - which this multi-day event never touches - lost that
+    // many lanes to nothing. It must render its own event at lane 0.
+    const multiWedThu = event({
+      occurrence_id: "multi-wed-thu",
+      start_at: "2026-01-07T00:00:00+00:00", // Wednesday
+      end_at: "2026-01-09T00:00:00+00:00", // exclusive end -> Wed-Thu
+      is_all_day: true,
+    });
+    const mondaySingle = event({
+      occurrence_id: "monday-single",
+      start_at: "2026-01-05T09:00:00+00:00",
+      end_at: "2026-01-05T10:00:00+00:00",
+    });
+    const rows = layout([multiWedThu, mondaySingle]);
+    expect(rowOf(rows, "multi-wed-thu")).toBe(0);
+    expect(rowOf(rows, "monday-single")).toBe(0);
+  });
+
+  it("11. no blank gap between two single-day events on the same day, even with a multi-day event elsewhere in the week", () => {
+    const multiWedThu = event({
+      occurrence_id: "multi-wed-thu",
+      start_at: "2026-01-07T00:00:00+00:00",
+      end_at: "2026-01-09T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const mondayFirst = event({
+      occurrence_id: "monday-first",
+      title: "A",
+      start_at: "2026-01-05T09:00:00+00:00",
+      end_at: "2026-01-05T10:00:00+00:00",
+    });
+    const mondaySecond = event({
+      occurrence_id: "monday-second",
+      title: "B",
+      start_at: "2026-01-05T11:00:00+00:00",
+      end_at: "2026-01-05T12:00:00+00:00",
+    });
+    const rows = layout([multiWedThu, mondayFirst, mondaySecond]);
+    const mondayRows = [rowOf(rows, "monday-first"), rowOf(rows, "monday-second")].sort((a, b) => a - b);
+    // Consecutive lanes starting at 0 - no skipped/blank row between them.
+    expect(mondayRows).toEqual([0, 1]);
   });
 });

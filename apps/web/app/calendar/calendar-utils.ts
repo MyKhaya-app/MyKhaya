@@ -450,30 +450,38 @@ export function layoutWeekEvents(
   const rowIntervals: { start: number; end: number }[][] = [];
   const rows: WeekEventLayoutRow[] = [];
 
-  function place(event: EventOccurrence, minRow: number) {
+  // Corrective follow-up: an earlier version of this function floored
+  // single-day placement at however many lanes multi-day events used
+  // *anywhere* in the week, so a day with no multi-day event of its own
+  // still lost that many lanes' worth of vertical space to nothing — blank
+  // rows above/between real events on days a multi-day bar never touched.
+  // Lane search is column-aware (below), so there is no need for a global
+  // floor to get multi-day priority: processing every multi-day event
+  // before any single-day event already means that wherever a single-day
+  // event's own day genuinely competes with a multi-day event for a lane
+  // (the multi-day event's [start, end] column range includes that day),
+  // the multi-day event — placed first — has already claimed the lowest
+  // available lane there, so the competing single-day event is naturally
+  // pushed to the next one. On a day the multi-day event's range doesn't
+  // reach, that lane was never occupied for that day's column in the first
+  // place, so a single-day event there is free to use it — exactly the
+  // per-day compaction this fix restores.
+  function place(event: EventOccurrence) {
     const { startKey, endKey } = bounds.get(event.occurrence_id)!;
     const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
     const end = Math.min(6, days.reduce((last, day, index) => (dateKey(day) <= endKey ? index : last), -1));
     if (end < start) return;
-    let row = -1;
-    for (let candidate = minRow; candidate < rowIntervals.length; candidate++) {
-      const intervals = rowIntervals[candidate] ?? [];
-      if (intervals.every((interval) => end < interval.start || start > interval.end)) {
-        row = candidate;
-        break;
-      }
-    }
+    let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
     if (row === -1) row = rowIntervals.length;
     (rowIntervals[row] ??= []).push({ start, end });
     rows.push({ event, start, end, row });
   }
 
-  // Multi-day first (search from lane 0) so they always claim the topmost
-  // lanes; single-day afterwards, floored at however many lanes multi-day
-  // actually used — never allowed to backfill a multi-day lane's gaps.
-  multiDay.forEach((event) => place(event, 0));
-  const multiDayRowCount = rowIntervals.length;
-  singleDay.forEach((event) => place(event, multiDayRowCount));
+  // Multi-day first, so a genuine lane contest on a shared day always
+  // resolves in its favour; single-day afterwards, free to reuse any lane
+  // a multi-day event left untouched on that particular day.
+  multiDay.forEach((event) => place(event));
+  singleDay.forEach((event) => place(event));
 
   return rows;
 }
