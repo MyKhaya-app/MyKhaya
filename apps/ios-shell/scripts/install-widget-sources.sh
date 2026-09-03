@@ -49,10 +49,22 @@ ruby scripts/add-app-target-sources.rb
 echo "== 4. Point Main.storyboard's bridge view controller at MainViewController =="
 STORYBOARD="ios/App/App/Base.lproj/Main.storyboard"
 if [ -f "$STORYBOARD" ]; then
-  if grep -q 'customClass="MainViewController"' "$STORYBOARD"; then
+  # customModule="Capacitor" is correct for Capacitor's own CAPBridgeViewController
+  # (it really lives in that framework) but wrong for MainViewController, which is
+  # compiled into the App target itself — leaving it in place after swapping only
+  # customClass produced "Unknown class _TtC9Capacitor18MainViewController in
+  # Interface Builder file" (UIKit looked for the class in the wrong module), which
+  # silently fails to load any root view controller: no crash, no bridge init, no
+  # WKWebView navigation — just a black screen. customModuleProvider="target" is
+  # what Xcode itself writes for a class defined in whatever target owns the file,
+  # so it stays correct regardless of the target's product/module name.
+  if grep -q 'customClass="MainViewController" customModule="Capacitor"' "$STORYBOARD"; then
+    perl -pi -e 's/customClass="MainViewController" customModule="Capacitor"/customClass="MainViewController" customModuleProvider="target"/' "$STORYBOARD"
+    echo "Fixed leftover customModule=\"Capacitor\" on MainViewController (self-healing): $STORYBOARD"
+  elif grep -q 'customClass="MainViewController"' "$STORYBOARD"; then
     echo "Storyboard already uses MainViewController: $STORYBOARD"
   elif grep -q 'customClass="CAPBridgeViewController"' "$STORYBOARD"; then
-    perl -pi -e 's/customClass="CAPBridgeViewController"/customClass="MainViewController"/' "$STORYBOARD"
+    perl -pi -e 's/customClass="CAPBridgeViewController" customModule="Capacitor"/customClass="MainViewController" customModuleProvider="target"/' "$STORYBOARD"
     echo "Updated storyboard custom class to MainViewController: $STORYBOARD"
   else
     echo "WARNING: $STORYBOARD has neither CAPBridgeViewController nor MainViewController as its custom class — inspect manually." >&2
