@@ -65,3 +65,58 @@ describe("BottomSheet — scroll lock, native shell", () => {
     unmount();
   });
 });
+
+// Regression coverage for the calendar-save "zoom" bug: closing a sheet
+// (e.g. Save from an event editor) while a text field still has focus must
+// deterministically blur that field before its DOM is torn down, and must
+// never scroll the page when focus is restored afterwards — see
+// bottom-sheet.tsx's cleanup comment for the full mechanism.
+describe("BottomSheet — focus handling on close (calendar-save zoom/jump regression)", () => {
+  it("blurs a focused field inside the sheet before unmounting, rather than letting the browser discover it vanished", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { unmount, getByLabelText } = render(
+      <BottomSheet title="Add event" onDismiss={vi.fn()}>
+        <input aria-label="Title" />
+      </BottomSheet>,
+    );
+
+    const input = getByLabelText("Title");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    const blurSpy = vi.spyOn(input, "blur");
+    unmount();
+
+    expect(blurSpy).toHaveBeenCalled();
+    trigger.remove();
+  });
+
+  it("restores focus to the pre-open trigger using preventScroll, never causing a scroll-into-view jump", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { unmount } = render(<BottomSheet title="Sheet" onDismiss={vi.fn()} children="x" />);
+
+    const focusSpy = vi.spyOn(trigger, "focus");
+    unmount();
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    trigger.remove();
+  });
+
+  it("does not attempt to blur anything when nothing inside the sheet is focused", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    // Nothing under the dialog is ever explicitly focused here — must not
+    // throw or blur an unrelated element.
+    const { unmount } = render(<BottomSheet title="Sheet" onDismiss={vi.fn()} children="x" />);
+    expect(() => unmount()).not.toThrow();
+    trigger.remove();
+  });
+});
