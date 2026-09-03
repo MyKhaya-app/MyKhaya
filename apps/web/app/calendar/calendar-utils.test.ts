@@ -1583,4 +1583,99 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     // Consecutive lanes starting at 0 - no skipped/blank row between them.
     expect(mondayRows).toEqual([0, 1]);
   });
+
+  it("12. a longer multi-day event that starts LATER still outranks a shorter one that started earlier, when they overlap", () => {
+    // Short: Monday-Tuesday (2 days). Long: Tuesday-Sunday (6 days). They
+    // overlap on Tuesday. A start-date-first comparator gets this wrong
+    // (short started first, so it would win lane 0) - span must be the
+    // PRIMARY key, not a tie-breaker.
+    const short = event({
+      occurrence_id: "short-mon-tue",
+      start_at: "2026-01-05T00:00:00+00:00", // Monday
+      end_at: "2026-01-07T00:00:00+00:00", // exclusive end -> Mon-Tue
+      is_all_day: true,
+    });
+    const long = event({
+      occurrence_id: "long-tue-sun",
+      start_at: "2026-01-06T00:00:00+00:00", // Tuesday
+      end_at: "2026-01-12T00:00:00+00:00", // exclusive end -> Tue-Sun
+      is_all_day: true,
+    });
+    const rows = layout([short, long]);
+    expect(rowOf(rows, "long-tue-sun")).toBeLessThan(rowOf(rows, "short-mon-tue"));
+  });
+
+  it("13. the obvious case: a longer multi-day event that also starts earlier outranks a shorter, later one", () => {
+    const long = event({
+      occurrence_id: "long",
+      start_at: "2026-01-05T00:00:00+00:00",
+      end_at: "2026-01-10T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const short = event({
+      occurrence_id: "short",
+      start_at: "2026-01-06T00:00:00+00:00",
+      end_at: "2026-01-08T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const rows = layout([short, long]);
+    expect(rowOf(rows, "long")).toBeLessThan(rowOf(rows, "short"));
+  });
+
+  it("14. equal-span multi-day events: earlier visible start wins, occurrence_id is the final tie-breaker", () => {
+    // Overlapping (Tue-Wed shared) so there is an actual lane contest to
+    // resolve - two equal-span events that DON'T overlap are legitimately
+    // allowed to share a lane under the compaction rule (see test 15's
+    // sibling non-overlap case), so a meaningful ordering test needs them
+    // to compete for the same day.
+    const later = event({
+      occurrence_id: "z-later-start",
+      start_at: "2026-01-06T00:00:00+00:00", // Tuesday
+      end_at: "2026-01-09T00:00:00+00:00", // exclusive end -> Tue-Thu (3 days)
+      is_all_day: true,
+    });
+    const earlier = event({
+      occurrence_id: "a-earlier-start",
+      start_at: "2026-01-05T00:00:00+00:00", // Monday
+      end_at: "2026-01-08T00:00:00+00:00", // exclusive end -> Mon-Wed (3 days, same span)
+      is_all_day: true,
+    });
+    const rows = layout([later, earlier]);
+    expect(rowOf(rows, "a-earlier-start")).toBeLessThan(rowOf(rows, "z-later-start"));
+
+    // Truly identical visible start AND span - occurrence_id breaks the tie
+    // deterministically (alphabetical), regardless of input array order.
+    const tieA = event({ occurrence_id: "tie-a", start_at: "2026-01-05T00:00:00+00:00", end_at: "2026-01-07T00:00:00+00:00", is_all_day: true });
+    const tieB = event({ occurrence_id: "tie-b", start_at: "2026-01-05T00:00:00+00:00", end_at: "2026-01-07T00:00:00+00:00", is_all_day: true });
+    const forward = layout([tieA, tieB]);
+    const reversed = layout([tieB, tieA]);
+    expect(rowOf(forward, "tie-a")).toBeLessThan(rowOf(forward, "tie-b"));
+    expect(rowOf(forward, "tie-a")).toBe(rowOf(reversed, "tie-a"));
+    expect(rowOf(forward, "tie-b")).toBe(rowOf(reversed, "tie-b"));
+  });
+
+  it("15. ordering follows the VISIBLE span within this week, not the full underlying event duration", () => {
+    // "long-underlying" started three weeks before this visible week (Dec
+    // 20) and ends early in it (Jan 6, Tuesday) - its own total duration is
+    // ~18 days, but the slice of it that actually falls inside this
+    // Jan 5-11 week is only Mon-Tue (2 visible days). "short-visible" is a
+    // shorter-duration event (3 days) but entirely inside this week
+    // (Mon-Wed) - so its visible bar this week is longer than
+    // long-underlying's, and must outrank it here, even though
+    // long-underlying's real/full duration is far greater.
+    const longUnderlyingEndsEarlyThisWeek = event({
+      occurrence_id: "long-underlying",
+      start_at: "2025-12-20T00:00:00+00:00",
+      end_at: "2026-01-07T00:00:00+00:00", // exclusive end -> ends Jan 6 (Tue); visible this week: Mon-Tue only
+      is_all_day: true,
+    });
+    const shortButFullyVisible = event({
+      occurrence_id: "short-visible",
+      start_at: "2026-01-05T00:00:00+00:00", // Monday
+      end_at: "2026-01-08T00:00:00+00:00", // exclusive end -> Mon-Wed (3 visible days)
+      is_all_day: true,
+    });
+    const rows = layout([longUnderlyingEndsEarlyThisWeek, shortButFullyVisible]);
+    expect(rowOf(rows, "short-visible")).toBeLessThan(rowOf(rows, "long-underlying"));
+  });
 });

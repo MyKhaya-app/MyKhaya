@@ -365,17 +365,6 @@ export function eventDateBounds(
   return { startKey, endKey };
 }
 
-function daySpan(startKey: string, endKey: string): number {
-  const MS_PER_DAY = 86_400_000;
-  // startKey/endKey are always "YYYY-MM-DD" (see dateKey) — Date.parse on a
-  // date-only ISO string is UTC-midnight per spec, matching every other
-  // date-only comparison in this file (lexical startKey/endKey compares,
-  // monthRange's Date.UTC construction). No wall-clock/timezone conversion
-  // is involved here; a multi-day event's *span in days* is timezone-
-  // independent once you already have its calendar-date bounds.
-  return Math.round((Date.parse(endKey) - Date.parse(startKey)) / MS_PER_DAY);
-}
-
 export interface WeekEventLayoutRow {
   event: EventOccurrence;
   /** 0-6 column index (Mon=0) of this event's segment within the week. */
@@ -425,19 +414,33 @@ export function layoutWeekEvents(
     return endKey === startKey;
   });
 
-  // Deterministic ordering for overlapping multi-day events: earlier start
-  // first, then longer span first (a longer event reads as the "anchor" of
-  // the week), then the stable occurrence_id as a final tie-breaker so
-  // render order never depends on array/fetch order.
-  multiDay.sort((a, b) => {
-    const boundsA = bounds.get(a.occurrence_id)!;
-    const boundsB = bounds.get(b.occurrence_id)!;
-    if (boundsA.startKey !== boundsB.startKey) {
-      return boundsA.startKey.localeCompare(boundsB.startKey);
-    }
-    const spanDiff = daySpan(boundsB.startKey, boundsB.endKey) - daySpan(boundsA.startKey, boundsA.endKey);
-    if (spanDiff !== 0) return spanDiff;
-    return a.occurrence_id.localeCompare(b.occurrence_id);
+  // Column span [0-6] this event actually occupies in *this* visible week
+  // — clipped at the week boundary, so an event that started three weeks
+  // ago and an event that started yesterday can both show, say, a 2-day
+  // visible bar this week and be compared like-for-like. Used for both
+  // lane-priority ordering (below) and actual grid placement (place()),
+  // so the two can never disagree about what "this event's bar" spans.
+  function visibleColumns(event: EventOccurrence): { start: number; end: number } {
+    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+    const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
+    const end = Math.min(6, days.reduce((last, day, index) => (dateKey(day) <= endKey ? index : last), -1));
+    return { start, end };
+  }
+
+  // Deterministic ordering for overlapping multi-day events: longer VISIBLE
+  // span within this week wins the higher (lower-numbered) lane first —
+  // this is the actual bar the user sees this week, not the event's full
+  // underlying duration, so an event only entering this week for its last
+  // two days competes on those two days, not on however many weeks it ran
+  // for in total. Ties broken by earlier visible start, then the stable
+  // occurrence_id so render order never depends on array/fetch order.
+  const multiDayWithColumns = multiDay.map((event) => ({ event, ...visibleColumns(event) }));
+  multiDayWithColumns.sort((a, b) => {
+    const spanA = a.end - a.start;
+    const spanB = b.end - b.start;
+    if (spanA !== spanB) return spanB - spanA;
+    if (a.start !== b.start) return a.start - b.start;
+    return a.event.occurrence_id.localeCompare(b.event.occurrence_id);
   });
 
   // Unchanged from the pre-existing single sort: start date, then title.
@@ -466,10 +469,8 @@ export function layoutWeekEvents(
   // reach, that lane was never occupied for that day's column in the first
   // place, so a single-day event there is free to use it — exactly the
   // per-day compaction this fix restores.
-  function place(event: EventOccurrence) {
-    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-    const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
-    const end = Math.min(6, days.reduce((last, day, index) => (dateKey(day) <= endKey ? index : last), -1));
+  function place(event: EventOccurrence, columns: { start: number; end: number }) {
+    const { start, end } = columns;
     if (end < start) return;
     let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
     if (row === -1) row = rowIntervals.length;
@@ -477,11 +478,13 @@ export function layoutWeekEvents(
     rows.push({ event, start, end, row });
   }
 
-  // Multi-day first, so a genuine lane contest on a shared day always
-  // resolves in its favour; single-day afterwards, free to reuse any lane
-  // a multi-day event left untouched on that particular day.
-  multiDay.forEach((event) => place(event));
-  singleDay.forEach((event) => place(event));
+  // Multi-day first, in the visible-span-priority order computed above, so
+  // a genuine lane contest on a shared day always resolves in the longer
+  // (or, on a tie, earlier-starting) bar's favour; single-day afterwards,
+  // free to reuse any lane a multi-day event left untouched on that
+  // particular day.
+  multiDayWithColumns.forEach(({ event, start, end }) => place(event, { start, end }));
+  singleDay.forEach((event) => place(event, visibleColumns(event)));
 
   return rows;
 }
