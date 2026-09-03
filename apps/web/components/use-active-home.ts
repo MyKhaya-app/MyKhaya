@@ -4,6 +4,7 @@ import { createContext, createElement, useContext, useEffect, useMemo, useState 
 import type { Home } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { useAuth } from "./auth-provider";
+import { syncWidgetSnapshot } from "./widget-bridge";
 
 const STORAGE_KEY = "mykhaya.activeHomeId";
 
@@ -45,6 +46,10 @@ function useActiveHomeState({ enabled = true }: { enabled?: boolean } = {}) {
   useEffect(() => {
     if (!activeHomeId || typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEY, activeHomeId);
+    // Old-Home data must not linger on the Home Screen after switching —
+    // this fires for the initial selection too, which is fine: it's the
+    // same fetch bootstrapNativeSession's own sync would otherwise race.
+    void syncWidgetSnapshot();
   }, [activeHomeId]);
 
   const activeHome = useMemo(

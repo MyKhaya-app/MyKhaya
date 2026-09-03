@@ -12,12 +12,33 @@ for why this is a thin shell and not a resurrection of the retired
 
 - **Here:** `capacitor.config.ts` (which live frontend origin to load, and
   the explicit `allowNavigation` allow-list), a minimal `www/index.html`
-  fallback page, and (once generated on a Mac — see the checklist below)
-  the native `ios/` Xcode project.
+  fallback page, the native `ios/` Xcode project (**committed to git** —
+  see below), `native/` (repo-managed Swift sources, including the
+  `MyKhayaWidgetCore` local Swift Package), and the Mac setup/recovery
+  scripts under `scripts/`.
 - **Not here:** any MyKhaya UI. Ordinary web/PWA feature work happens in
   `apps/web` exactly as before and reaches this shell automatically on next
   app launch, with no new iOS release, because the shell always loads the
   live origin.
+
+## The native `ios/` project is committed — this is not a build artifact
+
+Unlike a typical Capacitor project (where `ios/` is often gitignored and
+regenerated per-machine), **this repository commits `apps/ios-shell/ios/`**
+so a fresh Mac clone gets a complete, working, already-signed-once project —
+the exact one every other Mac uses — rather than a bare, unsigned
+regeneration missing every manual Xcode capability/entitlement change. A
+working native iOS project existing only on one Mac's local disk, never
+committed, is a real failure mode this repository has hit before — see
+[docs/mobile/ios-shell-mac-checklist.md](../../docs/mobile/ios-shell-mac-checklist.md)'s
+"If `ios/` is ever lost or corrupted" section for what to do if it ever
+happens again, and treat `npx cap add ios` as a recovery-only command, not
+routine setup — see "Commands that require macOS + Xcode" below.
+
+xcuserdata, DerivedData, build output, and machine-specific IDE state are
+still gitignored (`apps/ios-shell/ios/.gitignore`) — only the project
+structure, source, and configuration needed to reconstruct a working build
+are tracked.
 
 ## Windows-friendly commands
 
@@ -35,17 +56,19 @@ plain TypeScript — fully editable and testable from Windows.
 
 ## Commands that require macOS + Xcode
 
-Capacitor's `ios add`/`ios sync` and everything downstream of them needs
-CocoaPods and Xcode, which only run on macOS. **None of this has been run
-yet** — no `ios/` directory exists in this repo. See
+Everything below needs Xcode, which only runs on macOS. `ios/` is already
+committed to this repo, so a fresh Mac checkout does **not** need to
+generate it — see
 [the Mac handoff checklist](../../docs/mobile/ios-shell-mac-checklist.md)
-for the exact, minimal steps to do this once, on the Mac, when Phase 4
-begins.
+for the exact steps.
 
 ```sh
-npx cap add ios        # generates ios/ — macOS + CocoaPods only, one-time
 npx cap sync ios        # copies capacitor.config.ts + www/ into ios/ after any change to either
 npx cap open ios        # opens Xcode
+npx cap add ios         # RECOVERY-ONLY — no-ops if ios/ already exists;
+                         # only run this if ios/ is genuinely lost/corrupted,
+                         # after backing it up first (see the checklist's
+                         # "If ios/ is ever lost or corrupted" section)
 ```
 
 `cap sync ios` needs re-running (on the Mac) only when `capacitor.config.ts`,
@@ -61,6 +84,20 @@ native API uses the same frontend origin's `/api/v1` route in both environments.
 There is no separate `.env` file for this package; it is a single named
 variable, set when running `cap sync`/opening the relevant Xcode scheme, the
 same MYKHAYA_-prefixed convention used throughout the backend.
+
+## Home Screen widgets (Next Event, Calendar, To-do)
+
+Repository-managed Swift sources for MyKhaya's WidgetKit widgets live in
+`apps/ios-shell/native/`, including the `MyKhayaWidgetCore` local Swift
+Package (`native/WidgetCore/`) — the shared, XCTest-covered snapshot models
+and pure calendar/event/to-do display logic, imported by both the `App` and
+`MyKhayaWidgets` Xcode targets. `scripts/install-widget-sources.sh`
+(chained from `mac-bootstrap.sh`) installs the widget sources into the
+committed `ios/` project, creates/updates the `MyKhayaWidgets` extension
+target, and links the `MyKhayaWidgetCore` package into both targets —
+idempotently, safe to re-run after any `git pull`. Full architecture, data
+model, security model, and manual verification checklist: see
+[docs/mobile/ios-widgets.md](../../docs/mobile/ios-widgets.md).
 
 ## Native push / APNs
 

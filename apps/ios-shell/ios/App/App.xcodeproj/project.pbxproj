@@ -1,0 +1,634 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		04B9983967AF2C594B52CFE8 /* MyKhayaWidgetCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */; };
+		0AC6B8B26DFF59416A8A6690 /* MyKhayaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4475B4DA1EDC20977720D36B /* MyKhayaWidgetsBundle.swift */; };
+		0BBB9153FFE25E9F4E70B6E4 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FFDEB96A374B406799D2CC /* Color+Hex.swift */; };
+		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
+		3602F3C78D1C601EE084F99F /* NextEventWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A01DD9B4A643D3E13BF2E3 /* NextEventWidget.swift */; };
+		4A8F8570878052AECEC9233E /* .appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 88251383D8228AC5983F37F9 /* .appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
+		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
+		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
+		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
+		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
+		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
+		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
+		536DAA5120BE89BD01E8E189 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 267EE6FA2D4FE660091D5293 /* Foundation.framework */; };
+		55938AB4E30C5D58C44EA8BE /* CalendarViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DFE00C82B0FBFB91B3F8A30 /* CalendarViews.swift */; };
+		7439659A88C0317BD58DF56D /* WidgetBridgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */; };
+		76EC47C389C254FE4B8266B9 /* TodoViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC4673A7A57222864529C480 /* TodoViews.swift */; };
+		7953B0673D660068398A8EAE /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA3DB5330950B521A7044C7 /* MainViewController.swift */; };
+		8ADCFE0F8DAEC77954D2681E /* MyKhayaWidgetCore in Frameworks */ = {isa = PBXBuildFile; productRef = CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */; };
+		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
+		BB7D127C08279A2AF09CE8A7 /* TodoWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B14BC78F28CD29DA5158953 /* TodoWidget.swift */; };
+		BB93AA7519E5EB0FE473B9E4 /* NextEventViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C470DE596D938C60615630B6 /* NextEventViews.swift */; };
+		DC9A6BF024E7396E4503D5DD /* CalendarWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86369121C098782A39A02D2 /* CalendarWidget.swift */; };
+		E4EE24FC3D6F9CA0563DB2E0 /* TodoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5568CB6FC0AE88C6A727E132 /* TodoProvider.swift */; };
+		E5ADE660DAEFBE4DEB8DA12F /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512F2FA2FBB32DA405D82B2 /* DeepLink.swift */; };
+		F116D91478F5A7DD5B006162 /* CalendarProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A3A43502B4F616AABD6B0A /* CalendarProvider.swift */; };
+		FB130D2C71331663DDF08990 /* NextEventProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB344921B74A1E6B98B31E1 /* NextEventProvider.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		429A2DC87574581FE5ECB201 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ACD8C16AC04F1A5FAE641E0E;
+			remoteInfo = MyKhayaWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		192B9C3FF83276A957622E11 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4A8F8570878052AECEC9233E /* .appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0AB344921B74A1E6B98B31E1 /* NextEventProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NextEventProvider.swift; path = ../../MyKhayaWidgets/Timeline/NextEventProvider.swift; sourceTree = "<group>"; };
+		267EE6FA2D4FE660091D5293 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
+		3B14BC78F28CD29DA5158953 /* TodoWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TodoWidget.swift; path = ../../MyKhayaWidgets/TodoWidget.swift; sourceTree = "<group>"; };
+		4475B4DA1EDC20977720D36B /* MyKhayaWidgetsBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MyKhayaWidgetsBundle.swift; path = ../../MyKhayaWidgets/MyKhayaWidgetsBundle.swift; sourceTree = "<group>"; };
+		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
+		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
+		51F0B83151C50FE521E453F9 /* WidgetSnapshotStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetSnapshotStoreTests.swift; path = ../../native/widgetsTests/WidgetSnapshotStoreTests.swift; sourceTree = "<group>"; };
+		5568CB6FC0AE88C6A727E132 /* TodoProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TodoProvider.swift; path = ../../MyKhayaWidgets/Timeline/TodoProvider.swift; sourceTree = "<group>"; };
+		59A01DD9B4A643D3E13BF2E3 /* NextEventWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NextEventWidget.swift; path = ../../MyKhayaWidgets/NextEventWidget.swift; sourceTree = "<group>"; };
+		75FFDEB96A374B406799D2CC /* Color+Hex.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = "Color+Hex.swift"; path = "../../MyKhayaWidgets/Shared/Color+Hex.swift"; sourceTree = "<group>"; };
+		7DFE00C82B0FBFB91B3F8A30 /* CalendarViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalendarViews.swift; path = ../../MyKhayaWidgets/Views/CalendarViews.swift; sourceTree = "<group>"; };
+		88251383D8228AC5983F37F9 /* .appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = .appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WidgetBridgePlugin.swift; sourceTree = "<group>"; };
+		929F848D304980D800561283 /* AppRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppRelease.entitlements; sourceTree = "<group>"; };
+		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		B86369121C098782A39A02D2 /* CalendarWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalendarWidget.swift; path = ../../MyKhayaWidgets/CalendarWidget.swift; sourceTree = "<group>"; };
+		BC726EB5E341ED093D8F669C /* MyKhayaWidgetsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyKhayaWidgetsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BDA3DB5330950B521A7044C7 /* MainViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MainViewController.swift; sourceTree = "<group>"; };
+		C470DE596D938C60615630B6 /* NextEventViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NextEventViews.swift; path = ../../MyKhayaWidgets/Views/NextEventViews.swift; sourceTree = "<group>"; };
+		D1A3A43502B4F616AABD6B0A /* CalendarProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalendarProvider.swift; path = ../../MyKhayaWidgets/Timeline/CalendarProvider.swift; sourceTree = "<group>"; };
+		D1C008130EA5B5A954389BE1 /* WidgetCalendarLayoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetCalendarLayoutTests.swift; path = ../../native/widgetsTests/WidgetCalendarLayoutTests.swift; sourceTree = "<group>"; };
+		EC4673A7A57222864529C480 /* TodoViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TodoViews.swift; path = ../../MyKhayaWidgets/Views/TodoViews.swift; sourceTree = "<group>"; };
+		F512F2FA2FBB32DA405D82B2 /* DeepLink.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeepLink.swift; path = ../../MyKhayaWidgets/Shared/DeepLink.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		504EC3011FED79650016851F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+				04B9983967AF2C594B52CFE8 /* MyKhayaWidgetCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D61806A94FDEA7723B0A6CC2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				536DAA5120BE89BD01E8E189 /* Foundation.framework in Frameworks */,
+				8ADCFE0F8DAEC77954D2681E /* MyKhayaWidgetCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		027042F74F4C9C0A28D5B0F1 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				267EE6FA2D4FE660091D5293 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		2FE217EB460464073FD11B88 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				027042F74F4C9C0A28D5B0F1 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		37DED9077EE49925A87096CF /* MyKhayaWidgetsTests */ = {
+			isa = PBXGroup;
+			children = (
+				D1C008130EA5B5A954389BE1 /* WidgetCalendarLayoutTests.swift */,
+				51F0B83151C50FE521E453F9 /* WidgetSnapshotStoreTests.swift */,
+			);
+			name = MyKhayaWidgetsTests;
+			sourceTree = SOURCE_ROOT;
+		};
+		504EC2FB1FED79650016851F = {
+			isa = PBXGroup;
+			children = (
+				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
+				504EC3061FED79650016851F /* App */,
+				504EC3051FED79650016851F /* Products */,
+				88251383D8228AC5983F37F9 /* .appex */,
+				2FE217EB460464073FD11B88 /* Frameworks */,
+				E86AFE6B782412D527B19463 /* MyKhayaWidgets */,
+				BC726EB5E341ED093D8F669C /* MyKhayaWidgetsTests.xctest */,
+				37DED9077EE49925A87096CF /* MyKhayaWidgetsTests */,
+			);
+			sourceTree = "<group>";
+		};
+		504EC3051FED79650016851F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				504EC3041FED79650016851F /* App.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		504EC3061FED79650016851F /* App */ = {
+			isa = PBXGroup;
+			children = (
+				929F848D304980D800561283 /* AppRelease.entitlements */,
+				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
+				50379B222058CBB4000EE86E /* capacitor.config.json */,
+				504EC3071FED79650016851F /* AppDelegate.swift */,
+				504EC30B1FED79650016851F /* Main.storyboard */,
+				504EC30E1FED79650016851F /* Assets.xcassets */,
+				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
+				504EC3131FED79650016851F /* Info.plist */,
+				2FAD9762203C412B000D30F8 /* config.xml */,
+				50B271D01FEDC1A000F3C39B /* public */,
+				89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */,
+				BDA3DB5330950B521A7044C7 /* MainViewController.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E86AFE6B782412D527B19463 /* MyKhayaWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				B86369121C098782A39A02D2 /* CalendarWidget.swift */,
+				4475B4DA1EDC20977720D36B /* MyKhayaWidgetsBundle.swift */,
+				59A01DD9B4A643D3E13BF2E3 /* NextEventWidget.swift */,
+				75FFDEB96A374B406799D2CC /* Color+Hex.swift */,
+				F512F2FA2FBB32DA405D82B2 /* DeepLink.swift */,
+				D1A3A43502B4F616AABD6B0A /* CalendarProvider.swift */,
+				0AB344921B74A1E6B98B31E1 /* NextEventProvider.swift */,
+				5568CB6FC0AE88C6A727E132 /* TodoProvider.swift */,
+				3B14BC78F28CD29DA5158953 /* TodoWidget.swift */,
+				7DFE00C82B0FBFB91B3F8A30 /* CalendarViews.swift */,
+				C470DE596D938C60615630B6 /* NextEventViews.swift */,
+				EC4673A7A57222864529C480 /* TodoViews.swift */,
+			);
+			name = MyKhayaWidgets;
+			sourceTree = SOURCE_ROOT;
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		504EC3031FED79650016851F /* App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 504EC3161FED79650016851F /* Build configuration list for PBXNativeTarget "App" */;
+			buildPhases = (
+				504EC3001FED79650016851F /* Sources */,
+				504EC3011FED79650016851F /* Frameworks */,
+				504EC3021FED79650016851F /* Resources */,
+				192B9C3FF83276A957622E11 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				002419AA050D5792F39A98E6 /* PBXTargetDependency */,
+			);
+			name = App;
+			packageProductDependencies = (
+				4D22ABE82AF431CB00220026 /* CapApp-SPM */,
+				8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */,
+			);
+			productName = App;
+			productReference = 504EC3041FED79650016851F /* App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		ACD8C16AC04F1A5FAE641E0E /* MyKhayaWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E22B8BE3CF94F443B9030A98 /* Build configuration list for PBXNativeTarget "MyKhayaWidgets" */;
+			buildPhases = (
+				D477E10108921F7ADB154123 /* Sources */,
+				D61806A94FDEA7723B0A6CC2 /* Frameworks */,
+				8C6155BCC5EA30F77DD8B8B2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyKhayaWidgets;
+			packageProductDependencies = (
+				CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */,
+			);
+			productName = MyKhayaWidgets;
+			productReference = 88251383D8228AC5983F37F9 /* .appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		504EC2FC1FED79650016851F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 0920;
+				LastUpgradeCheck = 0920;
+				TargetAttributes = {
+					504EC3031FED79650016851F = {
+						CreatedOnToolsVersion = 9.2;
+						LastSwiftMigration = 1100;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */;
+			compatibilityVersion = "Xcode 8.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 504EC2FB1FED79650016851F;
+			packageReferences = (
+				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
+				1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */,
+			);
+			productRefGroup = 504EC3051FED79650016851F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				504EC3031FED79650016851F /* App */,
+				ACD8C16AC04F1A5FAE641E0E /* MyKhayaWidgets */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		504EC3021FED79650016851F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
+				50B271D11FEDC1A000F3C39B /* public in Resources */,
+				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,
+				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
+				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
+				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8C6155BCC5EA30F77DD8B8B2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		504EC3001FED79650016851F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
+				7439659A88C0317BD58DF56D /* WidgetBridgePlugin.swift in Sources */,
+				7953B0673D660068398A8EAE /* MainViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D477E10108921F7ADB154123 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DC9A6BF024E7396E4503D5DD /* CalendarWidget.swift in Sources */,
+				0AC6B8B26DFF59416A8A6690 /* MyKhayaWidgetsBundle.swift in Sources */,
+				3602F3C78D1C601EE084F99F /* NextEventWidget.swift in Sources */,
+				0BBB9153FFE25E9F4E70B6E4 /* Color+Hex.swift in Sources */,
+				E5ADE660DAEFBE4DEB8DA12F /* DeepLink.swift in Sources */,
+				F116D91478F5A7DD5B006162 /* CalendarProvider.swift in Sources */,
+				FB130D2C71331663DDF08990 /* NextEventProvider.swift in Sources */,
+				E4EE24FC3D6F9CA0563DB2E0 /* TodoProvider.swift in Sources */,
+				BB7D127C08279A2AF09CE8A7 /* TodoWidget.swift in Sources */,
+				55938AB4E30C5D58C44EA8BE /* CalendarViews.swift in Sources */,
+				BB93AA7519E5EB0FE473B9E4 /* NextEventViews.swift in Sources */,
+				76EC47C389C254FE4B8266B9 /* TodoViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		002419AA050D5792F39A98E6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MyKhayaWidgets;
+			target = ACD8C16AC04F1A5FAE641E0E /* MyKhayaWidgets */;
+			targetProxy = 429A2DC87574581FE5ECB201 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		504EC30B1FED79650016851F /* Main.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				504EC30C1FED79650016851F /* Base */,
+			);
+			name = Main.storyboard;
+			sourceTree = "<group>";
+		};
+		504EC3101FED79650016851F /* LaunchScreen.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				504EC3111FED79650016851F /* Base */,
+			);
+			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		504EC3141FED79650016851F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		504EC3151FED79650016851F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		504EC3171FED79650016851F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/AppDebug.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = M86392YDLQ;
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.18;
+				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		504EC3181FED79650016851F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/AppRelease.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = M86392YDLQ;
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.18;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D73490D79FF2709A3537EAD3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = M86392YDLQ;
+				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1.18;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		EDFC31D976A5333CF654CF45 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = M86392YDLQ;
+				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1.18;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				504EC3141FED79650016851F /* Debug */,
+				504EC3151FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		504EC3161FED79650016851F /* Build configuration list for PBXNativeTarget "App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				504EC3171FED79650016851F /* Debug */,
+				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E22B8BE3CF94F443B9030A98 /* Build configuration list for PBXNativeTarget "MyKhayaWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EDFC31D976A5333CF654CF45 /* Release */,
+				D73490D79FF2709A3537EAD3 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../native/WidgetCore;
+		};
+		D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "CapApp-SPM";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4D22ABE82AF431CB00220026 /* CapApp-SPM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */;
+			productName = "CapApp-SPM";
+		};
+		8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
+			productName = MyKhayaWidgetCore;
+		};
+		CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
+			productName = MyKhayaWidgetCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 504EC2FC1FED79650016851F /* Project object */;
+}

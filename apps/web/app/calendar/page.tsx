@@ -38,6 +38,7 @@ import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { useActiveHome } from "@/components/use-active-home";
+import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { MonthSwipeView } from "./month-view";
 import {
   addMonths,
@@ -1281,6 +1282,10 @@ export default function CalendarPage() {
       ),
     );
     setEvents([...eventRows.items, ...sharedEventLists.flat()]);
+    // Widget event data may be stale after any create/update/delete that
+    // routes through this loader (see widget-bridge.ts's own fetch, which
+    // covers a wider date range than this page's visible window).
+    void syncWidgetSnapshot();
   }, [activeHomeId, featureEnabled, fetchRange.end, fetchRange.start]);
 
   useEffect(() => {
