@@ -62,6 +62,16 @@ There is no separate `.env` file for this package; it is a single named
 variable, set when running `cap sync`/opening the relevant Xcode scheme, the
 same MYKHAYA_-prefixed convention used throughout the backend.
 
+## Home Screen widgets (Next Event, Calendar, To-do)
+
+Repository-managed Swift sources for MyKhaya's WidgetKit widgets live in
+`apps/ios-shell/native/` (not `ios/` — that only exists on a Mac).
+`scripts/install-widget-sources.sh` (chained from `mac-bootstrap.sh`)
+installs them into the Mac-generated project and creates the
+`MyKhayaWidgets` extension target. Full architecture, data model, security
+model, and manual verification checklist: see
+[docs/mobile/ios-widgets.md](../../docs/mobile/ios-widgets.md).
+
 ## Native push / APNs
 
 The native shell uses `@capacitor/push-notifications`; it does not use the

@@ -62,6 +62,9 @@ if [ -f "$INFO_PLIST" ] && ! grep -q 'NSFaceIDUsageDescription' "$INFO_PLIST"; t
   /usr/libexec/PlistBuddy -c "Add :NSFaceIDUsageDescription string Use Face ID to securely unlock MyKhaya and access your family information." "$INFO_PLIST"
 fi
 
+echo "== 5c-widgets. Install MyKhaya Home Screen widgets (Phase 5) =="
+bash scripts/install-widget-sources.sh
+
 echo "== 5d. Inspect APNs entitlements (signing is not changed by this script) =="
 ENTITLEMENTS_FILE="ios/App/App/App.entitlements"
 if [ -f "$ENTITLEMENTS_FILE" ]; then

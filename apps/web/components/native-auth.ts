@@ -10,6 +10,7 @@ import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 import { setBiometricSignInEnabled } from "./native-biometric-preference";
 import { authenticateWithBiometrics, getBiometricCapability, isBiometricCancellation } from "./native-biometric";
+import { clearWidgetSnapshot, syncWidgetSnapshot } from "./widget-bridge";
 
 export class NativeBiometricUnlockError extends Error {
   readonly code: string;
@@ -130,6 +131,7 @@ export function bootstrapNativeSession(): Promise<User | null> {
     biometricDebug("session_restoration_started");
     const restored = await nativeClient.bootstrapSession();
     biometricDebug("session_restoration_completed", { authenticated: Boolean(restored) });
+    if (restored) void syncWidgetSnapshot();
     return restored;
   })();
 }
@@ -138,6 +140,7 @@ export function nativeLogin(email: string, password: string): Promise<User> {
   lastNativeLoginDiagnostic = null;
   return client().login(email, password).then((user) => {
     offerBiometricAfterLogin = true;
+    void syncWidgetSnapshot();
     return user;
   }).catch((error: unknown) => {
     if (error instanceof Error && "status" in error && typeof error.status === "number") {
@@ -174,7 +177,10 @@ export function nativeChildLogin(
   username: string,
   pin: string,
 ): Promise<User> {
-  return client().childLogin(homeCode, username, pin);
+  return client().childLogin(homeCode, username, pin).then((user) => {
+    void syncWidgetSnapshot();
+    return user;
+  });
 }
 
 /** Explicit sign-out (Phase 8): revokes the server-side session (and its
@@ -193,6 +199,9 @@ export async function nativeLogout(): Promise<void> {
   } finally {
     api.setRequestTransport(null);
     await setBiometricSignInEnabled(false);
+    // Must run even if the network logout call failed above — a widget
+    // must never keep showing a signed-out user's household data.
+    await clearWidgetSnapshot();
   }
 }
 

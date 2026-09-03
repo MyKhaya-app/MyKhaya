@@ -17,6 +17,7 @@ import { FamilyUpsell } from "@/components/family-upsell";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { routineDueLabel } from "@/app/home/routine-utils";
+import { syncWidgetSnapshot } from "@/components/widget-bridge";
 
 // Routines and Reminders stay separate backend domains (separate models,
 // APIs, completion semantics — see docs/architecture/notification-engine.md)
@@ -126,12 +127,14 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId) return;
     const response = await api.routines(activeHomeId);
     setRoutines(response.items);
+    void syncWidgetSnapshot();
   }, [activeHomeId]);
 
   const loadReminders = useCallback(async () => {
     if (!activeHomeId) return;
     const response = await api.reminders(activeHomeId);
     setReminders(response.items);
+    void syncWidgetSnapshot();
   }, [activeHomeId]);
 
   useEffect(() => {

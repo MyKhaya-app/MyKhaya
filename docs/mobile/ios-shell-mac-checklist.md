@@ -211,6 +211,17 @@ persistent-login and Quick Sign-In failures. Re-run `npx cap sync ios` (or
 this change, and confirm the resulting `Podfile`/`Package.swift` now lists
 all four plugins before building again.
 
+## Step 9 — Home Screen widgets (Phase 5)
+
+`mac-bootstrap.sh` now runs `scripts/install-widget-sources.sh`
+automatically (between Steps 2 and 3 above), which installs the
+`MyKhayaWidgets` extension target and its App Group. See
+[docs/mobile/ios-widgets.md](ios-widgets.md) for the full architecture and
+its own detailed manual verification checklist (widget gallery, event/
+reminder updates, active Home switching, logout, deep links, light/dark,
+TestFlight archive entitlement checks). Run that checklist after this
+one — it assumes Steps 1–8 above already passed.
+
 ## What is deliberately still open after this checklist
 
 - **The Stripe billing navigation question** flagged in ADR 0012 — needs a
