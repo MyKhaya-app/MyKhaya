@@ -73,10 +73,10 @@ FileUtils.mkdir_p(source_root)
 
 def add_swift_files(project, group, target, dir, seen_paths)
   Dir.glob(File.join(dir, '**', '*.swift')).sort.each do |absolute_path|
-    relative = Pathname.new(absolute_path).relative_to(Pathname.new(Dir.pwd)).to_s
+    relative = Pathname.new(absolute_path).relative_path_from(Pathname.new(Dir.pwd)).to_s
     next if seen_paths.include?(relative)
 
-    file_ref = group.files.find { |f| f.path == File.basename(absolute_path) } ||
+    file_ref = group.files.find { |f| File.basename(f.path.to_s) == File.basename(absolute_path) } ||
                group.new_reference(absolute_path)
     unless target.source_build_phase.files_references.include?(file_ref)
       target.add_file_references([file_ref])
@@ -85,8 +85,28 @@ def add_swift_files(project, group, target, dir, seen_paths)
   end
 end
 
+# Prunes file references for .swift files that no longer exist on disk —
+# e.g. WidgetSnapshot.swift/WidgetSnapshotStore.swift, extracted into the
+# MyKhayaWidgetCore package and deleted from native/widgets/Shared/.
+# add_swift_files only ever adds; without this, a moved/deleted source
+# leaves a stale PBXFileReference that fails the build with "Build input
+# files cannot be found" the next time MyKhayaWidgets/ is rsynced from
+# native/widgets/ (rsync --delete removes the copy, but never touches
+# project.pbxproj).
+def prune_missing_swift_files(group, target)
+  group.files.select { |f| f.path.to_s.end_with?('.swift') }.each do |file_ref|
+    absolute_path = file_ref.real_path.to_s
+    next if File.exist?(absolute_path)
+
+    target.source_build_phase.remove_file_reference(file_ref)
+    file_ref.remove_from_project
+    puts "== Removed stale file reference (source no longer exists): #{absolute_path} =="
+  end
+end
+
 seen = []
 add_swift_files(project, widgets_group, widget_target, source_root, seen)
+prune_missing_swift_files(widgets_group, widget_target)
 puts "== Widget source files in target: #{seen.size} =="
 
 # --- Info.plist for the extension ----------------------------------------
@@ -100,6 +120,12 @@ unless File.exist?(widget_info_plist_path)
     <dict>
     	<key>CFBundleDisplayName</key>
     	<string>MyKhaya Widgets</string>
+    	<key>CFBundleExecutable</key>
+    	<string>$(EXECUTABLE_NAME)</string>
+    	<key>CFBundleIdentifier</key>
+    	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    	<key>CFBundleName</key>
+    	<string>$(PRODUCT_NAME)</string>
     	<key>CFBundleShortVersionString</key>
     	<string>$(MARKETING_VERSION)</string>
     	<key>CFBundleVersion</key>
@@ -114,6 +140,24 @@ unless File.exist?(widget_info_plist_path)
   PLIST
   puts "== Wrote #{widget_info_plist_path} =="
 end
+
+# Self-heal a widget Info.plist written by an older version of this script
+# that omitted CFBundleExecutable/CFBundleName — `xcodebuild build` succeeds
+# either way (nothing about compiling/linking needs them), but a real
+# install (simctl, and presumably App Store) rejects the resulting .appex:
+# "missing or invalid CFBundleExecutable" / "does not have a CFBundleName
+# key with a non-zero length string value". Verified by actually attempting
+# `simctl install`, not assumed from a successful build.
+info_plist = Xcodeproj::Plist.read_from_path(widget_info_plist_path)
+changed = false
+{ 'CFBundleExecutable' => '$(EXECUTABLE_NAME)', 'CFBundleName' => '$(PRODUCT_NAME)' }.each do |key, value|
+  next if info_plist[key]
+
+  info_plist[key] = value
+  changed = true
+  puts "== Added missing #{key} to #{widget_info_plist_path} =="
+end
+Xcodeproj::Plist.write_to_path(info_plist, widget_info_plist_path) if changed
 
 # --- Entitlements for the extension (App Group only — no APNs here) ------
 
@@ -136,11 +180,29 @@ end
 
 # --- Build settings --------------------------------------------------------
 
+# CODE_SIGN_ENTITLEMENTS/INFOPLIST_FILE are resolved by Xcode relative to
+# SRCROOT (the directory containing the .xcodeproj, i.e. ios/App/) — NOT
+# relative to Dir.pwd (apps/ios-shell/) where this script runs and where
+# source_root actually lives. A bare "MyKhayaWidgets/..." string previously
+# left both paths pointing at a nonexistent ios/App/MyKhayaWidgets/, which
+# Xcode surfaced as "could not be opened" on the entitlements file (and would
+# equally have failed to find Info.plist). Compute the real relative path
+# instead of hardcoding "../../" so this stays correct if nesting changes.
+srcroot = File.dirname(File.expand_path(PROJECT_PATH))
+entitlements_relative = Pathname.new(widget_entitlements_path).relative_path_from(Pathname.new(srcroot)).to_s
+info_plist_relative = Pathname.new(widget_info_plist_path).relative_path_from(Pathname.new(srcroot)).to_s
+
 widget_target.build_configurations.each do |config|
+  # Without this, PRODUCT_NAME is unset and the built extension's filename
+  # collapses to a bare ".appex" — indistinguishable from the main app
+  # target's own product, which xcodebuild rejects as "Multiple commands
+  # produce '.../.appex'". $(TARGET_NAME) matches every other target's
+  # convention in this project (see the App target's own PRODUCT_NAME).
+  config.build_settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = WIDGET_BUNDLE_ID
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = WIDGET_DEPLOYMENT_TARGET
-  config.build_settings['CODE_SIGN_ENTITLEMENTS'] = "#{WIDGET_TARGET_NAME}/MyKhayaWidgets.entitlements"
-  config.build_settings['INFOPLIST_FILE'] = "#{WIDGET_TARGET_NAME}/Info.plist"
+  config.build_settings['CODE_SIGN_ENTITLEMENTS'] = entitlements_relative
+  config.build_settings['INFOPLIST_FILE'] = info_plist_relative
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   config.build_settings['SKIP_INSTALL'] = 'YES'
@@ -154,23 +216,29 @@ end
 # docs/mobile/ios-widgets.md's explicit before/after diff requirement) and
 # only add com.apple.security.application-groups if missing.
 
-app_entitlements_path = 'ios/App/App/App.entitlements'
-if File.exist?(app_entitlements_path)
-  plist = Xcodeproj::Plist.read_from_path(app_entitlements_path)
-  groups = plist['com.apple.security.application-groups'] || []
-  unless groups.include?(APP_GROUP_ID)
-    groups << APP_GROUP_ID
-    plist['com.apple.security.application-groups'] = groups
-    Xcodeproj::Plist.write_to_path(plist, app_entitlements_path)
-    puts "== Added App Group entitlement to #{app_entitlements_path} =="
+# The App target uses separate per-configuration entitlements files
+# (AppDebug.entitlements / AppRelease.entitlements) rather than a single
+# App.entitlements — see docs/mobile/ios-shell-mac-checklist.md. Both must
+# get the App Group; a single "App.entitlements" path would silently never
+# match either real file.
+%w[ios/App/App/AppDebug.entitlements ios/App/App/AppRelease.entitlements].each do |app_entitlements_path|
+  if File.exist?(app_entitlements_path)
+    plist = Xcodeproj::Plist.read_from_path(app_entitlements_path)
+    groups = plist['com.apple.security.application-groups'] || []
+    unless groups.include?(APP_GROUP_ID)
+      groups << APP_GROUP_ID
+      plist['com.apple.security.application-groups'] = groups
+      Xcodeproj::Plist.write_to_path(plist, app_entitlements_path)
+      puts "== Added App Group entitlement to #{app_entitlements_path} =="
+    end
+    aps_present = plist.key?('aps-environment')
+    puts "== aps-environment present in #{app_entitlements_path} after edit: #{aps_present} =="
+    unless aps_present
+      puts "WARNING: aps-environment missing from #{app_entitlements_path} — APNs entitlement may have been lost or was never present. Investigate before archiving."
+    end
+  else
+    puts "WARNING: #{app_entitlements_path} not found — cannot add the App Group entitlement to the main app target. Add it manually in Xcode: App target -> Signing & Capabilities -> + Capability -> App Groups -> #{APP_GROUP_ID}."
   end
-  aps_present = plist.key?('aps-environment')
-  puts "== aps-environment present in #{app_entitlements_path} after edit: #{aps_present} =="
-  unless aps_present
-    puts "WARNING: aps-environment missing from #{app_entitlements_path} — APNs entitlement may have been lost or was never present. Investigate before archiving."
-  end
-else
-  puts "WARNING: #{app_entitlements_path} not found — cannot add the App Group entitlement to the main app target. Add it manually in Xcode: App target -> Signing & Capabilities -> + Capability -> App Groups -> #{APP_GROUP_ID}."
 end
 
 # --- Embed the extension in the main app target ---------------------------

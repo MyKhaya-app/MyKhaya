@@ -1,0 +1,11 @@
+# apps/ios-shell/MyKhayaWidgets/ is a working copy `rsync -a --delete`d from
+# native/widgets/ every time scripts/install-widget-sources.sh runs (part of
+# the normal mac-bootstrap.sh flow, not just recovery) — the committed
+# ios/App/App.xcodeproj references it via relative (../../MyKhayaWidgets/...)
+# paths, but its actual Swift file contents are always a disposable, fully
+# reproducible copy of the tracked apps/ios-shell/native/widgets/ source.
+# Committing it would duplicate tracked source and risk it silently
+# diverging from native/widgets/ if someone ever hand-edits the copy instead
+# of the source. Same pattern as ios/App/App/public/ (Capacitor's own
+# gitignore already excludes that regenerated copy for the same reason).
+MyKhayaWidgets/

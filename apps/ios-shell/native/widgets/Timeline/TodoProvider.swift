@@ -1,4 +1,5 @@
 import WidgetKit
+import MyKhayaWidgetCore
 
 struct TodoEntry: TimelineEntry {
     let date: Date

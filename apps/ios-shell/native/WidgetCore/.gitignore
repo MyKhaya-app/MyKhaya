@@ -1,0 +1,7 @@
+# Standard SwiftPM local build/IDE artifacts — never source, always
+# regenerable by `swift build`/`swift test`/Xcode resolving the package.
+.build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+.netrc

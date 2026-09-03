@@ -1,4 +1,5 @@
 import WidgetKit
+import MyKhayaWidgetCore
 
 struct CalendarEntry: TimelineEntry {
     let date: Date
