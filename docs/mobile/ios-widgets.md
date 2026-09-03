@@ -63,14 +63,23 @@ never imports any auth/Keychain code. It only reads the file
 
 ```
 apps/ios-shell/native/
+  WidgetCore/                  — local Swift Package: MyKhayaWidgetCore
+    Package.swift
+    Sources/MyKhayaWidgetCore/
+      WidgetSnapshot.swift       — Codable mirror of widget-snapshot.ts
+      WidgetSnapshotStore.swift  — App Group read/write, atomic, versioned
+      CalendarLayout.swift       — monthGridDays/dayKey/eventsByDay
+      EventDisplay.swift         — currentlyShownEvent/eventTimeLabel/dueLabel
+    Tests/MyKhayaWidgetCoreTests/
+      WidgetSnapshotTests.swift
+      CalendarLayoutTests.swift
+      EventDisplayTests.swift
   widgets/
     MyKhayaWidgetsBundle.swift
     NextEventWidget.swift
     CalendarWidget.swift
     TodoWidget.swift
     Shared/
-      WidgetSnapshot.swift        — Codable mirror of widget-snapshot.ts
-      WidgetSnapshotStore.swift   — App Group read/write, atomic, versioned
       DeepLink.swift              — mykhaya:// URL builder
       Color+Hex.swift
     Timeline/
@@ -84,14 +93,33 @@ apps/ios-shell/native/
   plugin/
     WidgetBridgePlugin.swift   — installed into the App target
     MainViewController.swift  — installed into the App target
-  widgetsTests/
-    WidgetSnapshotStoreTests.swift
-    WidgetCalendarLayoutTests.swift
 ```
 
-`native/` is **not** `ios/` — it is source that `ios/` does not yet exist
-to contain. `scripts/install-widget-sources.sh` is what turns it into
-part of the real Xcode project, on the Mac, after `cap add ios`.
+`native/` sources (including the `WidgetCore` package) are the source of
+truth; `scripts/install-widget-sources.sh` installs/updates copies of the
+`widgets/`/`plugin/` sources into the committed `ios/` project and links
+the `WidgetCore` package into both the `App` and `MyKhayaWidgets` Xcode
+targets — idempotently, safe to re-run any time after a `git pull`.
+
+### Why a separate local Swift Package, not just files under `native/widgets/`
+
+`WidgetSnapshot`/`WidgetSnapshotStore` and the pure calendar/event/to-do
+display helpers used to be plain files compiled separately into both the
+`App` and `MyKhayaWidgets` targets. They were extracted into the
+`MyKhayaWidgetCore` local Swift Package (`native/WidgetCore/`) specifically
+so they can be unit-tested: **an app extension's own compiled code cannot
+be an XCTest host** — a hosted test bundle (`TEST_HOST` pointed at the
+built `.appex`) and a logic-only test bundle both fail identically at link
+time (`ld: symbol(s) not found for architecture arm64`), because an
+extension isn't an independently launchable process XCTest can attach to
+or link against. A local Swift Package's library product compiles into
+each importing target exactly as the old loose files did, but also has its
+own test target that `swift test`/`xcodebuild test` can run directly and
+independently of either app target. `WidgetKit`, `SwiftUI`-specific
+rendering, `TimelineProvider` conformance, and the `Widget`/`WidgetBundle`
+structs themselves remain in `native/widgets/` — they're WidgetKit
+lifecycle code, not portable domain logic, and have no independent
+existence outside the extension that hosts them.
 
 ## Adding another MyKhaya widget later
 
@@ -364,22 +392,38 @@ introduced.
 
 ## Verification status — what is proven, what is not
 
-**Proven on Windows** (`pnpm --filter <pkg> test`/`typecheck`, this
-session): `widget-snapshot.ts`'s event selection, calendar-month shaping,
-to-do ordering, and no-secrets assertions (26 tests); `widget-bridge.ts`'s
-native-shell gating, Home fallback, and logout-wins-over-sync behaviour (7
-tests); the full `apps/web` TypeScript project still typechecks cleanly
-after every wiring change.
+**Proven on Windows** (`pnpm --filter <pkg> test`/`typecheck`):
+`widget-snapshot.ts`'s event selection, calendar-month shaping, to-do
+ordering, and no-secrets assertions; `widget-bridge.ts`'s native-shell
+gating, Home fallback, and logout-wins-over-sync behaviour; the full
+`apps/web` TypeScript project still typechecks cleanly after every wiring
+change.
 
-**Not provable on Windows, requires the Mac checklist below**: that the
-Swift code compiles at all; that `setup-widget-extension.rb` actually
-produces a valid, buildable `MyKhayaWidgets` target; that the widget
-gallery shows MyKhaya; that any widget renders correctly; that the
-`mykhaya://` deep link actually opens the app and navigates the WebView;
-that `WidgetCenter.shared.reloadAllTimelines()` visibly refreshes a
-Home-Screen-pinned widget; that App Group entitlements are accepted by
-Xcode's signing step; that TestFlight archiving succeeds with the new
-target embedded.
+**Proven on a Mac** (real `xcodebuild`, not a claim): `App` and
+`MyKhayaWidgets` both build successfully for the iOS Simulator, with
+`MyKhayaWidgets.appex` embedded via a real "Embed App Extensions" build
+phase; `setup-widget-extension.rb` produces a valid, buildable target with
+correct bundle ID/deployment target/entitlements/`Info.plist`; the
+`MyKhayaWidgetCore` package's 36-test XCTest suite (Codable round-trip,
+schema version/corruption handling, calendar month-grid shaping across
+different first-weekdays and month lengths, event-day grouping including
+multi-day spans, event time/due-date display labels, BST/UTC boundary
+parsing) passes via `xcodebuild test`; the full install pipeline
+(`install-widget-sources.sh` → `setup-widget-extension.rb` →
+`link-widget-core-package.rb` → `ensure-widget-schemes.rb`) is idempotent —
+run twice in direct succession with zero duplicate targets, file
+references, package dependencies, or schemes.
+
+**Still not provable without a physical device or a signed-in real
+backend session**: TestFlight archiving with the new target embedded
+(needs a Distribution certificate/profile, not yet attempted); the
+`mykhaya://` deep link actually opening the app and navigating the WebView
+against a real signed-in session; `WidgetCenter.shared.reloadAllTimelines()`
+visibly refreshing a Home-Screen-pinned widget after a real calendar/
+routine/reminder change; active-Home switching and logout clearing against
+real backend data. See "Manual Mac verification checklist" below for
+exactly what's been walked through in the Simulator vs. what still needs a
+signed-in session.
 
 ## Manual Mac verification checklist
 

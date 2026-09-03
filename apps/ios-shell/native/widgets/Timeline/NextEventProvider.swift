@@ -1,4 +1,5 @@
 import WidgetKit
+import MyKhayaWidgetCore
 
 // Deployment target note: written against the classic `TimelineProvider`
 // protocol (not `AppIntentTimelineProvider`, iOS 17+ only) and plain
@@ -44,11 +45,4 @@ struct NextEventProvider: TimelineProvider {
 
         completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
     }
-}
-
-/// The event a Small widget's single-event view is currently showing —
-/// same "soonest not-yet-finished" rule the snapshot itself already
-/// applied, kept here only to pick a sensible next-refresh instant.
-func currentlyShownEvent(in snapshot: WidgetSnapshot, at date: Date) -> WidgetEvent? {
-    snapshot.upcomingEvents.first
 }

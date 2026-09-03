@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import MyKhayaWidgetCore
 
 private struct SignedOutTodoView: View {
     var body: some View {
@@ -33,13 +34,6 @@ private struct EmptyTodoView: View {
     }
 }
 
-private func dueLabel(_ item: WidgetTodoItem) -> String {
-    if item.overdue { return "Overdue" }
-    guard let dueAt = item.dueAt else { return "" }
-    let todayKey = ISO8601DateFormatter().string(from: Date()).prefix(10)
-    return dueAt.hasPrefix(todayKey) ? "Today" : "Upcoming"
-}
-
 private struct TodoRow: View {
     let item: WidgetTodoItem
 
@@ -54,7 +48,7 @@ private struct TodoRow: View {
                     .font(.subheadline.weight(.medium))
                     .lineLimit(2)
                     .truncationMode(.tail)
-                Text(dueLabel(item))
+                Text(dueLabel(for: item))
                     .font(.caption2)
                     .foregroundStyle(item.overdue ? Color.red : Color.secondary)
             }

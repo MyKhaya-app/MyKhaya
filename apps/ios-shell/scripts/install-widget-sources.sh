@@ -34,14 +34,16 @@ echo "Copied $(find MyKhayaWidgets -name '*.swift' | wc -l | tr -d ' ') Swift fi
 echo "== 2. Copy main-app plugin sources (WidgetBridgePlugin, MainViewController) =="
 cp native/plugin/WidgetBridgePlugin.swift ios/App/App/WidgetBridgePlugin.swift
 cp native/plugin/MainViewController.swift ios/App/App/MainViewController.swift
-# The plugin also needs the shared snapshot model/store — the main app
-# target reads nothing from these directly, but WidgetBridgePlugin.swift
-# does (WidgetSnapshot, WidgetSnapshotStore), so the main app target must
-# compile them too, not just the widget extension.
-cp native/widgets/Shared/WidgetSnapshot.swift ios/App/App/WidgetSnapshot.swift
-cp native/widgets/Shared/WidgetSnapshotStore.swift ios/App/App/WidgetSnapshotStore.swift
+# The shared snapshot model/store used to be copied here as loose files
+# (WidgetSnapshot.swift/WidgetSnapshotStore.swift) because both the App
+# target and the widget extension needed their own compiled copy. They now
+# live in the MyKhayaWidgetCore local Swift Package (apps/ios-shell/native/
+# WidgetCore/) instead — both targets `import MyKhayaWidgetCore` (wired by
+# setup-widget-extension.rb), so there is exactly one compiled copy, and it
+# can be linked by XCTest (an app extension's own compiled code cannot be
+# an XCTest host — verified). Do not reintroduce loose copies here.
 
-echo "== 3. Add WidgetBridgePlugin/MainViewController/WidgetSnapshot*.swift to the App target =="
+echo "== 3. Add WidgetBridgePlugin/MainViewController.swift to the App target =="
 ruby scripts/add-app-target-sources.rb
 
 echo "== 4. Point Main.storyboard's bridge view controller at MainViewController =="
@@ -75,12 +77,24 @@ fi
 echo "== 6. Create/update the MyKhayaWidgets Xcode target, App Group, entitlements, embed phase =="
 ruby scripts/setup-widget-extension.rb
 
+echo "== 6b. Link the MyKhayaWidgetCore local Swift Package into App and MyKhayaWidgets =="
+ruby scripts/link-widget-core-package.rb
+
+echo "== 6c. Ensure committed shared schemes exist for App and MyKhayaWidgets =="
+ruby scripts/ensure-widget-schemes.rb
+
 echo "== 7. Post-install entitlement audit (APNs must survive) =="
-ENTITLEMENTS_FILE="ios/App/App/App.entitlements"
-if [ -f "$ENTITLEMENTS_FILE" ]; then
-  echo "-- $ENTITLEMENTS_FILE --"
-  /usr/libexec/PlistBuddy -c "Print" "$ENTITLEMENTS_FILE" | grep -A2 -E 'aps-environment|application-groups' || true
-fi
+# The App target uses separate per-configuration entitlements files
+# (AppDebug.entitlements / AppRelease.entitlements) rather than a single
+# App.entitlements — see docs/mobile/ios-shell-mac-checklist.md.
+for ENTITLEMENTS_FILE in ios/App/App/AppDebug.entitlements ios/App/App/AppRelease.entitlements; do
+  if [ -f "$ENTITLEMENTS_FILE" ]; then
+    echo "-- $ENTITLEMENTS_FILE --"
+    /usr/libexec/PlistBuddy -c "Print" "$ENTITLEMENTS_FILE" | grep -A2 -E 'aps-environment|application-groups' || true
+  else
+    echo "WARNING: $ENTITLEMENTS_FILE not found" >&2
+  fi
+done
 
 echo ""
 echo "== Done. Widget sources installed. Next: open Xcode, build the App scheme, =="

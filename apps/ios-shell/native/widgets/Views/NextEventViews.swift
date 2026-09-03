@@ -1,30 +1,12 @@
 import SwiftUI
 import WidgetKit
-
-private let timeFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.timeStyle = .short
-    formatter.dateStyle = .none
-    return formatter
-}()
+import MyKhayaWidgetCore
 
 private let dayFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.setLocalizedDateFormatFromTemplate("EEEEd MMM")
     return formatter
 }()
-
-/// Shared across Small/Medium: "10:00 – 11:00" for a timed event, "All day"
-/// for an all-day one, "Ends 6pm" style is intentionally avoided — Apple
-/// widget layout guidance favours short, glanceable strings.
-private func eventTimeLabel(_ event: WidgetEvent) -> String {
-    if event.isAllDay { return "All day" }
-    guard let start = event.startDate else { return "" }
-    if let end = event.endDate {
-        return "\(timeFormatter.string(from: start)) – \(timeFormatter.string(from: end))"
-    }
-    return timeFormatter.string(from: start)
-}
 
 private struct SignedOutView: View {
     var body: some View {
