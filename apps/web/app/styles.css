@@ -3828,6 +3828,21 @@ select.icon-row-control {
   textarea {
     font-size: 16px;
   }
+  /* .icon-row-control (below) sets its own 0.95rem font-size with higher
+     specificity (a class selector) than the plain-type-selector rule just
+     above, silently defeating it for the one *text* input that shares that
+     class — Location (app/calendar/page.tsx). Its <select> siblings
+     (Calendar, Calendar Tag) also carry the class but never need this: a
+     <select> opens a native picker, never triggers WebKit's
+     zoom-on-focus-of-a-small-font-input behaviour, so this targets
+     input.icon-row-control specifically rather than widening scope. Below
+     the 16px WebKit threshold, focusing Location auto-zoomed the whole
+     page in, and the zoom was still in effect when the event sheet closed
+     afterwards — the reported "calendar looks zoomed/shifted after saving
+     an event with a Location" bug traced to exactly this. */
+  input.icon-row-control {
+    font-size: 16px;
+  }
   .event-form label {
     gap: 0.25rem;
   }
