@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { isNativeShell } from "./native-runtime";
 
@@ -28,7 +28,7 @@ export function BottomSheet({
     dismiss.current = onDismiss;
   }, [onDismiss]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     restoreFocus.current = document.activeElement as HTMLElement | null;
     const element = dialog.current;
     const scrollY = window.scrollY;
@@ -74,6 +74,19 @@ export function BottomSheet({
     document.addEventListener("keydown", keydown);
     document.body.classList.add("sheet-open");
     return () => {
+      // Blur a still-focused field (e.g. Save tapped straight from a text
+      // input, keyboard still open) *before* React removes this sheet's DOM
+      // — this cleanup is a layout effect specifically so it runs
+      // synchronously while `element` and its focused descendant are still
+      // mounted, not after. Letting the browser instead discover the focused
+      // node has vanished (implicit unmount-while-focused) races the
+      // keyboard-dismiss animation against the focus-restore call below, and
+      // on iOS WKWebView that race is what produces the visible
+      // zoom/viewport glitch on Save — blurring here first makes keyboard
+      // dismissal deterministic and ordered before anything else changes.
+      if (element?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement | null)?.blur();
+      }
       document.removeEventListener("keydown", keydown);
       document.body.classList.remove("sheet-open");
       if (nativeScrollRegion) {
@@ -84,7 +97,9 @@ export function BottomSheet({
         document.body.style.width = "";
         window.scrollTo(0, scrollY);
       }
-      restoreFocus.current?.focus();
+      // preventScroll: restoring focus must not itself scroll/jump the page
+      // — the calendar's scroll position is exactly what must stay stable.
+      restoreFocus.current?.focus({ preventScroll: true });
     };
   }, []);
 
