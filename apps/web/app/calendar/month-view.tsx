@@ -11,6 +11,7 @@ import {
   displayDate,
   eventDateBounds,
   eventTime,
+  layoutWeekEvents,
   monthCells,
   zonedDateKey,
 } from "./calendar-utils";
@@ -147,29 +148,17 @@ export function MonthView({
         {Array.from({ length: weekCount }, (_, weekIndex) => {
           const days = cells.slice(weekIndex * 7, weekIndex * 7 + 7);
           const weekStart = dateKey(days[0]!);
-          const weekEnd = dateKey(days[6]!);
-          const rows: { event: EventOccurrence; start: number; end: number; row: number }[] = [];
-          const rowIntervals: { start: number; end: number }[][] = [];
-          events
-            .filter((event) => {
-              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-              return endKey >= weekStart && startKey <= weekEnd;
-            })
-            .sort((a, b) => bounds.get(a.occurrence_id)!.startKey.localeCompare(bounds.get(b.occurrence_id)!.startKey) || a.title.localeCompare(b.title))
-            .forEach((event) => {
-              const { startKey, endKey } = bounds.get(event.occurrence_id)!;
-              const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
-              const end = Math.min(6, days.reduce((last, day, index) => dateKey(day) <= endKey ? index : last, -1));
-              if (end < start) return;
-              let row = rowIntervals.findIndex((intervals) => intervals.every((interval) => end < interval.start || start > interval.end));
-              if (row === -1) row = rowIntervals.length;
-              (rowIntervals[row] ??= []).push({ start, end });
-              rows.push({ event, start, end, row });
-            });
+          // Multi-day events get lane priority over single-day ones — see
+          // layoutWeekEvents's own doc comment (calendar-utils.ts) for the
+          // packing rule; this call is the only place that priority is
+          // decided, so every downstream computation below (hidden counts,
+          // visible-row cap) just consumes whatever lanes it returned.
+          const rows = layoutWeekEvents(events, days, bounds);
+          const rowCount = rows.reduce((max, item) => Math.max(max, item.row + 1), 0);
           const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= MONTH_VISIBLE_ROW_CAP && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
           // The whole point: a week with 0-1 events only reserves 0-1 event-row
           // tracks, not a fixed 4-row block every week gets regardless of content.
-          const visibleRowCount = Math.min(rowIntervals.length, MONTH_VISIBLE_ROW_CAP);
+          const visibleRowCount = Math.min(rowCount, MONTH_VISIBLE_ROW_CAP);
           return (
             <div
               className="calendar-week"

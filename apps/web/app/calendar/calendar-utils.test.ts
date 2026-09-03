@@ -19,6 +19,7 @@ import {
   groupEventsByDay,
   isCalendarVisible,
   isEventStillUpcoming,
+  layoutWeekEvents,
   monthCells,
   monthRange,
   parseLocalInputValue,
@@ -1282,5 +1283,222 @@ describe("Shared-calendar permission and visibility helpers", () => {
       expect(updatable.expected_updated_at).toBe("2026-08-01T00:00:00+00:00");
       expect(updatable).not.toHaveProperty("member_ids");
     });
+  });
+});
+
+describe("layoutWeekEvents — multi-day lane priority in the month grid", () => {
+  const timeZone = "UTC";
+
+  // Monday 2026-01-05 through Sunday 2026-01-11.
+  function week(): Date[] {
+    return Array.from({ length: 7 }, (_, i) => new Date(Date.UTC(2026, 0, 5 + i)));
+  }
+
+  function boundsFor(events: EventOccurrence[]) {
+    return new Map(events.map((e) => [e.occurrence_id, eventDateBounds(e, timeZone)]));
+  }
+
+  function layout(events: EventOccurrence[], days: Date[] = week()) {
+    return layoutWeekEvents(events, days, boundsFor(events));
+  }
+
+  function rowOf(rows: ReturnType<typeof layout>, id: string) {
+    return rows.find((r) => r.event.occurrence_id === id)!.row;
+  }
+
+  it("1. a multi-day event and a single-day event on the same day - multi-day is above", () => {
+    const multi = event({
+      occurrence_id: "multi",
+      start_at: "2026-01-06T00:00:00+00:00",
+      end_at: "2026-01-08T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const single = event({
+      occurrence_id: "single",
+      start_at: "2026-01-06T09:00:00+00:00",
+      end_at: "2026-01-06T10:00:00+00:00",
+    });
+    const rows = layout([multi, single]);
+    expect(rowOf(rows, "multi")).toBeLessThan(rowOf(rows, "single"));
+  });
+
+  it("2. a single-day event earlier in the input array/start date does not outrank the multi-day event", () => {
+    const single = event({
+      occurrence_id: "single-early",
+      start_at: "2026-01-05T09:00:00+00:00",
+      end_at: "2026-01-05T10:00:00+00:00",
+    });
+    const multi = event({
+      occurrence_id: "multi-later",
+      start_at: "2026-01-06T00:00:00+00:00",
+      end_at: "2026-01-08T00:00:00+00:00",
+      is_all_day: true,
+    });
+    // single-day is both earlier in the array AND has an earlier start date
+    // - the classic case the old pure-chronological sort got wrong.
+    const rows = layout([single, multi]);
+    expect(rowOf(rows, "multi-later")).toBeLessThan(rowOf(rows, "single-early"));
+  });
+
+  it("3. two overlapping multi-day events both sit above single-day events", () => {
+    const multiA = event({
+      occurrence_id: "multi-a",
+      start_at: "2026-01-05T00:00:00+00:00",
+      end_at: "2026-01-08T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const multiB = event({
+      occurrence_id: "multi-b",
+      start_at: "2026-01-06T00:00:00+00:00",
+      end_at: "2026-01-09T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const single = event({
+      occurrence_id: "single",
+      start_at: "2026-01-06T09:00:00+00:00",
+      end_at: "2026-01-06T10:00:00+00:00",
+    });
+    const rows = layout([single, multiA, multiB]);
+    const singleRow = rowOf(rows, "single");
+    expect(rowOf(rows, "multi-a")).toBeLessThan(singleRow);
+    expect(rowOf(rows, "multi-b")).toBeLessThan(singleRow);
+    // Overlapping multi-day events must not share a lane.
+    expect(rowOf(rows, "multi-a")).not.toBe(rowOf(rows, "multi-b"));
+  });
+
+  it("4. a multi-day event spanning the entire visible week stays on one lane throughout", () => {
+    const multi = event({
+      occurrence_id: "multi",
+      start_at: "2026-01-05T00:00:00+00:00",
+      end_at: "2026-01-12T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const rows = layout([multi]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.start).toBe(0);
+    expect(rows[0]!.end).toBe(6);
+    expect(rows[0]!.row).toBe(0);
+  });
+
+  it("5. a multi-day event crossing a week boundary gets priority in both week rows", () => {
+    // Saturday 2026-01-10 through Tuesday 2026-01-13.
+    const multi = event({
+      occurrence_id: "multi",
+      start_at: "2026-01-10T00:00:00+00:00",
+      end_at: "2026-01-14T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const singleWeek1 = event({
+      occurrence_id: "single-w1",
+      start_at: "2026-01-08T09:00:00+00:00",
+      end_at: "2026-01-08T10:00:00+00:00",
+    });
+    const singleWeek2 = event({
+      occurrence_id: "single-w2",
+      start_at: "2026-01-12T09:00:00+00:00",
+      end_at: "2026-01-12T10:00:00+00:00",
+    });
+    const events = [multi, singleWeek1, singleWeek2];
+    const bounds = boundsFor(events);
+
+    const week1Days = week(); // Jan 5 - Jan 11
+    const week2Days = Array.from({ length: 7 }, (_, i) => new Date(Date.UTC(2026, 0, 12 + i))); // Jan 12 - Jan 18
+
+    const week1Rows = layoutWeekEvents(events, week1Days, bounds);
+    const week2Rows = layoutWeekEvents(events, week2Days, bounds);
+
+    expect(week1Rows.find((r) => r.event.occurrence_id === "multi")!.row).toBeLessThan(
+      week1Rows.find((r) => r.event.occurrence_id === "single-w1")!.row,
+    );
+    expect(week2Rows.find((r) => r.event.occurrence_id === "multi")!.row).toBeLessThan(
+      week2Rows.find((r) => r.event.occurrence_id === "single-w2")!.row,
+    );
+  });
+
+  it("6. a timed event crossing midnight is treated as multi-day (outranks a same-day single event)", () => {
+    const overnight = event({
+      occurrence_id: "overnight",
+      is_all_day: false,
+      start_at: "2026-01-06T23:00:00+00:00",
+      end_at: "2026-01-07T01:00:00+00:00",
+    });
+    const single = event({
+      occurrence_id: "single",
+      start_at: "2026-01-06T09:00:00+00:00",
+      end_at: "2026-01-06T10:00:00+00:00",
+    });
+    const rows = layout([single, overnight]);
+    expect(rowOf(rows, "overnight")).toBeLessThan(rowOf(rows, "single"));
+  });
+
+  it("7. a long same-calendar-date timed event is NOT treated as multi-day", () => {
+    const longButSameDay = event({
+      occurrence_id: "long",
+      title: "Zzz long meeting",
+      is_all_day: false,
+      start_at: "2026-01-06T08:00:00+00:00",
+      end_at: "2026-01-06T22:00:00+00:00",
+    });
+    const otherSameDay = event({
+      occurrence_id: "other",
+      title: "Aaa short errand",
+      start_at: "2026-01-06T06:00:00+00:00",
+      end_at: "2026-01-06T07:00:00+00:00",
+    });
+    // Both are single-day (same calendar date), so the *existing*,
+    // unchanged single-day tie-break applies: start date (equal here, both
+    // "2026-01-06"), then title. "long" having an all-day-length duration
+    // must NOT earn it multi-day lane priority (row 0 regardless of
+    // title) — it lands exactly where plain title ordering puts it, after
+    // "other".
+    const rows = layout([longButSameDay, otherSameDay]);
+    expect(rowOf(rows, "other")).toBeLessThan(rowOf(rows, "long"));
+  });
+
+  it("8. an event starting in the previous month still gets multi-day priority in this week", () => {
+    // Starts before the visible week (e.g. previous month) and continues
+    // into it - the segment clips to the week's first day (start index 0).
+    const continuation = event({
+      occurrence_id: "continuation",
+      start_at: "2025-12-30T00:00:00+00:00",
+      end_at: "2026-01-07T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const single = event({
+      occurrence_id: "single",
+      start_at: "2026-01-05T09:00:00+00:00",
+      end_at: "2026-01-05T10:00:00+00:00",
+    });
+    const rows = layout([single, continuation]);
+    expect(rows.find((r) => r.event.occurrence_id === "continuation")!.start).toBe(0);
+    expect(rowOf(rows, "continuation")).toBeLessThan(rowOf(rows, "single"));
+  });
+
+  it("9. ordering is deterministic across repeated calls regardless of input array order", () => {
+    const multiA = event({
+      occurrence_id: "multi-a",
+      start_at: "2026-01-05T00:00:00+00:00",
+      end_at: "2026-01-07T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const multiB = event({
+      occurrence_id: "multi-b",
+      start_at: "2026-01-05T00:00:00+00:00",
+      end_at: "2026-01-09T00:00:00+00:00",
+      is_all_day: true,
+    });
+    const single = event({
+      occurrence_id: "single",
+      start_at: "2026-01-06T09:00:00+00:00",
+      end_at: "2026-01-06T10:00:00+00:00",
+    });
+    const forward = layout([multiA, multiB, single]);
+    const reversed = layout([single, multiB, multiA]);
+    const shape = (rows: ReturnType<typeof layout>) =>
+      [...rows].sort((a, b) => a.event.occurrence_id.localeCompare(b.event.occurrence_id)).map((r) => r.row);
+    expect(shape(forward)).toEqual(shape(reversed));
+    // Same-start multi-day events break ties by longer span first - multi-b
+    // (4 days) must outrank multi-a (2 days) into the lower row number.
+    expect(rowOf(forward, "multi-b")).toBeLessThan(rowOf(forward, "multi-a"));
   });
 });

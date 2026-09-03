@@ -166,6 +166,62 @@ describe("MonthView — multi-day events occupy one lane, not one row per day", 
   });
 });
 
+describe("MonthView — multi-day priority under the density/overflow cap", () => {
+  const focusDate = new Date(Date.UTC(2026, 0, 15));
+
+  it("when a week has more events than MONTH_VISIBLE_ROW_CAP, multi-day events keep the visible lanes over single-day ones", () => {
+    // 2 multi-day + 5 single-day = 7 lanes needed, but the cap is 5 — both
+    // multi-day events must still render (never pushed into overflow),
+    // and exactly 2 single-day events must be bumped into "+N more".
+    const events = [
+      occurrence({
+        occurrence_id: "multi-a",
+        title: "Multi A",
+        start_at: "2026-01-05T00:00:00Z",
+        end_at: "2026-01-07T00:00:00Z",
+        is_all_day: true,
+      }),
+      occurrence({
+        occurrence_id: "multi-b",
+        title: "Multi B",
+        start_at: "2026-01-06T00:00:00Z",
+        end_at: "2026-01-09T00:00:00Z",
+        is_all_day: true,
+      }),
+      ...["a", "b", "c", "d", "e"].map((id, index) =>
+        occurrence({
+          occurrence_id: `single-${id}`,
+          title: `Single ${id}`,
+          start_at: `2026-01-06T0${index}:00:00Z`,
+          end_at: `2026-01-06T0${index}:30:00Z`,
+        }),
+      ),
+    ];
+    const { container } = render(
+      <MonthView
+        cells={monthCells(focusDate)}
+        events={events}
+        focusDate={focusDate}
+        timeZone="UTC"
+        onDay={noop}
+        onEvent={noop}
+      />,
+    );
+    // Total visible bars is still capped at 5 (unchanged density rule).
+    expect(container.querySelectorAll(".month-event")).toHaveLength(5);
+    // Both multi-day bars are among the visible ones.
+    expect(container.querySelectorAll('[title="Multi A"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[title="Multi B"]')).toHaveLength(1);
+    // Jan 6 (2nd day cell of the second rendered week row) is where every
+    // single-day event lives, and where the 2 bumped ones surface as overflow.
+    const secondWeek = container.querySelectorAll(".calendar-week")[1]!;
+    const jan6 = secondWeek.querySelectorAll(".calendar-day")[1]!;
+    const overflow = jan6.querySelector(".overflow-events");
+    expect(overflow).not.toBeNull();
+    expect(overflow!.textContent).toBe("+2 more");
+  });
+});
+
 describe("MonthView — dynamic 5-week vs 6-week row count", () => {
   it("renders 5 week rows, tagged via --calendar-week-count, for a month that only needs 5", () => {
     // January 2026: 31 days starting on a Thursday — fits in 5 Monday-first

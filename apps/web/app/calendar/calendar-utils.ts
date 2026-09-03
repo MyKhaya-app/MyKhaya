@@ -365,6 +365,119 @@ export function eventDateBounds(
   return { startKey, endKey };
 }
 
+function daySpan(startKey: string, endKey: string): number {
+  const MS_PER_DAY = 86_400_000;
+  // startKey/endKey are always "YYYY-MM-DD" (see dateKey) — Date.parse on a
+  // date-only ISO string is UTC-midnight per spec, matching every other
+  // date-only comparison in this file (lexical startKey/endKey compares,
+  // monthRange's Date.UTC construction). No wall-clock/timezone conversion
+  // is involved here; a multi-day event's *span in days* is timezone-
+  // independent once you already have its calendar-date bounds.
+  return Math.round((Date.parse(endKey) - Date.parse(startKey)) / MS_PER_DAY);
+}
+
+export interface WeekEventLayoutRow {
+  event: EventOccurrence;
+  /** 0-6 column index (Mon=0) of this event's segment within the week. */
+  start: number;
+  end: number;
+  /** 0-based display lane within the week. */
+  row: number;
+}
+
+/**
+ * Assigns each event overlapping a visible month-view week to a display
+ * lane (row) and column span. Multi-day events (endKey !== startKey — the
+ * same definition MonthView already uses for "isMultiDay" styling) are
+ * packed into the lowest lanes first; single-day events are packed
+ * afterwards, strictly beneath every lane a multi-day event used that week
+ * — never sharing a lane with one, even where a multi-day event's own
+ * column span leaves a same-row gap on another day. This is what keeps a
+ * multi-day bar reading as continuous top-priority content instead of
+ * fragmenting into whichever lane happened to be free when its turn in
+ * start-date order came up.
+ *
+ * The packing rule within each group (single-day, same as before this
+ * function existed; multi-day, new) is greedy first-fit: the lowest lane
+ * whose already-placed column intervals don't overlap this event's
+ * [start, end]. Pure and DOM-free — MonthView (month-view.tsx) is the only
+ * caller, once per visible week.
+ */
+export function layoutWeekEvents(
+  events: EventOccurrence[],
+  days: Date[],
+  bounds: Map<string, { startKey: string; endKey: string }>,
+): WeekEventLayoutRow[] {
+  const weekStart = dateKey(days[0]!);
+  const weekEnd = dateKey(days[6]!);
+
+  const overlapping = events.filter((event) => {
+    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+    return endKey >= weekStart && startKey <= weekEnd;
+  });
+
+  const multiDay = overlapping.filter((event) => {
+    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+    return endKey !== startKey;
+  });
+  const singleDay = overlapping.filter((event) => {
+    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+    return endKey === startKey;
+  });
+
+  // Deterministic ordering for overlapping multi-day events: earlier start
+  // first, then longer span first (a longer event reads as the "anchor" of
+  // the week), then the stable occurrence_id as a final tie-breaker so
+  // render order never depends on array/fetch order.
+  multiDay.sort((a, b) => {
+    const boundsA = bounds.get(a.occurrence_id)!;
+    const boundsB = bounds.get(b.occurrence_id)!;
+    if (boundsA.startKey !== boundsB.startKey) {
+      return boundsA.startKey.localeCompare(boundsB.startKey);
+    }
+    const spanDiff = daySpan(boundsB.startKey, boundsB.endKey) - daySpan(boundsA.startKey, boundsA.endKey);
+    if (spanDiff !== 0) return spanDiff;
+    return a.occurrence_id.localeCompare(b.occurrence_id);
+  });
+
+  // Unchanged from the pre-existing single sort: start date, then title.
+  singleDay.sort((a, b) => {
+    const boundsA = bounds.get(a.occurrence_id)!;
+    const boundsB = bounds.get(b.occurrence_id)!;
+    return boundsA.startKey.localeCompare(boundsB.startKey) || a.title.localeCompare(b.title);
+  });
+
+  const rowIntervals: { start: number; end: number }[][] = [];
+  const rows: WeekEventLayoutRow[] = [];
+
+  function place(event: EventOccurrence, minRow: number) {
+    const { startKey, endKey } = bounds.get(event.occurrence_id)!;
+    const start = Math.max(0, days.findIndex((day) => dateKey(day) >= startKey));
+    const end = Math.min(6, days.reduce((last, day, index) => (dateKey(day) <= endKey ? index : last), -1));
+    if (end < start) return;
+    let row = -1;
+    for (let candidate = minRow; candidate < rowIntervals.length; candidate++) {
+      const intervals = rowIntervals[candidate] ?? [];
+      if (intervals.every((interval) => end < interval.start || start > interval.end)) {
+        row = candidate;
+        break;
+      }
+    }
+    if (row === -1) row = rowIntervals.length;
+    (rowIntervals[row] ??= []).push({ start, end });
+    rows.push({ event, start, end, row });
+  }
+
+  // Multi-day first (search from lane 0) so they always claim the topmost
+  // lanes; single-day afterwards, floored at however many lanes multi-day
+  // actually used — never allowed to backfill a multi-day lane's gaps.
+  multiDay.forEach((event) => place(event, 0));
+  const multiDayRowCount = rowIntervals.length;
+  singleDay.forEach((event) => place(event, multiDayRowCount));
+
+  return rows;
+}
+
 export function eventsForDay(
   events: EventOccurrence[],
   day: Date | string,
