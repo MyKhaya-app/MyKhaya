@@ -728,6 +728,33 @@ describe("Calendar — Recurring event scope chooser", () => {
     await screen.findByRole("dialog", { name: "Family Swimming" });
   });
 
+  it("the delete chooser's destructive options carry the recurrence-delete-menu contrast fix, Cancel does not", async () => {
+    // button.danger (global) gives .sheet-menu-item.danger buttons a dark
+    // red background; without the .recurrence-delete-menu scoped override
+    // in styles.css, their text stays the low-contrast --colour-danger red
+    // instead of white. This asserts the markup that override targets is
+    // actually present, so a future refactor can't silently drop it.
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));
+    const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+
+    const nav = chooser.querySelector("nav.sheet-menu");
+    expect(nav).not.toBeNull();
+    expect(nav).toHaveClass("recurrence-delete-menu");
+
+    for (const label of [
+      "Delete this occurrence",
+      "Delete this and future occurrences",
+      "Delete entire series",
+    ]) {
+      const button = within(chooser).getByRole("button", { name: label });
+      expect(button).toHaveClass("sheet-menu-item", "danger");
+    }
+    const cancelButton = within(chooser).getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toHaveClass("sheet-menu-item");
+    expect(cancelButton).not.toHaveClass("danger");
+  });
+
   it("choosing 'Delete this occurrence' sends scope=occurrence with the canonical occurrence_start", async () => {
     const viewDialog = await openEventDialog(movedOccurrence());
     fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));

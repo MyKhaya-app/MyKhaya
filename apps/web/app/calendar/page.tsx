@@ -1128,7 +1128,7 @@ function RecurrenceScopeSheet({
           {error}
         </p>
       )}
-      <nav className="sheet-menu">
+      <nav className={mode === "delete" ? "sheet-menu recurrence-delete-menu" : "sheet-menu"}>
         {options.map((option) => (
           <button
             key={option.scope}

@@ -1056,6 +1056,26 @@ textarea {
 .sheet-menu-item.danger {
   color: var(--colour-danger);
 }
+/* The recurring-event delete chooser's three destructive options are also
+   plain <button> elements, so they pick up button.danger's dark red
+   background (background: #8c3d35) in addition to this class's text
+   colour — the two together left barely-legible red-on-red text. Reuse the
+   same button.danger convention (white text on that background) here,
+   scoped to just this chooser rather than changing .sheet-menu-item.danger
+   globally (e.g. the header's Log out action intentionally keeps its
+   text-only treatment). */
+.recurrence-delete-menu .sheet-menu-item.danger {
+  color: white;
+}
+/* .sheet-menu-item:hover normally swaps in a light sage background for
+   press/hover feedback — white text on that would be just as illegible as
+   the bug this fixes, and WebKit fires :hover on tap with no real pointer,
+   so this also covers the iPhone pressed state. Keep the same dark red
+   background instead, matching button.danger's own (unstyled-on-hover)
+   pressed appearance. */
+.recurrence-delete-menu .sheet-menu-item.danger:hover {
+  background: #8c3d35;
+}
 .sheet-menu-item span.muted {
   margin-left: auto;
   font-size: var(--font-small);
