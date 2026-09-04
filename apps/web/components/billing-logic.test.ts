@@ -4,6 +4,7 @@ import {
   canShowPortalAction,
   canShowUpgradeOptions,
   checkoutBannerKind,
+  hasFullFamilyAccess,
   intervalName,
   intervalSuffix,
   periodLabel,
@@ -265,5 +266,23 @@ describe("canShowUpgradeOptions", () => {
         stripe_billing_available: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("hasFullFamilyAccess", () => {
+  it("shows the 'All Family features included' strip for every state with genuine, current Family access", () => {
+    expect(hasFullFamilyAccess("complimentary_no_expiry")).toBe(true);
+    expect(hasFullFamilyAccess("complimentary_with_expiry")).toBe(true);
+    expect(hasFullFamilyAccess("stripe_active")).toBe(true);
+    expect(hasFullFamilyAccess("stripe_cancelling")).toBe(true);
+  });
+
+  it("hides it for Free states and for a payment that needs attention", () => {
+    expect(hasFullFamilyAccess("free")).toBe(false);
+    expect(hasFullFamilyAccess("free_expired_complimentary")).toBe(false);
+    expect(hasFullFamilyAccess("free_ended_stripe")).toBe(false);
+    // Access is being *maintained* while payment is fixed, not a settled
+    // "you have everything" state — see hasFullFamilyAccess's docstring.
+    expect(hasFullFamilyAccess("stripe_past_due")).toBe(false);
   });
 });

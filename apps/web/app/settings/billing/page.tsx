@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import {
+  Calendar,
+  Check,
+  Crown,
+  Home as HomeIcon,
+  ListChecks,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import type { BillingStatus, FamilyPricing, PlanComparison } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
@@ -11,6 +20,7 @@ import {
   canShowPortalAction,
   canShowUpgradeOptions,
   checkoutBannerKind,
+  hasFullFamilyAccess,
   intervalName,
   intervalSuffix,
   periodLabel,
@@ -19,6 +29,18 @@ import {
 } from "@/components/billing-logic";
 import { overLimitExplanation } from "@/components/calendar-entitlement-logic";
 import { memberOverLimitExplanation } from "@/components/member-entitlement-logic";
+
+// One small icon per comparison row key — purely decorative (the row label
+// text already carries the meaning), keyed off PlanComparisonRow.key so a
+// future row this map doesn't recognise still renders sensibly rather than
+// crashing. See mykhaya.routers.billing.plan_comparison for the source of
+// truth on which keys actually exist.
+const COMPARISON_ROW_ICONS: Record<string, typeof Users> = {
+  "home.max_members": Users,
+  "calendar.max_categories": Calendar,
+  "routines.personal.max_active": ListChecks,
+  "routines.household.enabled": HomeIcon,
+};
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -181,10 +203,17 @@ export default function PlanAndBillingSettings() {
         {homeLoading || !status ? (
           <p role="status">Loading your plan…</p>
         ) : (
-          <>
-            <section className="card details">
-              <h2>Current plan</h2>
-
+          <div className="plan-card-stack">
+            <section className="card plan-card">
+              <div className="plan-card-header">
+                <span className="plan-card-icon" aria-hidden="true">
+                  <ShieldCheck size={22} />
+                </span>
+                <div className="plan-card-heading">
+                  <h2>Current plan</h2>
+                </div>
+              </div>
+              <div className="plan-card-body">
               {cardKind === "free" && (
                 <>
                   <p>
@@ -228,7 +257,7 @@ export default function PlanAndBillingSettings() {
                 <>
                   <p>
                     <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
-                    <span className="quiet-state">Complimentary access</span>
+                    <span className="state-label state-soft">Complimentary access</span>
                   </p>
                   <p>No payment required. Access does not expire.</p>
                   <p>Family applies to everyone in this Home.</p>
@@ -239,7 +268,7 @@ export default function PlanAndBillingSettings() {
                 <>
                   <p>
                     <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
-                    <span className="quiet-state">Complimentary access</span>
+                    <span className="state-label state-soft">Complimentary access</span>
                   </p>
                   <p>No payment required. Access until {formatDate(status.complimentary_expires_at)}.</p>
                   <p>Family applies to everyone in this Home.</p>
@@ -322,6 +351,14 @@ export default function PlanAndBillingSettings() {
                   {memberOverLimitExplanation(status.member_usage)}
                 </p>
               )}
+              </div>
+
+              {cardKind && hasFullFamilyAccess(cardKind) && (
+                <p className="plan-card-footer">
+                  <Check size={16} aria-hidden="true" />
+                  All Family features included
+                </p>
+              )}
             </section>
 
             {!status.can_manage_billing && status.effective_plan === "free" && (
@@ -366,19 +403,58 @@ export default function PlanAndBillingSettings() {
             )}
 
             {comparison && comparison.rows.length > 0 && (
-              <section className="card details">
+              <section className="card plan-compare">
                 <h2>Free vs Family</h2>
-                <dl>
-                  {comparison.rows.map((row) => (
-                    <div key={row.key}>
-                      <dt>{row.label}</dt>
-                      <dd>
-                        Free: {row.free_display} · Family: {row.family_display}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
+                <table className="plan-compare-table">
+                  <caption className="sr-only">
+                    What's included on the Free plan compared with Family
+                  </caption>
+                  <colgroup>
+                    <col className="plan-compare-col-feature" />
+                    <col className="plan-compare-col-free" />
+                    <col className="plan-compare-col-family" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th scope="col">
+                        <span className="sr-only">Feature</span>
+                      </th>
+                      <th scope="col">Free</th>
+                      <th scope="col" className="plan-compare-family-heading">
+                        <Crown size={14} aria-hidden="true" />
+                        Family
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {comparison.rows.map((row) => {
+                      const RowIcon = COMPARISON_ROW_ICONS[row.key];
+                      return (
+                        <tr key={row.key}>
+                          <th scope="row">
+                            <span className="plan-compare-row-feature">
+                              {RowIcon && <RowIcon size={15} aria-hidden="true" />}
+                              {row.label}
+                            </span>
+                          </th>
+                          <td className="plan-compare-free-value">{row.free_display}</td>
+                          <td className="plan-compare-family-value">{row.family_display}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </section>
+            )}
+
+            {cardKind && hasFullFamilyAccess(cardKind) && (
+              <div className="plan-info-card">
+                <HomeIcon size={22} aria-hidden="true" />
+                <div>
+                  <strong>Your Home currently has Family access.</strong>
+                  <p>Enjoy all features together.</p>
+                </div>
+              </div>
             )}
 
             {status.provider === "stripe" && (
@@ -387,7 +463,7 @@ export default function PlanAndBillingSettings() {
                 Manage billing.
               </p>
             )}
-          </>
+          </div>
         )}
       </main>
     </SettingsPage>

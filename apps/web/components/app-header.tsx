@@ -9,6 +9,7 @@ import { api } from "@mykhaya/api-client";
 import { Logo } from "./logo";
 import { Avatar } from "./avatar";
 import { BottomSheet } from "./bottom-sheet";
+import { HeaderBotanical } from "./header-botanical";
 import { nativeLogout } from "./native-auth";
 import { isNativeShell } from "./native-runtime";
 
@@ -44,6 +45,7 @@ export function AppHeader({
 
   return (
     <header className={`app-header${flush ? " app-header-flush" : ""}`}>
+      <HeaderBotanical />
       <Link className="app-header-logo" href="/home" aria-label="Go to Home">
         <Logo compact />
       </Link>

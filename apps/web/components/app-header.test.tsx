@@ -82,3 +82,20 @@ describe("AppHeader — sign out", () => {
     expect(push).toHaveBeenCalledWith("/login");
   });
 });
+
+describe("AppHeader — botanical decoration", () => {
+  it("renders the leafy watermark hidden from assistive technology, never covering the real controls", () => {
+    const { container } = render(
+      <AppHeader user={user} homes={[]} activeHome={null} onSwitchHome={vi.fn()} />,
+    );
+
+    const decoration = container.querySelector(".app-header-botanical");
+    expect(decoration).not.toBeNull();
+    expect(decoration).toHaveAttribute("aria-hidden", "true");
+    // Purely decorative — it must never be reachable as a named element by
+    // its own accessible name, and never intercept taps meant for the real
+    // header controls (see the pointer-events: none rule in styles.css).
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /open profile menu/i })).toBeInTheDocument();
+  });
+});

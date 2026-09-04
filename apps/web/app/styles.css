@@ -934,6 +934,7 @@ textarea {
   box-shadow: var(--shadow-hero);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  overflow: hidden;
   padding: calc(var(--safe-top) + 13px) 20px 13px;
   position: sticky;
   top: 0;
@@ -942,6 +943,29 @@ textarea {
 .app-header-flush {
   border-radius: 0;
   box-shadow: none;
+}
+/* A subtle green-on-green watermark, not a competing visual element — see
+   HeaderBotanical's own docstring. Sits behind every real header control
+   (negative z-index, sized off the header's own box rather than the
+   viewport) and is clipped by .app-header's overflow: hidden, so it can
+   never cause horizontal scroll or bleed past the header's rounded corners
+   regardless of screen width. */
+.app-header-botanical {
+  bottom: 0;
+  color: var(--colour-cream-light);
+  height: 88px;
+  opacity: 0.1;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  width: 118px;
+  z-index: 0;
+}
+.app-header-logo,
+.app-header-home,
+.app-header-avatar {
+  position: relative;
+  z-index: 1;
 }
 .app-header-logo {
   align-items: center;
@@ -6569,4 +6593,189 @@ select.plan-meal-field-input {
 }
 .guest-wishlist-heading {
   margin-bottom: 1rem;
+}
+
+/* --- Plan & Billing: Current Plan card + Free vs Family comparison --- */
+.plan-card-stack {
+  display: grid;
+  gap: var(--space-card-stack);
+}
+.plan-card {
+  padding: 18px;
+}
+.plan-card-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+}
+.plan-card-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-forest-dark);
+  display: flex;
+  flex: none;
+  height: 46px;
+  justify-content: center;
+  width: 46px;
+}
+.plan-card-heading {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.plan-card-heading h2 {
+  margin: 0;
+}
+.plan-card-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+/* A softer, secondary companion to .state-label's default (green/"healthy")
+   and warning/danger variants — for a badge that's informational rather
+   than a status signal, e.g. "Complimentary access" sitting next to the
+   Family status badge. */
+.state-label.state-soft {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest-dark);
+}
+.plan-card-body {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+.plan-card-body p {
+  margin: 0;
+}
+/* Every per-plan-state branch in page.tsx renders its status badge(s) as
+   the first <p> — targeted structurally rather than duplicating markup, so
+   this stays correct automatically as new plan states are added. */
+.plan-card-body > p:first-child {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.plan-card-footer {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 0.75rem;
+  color: var(--colour-forest-dark);
+  display: flex;
+  font-weight: 600;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+  padding: 0.7rem 0.9rem;
+}
+.plan-card-footer svg {
+  flex: none;
+}
+
+.plan-compare {
+  padding: 18px;
+}
+.plan-compare h2 {
+  margin: 0 0 0.9rem;
+}
+.plan-compare-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-small);
+  table-layout: fixed;
+  width: 100%;
+}
+.plan-compare-table col.plan-compare-col-feature {
+  width: 42%;
+}
+.plan-compare-table col.plan-compare-col-free,
+.plan-compare-table col.plan-compare-col-family {
+  width: 29%;
+}
+.plan-compare-table th,
+.plan-compare-table td {
+  padding: 0.55rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+}
+.plan-compare-table thead th {
+  color: var(--colour-muted);
+  font-size: var(--font-micro);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding-bottom: 0.6rem;
+  text-transform: uppercase;
+}
+.plan-compare-family-heading {
+  align-items: center;
+  color: var(--colour-forest-dark);
+  display: flex;
+  gap: 0.3rem;
+}
+.plan-compare-family-heading svg {
+  flex: none;
+}
+.plan-compare-row-feature {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  font-weight: 600;
+  gap: 0.45rem;
+}
+.plan-compare-row-feature svg {
+  color: var(--colour-sage-dark);
+  flex: none;
+}
+.plan-compare-table tbody th {
+  font-weight: 600;
+}
+.plan-compare-free-value {
+  color: var(--colour-muted);
+}
+.plan-compare-family-value {
+  color: var(--colour-forest-dark);
+  font-weight: 700;
+}
+/* The pale-green Family-column highlight: solid, touching cells (no gap —
+   border-spacing: 0 above) so it reads as one continuous column, rounded
+   only at the very top and very bottom so it sits inside the card cleanly. */
+.plan-compare-family-heading,
+.plan-compare-family-value {
+  background: var(--colour-sage-soft);
+}
+.plan-compare-table thead th.plan-compare-family-heading {
+  border-radius: 0.6rem 0.6rem 0 0;
+}
+.plan-compare-table tbody tr:last-child td.plan-compare-family-value {
+  border-radius: 0 0 0.6rem 0.6rem;
+}
+
+.plan-info-card {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border: 1px solid #d7e0d4;
+  border-radius: var(--radius-card);
+  color: var(--colour-forest-dark);
+  display: flex;
+  gap: 0.75rem;
+  padding: 14px 16px;
+}
+.plan-info-card svg {
+  flex: none;
+}
+.plan-info-card strong {
+  display: block;
+}
+.plan-info-card p {
+  margin: 0.15rem 0 0;
+}
+@media (max-width: 420px) {
+  .plan-compare-table {
+    font-size: 0.75rem;
+  }
+  .plan-compare-table th,
+  .plan-compare-table td {
+    padding: 0.5rem 0.35rem;
+  }
 }

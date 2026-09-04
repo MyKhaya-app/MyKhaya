@@ -114,3 +114,18 @@ export function canShowUpgradeOptions(
     status.effective_plan === "free" && status.can_manage_billing && status.stripe_billing_available
   );
 }
+
+/** Whether the Current Plan card's "All Family features included" strip
+ * should show — every PlanCardKind where the Home genuinely has full,
+ * working Family access right now. Deliberately excludes stripe_past_due:
+ * access is still being *maintained* while payment is fixed, not a settled
+ * "you have everything" state, so that card keeps its own attention-getting
+ * copy instead. Free/ended states obviously never qualify. */
+export function hasFullFamilyAccess(cardKind: PlanCardKind): boolean {
+  return (
+    cardKind === "complimentary_no_expiry" ||
+    cardKind === "complimentary_with_expiry" ||
+    cardKind === "stripe_active" ||
+    cardKind === "stripe_cancelling"
+  );
+}
