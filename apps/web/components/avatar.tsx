@@ -84,7 +84,12 @@ export function Avatar({
         setNativeImageUrl(objectUrl);
       })
       .catch(() => {
-        if (!cancelled) setImageFailed(true);
+        if (!cancelled) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[AVATAR DEBUG] native image fetch failed");
+          }
+          setImageFailed(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -104,7 +109,12 @@ export function Avatar({
           alt=""
           width={px}
           height={px}
-          onError={() => setImageFailed(true)}
+          onError={() => {
+            if (process.env.NODE_ENV !== "production") {
+              console.warn("[AVATAR DEBUG] image render failed");
+            }
+            setImageFailed(true);
+          }}
         />
       ) : (
         initial

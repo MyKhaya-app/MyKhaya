@@ -47,6 +47,97 @@ Every commercial (plan-based) restriction must go through the central entitlemen
 
 Every new module must justify its existence on the Home screen. If a feature never surfaces useful, glanceable information on Home, it likely isn't important enough to exist as a first-class module — fold it into an existing surface, or reconsider it. This is a deliberate check against feature bloat, not a UI-placement suggestion: a module that has nothing to say on Home is a signal to revisit the proposal, not to add a Home widget for its own sake.
 
+## Security and privacy engineering
+
+Security, privacy, tenant isolation, resilience and scale are first-class requirements. They are design and implementation concerns, not a final hardening phase. The detailed references are [Security Baseline](../security/security-baseline.md), [Secure Development Lifecycle](../security/secure-development-lifecycle.md), [API Security](../security/api-security.md), [Multi-Tenancy](../architecture/multi-tenancy.md) and [Definition of Done](definition-of-done.md).
+
+### Security by design
+
+Before implementing a meaningful feature, identify its trust boundaries, data flows, authentication and authorization rules, abuse cases, tenant impact, privacy implications, rate limits, operational impact, audit requirements, failure modes and dependency/supply-chain impact. Security review happens before implementation and is revisited when the design changes.
+
+Security-relevant decisions must fail closed:
+
+- deny by default when authority, role, capability, tenant or host state is missing, unknown or malformed;
+- do not make a new capability delegatable without an explicit allow-list decision;
+- require explicit authority for privileged operations;
+- return predictable errors without revealing whether another tenant's data exists; and
+- never turn a dependency failure, timeout or degraded mode into an authorization bypass.
+
+Apply least privilege to household users, child accounts, Platform Control Centre operators, service accounts, database users, workers, queues, API scopes, CI/CD and infrastructure credentials. The UI may improve usability, but it is never the security boundary; all client identifiers and requested actions are untrusted and must be checked server-side.
+
+### Home isolation and child safety
+
+A Home is the primary tenant and privacy boundary. Every tenant-owned read, write, search, notification, cache entry, background job and external reference must be scoped to an authorized Home. One Home must not enumerate, infer, cache, search, share or receive data belonging to another Home. Prefer Home-scoped queries and repositories over unconstrained object lookup, and add cross-Home tests for new access paths.
+
+Child accounts are a distinct, lower-trust account type. Child permissions and restrictions are server-enforced and fail closed; children cannot self-elevate; child session state cannot become adult authority; adult-only and child-related data are disclosed only when necessary; PINs and remembered access do not become reusable credentials; and child-to-adult transitions require explicit secure handling.
+
+External calendar, wishlist and other sharing features create a separate trust boundary. Access must be narrowly scoped, with explicit read/write authority, expiry or single-use semantics where appropriate, revocation, no tenant enumeration and server-side checks on every shared resource. Notifications and briefings must apply the same visibility rules.
+
+### Privileged administration and secure defaults
+
+The Platform Control Centre is a separate high-trust management plane. It requires separate privileged authorization, MFA, strong session controls, recent authentication for sensitive actions, audit logging and appropriate host/network restrictions. Consumer sessions must never inherit platform privilege, and missing administrative state must not fail open.
+
+Shared development, staging and production environments default securely: Secure cookies, HTTPS, strict host validation, security headers, CSRF protection, explicit CORS allow-lists, rate limits, no debug bypasses and no development backdoors. Local-only exceptions must be explicit, isolated, documented and impossible to silently carry into shared environments.
+
+Critical controls use defence in depth across application authorization, database constraints, tenant-scoped queries, reverse-proxy limits, host validation, rate limiting, CSP and security headers, request-size limits, queue/task validation, audit logging and infrastructure controls. No single layer is sufficient on its own.
+
+Authentication and session designs must use strong password hashing, secure token generation, passkeys where available, no plaintext session tokens at rest, CSRF protection for cookie mutations, strict CORS, safe reset flows, rotation/revocation where appropriate, secure native bearer storage and separation of trusted-device credentials from ordinary active sessions. Persistent mobile UX must not require weakening authentication.
+
+### Privacy, data minimisation and observability
+
+Collect only the personal and household data needed for the feature, minimise retention, protect child and household information, and provide appropriate export and deletion mechanisms. Review diagnostics, caches, search, analytics and notifications for unintended disclosure before release. Do not make legal or compliance claims beyond established project policy.
+
+Security-relevant actions should be auditable without recording credentials: login and session events, privilege and membership changes, Home Admin changes, child-permission changes, external shares, billing administration, Platform Control Centre changes and security configuration changes. Logs must not contain passwords, reset/session tokens, API keys, CSRF secrets, payment secrets, APNs/private keys or other credentials. Diagnostics must be useful without exposing private image, household or child data.
+
+Malformed or unexpected input must produce a safe, predictable 4xx response where appropriate. Do not expose sensitive stack traces, swallow security errors, buffer unbounded request bodies, retry without limits or let degraded dependencies bypass controls.
+
+### Scale, resilience and abuse resistance
+
+Design for eventual operation at 100,000+ Homes and global public-Internet exposure. Treat credential stuffing, enumeration, brute force, invitation and sharing abuse, spam, notification abuse, scraping, oversized or decompression-heavy files, queue flooding, webhook abuse, rate-limit bypass, denial of service and authenticated-user abuse as normal threat cases. Prefer horizontally scalable controls and bounded work.
+
+Performance and scalability are security concerns. New paths should consider bounded queries, pagination, indexes, tenant-scoped filters, queue backpressure, retry limits, idempotency, rate limiting, circuit breakers where appropriate, storage growth, notification fan-out, cache isolation, connection-pool exhaustion, worker concurrency and expensive endpoints. An endpoint safe for 10 Homes may be unsafe for 100,000 Homes; resilience, backup/restore and rollback impact belong in the design.
+
+### Software supply chain and secrets
+
+Protect branches, require pull-request review and required CI checks, and use dependency, secret, SAST, container and IaC scanning. Keep lockfiles current, produce SBOMs, prefer reproducible immutable builds and provenance/signing where practical, minimize CI permissions, store secrets in controlled secret stores and review dependency updates deliberately.
+
+Never commit secrets or real keys in source, fixtures, logs or documentation. Clearly mark placeholders as fake. Credentials exposed in Git history must be rotated, not merely deleted. Local environment files, disposable test credentials, generated payloads and one-off databases remain local.
+
+### Engineering change checklist
+
+Before implementation:
+
+- identify data and trust boundaries, including Home and child-account boundaries;
+- define server-side authentication, authorization and failure behavior;
+- consider abuse cases, privacy, retention, notifications, sharing and cache isolation;
+- assess scale, resilience, operational impact and rollback; and
+- identify dependency, secret-handling and supply-chain implications.
+
+During implementation:
+
+- preserve secure defaults and existing controls;
+- validate all inputs and enforce authorization server-side;
+- bound requests, queries, files, retries and queue work;
+- avoid exposing secrets or sensitive data in responses and logs; and
+- add focused happy-path, denial-path, tenant-isolation and regression tests.
+
+Before completion:
+
+- run relevant tests, type checks, lint, build and security checks;
+- update architecture, threat-model or operational documentation when needed;
+- remove temporary diagnostics, test data, files and generated output;
+- review untracked files and `git status`;
+- review the final diff and rollback implications; and
+- confirm no unresolved high or critical security issue remains without an approved risk record.
+
+### Repository hygiene
+
+Do not commit local IDE or tool settings, temporary diagnostics, generated test payloads, investigation screenshots, scratch scripts, ad-hoc audit output, local credentials, one-off test databases, downloaded scanner binaries or temporary logs. Use normal engineering names based on the feature, defect, component, security control or release. Remove task-created temporary artifacts before completion; preserve unrelated local files rather than deleting them.
+
+### Assurance target
+
+MyKhaya is designed and reviewed against OWASP ASVS Level 2 as the practical application-security verification target, with the OWASP Top 10 used for awareness and risk classification and relevant UK NCSC secure development and software-security guidance used for engineering practice. These are assurance targets and review references, not claims of certification.
+
 ## Notification architecture
 
 All user-facing communications must originate from `notify()`

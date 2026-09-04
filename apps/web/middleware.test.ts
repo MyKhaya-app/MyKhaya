@@ -15,6 +15,7 @@ describe("hostname security boundaries", () => {
 		expect(secondNonce).toBeTruthy();
 		expect(firstNonce).not.toBe(secondNonce);
 		expect(firstCsp).toContain("script-src 'self'");
+		expect(firstCsp).toContain("img-src 'self' blob: data:");
 		expect(firstCsp).toContain("frame-ancestors 'none'");
 		expect(firstCsp).toContain("object-src 'none'");
 		expect(firstCsp).not.toContain("'unsafe-inline'");

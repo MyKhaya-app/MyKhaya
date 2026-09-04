@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mykhaya.activity import record_authenticated_activity
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import Group, Membership, Role, Session, SessionKind, User
@@ -55,6 +56,12 @@ async def auth_context(
         session_id=str(resolved.session.id),
         transport=resolved.transport,
     )
+    # Central last_activity_at tracking — see activity.py's module
+    # docstring. Deliberately after the auth/CSRF checks above (only a
+    # genuinely authenticated, authorised request counts) and covers every
+    # transport/session kind uniformly, since this is the one dependency
+    # nearly every authenticated route already depends on.
+    await record_authenticated_activity(db, resolved.user, request)
     return AuthContext(resolved.user, resolved.session, resolved.transport)
 
 

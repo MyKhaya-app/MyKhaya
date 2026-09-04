@@ -19,7 +19,7 @@ export function middleware(request: NextRequest) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${production ? "" : " 'unsafe-eval'"}`,
     adminHost ? "style-src 'self'" : "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",

@@ -18,6 +18,14 @@ describe("Avatar", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows initials when no avatar is configured", () => {
+    const { container } = render(<Avatar id="u1" name="Alice" avatarVersion={null} />);
+
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(container.textContent).toContain("A");
+    expect(fetchNativeImage).not.toHaveBeenCalled();
+  });
+
   it("keeps the direct protected URL on web/PWA", () => {
     const { container } = render(<Avatar id="u1" name="Alice" avatarVersion="v1" />);
 
