@@ -15,7 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.calendar_occurrences import expand_occurrences, recurrence_candidate_filter
+from mykhaya.calendar_occurrences import (
+    expand_occurrences,
+    load_exceptions,
+    recurrence_candidate_filter,
+)
 from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
 from mykhaya.household_permissions import Capability, capabilities_for
@@ -192,19 +196,28 @@ async def _events_for_user_today(
                 )
             )
         ).all()
+        exceptions_by_event = await load_exceptions(db, [event.id for event in events])
         for event in events:
-            if not view_all:
-                if event.created_by != user_id and user_id not in await viewer_ids_for_event(
-                    db, event
-                ):
-                    continue
-            for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
+            exceptions = exceptions_by_event.get(event.id, {})
+            for effective in expand_occurrences(event, day_start, day_end, exceptions):
+                if not view_all and event.created_by != user_id:
+                    # Checked per-occurrence, not once per event: an
+                    # occurrence-level member override (see
+                    # EffectiveOccurrence.member_ids_override) can add or
+                    # remove this user from just this one occurrence of a
+                    # recurring event, independent of the base event's own
+                    # membership.
+                    visible = user_id in await viewer_ids_for_event(
+                        db, event, member_ids_override=effective.member_ids_override
+                    )
+                    if not visible:
+                        continue
                 occurrences.append(
                     BriefingOccurrence(
                         event_id=event.id,
-                        title=event.title,
-                        start_at=occurrence_start,
-                        is_all_day=event.is_all_day,
+                        title=effective.title,
+                        start_at=effective.start_at,
+                        is_all_day=effective.is_all_day,
                     )
                 )
 
@@ -238,18 +251,20 @@ async def _events_for_user_today(
                 )
             )
         ).all()
+        exceptions_by_event = await load_exceptions(db, [event.id for event in events])
         for event in events:
             if event.id in seen_event_ids:
                 continue  # belt-and-braces: never double-count if ever also a Home member
             if not event_matches_share(event, share):
                 continue
-            for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
+            exceptions = exceptions_by_event.get(event.id, {})
+            for effective in expand_occurrences(event, day_start, day_end, exceptions):
                 occurrences.append(
                     BriefingOccurrence(
                         event_id=event.id,
-                        title=event.title,
-                        start_at=occurrence_start,
-                        is_all_day=event.is_all_day,
+                        title=effective.title,
+                        start_at=effective.start_at,
+                        is_all_day=effective.is_all_day,
                     )
                 )
 

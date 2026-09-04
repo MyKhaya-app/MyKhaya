@@ -53,7 +53,13 @@ function event(overrides: Partial<EventOccurrence>): EventOccurrence {
     reminder_minutes: null,
     created_by: crypto.randomUUID(),
     updated_at: "2026-07-01T00:00:00+00:00",
+    is_overridden: false,
     ...overrides,
+    // Placed after the spread — Partial<EventOccurrence> would otherwise
+    // widen this back to `string | undefined` even when a default is
+    // supplied above. Defaults to the (possibly overridden) start_at, since
+    // most fixtures never move an occurrence away from its canonical slot.
+    occurrence_start: overrides.occurrence_start ?? overrides.start_at ?? "2026-07-31T10:00:00+00:00",
   };
 }
 
@@ -767,7 +773,10 @@ describe("All-day events are pure calendar dates, immune to timezone conversion"
       reminder_minutes: null,
       created_by: crypto.randomUUID(),
       updated_at: "2026-07-01T00:00:00+00:00",
+      is_overridden: false,
       ...overrides,
+      occurrence_start:
+        overrides.occurrence_start ?? overrides.start_at ?? "2026-08-14T00:00:00+00:00",
     };
   }
 
@@ -812,6 +821,8 @@ describe("Overnight / multi-day timed events", () => {
       reminder_minutes: null,
       created_by: crypto.randomUUID(),
       updated_at: "2026-07-01T00:00:00+00:00",
+      occurrence_start: start.toISOString(),
+      is_overridden: false,
     };
     const { startKey, endKey } = eventDateBounds(overnight, "Europe/London");
     expect(startKey).toBe("2026-08-14");
@@ -868,7 +879,10 @@ describe("All day -> timed conversion never derives a clock value from the all-d
       reminder_minutes: null,
       created_by: crypto.randomUUID(),
       updated_at: "2026-07-01T00:00:00+00:00",
+      is_overridden: false,
       ...overrides,
+      occurrence_start:
+        overrides.occurrence_start ?? overrides.start_at ?? "2026-08-20T00:00:00+00:00",
     };
   }
 
@@ -938,6 +952,8 @@ describe("All day -> timed conversion never derives a clock value from the all-d
       reminder_minutes: null,
       created_by: crypto.randomUUID(),
       updated_at: "2026-07-01T00:00:00+00:00",
+      occurrence_start: zonedTimeToUtc(2026, 8, 20, 14, 30, "Europe/London").toISOString(),
+      is_overridden: false,
     };
     const initialWhen = computeInitialWhen(timedEvent, new Date(), "Europe/London");
     expect(initialWhen.hasTimedValues).toBe(true);
@@ -1042,7 +1058,10 @@ describe("Event View/Edit permissions (mirrors update_event/delete_event)", () =
       reminder_minutes: null,
       created_by: "me-user-id",
       updated_at: "2026-07-01T00:00:00+00:00",
+      is_overridden: false,
       ...overrides,
+      occurrence_start:
+        overrides.occurrence_start ?? overrides.start_at ?? "2026-08-20T08:00:00+00:00",
     };
   }
 
@@ -1188,7 +1207,10 @@ describe("Shared-calendar permission and visibility helpers", () => {
       share_id: "share-1",
       share_permission: "view",
       shared_by_home_name: "Smith Home",
+      is_overridden: false,
       ...overrides,
+      occurrence_start:
+        overrides.occurrence_start ?? overrides.start_at ?? "2026-08-20T08:00:00+00:00",
     };
   }
 

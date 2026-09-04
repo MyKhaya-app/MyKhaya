@@ -30,7 +30,11 @@ vi.mock("@/components/use-active-home", () => ({
     // calendar.edit_all so the Edit action is reachable for the
     // Calendar/Calendar Tag edit-flow tests below — no existing test in
     // this file asserts on the Edit action being hidden.
-    activeHome: { id: "home-1", name: "Hales Home", capabilities: ["calendar.edit_all"] },
+    activeHome: {
+      id: "home-1",
+      name: "Hales Home",
+      capabilities: ["calendar.edit_all", "calendar.delete"],
+    },
     activeHomeId: "home-1",
     homes: [{ id: "home-1", name: "Hales Home" }],
     setActiveHomeId: vi.fn(),
@@ -55,6 +59,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       sharedCalendars: vi.fn(),
       createEvent: vi.fn(),
       updateEvent: vi.fn(),
+      deleteEvent: vi.fn(),
     },
   };
 });
@@ -495,5 +500,297 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     const eventColour = chip.style.getPropertyValue("--event-color");
     expect(eventColour).toBe(resolveColour(activityTag.color));
     expect(eventColour).not.toBe(resolveColour(secondaryCalendar.color));
+  });
+});
+
+// Coverage for the recurring-event edit/delete scope chooser: an occurrence
+// belonging to a recurring series must offer "This occurrence only / This
+// and future occurrences / Entire series" (edit) or the matching delete
+// wording, before anything is sent to the API — while a non-recurring event
+// keeps its old, immediate Save/Delete behaviour untouched.
+describe("Calendar — Recurring event scope chooser", () => {
+  const primaryCalendar = {
+    id: "cal-1",
+    name: "Home Calendar",
+    timezone: "UTC",
+    is_primary: true,
+    owner_user_id: null,
+    color: "teal",
+    commercial_access: "normal" as const,
+  };
+
+  beforeEach(() => {
+    // Calendar visibility (and the other calendar-page prefs below) persist
+    // in localStorage — jsdom does not reset it between tests, so an
+    // earlier describe block's "hide this calendar" toggle would otherwise
+    // silently hide cal-1's events here too.
+    window.localStorage.clear();
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar],
+      personal_calendar: null,
+    });
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    window.confirm = vi.fn(() => true);
+  });
+
+  // A moved+overridden occurrence: its canonical identity ("occurrence_start")
+  // is 2026-09-15T18:00:00Z, but it now displays at a different effective
+  // time/title ("start_at" / "title") after a prior "This occurrence only"
+  // edit — exactly the re-edit scenario the task calls out explicitly.
+  function movedOccurrence(overrides: Record<string, unknown> = {}) {
+    return {
+      occurrence_id: "occ-2026-09-15",
+      event_id: "event-swim",
+      calendar_id: primaryCalendar.id,
+      title: "Family Swimming",
+      start_at: "2026-09-16T19:00:00Z",
+      end_at: "2026-09-16T20:00:00Z",
+      occurrence_start: "2026-09-15T18:00:00Z",
+      is_overridden: true,
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: primaryCalendar.color,
+      member_ids: [],
+      recurrence: "weekly",
+      recurrence_interval: 1,
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-08-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  function nonRecurringEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      occurrence_id: "occ-solo",
+      event_id: "event-solo",
+      calendar_id: primaryCalendar.id,
+      title: "Dentist",
+      start_at: "2026-09-10T09:00:00Z",
+      end_at: "2026-09-10T10:00:00Z",
+      occurrence_start: "2026-09-10T09:00:00Z",
+      is_overridden: false,
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: primaryCalendar.color,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-08-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  async function openEventDialog(event: Record<string, unknown>) {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(await screen.findByText(event.title as string));
+    return screen.findByRole("dialog", { name: event.title as string });
+  }
+
+  it("a non-recurring event's Save/Delete are unaffected — no chooser appears", async () => {
+    const viewDialog = await openEventDialog(nonRecurringEvent());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    expect(payload).not.toHaveProperty("scope");
+    expect(payload).not.toHaveProperty("occurrence_start");
+    expect(screen.queryByRole("dialog", { name: "Apply changes to" })).toBeNull();
+  });
+
+  it("a non-recurring event's Delete still uses the existing confirm() flow, no scope chooser", async () => {
+    const viewDialog = await openEventDialog(nonRecurringEvent());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    await waitFor(() => expect(api.deleteEvent).toHaveBeenCalledTimes(1));
+    expect(api.deleteEvent).toHaveBeenCalledWith("home-1", "event-solo");
+    expect(screen.queryByRole("dialog", { name: "Delete recurring event" })).toBeNull();
+  });
+
+  it("Save on a recurring occurrence opens the scope chooser and sends no request before a choice", async () => {
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    expect(api.updateEvent).not.toHaveBeenCalled();
+    expect(within(chooser).getByRole("button", { name: "This occurrence only" })).toBeInTheDocument();
+    expect(
+      within(chooser).getByRole("button", { name: "This and future occurrences" }),
+    ).toBeInTheDocument();
+    expect(within(chooser).getByRole("button", { name: "Entire series" })).toBeInTheDocument();
+
+    // Cancel makes no API request and returns to the editor's edits intact.
+    fireEvent.click(within(chooser).getByRole("button", { name: "Cancel" }));
+    expect(api.updateEvent).not.toHaveBeenCalled();
+    await screen.findByRole("dialog", { name: "Edit event" });
+  });
+
+  it("choosing 'This occurrence only' sends the canonical occurrence_start, not the moved start_at", async () => {
+    (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(movedOccurrence());
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "This occurrence only" }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    expect(payload.scope).toBe("occurrence");
+    // Canonical identity, never the effective/moved start_at.
+    expect(payload.occurrence_start).toBe("2026-09-15T18:00:00Z");
+    expect(payload.occurrence_start).not.toBe("2026-09-16T19:00:00Z");
+  });
+
+  it("choosing 'This and future occurrences' sends scope=future with the canonical occurrence_start", async () => {
+    (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(movedOccurrence());
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "This and future occurrences" }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    expect(payload.scope).toBe("future");
+    expect(payload.occurrence_start).toBe("2026-09-15T18:00:00Z");
+  });
+
+  it("choosing 'Entire series' sends scope=series", async () => {
+    (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(movedOccurrence());
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "Entire series" }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    // "series" is the backend's default scope, so toEventUpdatePayload omits
+    // it rather than sending it redundantly — either an explicit "series" or
+    // no scope field at all is a correct payload for this choice.
+    expect(payload.scope === undefined || payload.scope === "series").toBe(true);
+    expect(payload).not.toHaveProperty("occurrence_start");
+  });
+
+  it("Delete on a recurring occurrence opens a matching delete chooser, no request before a choice, and Cancel sends none", async () => {
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+    expect(api.deleteEvent).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(within(chooser).getByRole("button", { name: "Delete this occurrence" })).toBeInTheDocument();
+    expect(
+      within(chooser).getByRole("button", { name: "Delete this and future occurrences" }),
+    ).toBeInTheDocument();
+    expect(within(chooser).getByRole("button", { name: "Delete entire series" })).toBeInTheDocument();
+
+    fireEvent.click(within(chooser).getByRole("button", { name: "Cancel" }));
+    expect(api.deleteEvent).not.toHaveBeenCalled();
+    await screen.findByRole("dialog", { name: "Family Swimming" });
+  });
+
+  it("choosing 'Delete this occurrence' sends scope=occurrence with the canonical occurrence_start", async () => {
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));
+    const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "Delete this occurrence" }));
+
+    await waitFor(() => expect(api.deleteEvent).toHaveBeenCalledTimes(1));
+    expect(api.deleteEvent).toHaveBeenCalledWith(
+      "home-1",
+      "event-swim",
+      "occurrence",
+      "2026-09-15T18:00:00Z",
+    );
+  });
+
+  it("a failed occurrence edit keeps the chooser recoverable and does not silently fall back to series scope", async () => {
+    (api.updateEvent as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(movedOccurrence());
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "This occurrence only" }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    // The chooser is still open (not silently dismissed/escalated) and the
+    // user can retry the same choice.
+    const reopenedChooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    await waitFor(() => expect(within(reopenedChooser).getByRole("alert")).toBeInTheDocument());
+
+    fireEvent.click(within(reopenedChooser).getByRole("button", { name: "This occurrence only" }));
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(2));
+    const [, , secondPayload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[1]! as [
+      string,
+      string,
+      EventUpdatePayload,
+    ];
+    expect(secondPayload.scope).toBe("occurrence");
+  });
+
+  it("disables the scope options once a choice is submitted, preventing a double DELETE", async () => {
+    let resolveDelete: () => void = () => {};
+    (api.deleteEvent as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: /delete event/i }));
+    const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+
+    const occurrenceButton = within(chooser).getByRole("button", { name: "Delete this occurrence" });
+    fireEvent.click(occurrenceButton);
+    fireEvent.click(occurrenceButton);
+    fireEvent.click(occurrenceButton);
+
+    expect(occurrenceButton).toBeDisabled();
+    expect(api.deleteEvent).toHaveBeenCalledTimes(1);
+
+    resolveDelete();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete recurring event" })).toBeNull());
   });
 });

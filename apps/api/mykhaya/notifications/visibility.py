@@ -10,6 +10,7 @@ data leakage.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -77,7 +78,18 @@ def event_matches_share(event: CalendarEvent, share: CalendarShare) -> bool:
     return event.label_id is not None and str(event.label_id) in share.category_ids
 
 
-async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.UUID) -> bool:
+async def can_view_event(
+    db: AsyncSession,
+    event: CalendarEvent,
+    user_id: uuid.UUID,
+    *,
+    member_ids_override: Sequence[uuid.UUID] | None = None,
+) -> bool:
+    """`member_ids_override` mirrors viewer_ids_for_event's parameter of the
+    same name — pass one occurrence's EffectiveOccurrence.member_ids_override
+    so a member added or removed on just that occurrence is honoured by this
+    re-check, instead of only ever consulting the base event's own
+    CalendarEventMember rows."""
     membership = await active_membership(db, event.group_id, user_id)
     if membership is None:
         # Not a Home member — the only other legitimate way to see this
@@ -107,6 +119,8 @@ async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.U
         return True
     if event.created_by == user_id:
         return True
+    if member_ids_override is not None:
+        return user_id in member_ids_override
     assigned = await db.scalar(
         select(CalendarEventMember.id).where(
             CalendarEventMember.event_id == event.id,
@@ -116,20 +130,36 @@ async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.U
     return assigned is not None
 
 
-async def viewer_ids_for_event(db: AsyncSession, event: CalendarEvent) -> set[uuid.UUID]:
+async def viewer_ids_for_event(
+    db: AsyncSession,
+    event: CalendarEvent,
+    *,
+    member_ids_override: Sequence[uuid.UUID] | None = None,
+) -> set[uuid.UUID]:
     """Members explicitly attached to the event, plus any active external
     CalendarShare recipient for its calendar whose notification_preference
     isn't "off" — the natural reminder recipient set. (Not the same as
     "everyone who *could* view it" via calendar_view_all — a household admin
     with blanket visibility should not get reminded about an event they
     aren't actually part of; an external share recipient is different: the
-    whole point of sharing a calendar is to see everything on it.)"""
-    rows = (
-        await db.scalars(
-            select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == event.id)
-        )
-    ).all()
-    viewer_ids = set(rows)
+    whole point of sharing a calendar is to see everything on it.)
+
+    `member_ids_override` is a single occurrence's EffectiveOccurrence.
+    member_ids_override (see calendar_occurrences.py) — pass it when
+    resolving recipients for one specific occurrence of a recurring event,
+    so a member added or removed on just that occurrence changes who is
+    reminded/briefed about it, without touching the base event's own
+    CalendarEventMember rows. Omit it (the default) for the base event's own
+    membership, unchanged from before this parameter existed."""
+    if member_ids_override is not None:
+        viewer_ids = set(member_ids_override)
+    else:
+        rows = (
+            await db.scalars(
+                select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == event.id)
+            )
+        ).all()
+        viewer_ids = set(rows)
     for share in (
         await db.scalars(
             select(CalendarShare).where(

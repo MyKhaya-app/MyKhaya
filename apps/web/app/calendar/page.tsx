@@ -23,6 +23,7 @@ import type {
   BirthdayEntry,
   CalendarShare,
   EventLabel,
+  EventMutationScope,
   EventOccurrence,
   EventPayload,
   HomeCalendar,
@@ -206,6 +207,21 @@ const PERSONAL_CALENDAR_VALUE = "__personal__";
 // event's calendar assignment never changes via edit, matching the Home
 // calendar's own "calendar_id is fixed at creation" rule.
 const SHARE_VALUE_PREFIX = "__share__:";
+
+// Whether this occurrence's edit/delete should offer the recurring-scope
+// chooser (occurrence / this-and-future / entire series) rather than acting
+// immediately. Deliberately keyed on the event's own `recurrence` field —
+// the base series' recurrence pattern, always populated regardless of
+// whether *this* occurrence happens to be overridden or moved — never on
+// `occurrence_id` or `is_overridden`: a previously-overridden or moved
+// occurrence is still part of a recurring series and must still offer the
+// same three choices. Externally shared-calendar events are excluded: the
+// share-scoped mutation endpoints (updateSharedEvent/deleteSharedEvent)
+// don't accept a scope/occurrence_start yet, so those keep their existing
+// whole-event behaviour unconditionally, same as before this feature.
+function isRecurringOwnEvent(event: EventOccurrence): boolean {
+  return !event.share_id && event.recurrence !== "none";
+}
 
 function EventForm({
   labels,
@@ -909,7 +925,7 @@ function EventForm({
         </button>
       </div>
       {onDelete && (
-        <button className="danger-link" type="button" onClick={onDelete}>
+        <button className="danger-link" type="button" disabled={busy} onClick={onDelete}>
           <Trash2 size={16} aria-hidden="true" />
           Delete event
         </button>
@@ -933,6 +949,7 @@ function EventDetails({
   homeName,
   canDelete,
   onDelete,
+  busy = false,
 }: {
   event: EventOccurrence;
   members: Member[];
@@ -946,6 +963,7 @@ function EventDetails({
   homeName: string;
   canDelete: boolean;
   onDelete: () => Promise<void>;
+  busy?: boolean;
 }) {
   const { dateLine, timeLine } = eventWhenSummary(event, timeZone);
   const people = event.member_ids
@@ -1059,13 +1077,79 @@ function EventDetails({
 
       {canDelete && (
         <div className="event-view-actions">
-          <button className="danger-link" type="button" onClick={onDelete}>
+          <button className="danger-link" type="button" disabled={busy} onClick={onDelete}>
             <Trash2 size={16} aria-hidden="true" />
             Delete event
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+// The recurring-event scope chooser shown before an edit or delete on a
+// series' own occurrence actually reaches the API — see isRecurringOwnEvent.
+// Deliberately worded without any of the backend's internal vocabulary
+// ("exception", "override", "split", "canonical occurrence"): the three
+// choices map 1:1 onto EventMutationScope but are named the way an end user
+// thinks about a recurring event.
+function RecurrenceScopeSheet({
+  mode,
+  onChoose,
+  onCancel,
+  busy,
+  error,
+}: {
+  mode: "edit" | "delete";
+  onChoose: (scope: EventMutationScope) => void;
+  onCancel: () => void;
+  busy: boolean;
+  error: string;
+}) {
+  const options: { scope: EventMutationScope; label: string }[] =
+    mode === "edit"
+      ? [
+          { scope: "occurrence", label: "This occurrence only" },
+          { scope: "future", label: "This and future occurrences" },
+          { scope: "series", label: "Entire series" },
+        ]
+      : [
+          { scope: "occurrence", label: "Delete this occurrence" },
+          { scope: "future", label: "Delete this and future occurrences" },
+          { scope: "series", label: "Delete entire series" },
+        ];
+  return (
+    <BottomSheet
+      title={mode === "edit" ? "Apply changes to" : "Delete recurring event"}
+      onDismiss={busy ? () => {} : onCancel}
+    >
+      {error && (
+        <p className="notice error" role="alert">
+          {error}
+        </p>
+      )}
+      <nav className="sheet-menu">
+        {options.map((option) => (
+          <button
+            key={option.scope}
+            type="button"
+            className={mode === "delete" ? "sheet-menu-item danger" : "sheet-menu-item"}
+            disabled={busy}
+            onClick={() => onChoose(option.scope)}
+          >
+            {option.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="sheet-menu-item"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </nav>
+    </BottomSheet>
   );
 }
 
@@ -1098,6 +1182,16 @@ export default function CalendarPage() {
   // is an explicit, separate action. Reset by openEvent/closeEventSheet so
   // an event's draft state can never leak into the next event opened.
   const [editingSelected, setEditingSelected] = useState(false);
+  // Set the instant Save/Delete is pressed on a recurring event's own
+  // occurrence (never a shared-calendar one — see isRecurringOwnEvent), and
+  // cleared on Cancel/success/failure-that-should-restart. Holding the
+  // already-extracted EventPayload here (rather than re-reading the form)
+  // is what lets a failed occurrence/future mutation retry without losing
+  // the user's edits, and is also why Cancel never needs to touch the API:
+  // no request has been sent yet at the point this is set.
+  const [pendingEditPayload, setPendingEditPayload] = useState<EventPayload | null>(null);
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [scopeBusy, setScopeBusy] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1350,6 +1444,8 @@ export default function CalendarPage() {
   function closeEventSheet() {
     setSelectedEvent(null);
     setEditingSelected(false);
+    setPendingEditPayload(null);
+    setPendingDelete(false);
   }
 
   useEffect(() => {
@@ -1477,6 +1573,16 @@ export default function CalendarPage() {
       setError("End must be after start.");
       return;
     }
+    // A recurring event owned by this Home offers occurrence/future/series
+    // choices before anything is sent — hand off to the scope chooser
+    // instead of mutating immediately. Shared-calendar events never reach
+    // here (isRecurringOwnEvent excludes them) since their update endpoint
+    // has no scope support yet.
+    if (isRecurringOwnEvent(selectedEvent)) {
+      setError("");
+      setPendingEditPayload(payload);
+      return;
+    }
     setError("");
     setBusy(true);
     try {
@@ -1524,13 +1630,53 @@ export default function CalendarPage() {
     }
   }
 
+  // Runs the actual PATCH for a recurring event once the user has picked a
+  // scope in the chooser. `occurrence_start` is always read from
+  // `selectedEvent.occurrence_start` — the canonical identity — never
+  // derived from `payload.start_at`, so re-editing an occurrence already
+  // moved or overridden keeps updating the same exception row instead of
+  // creating a new one at the (wrong) effective time.
+  async function applyEventUpdate(payload: EventPayload, scope: EventMutationScope) {
+    if (!activeHomeId || !selectedEvent) return;
+    setError("");
+    setScopeBusy(true);
+    try {
+      const updated = await api.updateEvent(
+        activeHomeId,
+        selectedEvent.event_id,
+        toEventUpdatePayload(
+          payload,
+          selectedEvent.updated_at,
+          scope,
+          selectedEvent.occurrence_start,
+        ),
+      );
+      setSelectedEvent(updated);
+      setEditingSelected(false);
+      setPendingEditPayload(null);
+      await load();
+    } catch (cause) {
+      // Keep pendingEditPayload set so the chooser stays open with the
+      // user's edits intact and they can retry — never silently fall back
+      // to a different scope.
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "This event changed. Reload and try again.",
+      );
+    } finally {
+      setScopeBusy(false);
+    }
+  }
+
   async function remove() {
-    if (
-      !activeHomeId ||
-      !selectedEvent ||
-      !window.confirm("Delete this event?")
-    )
+    if (!activeHomeId || !selectedEvent) return;
+    if (isRecurringOwnEvent(selectedEvent)) {
+      setError("");
+      setPendingDelete(true);
       return;
+    }
+    if (!window.confirm("Delete this event?")) return;
     try {
       if (selectedEvent.share_id) {
         await api.deleteSharedEvent(selectedEvent.share_id, selectedEvent.event_id);
@@ -1545,6 +1691,35 @@ export default function CalendarPage() {
           ? cause.message
           : "The event could not be deleted.",
       );
+    }
+  }
+
+  // Runs the actual DELETE for a recurring event once the user has picked a
+  // scope. Same canonical-identity rule as applyEventUpdate.
+  async function applyDelete(scope: EventMutationScope) {
+    if (!activeHomeId || !selectedEvent) return;
+    setError("");
+    setScopeBusy(true);
+    try {
+      await api.deleteEvent(
+        activeHomeId,
+        selectedEvent.event_id,
+        scope,
+        selectedEvent.occurrence_start,
+      );
+      setPendingDelete(false);
+      closeEventSheet();
+      await load();
+    } catch (cause) {
+      // Keep the event open/recoverable — pendingDelete stays true so the
+      // chooser stays open and the user can retry.
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "The event could not be deleted.",
+      );
+    } finally {
+      setScopeBusy(false);
     }
   }
 
@@ -1976,7 +2151,7 @@ export default function CalendarPage() {
           </BottomSheet>
         )}
 
-        {selectedEvent && (() => {
+        {selectedEvent && !pendingEditPayload && !pendingDelete && (() => {
           // An occurrence merged in from an externally shared calendar has
           // its own authority (CalendarShare.permission), independent of —
           // and usually entirely absent from — the viewer's Home
@@ -2030,11 +2205,38 @@ export default function CalendarPage() {
                   homeName={activeHome?.name ?? "Home calendar"}
                   canDelete={canDelete}
                   onDelete={remove}
+                  busy={busy}
                 />
               )}
             </BottomSheet>
           );
         })()}
+
+        {selectedEvent && pendingEditPayload && (
+          <RecurrenceScopeSheet
+            mode="edit"
+            busy={scopeBusy}
+            error={error}
+            onCancel={() => {
+              setPendingEditPayload(null);
+              setError("");
+            }}
+            onChoose={(scope) => applyEventUpdate(pendingEditPayload, scope)}
+          />
+        )}
+
+        {selectedEvent && pendingDelete && (
+          <RecurrenceScopeSheet
+            mode="delete"
+            busy={scopeBusy}
+            error={error}
+            onCancel={() => {
+              setPendingDelete(false);
+              setError("");
+            }}
+            onChoose={(scope) => applyDelete(scope)}
+          />
+        )}
       </main>
     </AppShellContent>
   );

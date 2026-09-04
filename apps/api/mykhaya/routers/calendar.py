@@ -6,12 +6,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import ColumnElement, and_, delete, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.calendar_occurrences import (
     MAX_RANGE_DAYS,
+    EffectiveOccurrence,
+    canonical_occurrences_up_to,
     expand_occurrences,
+    is_canonical_occurrence,
+    load_exceptions,
     next_occurrence_on_or_after,
     recurrence_candidate_filter,
     upcoming_candidate_filter,
@@ -34,6 +39,7 @@ from mykhaya.household_permissions import Capability, capabilities_for, require_
 from mykhaya.models import (
     CalendarEvent,
     CalendarEventActivity,
+    CalendarEventException,
     CalendarEventLabel,
     CalendarEventMember,
     FeatureKey,
@@ -59,6 +65,7 @@ from mykhaya.schemas import (
     EventLabelUpdate,
     EventLabelUsageResponse,
     EventListResponse,
+    EventMutationScope,
     EventOccurrence,
     EventUpdate,
     HomeCalendarCreate,
@@ -522,33 +529,60 @@ async def _calendar_color_map(
     return {row.id: row.color for row in rows}
 
 
+def _own_occurrence(event: CalendarEvent) -> EffectiveOccurrence:
+    """The base event's own definition, expressed as a (never-overridden)
+    EffectiveOccurrence — for the handful of call sites (create_event,
+    event_detail, the returned row of an update_event) that render "this
+    event's own start/end" rather than an occurrence found via
+    expand_occurrences."""
+    return EffectiveOccurrence(
+        occurrence_start=event.start_at,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        title=event.title,
+        description=event.description,
+        is_all_day=event.is_all_day,
+        location_text=event.location_text,
+        calendar_id=event.calendar_id,
+        label_id=event.label_id,
+        reminder_minutes=event.reminder_minutes,
+        member_ids_override=None,
+        is_overridden=False,
+    )
+
+
 def _occurrence(
     event: CalendarEvent,
-    start_at: datetime,
-    end_at: datetime,
+    effective: EffectiveOccurrence,
     label: CalendarEventLabel | None,
     member_ids: list[uuid.UUID],
     calendar_color: str,
 ) -> EventOccurrence:
     return EventOccurrence(
-        occurrence_id=f"{event.id}:{start_at.isoformat()}",
+        occurrence_id=f"{event.id}:{effective.occurrence_start.isoformat()}",
         event_id=event.id,
-        calendar_id=event.calendar_id,
-        title=event.title,
-        start_at=start_at,
-        end_at=end_at,
-        is_all_day=event.is_all_day,
+        calendar_id=effective.calendar_id,
+        title=effective.title,
+        start_at=effective.start_at,
+        end_at=effective.end_at,
+        is_all_day=effective.is_all_day,
         timezone=event.timezone,
-        description=event.description,
-        location_text=event.location_text,
+        description=effective.description,
+        location_text=effective.location_text,
         label=_to_label_response(label),
         calendar_color=calendar_color,
-        member_ids=member_ids,
+        member_ids=(
+            [uuid.UUID(str(value)) for value in effective.member_ids_override]
+            if effective.member_ids_override is not None
+            else member_ids
+        ),
         recurrence=event.recurrence,
         recurrence_end_date=event.recurrence_end_date,
-        reminder_minutes=event.reminder_minutes,
+        reminder_minutes=effective.reminder_minutes,
         created_by=event.created_by,
         updated_at=event.updated_at,
+        occurrence_start=effective.occurrence_start,
+        is_overridden=effective.is_overridden,
     )
 
 
@@ -570,13 +604,19 @@ async def _record_activity(
     )
 
 
-def _format_event_when(event: CalendarEvent) -> str:
+def _format_event_when(event: CalendarEvent, start_at: datetime | None = None) -> str:
+    """`start_at` lets a caller acting on a single occurrence (rather than
+    the base event's own recurrence anchor) render the *actual* occurrence
+    date in a notification — required for occurrence/future-scope wording
+    (Phase 9): "communicate the changed occurrence", not the series'
+    original first date. Defaults to `event.start_at`, i.e. unchanged
+    behaviour for whole-series notifications."""
     tz: tzinfo
     try:
         tz = ZoneInfo(event.timezone)
     except ZoneInfoNotFoundError:
         tz = UTC
-    local_start = event.start_at.astimezone(tz)
+    local_start = (start_at if start_at is not None else event.start_at).astimezone(tz)
     if event.is_all_day:
         return local_start.strftime("%A, %d %B")
     return local_start.strftime("%A, %d %B at %H:%M")
@@ -704,13 +744,26 @@ async def _notify_members_event_updated(
     actor_name: str,
     recipient_ids: set[uuid.UUID],
     version_marker: int,
+    *,
+    occurrence_start: datetime | None = None,
+    scope_note: str | None = None,
 ) -> None:
-    when = _format_event_when(event)
+    """`occurrence_start`/`scope_note` are set only for an occurrence- or
+    future-scoped edit (Phase 9): the "when" must reflect the actual
+    occurrence changed, and the body must say so explicitly rather than
+    reading as if the whole series moved. `version_marker` alone (no
+    occurrence_start baked into the idempotency key) already produces a
+    distinct key per edit for this event — a second edit bumps
+    event.version, so a genuine double-submit of the *same* edit still
+    dedupes correctly."""
+    when = _format_event_when(event, occurrence_start)
     title, body = await render_notification(
         db,
         "calendar.event.updated",
         {"actor_name": actor_name, "event_title": event.title, "event_when": when},
     )
+    if scope_note:
+        body = f"{body} ({scope_note})"
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -736,10 +789,20 @@ async def _notify_members_event_cancelled(
     actor_id: uuid.UUID,
     actor_name: str,
     recipient_ids: set[uuid.UUID],
+    *,
+    scope_note: str | None = None,
+    idempotency_suffix: str = "",
 ) -> None:
+    """`idempotency_suffix` distinguishes an occurrence-scoped cancellation
+    from the whole-series one for the SAME event — required so deleting
+    one occurrence and later deleting the entire series don't collide on
+    the same idempotency key (which would silently drop the second
+    notification) — see Phase 9's per-scope delivery requirement."""
     title, body = await render_notification(
         db, "calendar.event.cancelled", {"actor_name": actor_name, "event_title": event.title}
     )
+    if scope_note:
+        body = f"{body} ({scope_note})"
     for recipient_id in recipient_ids:
         if recipient_id == actor_id:
             continue
@@ -750,7 +813,7 @@ async def _notify_members_event_cancelled(
             notification_type="event_cancelled",
             title=title,
             body=body,
-            idempotency_key=f"calendar_event_cancelled:{event.id}:{recipient_id}",
+            idempotency_key=f"calendar_event_cancelled:{event.id}:{recipient_id}{idempotency_suffix}",
             group_id=event.group_id,
             related_entity_type="calendar_event",
             related_entity_id=event.id,
@@ -1050,16 +1113,16 @@ async def list_events(
     label_by_id = await _label_map(db, home_id)
     members_by_event = await _event_members_map(db, [event.id for event in events])
     calendar_colors = await _calendar_color_map(db, home_id)
+    exceptions_by_event = await load_exceptions(db, [event.id for event in events])
 
     items: list[EventOccurrence] = []
     for event in events:
-        label = label_by_id.get(event.label_id) if event.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
-        for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
-            items.append(
-                _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
-            )
+        exceptions = exceptions_by_event.get(event.id, {})
+        for effective in expand_occurrences(event, start_at, end_at, exceptions):
+            label = label_by_id.get(effective.label_id) if effective.label_id else None
+            color = calendar_colors.get(effective.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
+            items.append(_occurrence(event, effective, label, member_ids, color))
 
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=page + 1 if has_more else None)
@@ -1115,19 +1178,18 @@ async def list_upcoming_events(
     label_by_id = await _label_map(db, home_id)
     members_by_event = await _event_members_map(db, [event.id for event in events])
     calendar_colors = await _calendar_color_map(db, home_id)
+    exceptions_by_event = await load_exceptions(db, [event.id for event in events])
 
     candidates: list[EventOccurrence] = []
     for event in events:
-        next_occ = next_occurrence_on_or_after(event, after)
-        if next_occ is None:
+        exceptions = exceptions_by_event.get(event.id, {})
+        effective = next_occurrence_on_or_after(event, after, exceptions)
+        if effective is None:
             continue
-        occurrence_start, occurrence_end = next_occ
-        label = label_by_id.get(event.label_id) if event.label_id else None
+        label = label_by_id.get(effective.label_id) if effective.label_id else None
         member_ids = members_by_event.get(event.id, [])
-        color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
-        candidates.append(
-            _occurrence(event, occurrence_start, occurrence_end, label, member_ids, color)
-        )
+        color = calendar_colors.get(effective.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
+        candidates.append(_occurrence(event, effective, label, member_ids, color))
 
     candidates.sort(key=lambda item: item.start_at)
     return EventListResponse(items=candidates[:limit], next_page=None)
@@ -1285,7 +1347,7 @@ async def create_event(
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     return _occurrence(
-        event, event.start_at, event.end_at, label, requested_members, calendar_row.color
+        event, _own_occurrence(event), label, requested_members, calendar_row.color
     )
 
 
@@ -1342,7 +1404,7 @@ async def event_detail(
         )
     ).all()
     return EventDetailResponse(
-        event=_occurrence(event, event.start_at, event.end_at, label, member_ids, calendar_color),
+        event=_occurrence(event, _own_occurrence(event), label, member_ids, calendar_color),
         activity=[
             EventActivityResponse(
                 id=row.id,
@@ -1353,6 +1415,323 @@ async def event_detail(
             )
             for row in activity_rows
         ],
+    )
+
+
+async def _validated_requested_members(
+    db: AsyncSession,
+    home_id: uuid.UUID,
+    body_member_ids: list[uuid.UUID],
+    created_by: uuid.UUID,
+    is_personal_calendar: bool,
+) -> list[uuid.UUID]:
+    """Shared participant validation for occurrence/future-scope edits —
+    the exact same rule the whole-series path already enforces (creator
+    always included, Personal Calendar events can never be assigned to
+    anyone else, every requested member must be a live Home member).
+    """
+    requested_members = sorted(set(body_member_ids + [created_by]))
+    if is_personal_calendar and set(requested_members) != {created_by}:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Events on your Personal Calendar can't be assigned to other members.",
+        )
+    if requested_members:
+        rows = (
+            await db.scalars(
+                select(Membership.user_id).where(
+                    Membership.group_id == home_id,
+                    Membership.removed_at.is_(None),
+                    Membership.user_id.in_(requested_members),
+                )
+            )
+        ).all()
+        if set(rows) != set(requested_members):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "A selected member is invalid"
+            )
+    return requested_members
+
+
+def _truncate_series_after(event: CalendarEvent, last_kept_start: datetime) -> None:
+    """Ends `event`'s series so `last_kept_start` is its final occurrence —
+    used by both the "future" split (edit) and "future" delete paths to
+    truncate the OLD/historical series.
+
+    Deliberately sets `recurrence_end_date` (a plain calendar date, inclusive
+    of its own day — see that column's docstring in models.py) rather than
+    `recurrence_until`: a plain calendar date is what "this and future" is
+    actually cutting off at (the day after `last_kept_start`), and is the
+    natural, exact thing to set here regardless of `recurrence_until`'s own
+    handling. (`expand_occurrences`/`next_occurrence_on_or_after` used to
+    check `recurrence_until` one candidate too late, letting exactly one
+    occurrence past the intended boundary through — that has since been
+    fixed at the source in calendar_occurrences.py, but this function still
+    prefers `recurrence_end_date` on its own merits.) `recurrence_until` is
+    left exactly as it was; if the series already had an EARLIER
+    recurrence_end_date, that stricter existing bound is preserved rather
+    than being loosened.
+    """
+    tz: tzinfo
+    try:
+        tz = ZoneInfo(event.timezone)
+    except ZoneInfoNotFoundError:
+        tz = UTC
+    last_kept_date = last_kept_start.astimezone(tz).date()
+    if event.recurrence_end_date is None or last_kept_date < event.recurrence_end_date:
+        event.recurrence_end_date = last_kept_date
+
+
+async def _validated_label(
+    db: AsyncSession, home_id: uuid.UUID, label_id: uuid.UUID | None
+) -> None:
+    if label_id is None:
+        return
+    new_label = await db.scalar(
+        select(CalendarEventLabel).where(
+            CalendarEventLabel.id == label_id,
+            CalendarEventLabel.group_id == home_id,
+            CalendarEventLabel.is_active.is_(True),
+        )
+    )
+    if new_label is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That label could not be found")
+    _require_label_selectable(await _label_access(db, home_id), label_id)
+
+
+async def _apply_occurrence_edit(
+    db: AsyncSession,
+    request: Request,
+    event: CalendarEvent,
+    is_personal_calendar: bool,
+    auth: AuthContext,
+    settings: Settings,
+    body: EventUpdate,
+    start_at: datetime,
+    end_at: datetime,
+) -> EventOccurrence:
+    """"This occurrence only": create/update a CalendarEventException for
+    body.occurrence_start (already validated by the caller as a real
+    canonical occurrence of `event`) — never touches the base event row.
+    Idempotent under retry via ON CONFLICT DO UPDATE keyed on
+    (event_id, occurrence_start) — a double-submit updates the same row
+    to the same requested values rather than creating a duplicate."""
+    await _validated_label(db, event.group_id, body.label_id)
+    requested_members = await _validated_requested_members(
+        db, event.group_id, body.member_ids, event.created_by, is_personal_calendar
+    )
+    assert body.occurrence_start is not None
+
+    title = " ".join(body.title.strip().split())
+    values = {
+        "group_id": event.group_id,
+        "event_id": event.id,
+        "occurrence_start": body.occurrence_start,
+        "is_deleted": False,
+        "title": title,
+        "description": body.description,
+        "start_at": start_at,
+        "end_at": end_at,
+        "is_all_day": body.is_all_day,
+        "location_text": body.location_text,
+        "label_id": body.label_id,
+        "reminder_minutes": body.reminder_minutes,
+        "member_ids": [str(user_id) for user_id in requested_members],
+        "created_by": auth.user.id,
+        "last_edited_by": auth.user.id,
+    }
+    immutable_on_conflict = ("group_id", "event_id", "occurrence_start", "created_by")
+    update_values = {
+        key: value for key, value in values.items() if key not in immutable_on_conflict
+    }
+    stmt = (
+        pg_insert(CalendarEventException)
+        .values(**values)
+        .on_conflict_do_update(
+            constraint="uq_event_exception_occurrence",
+            set_=update_values,
+        )
+        .returning(CalendarEventException)
+    )
+    exception = (await db.execute(stmt)).scalars().first()
+    assert exception is not None
+
+    await _record_activity(
+        db, event, auth.user.id, "event.occurrence_updated", "updated one occurrence"
+    )
+    audit(
+        db, request, "calendar.event.occurrence_updated", auth.user.id, event.group_id,
+        "event", event.id,
+    )
+
+    visible_ids = await home_viewer_ids_for_event(db, event)
+    await _notify_members_event_updated(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        set(requested_members) | visible_ids,
+        event.version,
+        occurrence_start=start_at,
+        scope_note="this occurrence only",
+    )
+
+    await db.commit()
+
+    label = await db.get(CalendarEventLabel, body.label_id) if body.label_id else None
+    calendar_colors = await _calendar_color_map(db, event.group_id)
+    color = calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX)
+    effective = EffectiveOccurrence(
+        occurrence_start=exception.occurrence_start,
+        start_at=exception.start_at or start_at,
+        end_at=exception.end_at or end_at,
+        title=exception.title or title,
+        description=exception.description,
+        is_all_day=exception.is_all_day if exception.is_all_day is not None else body.is_all_day,
+        location_text=exception.location_text,
+        calendar_id=event.calendar_id,
+        label_id=exception.label_id,
+        reminder_minutes=exception.reminder_minutes,
+        member_ids_override=requested_members,
+        is_overridden=True,
+    )
+    return _occurrence(event, effective, label, requested_members, color)
+
+
+async def _apply_future_split_edit(
+    db: AsyncSession,
+    request: Request,
+    home_id: uuid.UUID,
+    event: CalendarEvent,
+    is_personal_calendar: bool,
+    auth: AuthContext,
+    settings: Settings,
+    body: EventUpdate,
+    start_at: datetime,
+    end_at: datetime,
+    recurrence_end_date: date | None,
+) -> EventOccurrence:
+    """"This and future occurrences": split the series at
+    body.occurrence_start. The OLD event row is truncated to end
+    immediately before the split (history preserved, untouched); a NEW
+    CalendarEvent row is created starting at the split point carrying the
+    requested edit, inherits the old series' current participants, and
+    takes over any exceptions at/after the split point (an exception
+    strictly before the split stays attached to the historical series —
+    Phase 5/6's explicit requirement). One transaction: the old series can
+    never end up truncated without the new one existing, and vice versa —
+    both changes are flushed together and committed once at the end."""
+    assert body.occurrence_start is not None
+    canonical = canonical_occurrences_up_to(event, body.occurrence_start)
+    # Caller already confirmed len(canonical) > 1 (a split at the very
+    # first occurrence is redirected to a plain whole-series edit instead).
+    occurrences_before_split = len(canonical) - 1
+    last_kept_start = canonical[-2]
+
+    await _validated_label(db, home_id, body.label_id)
+    requested_members = await _validated_requested_members(
+        db, home_id, body.member_ids, event.created_by, is_personal_calendar
+    )
+
+    # Preserve the *intended total occurrence count* across the split
+    # rather than copying the old total onto the new series (which would
+    # silently extend the series) — see Phase 5's explicit requirement.
+    # An explicit new count/until (different from the pre-split value) is
+    # trusted as the user's deliberate choice for the future series.
+    new_recurrence_count: int | None
+    if body.recurrence_count is not None and body.recurrence_count == event.recurrence_count:
+        new_recurrence_count = (
+            event.recurrence_count - occurrences_before_split
+            if event.recurrence_count is not None
+            else None
+        )
+    else:
+        new_recurrence_count = body.recurrence_count
+    # recurrence_until is an absolute cutoff instant, not a counter, so it
+    # carries none of recurrence_count's "total length" ambiguity — the
+    # user's submitted value is used as-is for the new series.
+    new_recurrence_until = body.recurrence_until
+
+    new_event = CalendarEvent(
+        group_id=home_id,
+        calendar_id=event.calendar_id,
+        label_id=body.label_id,
+        title=" ".join(body.title.strip().split()),
+        description=body.description,
+        start_at=start_at,
+        end_at=end_at,
+        is_all_day=body.is_all_day,
+        timezone=body.timezone,
+        location_text=body.location_text,
+        reminder_minutes=body.reminder_minutes,
+        recurrence=body.recurrence,
+        recurrence_interval=body.recurrence_interval,
+        recurrence_until=new_recurrence_until,
+        recurrence_end_date=recurrence_end_date,
+        recurrence_count=new_recurrence_count,
+        created_by=event.created_by,
+        last_edited_by=auth.user.id,
+    )
+    db.add(new_event)
+    await db.flush()
+
+    for user_id in requested_members:
+        db.add(CalendarEventMember(group_id=home_id, event_id=new_event.id, user_id=user_id))
+
+    # Truncate the OLD series immediately after its last kept occurrence —
+    # see _truncate_series_after's own docstring for why recurrence_end_date,
+    # not recurrence_until.
+    _truncate_series_after(event, last_kept_start)
+    if event.recurrence_count is not None:
+        event.recurrence_count = occurrences_before_split
+    event.last_edited_by = auth.user.id
+    event.version += 1
+
+    # Migrate exceptions at/after the split point to the new series;
+    # anything strictly before stays attached to the historical one.
+    exception_rows = (
+        await db.scalars(
+            select(CalendarEventException).where(CalendarEventException.event_id == event.id)
+        )
+    ).all()
+    for exception in exception_rows:
+        if exception.occurrence_start >= body.occurrence_start:
+            exception.event_id = new_event.id
+            exception.last_edited_by = auth.user.id
+
+    await _record_activity(
+        db, event, auth.user.id, "event.series_split",
+        "split the series — this and future occurrences updated",
+    )
+    audit(
+        db, request, "calendar.event.future_updated", auth.user.id, home_id,
+        "event", new_event.id,
+    )
+
+    visible_ids = await home_viewer_ids_for_event(db, new_event)
+    await _notify_members_event_updated(
+        db,
+        settings,
+        new_event,
+        auth.user.id,
+        auth.user.display_name,
+        set(requested_members) | visible_ids,
+        new_event.version,
+        occurrence_start=start_at,
+        scope_note="this and future occurrences",
+    )
+
+    await db.commit()
+    await db.refresh(new_event)
+
+    label = await db.get(CalendarEventLabel, new_event.label_id) if new_event.label_id else None
+    event_calendar = await db.get(HomeCalendar, new_event.calendar_id)
+    calendar_color = (
+        event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR_HEX
+    )
+    return _occurrence(
+        new_event, _own_occurrence(new_event), label, requested_members, calendar_color
     )
 
 
@@ -1400,7 +1779,16 @@ async def update_event(
     is_personal_calendar = event_calendar is not None and event_calendar.owner_user_id is not None
     if event.created_by != membership.user_id and not is_personal_calendar:
         await require_capability(home_id, Capability.calendar_edit_all, auth, db)
-    if event.updated_at != body.expected_updated_at:
+    # Optimistic concurrency is checked only for a whole-series edit — an
+    # occurrence/future-scoped edit never mutates the base event's own
+    # updated_at (occurrence: touches only its exception row; future:
+    # touches a NEW row), so comparing against the base event's
+    # updated_at would produce spurious conflicts between two people
+    # editing two different occurrences of the same series at once. The
+    # row-level `with_for_update()` lock above still serialises concurrent
+    # requests against this same event; finer-grained per-occurrence
+    # conflict detection is a documented follow-up, not a security gap.
+    if body.scope == "series" and event.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
     if is_personal_calendar:
         # Never entitlement-gated — same reasoning as create_event.
@@ -1408,6 +1796,31 @@ async def update_event(
     else:
         access = await _calendar_access(db, home_id)
         _require_calendar_writable(access, event.calendar_id)
+
+    if body.scope != "series":
+        if event.recurrence == RecurrencePattern.none:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat"
+            )
+        assert body.occurrence_start is not None  # enforced by EventUpdate's own validator
+        if not is_canonical_occurrence(event, body.occurrence_start):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "That occurrence does not belong to this recurring event",
+            )
+        if body.scope == "occurrence":
+            return await _apply_occurrence_edit(
+                db, request, event, is_personal_calendar, auth, settings, body, start_at, end_at
+            )
+        # scope == "future". A split at the series' very first occurrence
+        # has no history to preserve — fall through to the ordinary
+        # whole-series edit below instead of leaving a dead, occurrence-
+        # less historical row behind.
+        if len(canonical_occurrences_up_to(event, body.occurrence_start)) > 1:
+            return await _apply_future_split_edit(
+                db, request, home_id, event, is_personal_calendar, auth, settings,
+                body, start_at, end_at, recurrence_end_date,
+            )
 
     # Transition-safe, same rule as shared events/routines: only a genuine
     # *change* of label is checked against the entitlement — resaving an
@@ -1549,6 +1962,22 @@ async def update_event(
             version_marker=event.version,
         )
 
+    # Whole-series edit + existing exceptions (Phase 6): a valid exception
+    # (still referring to an occurrence the — possibly just-changed —
+    # recurrence rule genuinely still generates) is preserved as-is. One
+    # that no longer corresponds to any canonical occurrence under the new
+    # rule (e.g. recurrence pattern/interval/count/until shrank past it)
+    # is deleted deterministically rather than left as stale, orphaned
+    # data a future expand_occurrences call would simply never look up.
+    stale_exceptions = (
+        await db.scalars(
+            select(CalendarEventException).where(CalendarEventException.event_id == event.id)
+        )
+    ).all()
+    for exception in stale_exceptions:
+        if not is_canonical_occurrence(event, exception.occurrence_start):
+            await db.delete(exception)
+
     await db.commit()
     # Async SQLAlchemy expires every attribute on commit; touching one
     # without an explicit refresh first (updated_at, server-computed via
@@ -1562,7 +1991,7 @@ async def update_event(
         event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR_HEX
     )
     return _occurrence(
-        event, event.start_at, event.end_at, label, requested_members, calendar_color
+        event, _own_occurrence(event), label, requested_members, calendar_color
     )
 
 
@@ -1571,11 +2000,23 @@ async def delete_event(
     home_id: uuid.UUID,
     event_id: uuid.UUID,
     request: Request,
+    scope: EventMutationScope = Query(default="series"),
+    occurrence_start: datetime | None = Query(default=None),
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> None:
     await require_capability(home_id, Capability.calendar_delete, auth, db)
+    if scope != "series" and occurrence_start is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "occurrence_start is required when scope is 'occurrence' or 'future'",
+        )
+    if occurrence_start is not None and occurrence_start.tzinfo is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "occurrence_start must include a UTC offset",
+        )
     event = await db.scalar(
         select(CalendarEvent)
         .where(
@@ -1596,6 +2037,32 @@ async def delete_event(
     if event_calendar is None or event_calendar.owner_user_id is None:
         access = await _calendar_access(db, home_id)
         _require_calendar_writable(access, event.calendar_id)
+
+    if scope != "series":
+        if event.recurrence == RecurrencePattern.none:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat"
+            )
+        assert occurrence_start is not None
+        if not is_canonical_occurrence(event, occurrence_start):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "That occurrence does not belong to this recurring event",
+            )
+        if scope == "occurrence":
+            await _delete_single_occurrence(db, request, event, auth, settings, occurrence_start)
+            return
+        # scope == "future". Deleting from the very first occurrence has no
+        # history left to preserve — equivalent to deleting the whole
+        # series, so fall through to that path instead of leaving a dead,
+        # occurrence-less row behind.
+        canonical = canonical_occurrences_up_to(event, occurrence_start)
+        if len(canonical) > 1:
+            await _delete_future_occurrences(
+                db, request, event, auth, settings, occurrence_start, canonical[-2]
+            )
+            return
+
     member_ids = {
         row.user_id
         for row in (
@@ -1610,6 +2077,15 @@ async def delete_event(
     event.last_edited_by = auth.user.id
     await _record_activity(db, event, auth.user.id, "event.deleted", "deleted this event")
     audit(db, request, "calendar.event.deleted", auth.user.id, home_id, "event", event.id)
+    # Whole-series delete: no exception can produce an effective event for
+    # a deleted parent (expand_occurrences/next_occurrence_on_or_after
+    # never even query a deleted CalendarEvent — every consumer already
+    # filters deleted_at IS NULL first), so existing exception rows for it
+    # become permanently inert. Deleted outright here rather than left as
+    # orphaned data with no live parent that could ever read them again.
+    await db.execute(
+        delete(CalendarEventException).where(CalendarEventException.event_id == event.id)
+    )
     await _notify_members_event_cancelled(
         db,
         settings,
@@ -1625,6 +2101,125 @@ async def delete_event(
         actor_user_id=auth.user.id,
         actor_name=auth.user.display_name,
         action="cancelled",
+    )
+    await db.commit()
+
+
+async def _delete_single_occurrence(
+    db: AsyncSession,
+    request: Request,
+    event: CalendarEvent,
+    auth: AuthContext,
+    settings: Settings,
+    occurrence_start: datetime,
+) -> None:
+    """"Delete this occurrence": an excluded-occurrence exception, never a
+    mutation of the base recurrence rule — see Phase D. Idempotent under
+    retry (ON CONFLICT DO UPDATE, same is_deleted=True result either way)."""
+    await db.execute(
+        pg_insert(CalendarEventException)
+        .values(
+            group_id=event.group_id,
+            event_id=event.id,
+            occurrence_start=occurrence_start,
+            is_deleted=True,
+            created_by=auth.user.id,
+            last_edited_by=auth.user.id,
+        )
+        .on_conflict_do_update(
+            constraint="uq_event_exception_occurrence",
+            set_={"is_deleted": True, "last_edited_by": auth.user.id},
+        )
+    )
+    member_ids = {
+        row.user_id
+        for row in (
+            await db.scalars(
+                select(CalendarEventMember).where(CalendarEventMember.event_id == event.id)
+            )
+        ).all()
+    }
+    visible_member_ids = await home_viewer_ids_for_event(db, event)
+    await _record_activity(
+        db, event, auth.user.id, "event.occurrence_deleted", "deleted one occurrence"
+    )
+    audit(
+        db, request, "calendar.event.occurrence_deleted", auth.user.id, event.group_id,
+        "event", event.id,
+    )
+    await _notify_members_event_cancelled(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        visible_member_ids | member_ids,
+        scope_note="this occurrence only",
+        idempotency_suffix=f":{occurrence_start.isoformat()}",
+    )
+    await db.commit()
+
+
+async def _delete_future_occurrences(
+    db: AsyncSession,
+    request: Request,
+    event: CalendarEvent,
+    auth: AuthContext,
+    settings: Settings,
+    occurrence_start: datetime,
+    last_kept_start: datetime,
+) -> None:
+    """"Delete this and future occurrences": truncate the series to end
+    immediately after `last_kept_start` — history preserved, nothing after
+    the selected occurrence ever generates again. No new event row is
+    created (unlike the edit-scope future split): there is nothing to
+    continue. Exceptions at/after the cut are removed — they can never
+    produce an effective occurrence again once the series no longer
+    reaches them, so leaving them would just be inert stale data."""
+    # Compute the new recurrence_count BEFORE truncating — truncating first
+    # would mutate the very state canonical_occurrences_up_to reads,
+    # potentially cutting this walk off before it ever reaches
+    # occurrence_start.
+    if event.recurrence_count is not None:
+        canonical = canonical_occurrences_up_to(event, occurrence_start)
+        event.recurrence_count = len(canonical) - 1
+    _truncate_series_after(event, last_kept_start)
+    event.last_edited_by = auth.user.id
+    event.version += 1
+
+    await db.execute(
+        delete(CalendarEventException).where(
+            CalendarEventException.event_id == event.id,
+            CalendarEventException.occurrence_start >= occurrence_start,
+        )
+    )
+
+    member_ids = {
+        row.user_id
+        for row in (
+            await db.scalars(
+                select(CalendarEventMember).where(CalendarEventMember.event_id == event.id)
+            )
+        ).all()
+    }
+    visible_member_ids = await home_viewer_ids_for_event(db, event)
+    await _record_activity(
+        db, event, auth.user.id, "event.future_deleted",
+        "deleted this and future occurrences",
+    )
+    audit(
+        db, request, "calendar.event.future_deleted", auth.user.id, event.group_id,
+        "event", event.id,
+    )
+    await _notify_members_event_cancelled(
+        db,
+        settings,
+        event,
+        auth.user.id,
+        auth.user.display_name,
+        visible_member_ids | member_ids,
+        scope_note="this and future occurrences",
+        idempotency_suffix=f":future:{occurrence_start.isoformat()}",
     )
     await db.commit()
 
@@ -1718,53 +2313,75 @@ async def home_summary(
                 ),
             )
         )
-    today_rows = (
+    # Recurring occurrences must come from the one canonical effective-
+    # occurrence path (expand_occurrences/next_occurrence_on_or_after) —
+    # querying CalendarEvent.start_at/end_at directly, as this endpoint
+    # used to, only ever sees a recurring series' FIRST occurrence (its
+    # base row's own stored start/end); a recurring event whose first
+    # occurrence isn't today would never appear here at all, and any
+    # occurrence exception (moved/overridden/deleted) would be silently
+    # ignored. See docs completion report for the pre-existing gap this
+    # closes — Home must see exactly what Calendar/Coming Up/reminders/
+    # briefing already do.
+    today_candidate_rows = (
         await db.scalars(
             select(CalendarEvent)
             .where(
                 CalendarEvent.group_id == home_id,
                 CalendarEvent.deleted_at.is_(None),
-                CalendarEvent.start_at < day_end,
-                CalendarEvent.end_at > day_start,
+                recurrence_candidate_filter(day_start, day_end),
                 *visibility_filters,
             )
-            .order_by(CalendarEvent.start_at)
-            .limit(20)
         )
     ).all()
-    member_map = await _event_members_map(db, [event.id for event in today_rows])
+    today_exceptions = await load_exceptions(db, [event.id for event in today_candidate_rows])
+    member_map = await _event_members_map(db, [event.id for event in today_candidate_rows])
+    today_effective: list[tuple[CalendarEvent, EffectiveOccurrence]] = []
+    for event in today_candidate_rows:
+        exceptions = today_exceptions.get(event.id, {})
+        for effective in expand_occurrences(event, day_start, day_end, exceptions):
+            today_effective.append((event, effective))
+    today_effective.sort(key=lambda pair: pair[1].start_at)
     today_events = [
         _occurrence(
             event,
-            event.start_at,
-            event.end_at,
-            labels.get(event.label_id) if event.label_id else None,
+            effective,
+            labels.get(effective.label_id) if effective.label_id else None,
             member_map.get(event.id, []),
-            calendar_colors.get(event.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
+            calendar_colors.get(effective.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
         )
-        for event in today_rows
+        for event, effective in today_effective[:20]
     ]
 
-    next_event_row = await db.scalar(
-        select(CalendarEvent)
-        .where(
-            CalendarEvent.group_id == home_id,
-            CalendarEvent.deleted_at.is_(None),
-            CalendarEvent.end_at >= now,
-            *visibility_filters,
+    next_candidate_rows = (
+        await db.scalars(
+            select(CalendarEvent)
+            .where(
+                CalendarEvent.group_id == home_id,
+                CalendarEvent.deleted_at.is_(None),
+                upcoming_candidate_filter(now),
+                *visibility_filters,
+            )
         )
-        .order_by(CalendarEvent.start_at)
-        .limit(1)
-    )
+    ).all()
+    next_exceptions = await load_exceptions(db, [event.id for event in next_candidate_rows])
+    next_member_map = await _event_members_map(db, [event.id for event in next_candidate_rows])
+    next_candidates: list[tuple[CalendarEvent, EffectiveOccurrence]] = []
+    for event in next_candidate_rows:
+        exceptions = next_exceptions.get(event.id, {})
+        next_effective_or_none = next_occurrence_on_or_after(event, now, exceptions)
+        if next_effective_or_none is not None:
+            next_candidates.append((event, next_effective_or_none))
+    next_candidates.sort(key=lambda pair: pair[1].start_at)
     next_event = None
-    if next_event_row is not None:
+    if next_candidates:
+        next_event_row, next_effective = next_candidates[0]
         next_event = _occurrence(
             next_event_row,
-            next_event_row.start_at,
-            next_event_row.end_at,
-            labels.get(next_event_row.label_id) if next_event_row.label_id else None,
-            member_map.get(next_event_row.id, []),
-            calendar_colors.get(next_event_row.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
+            next_effective,
+            labels.get(next_effective.label_id) if next_effective.label_id else None,
+            next_member_map.get(next_event_row.id, []),
+            calendar_colors.get(next_effective.calendar_id, DEFAULT_LABEL_COLOUR_HEX),
         )
 
     pending_count = None

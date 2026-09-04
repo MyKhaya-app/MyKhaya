@@ -695,6 +695,13 @@ class EventCreate(StrictModel):
         return _require_tz_aware(value)
 
 
+# Which recurring occurrences a mutation applies to — "series" (the whole
+# recurring event, or the only sensible value for a non-recurring one) is
+# the default so every existing API caller (native/web builds predating
+# this feature) keeps its exact current behaviour with no request change.
+EventMutationScope = Literal["occurrence", "future", "series"]
+
+
 class EventUpdate(StrictModel):
     title: str = Field(min_length=1, max_length=180)
     start_at: datetime
@@ -712,11 +719,25 @@ class EventUpdate(StrictModel):
     recurrence_end_date: date | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
     expected_updated_at: datetime
+    scope: EventMutationScope = "series"
+    # The CANONICAL occurrence_start (EventOccurrence.occurrence_start) the
+    # selected occurrence was generated at — required for scope in
+    # ("occurrence", "future"), ignored for "series". The server
+    # independently re-derives and validates this against the event's own
+    # recurrence rule (see routers.calendar.update_event) rather than
+    # trusting it — never treat this field as authoritative on its own.
+    occurrence_start: datetime | None = None
 
-    @field_validator("start_at", "end_at", "recurrence_until")
+    @field_validator("start_at", "end_at", "recurrence_until", "occurrence_start")
     @classmethod
     def tz_aware(cls, value: datetime | None) -> datetime | None:
         return _require_tz_aware(value)
+
+    @model_validator(mode="after")
+    def occurrence_start_required_for_occurrence_scopes(self) -> "EventUpdate":
+        if self.scope in ("occurrence", "future") and self.occurrence_start is None:
+            raise ValueError("occurrence_start is required when scope is 'occurrence' or 'future'")
+        return self
 
 
 class EventOccurrence(BaseModel):
@@ -745,6 +766,13 @@ class EventOccurrence(BaseModel):
     reminder_minutes: int | None
     created_by: uuid.UUID
     updated_at: datetime
+    # The CANONICAL occurrence identity — stable across a move/override
+    # (unlike `start_at`, which reflects the *effective*, possibly moved,
+    # time). Pass this back as EventUpdate.occurrence_start /
+    # DELETE's occurrence_start query param when acting on a single
+    # occurrence. Equal to `start_at` for a non-overridden occurrence.
+    occurrence_start: datetime
+    is_overridden: bool = False
 
 
 class EventActivityResponse(BaseModel):

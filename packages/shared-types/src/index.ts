@@ -123,6 +123,14 @@ export interface EventOccurrence {
   reminder_minutes: number | null;
   created_by: string;
   updated_at: string;
+  // The CANONICAL occurrence identity — stable across a move/override
+  // (unlike `start_at`, which reflects the *effective*, possibly moved,
+  // time). Pass this back as EventUpdatePayload.occurrence_start /
+  // deleteEvent's occurrence_start when acting on a single occurrence —
+  // never recompute it from the currently-edited start_at. Equal to
+  // `start_at` for a non-overridden occurrence.
+  occurrence_start: string;
+  is_overridden: boolean;
   // Present only on an occurrence merged in from an externally shared
   // calendar (see app/calendar/page.tsx's load()) — the backend's own
   // EventOccurrence schema never sets these; they're attached client-side
@@ -201,8 +209,20 @@ export interface CalendarUsage {
 // on a PATCH is rejected with a 422 ("extra_forbidden") — see
 // EventForm.submit/`update()` in app/calendar/page.tsx, which strips it
 // before calling updateEvent.
+// Which recurring occurrences a mutation applies to — "series" (the whole
+// recurring event, or the only sensible value for a non-recurring one) is
+// the default, matching the backend's own default, so an ordinary non-
+// recurring edit/delete never needs to think about this field at all.
+export type EventMutationScope = "occurrence" | "future" | "series";
+
 export interface EventUpdatePayload extends Omit<EventPayload, "calendar_id"> {
   expected_updated_at: string;
+  scope?: EventMutationScope;
+  // Required by the backend when scope is "occurrence"/"future" — the
+  // CANONICAL EventOccurrence.occurrence_start of the instance being acted
+  // on, never derived from the currently-edited start_at. See
+  // EventOccurrence.occurrence_start's own docstring above.
+  occurrence_start?: string;
 }
 
 // The narrower body an external "Can add & edit" recipient submits to

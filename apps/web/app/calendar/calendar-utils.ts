@@ -1,4 +1,5 @@
 import type {
+  EventMutationScope,
   EventOccurrence,
   EventPayload,
   EventUpdatePayload,
@@ -839,9 +840,19 @@ export function filterByVisibleCalendars(
  *  creation and always resolved server-side from the existing row; sending
  *  it here broke every edit regardless of what actually changed —
  *  regression covered by calendar-utils.test.ts. */
+// `scope`/`occurrenceStart` are omitted entirely (not even sent as
+// undefined) for the default "series" case — matches the backend's own
+// default exactly, so an ordinary non-recurring edit's request body is
+// byte-for-byte unchanged from before this feature existed. `occurrenceStart`
+// must always be the CANONICAL EventOccurrence.occurrence_start captured
+// when the sheet was opened, never derived from `payload.start_at` (the
+// just-edited value) — see EventOccurrence.occurrence_start's docstring in
+// shared-types.
 export function toEventUpdatePayload(
   payload: EventPayload,
   expectedUpdatedAt: string,
+  scope?: EventMutationScope,
+  occurrenceStart?: string,
 ): EventUpdatePayload {
   return {
     title: payload.title,
@@ -862,5 +873,6 @@ export function toEventUpdatePayload(
       : {}),
     recurrence_count: payload.recurrence_count,
     expected_updated_at: expectedUpdatedAt,
+    ...(scope && scope !== "series" ? { scope, occurrence_start: occurrenceStart } : {}),
   };
 }

@@ -351,11 +351,21 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
       { method: "PATCH", body: JSON.stringify(body) },
     );
-  deleteEvent = (homeId: string, eventId: string) =>
-    this.request<void>(
-      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
+  deleteEvent = (
+    homeId: string,
+    eventId: string,
+    scope?: import("@mykhaya/shared-types").EventMutationScope,
+    occurrenceStart?: string,
+  ) => {
+    const search = new URLSearchParams();
+    if (scope) search.set("scope", scope);
+    if (occurrenceStart) search.set("occurrence_start", occurrenceStart);
+    const query = search.toString();
+    return this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}${query ? `?${query}` : ""}`,
       { method: "DELETE" },
     );
+  };
   listCalendars = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").CalendarListResponse>(
       `/homes/${encodeURIComponent(homeId)}/calendars`,

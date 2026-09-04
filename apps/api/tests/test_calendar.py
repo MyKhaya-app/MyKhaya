@@ -356,7 +356,7 @@ def test_recurrence_end_date_is_inclusive() -> None:
         datetime(2026, 8, 20, tzinfo=UTC),
         datetime(2026, 9, 26, tzinfo=UTC),
     )
-    assert [start.date() for start, _end in occurrences] == [
+    assert [occurrence.start_at.date() for occurrence in occurrences] == [
         date(2026, 8, 21),
         date(2026, 8, 28),
         date(2026, 9, 4),
@@ -390,7 +390,7 @@ def test_next_occurrence_on_or_after_finds_a_weekly_occurrence_months_out() -> N
     cursor = datetime(2026, 9, 1, tzinfo=UTC)  # ~8 months after start_at
     result = next_occurrence_on_or_after(event, cursor)
     assert result is not None
-    start, end = result
+    start, end = result.start_at, result.end_at
     assert start >= cursor
     assert start.weekday() == 1  # still a Tuesday
     assert (start - datetime(2026, 1, 6, 9, tzinfo=UTC)).days % 7 == 0
@@ -411,7 +411,35 @@ def test_next_occurrence_on_or_after_respects_recurrence_until() -> None:
     # But a cursor within the series' lifetime finds the right occurrence.
     found = next_occurrence_on_or_after(event, datetime(2026, 2, 1, tzinfo=UTC))
     assert found is not None
-    assert found[0].date() == date(2026, 2, 1)
+    assert found.start_at.date() == date(2026, 2, 1)
+
+
+def test_recurrence_until_boundary_is_exact_not_off_by_one() -> None:
+    """expand_occurrences/next_occurrence_on_or_after used to check
+    recurrence_until only AFTER already using/appending the current
+    candidate, letting exactly one occurrence past the intended boundary
+    through. recurrence_until here is set to exactly the 3rd weekly
+    occurrence's start (Jan 1, 8, 15) — the boundary is inclusive, so that
+    3rd occurrence must still appear, but the 4th (Jan 22, which the bug
+    used to leak through) must not."""
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+        recurrence_until=datetime(2026, 1, 15, 9, tzinfo=UTC),
+    )
+    occurrences = expand_occurrences(
+        event, datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)
+    )
+    starts = [occ.start_at.date() for occ in occurrences]
+    assert starts == [date(2026, 1, 1), date(2026, 1, 8), date(2026, 1, 15)]
+
+    # The same boundary, walked via next_occurrence_on_or_after: a cursor
+    # sitting exactly on the 4th (excluded) occurrence's date must find
+    # nothing, not the leaked-through Jan 22 occurrence.
+    assert next_occurrence_on_or_after(event, datetime(2026, 1, 16, tzinfo=UTC)) is None
 
 
 def test_next_occurrence_on_or_after_respects_recurrence_count() -> None:
@@ -427,7 +455,7 @@ def test_next_occurrence_on_or_after_respects_recurrence_count() -> None:
     assert next_occurrence_on_or_after(event, datetime(2026, 1, 4, tzinfo=UTC)) is None
     found = next_occurrence_on_or_after(event, datetime(2026, 1, 2, 12, tzinfo=UTC))
     assert found is not None
-    assert found[0].date() == date(2026, 1, 3)
+    assert found.start_at.date() == date(2026, 1, 3)
 
 
 def test_next_occurrence_on_or_after_parent_start_date_does_not_win_ordering() -> None:
@@ -446,8 +474,8 @@ def test_next_occurrence_on_or_after_parent_start_date_does_not_win_ordering() -
     cursor = datetime(2026, 6, 1, tzinfo=UTC)
     found = next_occurrence_on_or_after(event, cursor)
     assert found is not None
-    assert found[0].date() == date(2027, 1, 1)
-    assert found[0] > event.start_at
+    assert found.start_at.date() == date(2027, 1, 1)
+    assert found.start_at > event.start_at
 
 
 async def _enable_calendar(home_id: str) -> None:
@@ -635,7 +663,7 @@ async def test_upcoming_events_endpoint_recurring_and_all_day_ordering(
     weekly_next = next_occurrence_on_or_after(weekly_event, after)
     assert weekly_next is not None
     starts_by_title = {
-        "Weekly standup": weekly_next[0],
+        "Weekly standup": weekly_next.start_at,
         "One-off soon": one_off_start,
         "All-day trip": all_day_start,
     }

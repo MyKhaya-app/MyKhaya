@@ -43,6 +43,7 @@ from mykhaya.audit import audit
 from mykhaya.calendar_occurrences import (
     MAX_RANGE_DAYS,
     expand_occurrences,
+    load_exceptions,
     next_occurrence_on_or_after,
     recurrence_candidate_filter,
     upcoming_candidate_filter,
@@ -76,7 +77,7 @@ from mykhaya.rate_limit import enforce_rate_limit
 # Reused, not duplicated: these are the exact same event-response/activity-logging
 # helpers routers.calendar's own event endpoints use — see that module's
 # docstrings on _occurrence/_record_activity.
-from mykhaya.routers.calendar import _label_map, _occurrence, _record_activity
+from mykhaya.routers.calendar import _label_map, _occurrence, _own_occurrence, _record_activity
 from mykhaya.schemas import (
     CalendarShareAccept,
     CalendarShareCategoriesUpdate,
@@ -889,6 +890,7 @@ async def list_shared_events(
         )
     ).all()
     label_by_id = await _label_map(db, share.source_group_id)
+    exceptions_by_event = await load_exceptions(db, [event.id for event in events])
     items: list[EventOccurrence] = []
     for event in events:
         # The category-scoped sharing filter (see CalendarShare.category_ids'
@@ -896,16 +898,16 @@ async def list_shared_events(
         # everything, unchanged from before this filter existed.
         if not event_matches_share(event, share):
             continue
-        # No member assignment is ever shown/edited externally — an external
-        # recipient sees the same events as a Home member with
-        # calendar_view_all, but never the Home's own member list. The
-        # category *is* shown, when one is set, matching the "Category:"
-        # line on the event-detail screen.
-        label = label_by_id.get(event.label_id) if event.label_id else None
-        for occurrence_start, occurrence_end in expand_occurrences(event, start_at, end_at):
-            items.append(
-                _occurrence(event, occurrence_start, occurrence_end, label, [], calendar.color)
-            )
+        exceptions = exceptions_by_event.get(event.id, {})
+        for effective in expand_occurrences(event, start_at, end_at, exceptions):
+            # No member assignment is ever shown/edited externally — an
+            # external recipient sees the same events as a Home member with
+            # calendar_view_all, but never the Home's own member list —
+            # never member_ids_override either, for the same reason. The
+            # category *is* shown, when one is set, matching the
+            # "Category:" line on the event-detail screen.
+            label = label_by_id.get(effective.label_id) if effective.label_id else None
+            items.append(_occurrence(event, effective, label, [], calendar.color))
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=None)
 
@@ -940,18 +942,17 @@ async def list_upcoming_shared_events(
         )
     ).all()
     label_by_id = await _label_map(db, share.source_group_id)
+    exceptions_by_event = await load_exceptions(db, [event.id for event in events])
     candidates: list[EventOccurrence] = []
     for event in events:
         if not event_matches_share(event, share):
             continue
-        next_occ = next_occurrence_on_or_after(event, after)
-        if next_occ is None:
+        exceptions = exceptions_by_event.get(event.id, {})
+        effective = next_occurrence_on_or_after(event, after, exceptions)
+        if effective is None:
             continue
-        occurrence_start, occurrence_end = next_occ
-        label = label_by_id.get(event.label_id) if event.label_id else None
-        candidates.append(
-            _occurrence(event, occurrence_start, occurrence_end, label, [], calendar.color)
-        )
+        label = label_by_id.get(effective.label_id) if effective.label_id else None
+        candidates.append(_occurrence(event, effective, label, [], calendar.color))
     candidates.sort(key=lambda item: item.start_at)
     return EventListResponse(items=candidates[:limit], next_page=None)
 
@@ -1014,7 +1015,7 @@ async def create_shared_event(
     )
     await db.commit()
     await db.refresh(event)
-    return _occurrence(event, event.start_at, event.end_at, None, [], calendar.color)
+    return _occurrence(event, _own_occurrence(event), None, [], calendar.color)
 
 
 @shared_router.patch("/{share_id}/events/{event_id}", response_model=EventOccurrence)
@@ -1091,7 +1092,7 @@ async def update_shared_event(
         )
     await db.commit()
     await db.refresh(event)
-    return _occurrence(event, event.start_at, event.end_at, None, [], calendar.color)
+    return _occurrence(event, _own_occurrence(event), None, [], calendar.color)
 
 
 @shared_router.delete("/{share_id}/events/{event_id}", status_code=204)

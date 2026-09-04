@@ -30,7 +30,9 @@ function occurrence(overrides: Partial<EventOccurrence> & { occurrence_id: strin
     reminder_minutes: null,
     created_by: "u1",
     updated_at: "2026-01-01T00:00:00Z",
+    is_overridden: false,
     ...overrides,
+    occurrence_start: overrides.occurrence_start ?? overrides.start_at ?? "2026-01-05T09:00:00Z",
   };
 }
 

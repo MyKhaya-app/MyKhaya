@@ -519,6 +519,76 @@ class CalendarEventActivity(UuidTimeMixin, Base):
     summary: Mapped[str] = mapped_column(String(300))
 
 
+class CalendarEventException(UuidTimeMixin, Base):
+    """A single occurrence-level divergence from a recurring CalendarEvent's
+    generated series — either "this occurrence is deleted" or "this
+    occurrence's effective values differ from the base event". Read by
+    mykhaya.calendar_occurrences.expand_occurrences, which is the only
+    place that turns a (base event, exception) pair into the effective
+    occurrence a client actually sees — see that module's docstring.
+
+    `occurrence_start` is the CANONICAL original generated occurrence
+    start (the exact instant expand_occurrences would have produced for
+    this event with no exception applied) — never the edited/moved value.
+    This is what keeps identity stable across a move: moving 15 Sep 18:00
+    to 16 Sep 19:00 still looks up/creates the exception row keyed by
+    "15 Sep 18:00", so reopening the moved event edits the same row rather
+    than creating a second one, and the original slot is never
+    regenerated. The effective (possibly moved) time lives in the
+    nullable `start_at`/`end_at` override columns below.
+    """
+
+    __tablename__ = "calendar_event_exceptions"
+    __table_args__ = (
+        # The core invariant this whole feature depends on: at most one
+        # exception per (event, canonical occurrence) — never two
+        # competing overrides/deletes for the same generated instance,
+        # including under concurrent double-submit/retry (see
+        # routers.calendar's upsert path, which relies on this constraint
+        # via ON CONFLICT / a race-safe read-then-write).
+        UniqueConstraint("event_id", "occurrence_start", name="uq_event_exception_occurrence"),
+        Index("ix_event_exception_event", "event_id"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Override fields. NULL means "use the base CalendarEvent's own
+    # current value" for every column below except start_at/end_at, which
+    # are always populated together on a non-deleted exception (an
+    # override always has a concrete effective time, even one identical
+    # to the canonical occurrence — e.g. a title-only edit still stores
+    # start_at/end_at so a later base-event time change can't silently
+    # drag an already-overridden occurrence along with it).
+    title: Mapped[str | None] = mapped_column(String(180))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_all_day: Mapped[bool | None] = mapped_column(Boolean)
+    location_text: Mapped[str | None] = mapped_column(String(200))
+    calendar_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="SET NULL")
+    )
+    label_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("calendar_event_labels.id", ondelete="SET NULL")
+    )
+    reminder_minutes: Mapped[int | None] = mapped_column(Integer)
+    # NULL = inherit the base event's current participants; a JSON array
+    # (including an empty one) = this occurrence's own explicit member
+    # list. Same "list[str] of UUIDs in a JSON column" shape as
+    # Invitation.shared_resources below — no new join table for what is,
+    # per occurrence, a small, infrequently-diverging list.
+    member_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    last_edited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
 class Invitation(UuidTimeMixin, Base):
     __tablename__ = "group_invitations"
     __table_args__ = (Index("ix_invitation_group_email", "group_id", "email"),)
