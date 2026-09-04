@@ -65,6 +65,28 @@ class Capability(StrEnum):
 
 
 ALL_CAPABILITIES = frozenset(Capability)
+# This is intentionally an allow-list.  A capability added in the future is
+# not delegatable until its authority and data boundary have been reviewed.
+DELEGATABLE_CAPABILITIES = frozenset(
+    {
+        Capability.members_view,
+        Capability.calendar_view,
+        Capability.calendar_view_all,
+        Capability.calendar_create,
+        Capability.calendar_edit_own,
+        Capability.calendar_edit_all,
+        Capability.calendar_delete,
+        Capability.household_manage_routines,
+        Capability.household_manage_reminders,
+        Capability.meals_view,
+        Capability.meals_manage,
+        Capability.lists_view,
+        Capability.lists_manage,
+        Capability.wishlists_view,
+        Capability.wishlists_manage,
+        Capability.sharing_external,
+    }
+)
 PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
     PermissionProfile.home_admin: ALL_CAPABILITIES,
     PermissionProfile.standard_partner: frozenset(
@@ -164,7 +186,16 @@ def legacy_role(relationship: HouseholdRelationship) -> Role:
 
 
 async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capability]:
-    capabilities = set(PROFILE_CAPABILITIES[membership.permission_profile])
+    # Administrative authority is bound to the trusted relationship/profile
+    # state.  Do not let a stale or manually-corrupted profile value turn a
+    # non-admin membership into a Home Admin.
+    profile = membership.permission_profile
+    if (
+        profile == PermissionProfile.home_admin
+        and membership.relationship != HouseholdRelationship.home_admin
+    ):
+        profile = default_profile(membership.relationship)
+    capabilities = set(PROFILE_CAPABILITIES[profile])
     if (
         membership.relationship
         in {
@@ -187,6 +218,8 @@ async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capa
         try:
             capability = Capability(raw)
         except ValueError:
+            continue
+        if capability not in DELEGATABLE_CAPABILITIES:
             continue
         if enabled:
             capabilities.add(capability)

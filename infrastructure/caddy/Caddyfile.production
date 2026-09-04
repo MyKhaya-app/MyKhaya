@@ -1,5 +1,8 @@
 {$WEB_DOMAIN:mykhaya.app} {
 	encode zstd gzip
+	request_body {
+		max_size 10MB
+	}
 	@api path /api/*
 	reverse_proxy @api api:8000
 	reverse_proxy web:3000
@@ -13,7 +16,7 @@
 		# framed by another site — frame-ancestors (modern) plus
 		# X-Frame-Options (older-browser fallback) both deny it outright.
 		X-Frame-Options DENY
-		Content-Security-Policy "frame-ancestors 'none'"
+		?Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout
@@ -29,7 +32,7 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
-		Content-Security-Policy "frame-ancestors 'none'"
+		?Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout
@@ -71,7 +74,7 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		X-Frame-Options DENY
-		Content-Security-Policy "frame-ancestors 'none'"
+		?Content-Security-Policy "frame-ancestors 'none'"
 	}
 	log {
 		output stdout

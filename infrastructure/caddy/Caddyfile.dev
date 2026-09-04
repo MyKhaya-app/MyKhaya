@@ -15,7 +15,7 @@
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		# PCC-SEC-008: no legitimate reason for any MyKhaya origin to be framed.
 		X-Frame-Options DENY
-		Content-Security-Policy "frame-ancestors 'none'"
+		?Content-Security-Policy "frame-ancestors 'none'"
 	}
 }
 
@@ -34,6 +34,10 @@
 
 (public_development_site) {
 	encode zstd gzip
+	request_body {
+		# Coarse edge limit; the API retains its tighter JSON limit and 5 MB avatar allowance.
+		max_size 10MB
+	}
 	@api path /api/*
 	reverse_proxy @api api:8000 {
 		header_up Host {host}
@@ -144,4 +148,10 @@ http://api.localhost {
 		output stdout
 		format json
 	}
+}
+
+# Fail closed when a request reaches the local listener with an unrecognised
+# Host header instead of receiving Caddy's empty default response.
+:8080 {
+	respond "Misdirected Request" 421
 }

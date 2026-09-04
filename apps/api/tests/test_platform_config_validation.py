@@ -33,6 +33,10 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
             "api.localhost",
         ],
         "cors_origins": ["http://localhost:8089", "http://admin.localhost:8089"],
+        # Keep direct model_validate() cases independent of the test container's
+        # intentionally relaxed runtime environment variables.
+        "cookie_secure": True,
+        "admin_mfa_required": True,
     }
     kwargs.update(overrides)
     return kwargs

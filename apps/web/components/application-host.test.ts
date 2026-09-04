@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { isPlatformControlCentreHost } from "./application-host";
+import { applicationHostKind, isPlatformControlCentreHost } from "./application-host";
+
+describe("applicationHostKind", () => {
+  it.each(["mykhaya.app", "dev.mykhaya.app", "localhost:3000", "127.0.0.1:8080"])(
+    "accepts consumer host %s",
+    (host) => expect(applicationHostKind(host)).toBe("consumer"),
+  );
+  it.each(["evil.dev.mykhaya.app", "phpmyadmin.dev.mykhaya.app", "mykhaya.app.attacker.example", "admin.mykhaya.app.attacker.example", "localhost:0", "localhost:70000", "localhost:abc", "https://localhost"])(
+    "fails closed for %s",
+    (host) => expect(applicationHostKind(host)).toBe("unknown"),
+  );
+  it("classifies PCC and status separately", () => {
+    expect(applicationHostKind("ADMIN.MYKHAYA.APP:443")).toBe("admin");
+    expect(applicationHostKind("status.dev.mykhaya.app:443")).toBe("status");
+  });
+});
 
 describe("isPlatformControlCentreHost", () => {
   it.each([

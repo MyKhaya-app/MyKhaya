@@ -12,6 +12,7 @@ from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
 from mykhaya.entitlements import ensure_home_subscription
 from mykhaya.household_permissions import (
+    DELEGATABLE_CAPABILITIES,
     Capability,
     capabilities_for,
     default_profile,
@@ -273,6 +274,27 @@ async def update_member(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Extended Family and Friends are no longer added as Home members. "
             "Use calendar sharing to give someone outside the Home access instead.",
+        )
+    if (
+        body.permission_profile == PermissionProfile.home_admin
+        and body.relationship != HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Home Admin permissions require the Home Admin relationship.",
+        )
+    invalid_overrides = sorted(
+        raw
+        for raw in body.permission_overrides
+        if raw not in {cap.value for cap in DELEGATABLE_CAPABILITIES}
+    )
+    if invalid_overrides:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {
+                "message": "These capabilities cannot be configured as member overrides.",
+                "capabilities": invalid_overrides,
+            },
         )
 
     previous = {

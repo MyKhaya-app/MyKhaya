@@ -8,7 +8,7 @@ x-dev-api-environment: &dev-api-environment
   # must be off here for local access to work at all — it still works fine over the
   # tunnel's HTTPS regardless, Secure is an extra restriction, not a requirement.
   # compose.production.yml has its own independent (and strict) cookie/CORS settings.
-  MYKHAYA_COOKIE_SECURE: "false"
+  MYKHAYA_COOKIE_SECURE: "true"
   MYKHAYA_PUBLIC_WEB_URL: https://dev.mykhaya.app
   MYKHAYA_ADMIN_URL: https://admin.dev.mykhaya.app
   MYKHAYA_STATUS_URL: https://status.dev.mykhaya.app
@@ -22,7 +22,7 @@ x-dev-api-environment: &dev-api-environment
   MYKHAYA_TRUSTED_HOSTS: '["dev.mykhaya.app","admin.dev.mykhaya.app","status.dev.mykhaya.app","api.dev.mykhaya.app","localhost","127.0.0.1","api"]'
   MYKHAYA_TRUSTED_PROXY_CIDRS: '${MYKHAYA_TRUSTED_PROXY_CIDRS:-["172.16.0.0/12"]}'
   MYKHAYA_ADMIN_ALLOWED_NETWORKS: '${MYKHAYA_ADMIN_ALLOWED_NETWORKS:-["100.64.0.0/10"]}'
-  MYKHAYA_ADMIN_MFA_REQUIRED: "${MYKHAYA_ADMIN_MFA_REQUIRED:-false}"
+  MYKHAYA_ADMIN_MFA_REQUIRED: "true"
   MYKHAYA_DEFAULT_TIMEZONE: "${MYKHAYA_DEFAULT_TIMEZONE:-Europe/London}"
   MYKHAYA_DEFAULT_LOCALE: "${MYKHAYA_DEFAULT_LOCALE:-en-GB}"
   MYKHAYA_WEEK_START: "${MYKHAYA_WEEK_START:-monday}"

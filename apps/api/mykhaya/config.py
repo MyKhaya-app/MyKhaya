@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     native_api_url: str = "http://api.localhost:8080"
     cors_origins: list[str] = ["http://localhost:8080"]
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "api", "api.mykhaya.app"]
-    cookie_secure: bool = False
+    cookie_secure: bool = True
     cookie_domain: str | None = None
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
     trusted_device_days: int = Field(default=90, ge=7, le=365)
@@ -238,6 +238,26 @@ class Settings(BaseSettings):
                 raise ValueError("MYKHAYA_ADMIN_ALLOWED_NETWORKS is required in production")
             if not self.admin_mfa_required:
                 raise ValueError("MYKHAYA_ADMIN_MFA_REQUIRED must be true in production")
+        return self
+
+    @model_validator(mode="after")
+    def secure_shared_development_defaults(self) -> "Settings":
+        """Externally reachable development must retain its security defaults."""
+        if self.environment == "development":
+            public_host = (urlsplit(self.public_web_url).hostname or "").casefold()
+            admin_host = (urlsplit(self.admin_url).hostname or "").casefold()
+            local_only = public_host in {"localhost", "127.0.0.1"} and admin_host in {
+                "localhost",
+                "admin.localhost",
+            }
+            if not self.cookie_secure and not local_only:
+                raise ValueError(
+                    "MYKHAYA_COOKIE_SECURE may be false only for pure localhost development."
+                )
+            if not self.admin_mfa_required and not local_only:
+                raise ValueError(
+                    "MYKHAYA_ADMIN_MFA_REQUIRED may be false only for pure localhost development."
+                )
         return self
 
     @model_validator(mode="after")

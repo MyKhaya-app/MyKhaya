@@ -21,6 +21,7 @@ services:
       MYKHAYA_WEEK_START: monday
       MYKHAYA_BUILD_CHANNEL: stable
       MYKHAYA_COOKIE_SECURE: "true"
+      MYKHAYA_ADMIN_MFA_REQUIRED: "true"
       MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN:-mykhaya.app}"
       MYKHAYA_ADMIN_URL: "https://${ADMIN_DOMAIN:-admin.mykhaya.app}"
       MYKHAYA_STATUS_URL: "https://${STATUS_DOMAIN:-status.mykhaya.app}"

@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isPlatformControlCentreHost } from "./components/application-host";
+import { applicationHostKind } from "./components/application-host";
 export function middleware(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
-  const adminHost = isPlatformControlCentreHost(host);
-  const normalizedHost = host.trim().toLowerCase().split(":", 1)[0] ?? "";
-  const statusHost =
-    normalizedHost === "status.mykhaya.app" ||
-    normalizedHost === "status.dev.mykhaya.app" ||
-    normalizedHost === "status.localhost";
+  const hostKind = applicationHostKind(host);
+  const adminHost = hostKind === "admin";
+  const statusHost = hostKind === "status";
+  if (hostKind === "unknown") return new NextResponse("Misdirected Request", { status: 421 });
   const internalAdminPath =
     request.nextUrl.pathname.startsWith("/control-centre");
   const internalStatusPath =

@@ -77,6 +77,13 @@ app.add_middleware(
 )
 
 
+class RequestBodyTooLarge(Exception):
+    pass
+
+
+AVATAR_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
 @app.middleware("http")
 async def security_and_limits(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -92,18 +99,49 @@ async def security_and_limits(
             )
         # The avatar upload carries an image (up to avatar_max_upload_bytes), well
         # above the general JSON body limit — everything else keeps the tight default.
+        # Multipart framing is bounded overhead outside the uploaded file itself;
+        # leave room for it so a file at the documented limit reaches the route.
         body_limit = (
-            settings.avatar_max_upload_bytes
+            settings.avatar_max_upload_bytes + AVATAR_MULTIPART_OVERHEAD_BYTES
             if request.method == "POST" and request.url.path == "/api/v1/users/me/avatar"
             else settings.request_body_limit
         )
         length = request.headers.get("content-length")
-        if length and int(length) > body_limit:
+        if length is not None:
+            try:
+                parsed_length = int(length)
+            except (TypeError, ValueError):
+                return JSONResponse({"detail": "Invalid Content-Length."}, status_code=400)
+            if parsed_length < 0:
+                return JSONResponse({"detail": "Invalid Content-Length."}, status_code=400)
+        else:
+            parsed_length = None
+        if parsed_length is not None and parsed_length > body_limit:
             return JSONResponse(
                 {"detail": "The request is too large."},
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
-    response = await call_next(request)
+        original_receive = request.receive
+        received = 0
+
+        async def limited_receive() -> object:
+            nonlocal received
+            message = await original_receive()
+            if message.get("type") == "http.request":
+                chunk = message.get("body", b"")
+                received += len(chunk)
+                if received > body_limit:
+                    raise RequestBodyTooLarge
+            return message
+
+        request = Request(request.scope, limited_receive)
+    try:
+        response = await call_next(request)
+    except RequestBodyTooLarge:
+        return JSONResponse(
+            {"detail": "The request is too large."},
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

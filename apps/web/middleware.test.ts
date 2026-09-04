@@ -134,6 +134,29 @@ describe("hostname security boundaries", () => {
       ).status,
     ).toBe(404);
   });
+
+  it.each([
+    "evil.dev.mykhaya.app",
+    "phpmyadmin.dev.mykhaya.app",
+    "mykhaya.app.attacker.example",
+    "admin.mykhaya.app.attacker.example",
+    "localhost:0",
+    "localhost:70000",
+  ])("rejects unknown browser host %s with 421", (host) => {
+    const response = middleware(
+      new NextRequest("http://localhost/", { headers: { host } }),
+    );
+    expect(response.status).toBe(421);
+  });
+
+  it("accepts a valid production consumer host with a port", () => {
+    const response = middleware(
+      new NextRequest("https://mykhaya.app:443/", {
+        headers: { host: "MYKHAYA.APP:443" },
+      }),
+    );
+    expect(response.status).toBe(200);
+  });
 });
 
 describe("middleware matcher", () => {
