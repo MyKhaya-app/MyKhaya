@@ -6779,3 +6779,264 @@ select.plan-meal-field-input {
     padding: 0.5rem 0.35rem;
   }
 }
+
+/* --- Routines & Reminders redesign --- */
+.rr-page {
+  display: grid;
+  gap: var(--space-card-stack);
+}
+.rr-intro {
+  color: var(--colour-muted);
+  margin: -0.4rem 0 0;
+}
+.rr-search-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.rr-search-row .calendar-search {
+  flex: 1;
+}
+/* iOS/WKWebView zooms the whole page when a focused text input computes to
+   under 16px — the shared .calendar-search input doesn't guarantee that
+   for every consumer, so this page-scoped override does, without changing
+   the Calendar page's own search field. */
+.rr-search-row input {
+  font-size: 16px;
+}
+.rr-segmented {
+  background: var(--colour-cream);
+  border-radius: var(--radius-card);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+}
+.rr-segment {
+  align-items: center;
+  background: none;
+  border-radius: calc(var(--radius-card) - 5px);
+  box-shadow: none;
+  color: var(--colour-slate);
+  display: flex;
+  flex: 1;
+  font-size: var(--font-small);
+  font-weight: 700;
+  gap: 0.35rem;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0.5rem 0.4rem;
+}
+.rr-segment:hover {
+  box-shadow: none;
+  transform: none;
+}
+/* Deep MyKhaya green — the Type control (All / Routines / Reminders). */
+.rr-segment-active {
+  background: var(--colour-forest);
+  color: var(--colour-white);
+}
+/* Soft sage — the Scope control (Personal / Household): a real state
+   change, but a quieter one than switching what kind of item is shown. */
+.rr-segment-soft-active {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest-dark);
+}
+.rr-section-heading {
+  margin: 0 0 0.6rem;
+}
+.rr-card-list {
+  display: grid;
+  gap: 0.7rem;
+}
+.rr-card {
+  padding: 0.9rem;
+}
+.rr-card-main {
+  align-items: center;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+.rr-card-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 0.85rem;
+  color: var(--colour-forest-dark);
+  display: flex;
+  flex: none;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+.rr-card-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rr-card-title {
+  display: block;
+}
+.rr-card-meta {
+  color: var(--colour-muted);
+  display: block;
+  font-size: var(--font-small);
+}
+.rr-card-actions {
+  border-top: 1px solid #f1ece1;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+}
+.rr-card-action {
+  align-items: center;
+  background: var(--colour-cream);
+  border-radius: 0.6rem;
+  box-shadow: none;
+  color: var(--colour-slate);
+  display: inline-flex;
+  font-size: var(--font-small);
+  font-weight: 600;
+  gap: 0.35rem;
+  min-height: 40px;
+  padding: 0.45rem 0.8rem;
+}
+.rr-card-action:hover {
+  box-shadow: none;
+  transform: none;
+}
+/* Destructive, but quietly so — pale red, not a solid alarm colour; see
+   docs/design/visual-identity.md on restrained use of --colour-danger. */
+.rr-card-action-delete {
+  background: #fbe9e6;
+  color: var(--colour-danger);
+}
+
+/* Upcoming items: one visual step quieter than an actionable Today/Overdue
+   card — a single compact row rather than a full card with its own action
+   strip, matching the "slightly more compact" requirement. */
+.rr-upcoming-card {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid #efe9dd;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  /* Overrides the global button { color: white } rule — the non-interactive
+     (canManage: false) rendering of this card is a plain <div> and needs
+     no override, but the interactive <button> form otherwise inherits
+     white text on this white background, which read as a missing title. */
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.8rem 0.9rem;
+  text-align: left;
+  width: 100%;
+}
+.rr-upcoming-card:hover {
+  box-shadow: var(--shadow-raised);
+}
+.rr-upcoming-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 0.75rem;
+  color: var(--colour-forest-dark);
+  display: flex;
+  flex: none;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+.rr-upcoming-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rr-upcoming-eyebrow {
+  color: var(--colour-muted);
+  display: block;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.rr-upcoming-title {
+  display: block;
+}
+.rr-upcoming-meta {
+  color: var(--colour-muted);
+  display: block;
+  font-size: var(--font-small);
+}
+.rr-upcoming-due {
+  align-items: center;
+  color: var(--colour-muted);
+  display: flex;
+  font-size: var(--font-small);
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
+.rr-upcoming-due svg {
+  flex: none;
+}
+.rr-upcoming-chevron {
+  color: var(--colour-muted);
+  flex: none;
+}
+
+.rr-empty {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border: 1px dashed #ddd5c4;
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+  padding: 2.2rem 1.2rem;
+  text-align: center;
+}
+.rr-empty-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-forest-dark);
+  display: flex;
+  height: 52px;
+  justify-content: center;
+  width: 52px;
+}
+.rr-empty h2 {
+  margin: 0.3rem 0 0;
+}
+.rr-empty p {
+  color: var(--colour-muted);
+  margin: 0;
+  max-width: 320px;
+}
+
+/* Circular floating Add action — same bottom-nav/safe-area clearance
+   mechanism as .calendar-fab (--bottom-nav-height + --safe-bottom), so it
+   can never sit under the fixed bottom navigation on any device. */
+.rr-fab {
+  align-items: center;
+  background: var(--colour-forest);
+  border-radius: 30px;
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 0.9rem);
+  box-shadow: 0 12px 28px rgb(31 41 51 / 25%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  height: 60px;
+  justify-content: center;
+  padding: 0 0.4rem;
+  position: fixed;
+  right: max(1rem, var(--safe-right));
+  width: 60px;
+  z-index: 8;
+}
+.rr-fab span {
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.rr-fab svg {
+  flex: none;
+}

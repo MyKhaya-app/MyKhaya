@@ -2,6 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  CalendarCheck2,
+  ChevronRight,
+  Clock,
+  Home as HomeIcon,
+  Pencil,
+  Plus,
+  Repeat,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  User as UserIcon,
+} from "lucide-react";
 import type {
   Member,
   Reminder,
@@ -13,6 +26,7 @@ import type {
   RoutineScope,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
+import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
@@ -84,14 +98,39 @@ function routineFrequencyLabel(routine: Routine): string {
   return `Every ${routine.interval_weeks === 1 ? "week" : `${routine.interval_weeks} weeks`}`;
 }
 
-function itemMetaLabel(item: UiItem): string {
+// "Routine · Personal · Daily" / "Reminder · Household" — the kind/scope/
+// frequency line every card shows, independent of *when* it's due (that's
+// dueLine below, shown separately so a Today/Overdue card — whose section
+// heading already says when — doesn't repeat itself).
+function kindScopeLabel(item: UiItem): string {
+  const kind = item.kind === "routine" ? "Routine" : "Reminder";
   const scopeLabel = item.data.scope === "household" ? "Household" : "Personal";
-  if (item.kind === "routine") {
-    return `Routine · ${scopeLabel} · ${routineFrequencyLabel(item.data)}`;
-  }
+  const parts = [kind, scopeLabel];
+  if (item.kind === "routine") parts.push(routineFrequencyLabel(item.data));
+  return parts.join(" · ");
+}
+
+// "Tomorrow at 07:00" / "In 3 days" — reuses the same routineDueLabel this
+// page already relied on for its due-date wording, never reimplementing the
+// "how soon" calculation itself.
+function dueLine(item: UiItem): string | null {
+  if (!item.data.next_occurrence_date) return null;
   const dueLabel = routineDueLabel(item.data.next_occurrence_date);
-  const time = item.data.next_occurrence_date ? ` ${item.data.due_time.slice(0, 5)}` : "";
-  return `Reminder · ${scopeLabel} · ${dueLabel}${time}`;
+  const time = item.kind === "reminder" ? ` at ${item.data.due_time.slice(0, 5)}` : "";
+  return `${dueLabel}${time}`;
+}
+
+function itemIcon(item: UiItem) {
+  return item.kind === "routine" ? Repeat : Clock;
+}
+
+function matchesSearch(item: UiItem, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    item.data.title.toLowerCase().includes(needle) ||
+    (item.data.description?.toLowerCase().includes(needle) ?? false)
+  );
 }
 
 export default function RoutinesRemindersPage() {
@@ -106,6 +145,8 @@ export default function RoutinesRemindersPage() {
     initialType === "routines" || initialType === "reminders" ? initialType : "all",
   );
   const [scopeTab, setScopeTab] = useState<RoutineScope>("personal");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filtersVisible, setFiltersVisible] = useState(true);
 
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -381,64 +422,135 @@ export default function RoutinesRemindersPage() {
     [scopeFiltered, typeTab],
   );
 
+  // Client-side only, on top of the type/scope filters above — the data is
+  // already loaded in full for this Home, so there's no need for a backend
+  // search endpoint here.
+  const searchFiltered = useMemo(
+    () => typeFiltered.filter((item) => matchesSearch(item, searchQuery)),
+    [typeFiltered, searchQuery],
+  );
+
   const sections = useMemo(() => {
     const groups: Record<Section, UiItem[]> = { overdue: [], today: [], upcoming: [], completed: [] };
-    for (const item of typeFiltered) {
+    for (const item of searchFiltered) {
       const section = sectionFor(item, today);
       if (section) groups[section].push(item);
     }
     for (const key of Object.keys(groups) as Section[]) groups[key].sort(compareItems);
     return groups;
-  }, [typeFiltered, today]);
+  }, [searchFiltered, today]);
 
-  function renderRow(item: UiItem) {
+  function openEditItem(item: UiItem) {
+    if (item.kind === "routine") openEditRoutine(item.data);
+    else openEditReminder(item.data);
+  }
+
+  // Overdue / Today / Completed — the actionable cards: a completion
+  // circle, an icon tile, title/meta, and (for anyone with manage rights)
+  // a compact Edit/Delete strip along the bottom of the card.
+  function renderCard(item: UiItem) {
     const canManage = item.kind === "routine" ? canManageRoutines : canManageReminders;
     const completed = item.data.completed_today;
+    const Icon = itemIcon(item);
     return (
-      <div className="rr-row" key={item.id}>
-        <button
-          className="rr-row-check"
-          type="button"
-          aria-label={`${completed ? "Completed" : "Complete"} ${item.data.title}`}
-          aria-pressed={completed}
-          disabled={completed || !item.data.next_occurrence_date}
-          onClick={() => toggleItem(item)}
-        >
-          <span className="rr-row-check-dot" aria-hidden="true" />
-        </button>
-        <div className="rr-row-body">
-          <strong className={completed ? "rr-row-done" : undefined}>{item.data.title}</strong>
-          {item.data.description && <p>{item.data.description}</p>}
-          <small>
-            <span className="rr-row-kind">{item.kind === "routine" ? "Routine" : "Reminder"}</span>
-            {" · "}
-            {itemMetaLabel(item).replace(/^(Routine|Reminder) · /, "")}
-            {!item.data.enabled ? " · Disabled" : ""}
-          </small>
+      <article className="card rr-card" key={item.id}>
+        <div className="rr-card-main">
+          <button
+            className="rr-row-check"
+            type="button"
+            aria-label={`${completed ? "Completed" : "Complete"} ${item.data.title}`}
+            aria-pressed={completed}
+            disabled={completed || !item.data.next_occurrence_date}
+            onClick={() => toggleItem(item)}
+          >
+            <span className="rr-row-check-dot" aria-hidden="true" />
+          </button>
+          <span className="rr-card-icon" aria-hidden="true">
+            <Icon size={20} />
+          </span>
+          <div className="rr-card-body">
+            <strong className={`rr-card-title${completed ? " rr-row-done" : ""}`}>
+              {item.data.title}
+            </strong>
+            {item.data.description && (
+              <p className="text-wrap-anywhere">{item.data.description}</p>
+            )}
+            <small className="rr-card-meta">
+              {kindScopeLabel(item)}
+              {!item.data.enabled ? " · Disabled" : ""}
+            </small>
+          </div>
         </div>
         {canManage && (
-          <div className="rr-row-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                item.kind === "routine" ? openEditRoutine(item.data) : openEditReminder(item.data)
-              }
-            >
+          <div className="rr-card-actions">
+            <button type="button" className="rr-card-action" onClick={() => openEditItem(item)}>
+              <Pencil size={14} aria-hidden="true" />
               Edit
             </button>
             <button
               type="button"
-              className="secondary"
+              className="rr-card-action rr-card-action-delete"
               onClick={() =>
                 item.kind === "routine" ? removeRoutine(item.data) : removeReminder(item.data)
               }
             >
+              <Trash2 size={14} aria-hidden="true" />
               Delete
             </button>
           </div>
         )}
-      </div>
+      </article>
+    );
+  }
+
+  // Upcoming — one visual step quieter: a single compact row, tap-to-edit
+  // (same openEditItem the Edit button above uses, not a second flow)
+  // rather than its own action strip, with a chevron affordance only when
+  // there's actually something to tap into.
+  function renderUpcomingCard(item: UiItem) {
+    const canManage = item.kind === "routine" ? canManageRoutines : canManageReminders;
+    const Icon = itemIcon(item);
+    const due = dueLine(item);
+    const inner = (
+      <>
+        <span className="rr-upcoming-icon" aria-hidden="true">
+          <Icon size={17} />
+        </span>
+        <span className="rr-upcoming-body">
+          <span className="rr-upcoming-eyebrow">Upcoming</span>
+          <strong className="rr-upcoming-title">{item.data.title}</strong>
+          <small className="rr-upcoming-meta">
+            {kindScopeLabel(item)}
+            {!item.data.enabled ? " · Disabled" : ""}
+          </small>
+          {due && (
+            <span className="rr-upcoming-due">
+              <Clock size={12} aria-hidden="true" />
+              {due}
+            </span>
+          )}
+        </span>
+        {canManage && (
+          <ChevronRight size={18} className="rr-upcoming-chevron" aria-hidden="true" />
+        )}
+      </>
+    );
+    if (!canManage) {
+      return (
+        <div className="rr-upcoming-card" key={item.id}>
+          {inner}
+        </div>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className="rr-upcoming-card"
+        key={item.id}
+        onClick={() => openEditItem(item)}
+      >
+        {inner}
+      </button>
     );
   }
 
@@ -455,102 +567,187 @@ export default function RoutinesRemindersPage() {
 
   return (
     <SettingsPage title="Routines & Reminders">
-      {error && (
-        <p className="notice error" role="alert">
-          {error}
+      <div className="rr-page">
+        <p className="rr-intro">
+          Stay on top of daily rhythms and important reminders for you and your home.
         </p>
-      )}
-      {message && (
-        <p className="notice" role="status">
-          {message}
-        </p>
-      )}
 
-      <div className="rr-tabs" role="group" aria-label="Filter by type">
-        {(["all", "routines", "reminders"] as TypeFilter[]).map((value) => (
+        {error && (
+          <p className="notice error" role="alert">
+            {error}
+          </p>
+        )}
+        {message && (
+          <p className="notice" role="status">
+            {message}
+          </p>
+        )}
+
+        <div className="rr-search-row">
+          <div className="calendar-search">
+            <Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Search routines & reminders..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              aria-label="Search routines and reminders"
+            />
+          </div>
           <button
-            key={value}
             type="button"
-            aria-pressed={typeTab === value}
-            className={typeTab === value ? "toggle-active" : "secondary"}
-            onClick={() => selectTypeTab(value)}
+            className="icon-button secondary"
+            aria-pressed={filtersVisible}
+            aria-label={filtersVisible ? "Hide filters" : "Show filters"}
+            onClick={() => setFiltersVisible((value) => !value)}
           >
-            {value === "all" ? "All" : value === "routines" ? "Routines" : "Reminders"}
+            <SlidersHorizontal size={17} aria-hidden="true" />
           </button>
-        ))}
-      </div>
-
-      <div className="routine-choice" role="group" aria-label="Personal or household">
-        {(["personal", "household"] as RoutineScope[]).map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={scopeTab === value}
-            className={scopeTab === value ? "toggle-active" : "secondary"}
-            onClick={() => setScopeTab(value)}
-          >
-            {value === "personal" ? "Personal" : "Household"}
-          </button>
-        ))}
-      </div>
-
-      {(["overdue", "today", "upcoming", "completed"] as Section[]).map((section) =>
-        sections[section].length > 0 ? (
-          <section key={section}>
-            <h2>{sectionTitles[section]}</h2>
-            <div className="rr-list">{sections[section].map(renderRow)}</div>
-          </section>
-        ) : null,
-      )}
-
-      {typeFiltered.length === 0 && allItems.length > 0 && (
-        <p>No {scopeWord} {typeWord} yet.</p>
-      )}
-      {allItems.length === 0 && (
-        <p>
-          Nothing here yet. Create a Routine for something you do regularly, or a Reminder for
-          something you simply need to remember.
-        </p>
-      )}
-
-      {canManageAny && formKind === null && (
-        <div className="rr-create">
-          <button type="button" onClick={() => setShowCreateMenu((value) => !value)}>
-            Add
-          </button>
-          {showCreateMenu && (
-            <div className="rr-create-menu" role="group" aria-label="Create">
-              {typeTab === "reminders" ? (
-                <>
-                  {canManageReminders && (
-                    <button type="button" onClick={openNewReminder}>
-                      New Reminder
-                    </button>
-                  )}
-                  {canManageRoutines && (
-                    <button type="button" className="secondary" onClick={openNewRoutine}>
-                      New Routine
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  {canManageRoutines && (
-                    <button type="button" onClick={openNewRoutine}>
-                      New Routine
-                    </button>
-                  )}
-                  {canManageReminders && (
-                    <button type="button" className="secondary" onClick={openNewReminder}>
-                      New Reminder
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
         </div>
-      )}
+
+        {filtersVisible && (
+          <>
+            <div className="rr-segmented" role="group" aria-label="Filter by type">
+              {(["all", "routines", "reminders"] as TypeFilter[]).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={typeTab === value}
+                  className={`rr-segment${typeTab === value ? " rr-segment-active" : ""}`}
+                  onClick={() => selectTypeTab(value)}
+                >
+                  {value === "all" ? "All" : value === "routines" ? "Routines" : "Reminders"}
+                </button>
+              ))}
+            </div>
+
+            <div className="rr-segmented" role="group" aria-label="Personal or household">
+              <button
+                type="button"
+                aria-pressed={scopeTab === "personal"}
+                className={`rr-segment${scopeTab === "personal" ? " rr-segment-soft-active" : ""}`}
+                onClick={() => setScopeTab("personal")}
+              >
+                <UserIcon size={16} aria-hidden="true" />
+                Personal
+              </button>
+              <button
+                type="button"
+                aria-pressed={scopeTab === "household"}
+                className={`rr-segment${scopeTab === "household" ? " rr-segment-soft-active" : ""}`}
+                onClick={() => setScopeTab("household")}
+              >
+                <HomeIcon size={16} aria-hidden="true" />
+                Household
+              </button>
+            </div>
+          </>
+        )}
+
+        {(["overdue", "today"] as Section[]).map((section) =>
+          sections[section].length > 0 ? (
+            <section key={section}>
+              <h2 className="rr-section-heading">{sectionTitles[section]}</h2>
+              <div className="rr-card-list">{sections[section].map(renderCard)}</div>
+            </section>
+          ) : null,
+        )}
+
+        {sections.upcoming.length > 0 && (
+          <section>
+            <h2 className="rr-section-heading">{sectionTitles.upcoming}</h2>
+            <div className="rr-card-list">{sections.upcoming.map(renderUpcomingCard)}</div>
+          </section>
+        )}
+
+        {sections.completed.length > 0 && (
+          <section>
+            <h2 className="rr-section-heading">{sectionTitles.completed}</h2>
+            <div className="rr-card-list">{sections.completed.map(renderCard)}</div>
+          </section>
+        )}
+
+        {searchFiltered.length === 0 && allItems.length > 0 && (
+          <div className="rr-empty">
+            <span className="rr-empty-icon" aria-hidden="true">
+              <CalendarCheck2 size={24} />
+            </span>
+            <h2>All caught up!</h2>
+            <p>
+              {searchQuery.trim()
+                ? `No ${scopeWord} ${typeWord} match "${searchQuery.trim()}".`
+                : `You have no more ${scopeWord} ${typeWord} scheduled.`}
+            </p>
+          </div>
+        )}
+        {allItems.length === 0 && (
+          <div className="rr-empty">
+            <span className="rr-empty-icon" aria-hidden="true">
+              <CalendarCheck2 size={24} />
+            </span>
+            <h2>Nothing here yet</h2>
+            <p>
+              Create a Routine for something you do regularly, or a Reminder for something you
+              simply need to remember.
+            </p>
+          </div>
+        )}
+
+        {canManageAny && formKind === null && (
+          <>
+            <button
+              type="button"
+              className="rr-fab"
+              aria-label="Add"
+              onClick={() => setShowCreateMenu(true)}
+            >
+              <Plus size={22} aria-hidden="true" />
+              <span aria-hidden="true">Add</span>
+            </button>
+            {showCreateMenu && (
+              <BottomSheet title="Add" onDismiss={() => setShowCreateMenu(false)}>
+                <nav className="sheet-menu" aria-label="Create">
+                  {typeTab === "reminders" ? (
+                    <>
+                      {canManageReminders && (
+                        <button
+                          type="button"
+                          className="sheet-menu-item"
+                          onClick={openNewReminder}
+                        >
+                          New Reminder
+                        </button>
+                      )}
+                      {canManageRoutines && (
+                        <button type="button" className="sheet-menu-item" onClick={openNewRoutine}>
+                          New Routine
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {canManageRoutines && (
+                        <button type="button" className="sheet-menu-item" onClick={openNewRoutine}>
+                          New Routine
+                        </button>
+                      )}
+                      {canManageReminders && (
+                        <button
+                          type="button"
+                          className="sheet-menu-item"
+                          onClick={openNewReminder}
+                        >
+                          New Reminder
+                        </button>
+                      )}
+                    </>
+                  )}
+                </nav>
+              </BottomSheet>
+            )}
+          </>
+        )}
+      </div>
 
       {formKind === "routine" && (
         <form className="card details routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>

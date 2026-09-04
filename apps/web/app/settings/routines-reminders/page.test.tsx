@@ -152,8 +152,11 @@ describe("Routines & Reminders — combined module", () => {
 
     expect(await screen.findByText("Put bins out")).toBeInTheDocument();
     expect(screen.getByText("Call the dentist")).toBeInTheDocument();
-    expect(screen.getByText("Routine")).toBeInTheDocument();
-    expect(screen.getByText("Reminder")).toBeInTheDocument();
+    // Kind is labelled as part of each card's meta line ("Routine ·
+    // Personal · ..." / "Reminder · Personal") rather than a standalone
+    // badge — still text, never colour alone.
+    expect(screen.getByText(/^Routine · /)).toBeInTheDocument();
+    expect(screen.getByText(/^Reminder · /)).toBeInTheDocument();
   });
 
   it("Routines filter shows only Routines", async () => {
@@ -228,7 +231,8 @@ describe("Routines & Reminders — combined module", () => {
     render(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Routines" }));
-    expect(await screen.findByText(/no personal routines yet/i)).toBeInTheDocument();
+    expect(await screen.findByText("All caught up!")).toBeInTheDocument();
+    expect(screen.getByText(/no more personal routines scheduled/i)).toBeInTheDocument();
   });
 });
 
@@ -416,5 +420,87 @@ describe("Routines & Reminders — edit and delete", () => {
     await user.click(await screen.findByRole("button", { name: "Delete" }));
 
     expect(api.deleteReminder).toHaveBeenCalledWith("home-1", "reminder-1");
+  });
+});
+
+describe("Routines & Reminders — search", () => {
+  it("filters the visible list client-side by title as the user types", async () => {
+    mockBoth();
+    render(<RoutinesRemindersPage />);
+    await screen.findByText("Put bins out");
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByLabelText(/search routines and reminders/i),
+      "dentist",
+    );
+
+    expect(await screen.findByText("Call the dentist")).toBeInTheDocument();
+    expect(screen.queryByText("Put bins out")).not.toBeInTheDocument();
+    // No backend search architecture — routines()/reminders() are called
+    // exactly once each, at initial load, never re-fetched as the user types.
+    expect(api.routines).toHaveBeenCalledTimes(1);
+    expect(api.reminders).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the empty state, scoped to the current search term, when nothing matches", async () => {
+    mockBoth();
+    render(<RoutinesRemindersPage />);
+    await screen.findByText("Put bins out");
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByLabelText(/search routines and reminders/i),
+      "nonexistent item",
+    );
+
+    expect(await screen.findByText("All caught up!")).toBeInTheDocument();
+    expect(screen.getByText(/match "nonexistent item"/i)).toBeInTheDocument();
+  });
+});
+
+describe("Routines & Reminders — filter visibility toggle", () => {
+  it("hides and re-shows the Type/Scope segmented controls without touching the underlying filters", async () => {
+    mockBoth();
+    render(<RoutinesRemindersPage />);
+    await screen.findByText("Put bins out");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Routines" }));
+    expect(screen.queryByText("Call the dentist")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Hide filters" }));
+    expect(screen.queryByRole("button", { name: "All" })).not.toBeInTheDocument();
+    // The Routines-only filter chosen before hiding is still in effect.
+    expect(screen.queryByText("Call the dentist")).not.toBeInTheDocument();
+    expect(screen.getByText("Put bins out")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show filters" }));
+    expect(screen.getByRole("button", { name: "All", pressed: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Routines", pressed: true })).toBeInTheDocument();
+  });
+});
+
+describe("Routines & Reminders — Upcoming cards", () => {
+  it("shows the UPCOMING eyebrow and due date, and tapping the card opens the existing edit flow", async () => {
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        reminder({
+          id: "reminder-2",
+          title: "Gym Session",
+          scope: "personal",
+          next_occurrence_date: tomorrow(),
+          due_time: "07:00:00",
+        }),
+      ],
+    });
+    render(<RoutinesRemindersPage />);
+
+    const card = await screen.findByRole("button", { name: /Gym Session/ });
+    expect(within(card).getByText("Upcoming")).toBeInTheDocument();
+    expect(within(card).getByText(/tomorrow at 07:00/i)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(card);
+    expect(screen.getByRole("heading", { name: "Edit reminder" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/title/i)).toHaveValue("Gym Session");
   });
 });
