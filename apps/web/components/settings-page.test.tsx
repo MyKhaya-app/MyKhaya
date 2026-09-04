@@ -212,4 +212,16 @@ describe("More — green hero header", () => {
     expect(await screen.findByRole("heading", { name: "Security" })).toBeInTheDocument();
     expect(container.querySelector(".more-hero")).toBeNull();
   });
+
+  // The static AppHeader (rendered by AppShell, above this component) already
+  // shows the MyKhaya icon/home name/avatar — the hero must not repeat a
+  // second logo/icon. See the "Simplify the green More header" fix.
+  it("does not render a second MyKhaya logo/icon inside the hero", async () => {
+    const { container } = render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+
+    const hero = container.querySelector(".more-hero") as HTMLElement;
+    expect(hero.querySelector(".more-hero-icon")).toBeNull();
+    expect(within(hero).queryByLabelText("MyKhaya")).not.toBeInTheDocument();
+  });
 });

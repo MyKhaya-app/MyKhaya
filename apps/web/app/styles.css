@@ -7053,27 +7053,15 @@ select.plan-meal-field-input {
   border-radius: 0 0 var(--radius-hero) var(--radius-hero);
   box-shadow: var(--shadow-hero);
   display: grid;
-  gap: 0.9rem;
-  grid-template-columns: auto minmax(0, 1fr);
+  /* Single content column now the icon is gone (see settings-page.tsx —
+     AppHeader, directly above, already shows the MyKhaya icon/home name/
+     avatar, so this hero doesn't repeat one). Left padding matches
+     .standard-page's own left inset exactly, so "More" lines up with the
+     group cards immediately below it. */
+  gap: 0.25rem;
   overflow: hidden;
-  padding: 14px 24px 40px;
+  padding: 14px max(1.25rem, var(--safe-right)) 40px max(1.25rem, var(--safe-left));
   position: relative;
-}
-.more-hero-icon {
-  align-items: center;
-  background: var(--colour-cream-light);
-  border-radius: 0.7rem;
-  box-shadow: 0 4px 10px rgb(31 41 51 / 18%);
-  display: inline-flex;
-  height: 46px;
-  justify-content: center;
-  position: relative;
-  width: 46px;
-  z-index: 1;
-}
-.more-hero-icon .brand-mark {
-  height: 27px;
-  width: 27px;
 }
 .more-hero-text {
   min-width: 0;
@@ -7137,11 +7125,31 @@ select.plan-meal-field-input {
   grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 44px;
   padding: 12px;
+  /* WebKit's own grey tap-highlight overlay would otherwise show alongside
+     (and can visually outlast) the :active background below — replaced
+     entirely by that explicit, reliably-cleared state instead. */
+  -webkit-tap-highlight-color: transparent;
 }
-.more-row:hover {
+/* :hover, scoped to devices that genuinely have a hovering pointer. A
+   touchscreen (WKWebView included) synthesises a single hover-then-click on
+   tap but never fires the "pointer left" event :hover needs to clear —
+   unscoped, this rule stayed matched on whichever row was last tapped even
+   after navigating away and back (confirmed live: the row's computed
+   background was still --colour-cream-light on return). See the
+   task/completion-report note on this fix for the full repro. Desktop/
+   trackpad pointers are unaffected — hover still clears normally there. */
+@media (hover: hover) and (pointer: fine) {
+  .more-row:hover {
+    background: var(--colour-cream-light);
+    box-shadow: none;
+    transform: none;
+  }
+}
+/* The touch/mouse-down feedback :hover used to also provide — :active is
+   the correct primitive for this: WebKit guarantees it clears on
+   touchend/touchcancel, so it can never get stuck the way :hover did. */
+.more-row:active {
   background: var(--colour-cream-light);
-  box-shadow: none;
-  transform: none;
 }
 .more-group-rows > a + a {
   border-top: 1px solid #f1ece1;
@@ -7202,5 +7210,5 @@ select.plan-meal-field-input {
   color: #a9791a;
 }
 html.native-shell .more-hero {
-  padding: 12px 24px 32px;
+  padding: 12px max(1.25rem, var(--safe-right)) 32px max(1.25rem, var(--safe-left));
 }

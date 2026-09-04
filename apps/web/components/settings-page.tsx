@@ -25,7 +25,6 @@ import type { User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { AppShellContent } from "./app-shell";
 import { HeroFlower } from "./hero-flower";
-import { Logo } from "./logo";
 import { useActiveHome } from "./use-active-home";
 
 // Who may see a given More row. Mirrors the *page's own* access rule in
@@ -135,9 +134,6 @@ export function SettingsPage({
     <AppShellContent>
       {!children && (
         <div className="more-hero">
-          <span className="more-hero-icon" aria-hidden="true">
-            <Logo compact />
-          </span>
           <div className="more-hero-text">
             <h1>More</h1>
             <p>Everything else for your home</p>
