@@ -66,7 +66,7 @@ export default function FeatureManagementPage() {
 
   return (
     <KhayaControlShell
-      title="Feature Management"
+      title="Module management"
       description="Released modules can be enabled per Home. Unreleased modules remain completely hidden."
     >
       <FormStatus message={message} error={error} />

@@ -98,7 +98,7 @@ export function AppShell({
         homes={homes}
         activeHome={activeHome}
         onSwitchHome={setActiveHomeId}
-        flush={Boolean(hero) || path === "/home"}
+        flush={Boolean(hero) || path === "/home" || path === "/settings"}
       />
       <div className="app-content-scroll-region">
         {hero}

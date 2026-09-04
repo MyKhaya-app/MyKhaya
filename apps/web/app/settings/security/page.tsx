@@ -236,7 +236,7 @@ export default function Security() {
         )}
       </section>
       )}
-      <section className="card details">
+      <section className="card details" id="devices">
         <h2>Signed-in devices</h2>
         {devices.map((device) => (
           <div className="session" key={device.id}>

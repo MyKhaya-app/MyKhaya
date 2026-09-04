@@ -1254,13 +1254,13 @@ html.native-shell .app-content-scroll-region {
    contain (above) only stops that pull from chaining up into the page
    itself; it doesn't touch what colour shows in the bounce gap, which is
    what this rule is for.
-   :has(.home-hero) scopes this to only the one page that actually has a
-   green hero (currently just Home — see AppShell's optional `hero` prop)
-   rather than recolouring every native-shell screen green. .app-main
-   keeps its own explicit cream background immediately below so the
-   ordinary card/content area is never affected — only the sliver directly
-   behind the hero (and revealed above it during the bounce) is green. */
-html.native-shell .app-content-scroll-region:has(.home-hero) {
+   :has(.home-hero, .more-hero) scopes this to only the pages that actually
+   have a green hero (Home, and More — see .more-hero below) rather than
+   recolouring every native-shell screen green. .app-main keeps its own
+   explicit cream background immediately below so the ordinary card/content
+   area is never affected — only the sliver directly behind the hero (and
+   revealed above it during the bounce) is green. */
+html.native-shell .app-content-scroll-region:has(.home-hero, .more-hero) {
   background: var(--colour-forest);
 }
 html.native-shell .app-main {
@@ -7039,4 +7039,168 @@ select.plan-meal-field-input {
 }
 .rr-fab svg {
   flex: none;
+}
+
+/* --- More: green hero header + grouped destination cards --- */
+/* A full-bleed continuation of the header's green field, the same
+   mechanism as .home-hero (see AppShell's `flush` prop, generalised to
+   also flush on /settings) — its own rounded bottom + shadow become the
+   edge the white group cards sit against. Deliberately doesn't repeat the
+   home-icon/avatar row AppHeader already renders directly above it — see
+   components/settings-page.tsx. */
+.more-hero {
+  background: var(--colour-forest);
+  border-radius: 0 0 var(--radius-hero) var(--radius-hero);
+  box-shadow: var(--shadow-hero);
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  overflow: hidden;
+  padding: 14px 24px 40px;
+  position: relative;
+}
+.more-hero-icon {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border-radius: 0.7rem;
+  box-shadow: 0 4px 10px rgb(31 41 51 / 18%);
+  display: inline-flex;
+  height: 46px;
+  justify-content: center;
+  position: relative;
+  width: 46px;
+  z-index: 1;
+}
+.more-hero-icon .brand-mark {
+  height: 27px;
+  width: 27px;
+}
+.more-hero-text {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+.more-hero-text h1 {
+  color: var(--colour-white);
+  font-family: var(--font-family-display);
+  font-size: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0.1rem 0 0.25rem;
+}
+.more-hero-text p {
+  color: rgb(255 254 251 / 82%);
+  font-size: var(--font-body);
+  line-height: 1.4;
+  margin: 0;
+}
+/* Purely decorative — clipped by .more-hero's own overflow: hidden and
+   sized off its own box, so it can never cause horizontal overflow or
+   bleed past the hero's rounded corners regardless of screen width. See
+   HeroFlower's docstring. */
+.hero-flower {
+  bottom: -8px;
+  height: 96px;
+  position: absolute;
+  right: 6px;
+  width: 112px;
+  z-index: 0;
+}
+
+.more-groups {
+  display: grid;
+  gap: var(--space-card-stack);
+}
+.more-group {
+  padding: 8px 4px;
+}
+.more-group-label {
+  color: var(--colour-muted);
+  font-size: var(--font-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 8px 16px 4px;
+  text-transform: uppercase;
+}
+.more-group-rows {
+  display: grid;
+}
+.more-row {
+  align-items: center;
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 44px;
+  padding: 12px;
+}
+.more-row:hover {
+  background: var(--colour-cream-light);
+  box-shadow: none;
+  transform: none;
+}
+.more-group-rows > a + a {
+  border-top: 1px solid #f1ece1;
+}
+.more-row-text {
+  min-width: 0;
+}
+.more-row-text h2 {
+  font-size: var(--font-body);
+  margin: 0;
+}
+.more-row-text p {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  margin: 0.1rem 0 0;
+}
+.more-row-chevron {
+  color: var(--colour-muted);
+  flex: none;
+  font-size: 1.2rem;
+}
+.more-icon-tile {
+  align-items: center;
+  border-radius: 0.85rem;
+  display: flex;
+  flex: none;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+/* A small, self-contained pastel palette for icon tiles only — the rest of
+   the app's tokens (sage/forest/cream/terracotta/danger + the member/
+   calendar palette) has no pale pastel tile backgrounds, and this is the
+   one place that needs several side-by-side. Each pairs a pale tint with a
+   readable, same-family darker icon colour. */
+.more-icon-tile.sage {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest-dark);
+}
+.more-icon-tile.cream {
+  background: #f1e9d8;
+  color: #8a6d3b;
+}
+.more-icon-tile.coral {
+  background: #fbe2de;
+  color: #b5533f;
+}
+.more-icon-tile.blue {
+  background: #dfeaf5;
+  color: #3d6fb0;
+}
+.more-icon-tile.lavender {
+  background: #e8e3f5;
+  color: #6c63b5;
+}
+.more-icon-tile.yellow {
+  background: #faf0d6;
+  color: #a9791a;
+}
+html.native-shell .more-hero {
+  padding: 12px 24px 32px;
 }

@@ -34,9 +34,9 @@ function shareCategorySummary(share: CalendarShare, labelsById: Map<string, Even
 // Calendar Tags): this Home's own calendar(s) and their sharing, the
 // signed-in user's Personal calendar, and calendars genuinely shared with
 // them by other Homes. Calendar Tags (CalendarEventLabel — Family, Megan,
-// Activity, ...) are managed on Home settings, deliberately not here: they
-// colour/tag events within a calendar, they are never a calendar of their
-// own — see /settings/home's "Calendar Tags" section.
+// Activity, ...) are managed on their own More destination, deliberately
+// not here: they colour/tag events within a calendar, they are never a
+// calendar of their own — see app/settings/calendar-tags.
 export default function CalendarsPage() {
   const { activeHomeId, loading: homeLoading } = useActiveHome();
   const [items, setItems] = useState<HomeCalendar[]>([]);
@@ -255,7 +255,7 @@ export default function CalendarsPage() {
             <h1>Home calendars</h1>
             <p className="muted">
               Manage your Home calendars and sharing. Calendar Tags are managed separately in{" "}
-              <Link href="/settings/home">Home settings</Link>.
+              <Link href="/settings/calendar-tags">Calendar tags</Link>.
             </p>
           </div>
         </div>
@@ -329,7 +329,7 @@ export default function CalendarsPage() {
                 <h2>Personal calendar</h2>
                 <p className="muted">Only visible to you — never automatically shared with your Home.</p>
                 <p>
-                  <Link href="/settings/home">Calendar colour and settings</Link>
+                  <Link href="/settings/calendar-tags">Calendar colour and settings</Link>
                 </p>
               </section>
             )}
