@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChevronRight, Users } from "lucide-react";
 import type {
   BirthdayEntry,
+  EventOccurrence,
   HomeSummary,
   HouseholdRelationship,
   MealPlanEntry,
@@ -16,6 +17,7 @@ import { api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
+import { fetchVisibleEventsInRange } from "../calendar/visible-events";
 import { FamilyChatPreview } from "@/components/family-chat-preview";
 import { useActiveHome } from "@/components/use-active-home";
 import { isBirthdayThisMonthAndUpcoming } from "../home/birthday-utils";
@@ -140,7 +142,12 @@ export default function Family() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [mealsToday, setMealsToday] = useState<MealPlanEntry[]>([]);
-  const [weekEventCount, setWeekEventCount] = useState<number | null>(null);
+  // null = not yet loaded (or the fetch failed) — rendered as "—", distinct
+  // from a genuinely empty [] (rendered as 0). See fetchVisibleEventsInRange's
+  // docstring for why this is the same Home-calendar + every accepted
+  // externally-shared-calendar union the Calendar page itself shows for a
+  // range, not a Home-only or capped "preview" count.
+  const [weekEvents, setWeekEvents] = useState<EventOccurrence[] | null>(null);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [error, setError] = useState("");
 
@@ -190,23 +197,19 @@ export default function Family() {
       .birthdays(activeHomeId)
       .then((response) => !cancelled && setBirthdays(response.items))
       .catch(() => !cancelled && setBirthdays([]));
-    // "Family events" (Our week) deliberately counts only this Home's own
-    // calendar via listEvents — it does NOT include events from calendars
-    // externally shared into this Home. Home's own upcoming-events card
-    // aggregates Home + every shared calendar (see fetchUpcomingCandidates
-    // in app/home/page.tsx), but that's an N+1 fan-out over api.sharedCalendars()
-    // built for a 3-item "next up" list, not a simple reusable selector —
-    // reusing it here for a single weekly count would add a non-trivial
-    // amount of fetching for a stat tile. Left as follow-up work rather than
-    // pulled in during this polish pass; see the completion report.
+    // "Events this week" reuses the exact same visible-event union the
+    // Calendar page itself shows (Home calendar + every accepted externally
+    // shared calendar) for the current 7-day window — see
+    // fetchVisibleEventsInRange's docstring. The per-member "Everyone" event
+    // counts below are filtered from this same list, so the two figures are
+    // always drawn from one dataset rather than two different scopes.
     const today = localIsoDate();
-    api
-      .listEvents(activeHomeId, {
-        start_at: `${today}T00:00:00Z`,
-        end_at: `${addDaysIso(today, 7)}T00:00:00Z`,
-      })
-      .then((response) => !cancelled && setWeekEventCount(response.items.length))
-      .catch(() => !cancelled && setWeekEventCount(null));
+    fetchVisibleEventsInRange(activeHomeId, {
+      start_at: `${today}T00:00:00Z`,
+      end_at: `${addDaysIso(today, 7)}T00:00:00Z`,
+    })
+      .then((events) => !cancelled && setWeekEvents(events))
+      .catch(() => !cancelled && setWeekEvents(null));
     return () => {
       cancelled = true;
     };
@@ -214,6 +217,17 @@ export default function Family() {
 
   const memberById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members]);
 
+  // api.routines/api.reminders(homeId, {home: true}) already return exactly
+  // one "currently relevant" occurrence per routine/reminder — overdue,
+  // due today, or inside its pre-due visibility window — and only for
+  // enabled ones; a disabled routine/reminder, or one with no such
+  // occurrence, is never present in these lists at all (see
+  // household_routines.list_routines/reminders.list_reminders's `home=true`
+  // branch, which `continue`s past anything select_home_occurrence returns
+  // None for). So "not yet home_completed_at" here already means "genuinely
+  // outstanding for the Home right now" — the same definition the main
+  // Routines & Reminders page's Home view uses — with nothing further to
+  // exclude.
   const openRoutines = useMemo(() => routines.filter((routine) => !routine.home_completed_at), [routines]);
   const openReminders = useMemo(() => reminders.filter((reminder) => !reminder.home_completed_at), [reminders]);
   const upcomingBirthdays = useMemo(
@@ -354,8 +368,8 @@ export default function Family() {
             </div>
             <div className="family-stats-grid">
               <div className="family-stat-tile">
-                <strong>{weekEventCount ?? "—"}</strong>
-                <span>Family events</span>
+                <strong>{weekEvents?.length ?? "—"}</strong>
+                <span>Events this week</span>
               </div>
               <div className="family-stat-tile">
                 <strong>{routinesLeftCount}</strong>
@@ -365,13 +379,9 @@ export default function Family() {
                 <strong>{remindersDueCount}</strong>
                 <span>Reminders due</span>
               </div>
-              <div className="family-stat-tile family-stat-tile-text">
-                <strong>
-                  {upcomingBirthdays.length === 0
-                    ? "No birthdays"
-                    : `${upcomingBirthdays.length} birthday${upcomingBirthdays.length === 1 ? "" : "s"}`}
-                </strong>
-                <span>This month</span>
+              <div className="family-stat-tile">
+                <strong>{upcomingBirthdays.length}</strong>
+                <span>Birthdays this month</span>
               </div>
             </div>
           </section>
@@ -388,11 +398,19 @@ export default function Family() {
               </div>
               <div className="family-everyone-grid">
                 {members.map((member) => {
-                  const eventsToday = (summary?.today_events ?? []).filter((event) =>
+                  // Same underlying datasets as the "Our week" tiles above
+                  // (weekEvents, openReminders) — filtered to this member via
+                  // their real event/reminder membership, never inferred from
+                  // a name or hard-coded. member_ids is the reminder's actual
+                  // assignment list, not just its personal owner, so a
+                  // household reminder assigned to several people counts for
+                  // each of them here, matching how "Reminders due" above
+                  // already counts it once.
+                  const eventsForMember = (weekEvents ?? []).filter((event) =>
                     event.member_ids.includes(member.user_id),
                   ).length;
-                  const remindersForMember = openReminders.filter(
-                    (reminder) => reminder.owner_user_id === member.user_id,
+                  const remindersForMember = openReminders.filter((reminder) =>
+                    reminder.member_ids.includes(member.user_id),
                   ).length;
                   return (
                     <Link
@@ -412,7 +430,7 @@ export default function Family() {
                         <span className="role-badge">{relationshipStatusLabel[member.relationship]}</span>
                       </span>
                       <span className="family-everyone-summary">
-                        {eventsToday} event{eventsToday === 1 ? "" : "s"} · {remindersForMember} reminder
+                        {eventsForMember} event{eventsForMember === 1 ? "" : "s"} · {remindersForMember} reminder
                         {remindersForMember === 1 ? "" : "s"}
                       </span>
                       <span className="family-everyone-view">

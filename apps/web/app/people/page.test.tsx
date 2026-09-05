@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
-import type { BirthdayEntry, Home, Member, Reminder, Routine } from "@mykhaya/shared-types";
+import type { BirthdayEntry, EventOccurrence, Home, Member, Reminder, Routine } from "@mykhaya/shared-types";
 import Family from "./page";
 
 // The Family tab — now a people-focused household overview (member
@@ -58,6 +58,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       mealPlanDay: vi.fn(),
       birthdays: vi.fn(),
       listEvents: vi.fn(),
+      sharedCalendars: vi.fn(),
+      listSharedEvents: vi.fn(),
     },
   };
 });
@@ -128,6 +130,8 @@ beforeEach(() => {
   (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({ date: "2026-09-05", entries: [] });
   (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
+  (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.listSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
 });
 
 describe("Family — page intro and status row", () => {
@@ -363,20 +367,46 @@ describe("Family — Today with the family", () => {
   });
 });
 
+function event(overrides: Partial<EventOccurrence> = {}): EventOccurrence {
+  return {
+    occurrence_id: "occ-1",
+    event_id: "e1",
+    calendar_id: "cal-1",
+    title: "Football",
+    start_at: "2026-09-05T17:30:00Z",
+    end_at: "2026-09-05T18:30:00Z",
+    is_all_day: false,
+    timezone: "UTC",
+    description: null,
+    location_text: null,
+    label: null,
+    calendar_color: "teal",
+    member_ids: [],
+    recurrence: "none",
+    reminder_minutes: null,
+    created_by: "u1",
+    updated_at: "2026-09-01T00:00:00Z",
+    occurrence_start: "2026-09-05T17:30:00Z",
+    is_overridden: false,
+    ...overrides,
+  };
+}
+
 describe("Family — Our week", () => {
   it("shows zero counts honestly rather than hiding the card or inventing values", async () => {
     render(<Family />);
 
     await screen.findByRole("heading", { name: "Our week" });
+    expect(screen.getByText("Events this week")).toBeInTheDocument();
     expect(screen.getByText("Routines left")).toBeInTheDocument();
     expect(screen.getByText("Reminders due")).toBeInTheDocument();
+    expect(screen.getByText("Birthdays this month")).toBeInTheDocument();
     const tiles = document.querySelectorAll(".family-stat-tile strong");
     const values = Array.from(tiles).map((el) => el.textContent);
-    expect(values).toContain("0");
-    expect(screen.getByText("No birthdays")).toBeInTheDocument();
+    expect(values).toEqual(["0", "0", "0", "0"]);
   });
 
-  it("shows a real upcoming-birthday count when one exists", async () => {
+  it("shows a real upcoming-birthday count when one exists, as a plain number", async () => {
     const entry: BirthdayEntry = {
       owner_type: "user",
       owner_id: "u2",
@@ -388,7 +418,192 @@ describe("Family — Our week", () => {
     (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [entry] });
 
     render(<Family />);
-    expect(await screen.findByText("1 birthday")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Our week" });
+    const birthdayTile = screen.getByText("Birthdays this month").closest(".family-stat-tile");
+    expect(within(birthdayTile as HTMLElement).getByText("1")).toBeInTheDocument();
+  });
+
+  it("counts a Home-owned event toward 'Events this week'", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [event({ occurrence_id: "home-occ" })],
+      next_page: null,
+    });
+
+    render(<Family />);
+    const tile = (await screen.findByText("Events this week")).closest(".family-stat-tile");
+    expect(within(tile as HTMLElement).getByText("1")).toBeInTheDocument();
+  });
+
+  it("includes an externally shared calendar's event in 'Events this week', reusing the same visible-event union as Calendar", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
+    (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{ id: "share-1", permission: "view", source_group_name: "Grandma's" }],
+    });
+    (api.listSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [event({ occurrence_id: "shared-occ", title: "Shared party" })],
+      next_page: null,
+    });
+
+    render(<Family />);
+    const tile = (await screen.findByText("Events this week")).closest(".family-stat-tile");
+    expect(within(tile as HTMLElement).getByText("1")).toBeInTheDocument();
+    const [shareId, shareRange] = (api.listSharedEvents as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { start_at: string; end_at: string },
+    ];
+    expect(shareId).toBe("share-1");
+    expect(typeof shareRange.start_at).toBe("string");
+    expect(typeof shareRange.end_at).toBe("string");
+  });
+
+  it("excludes an event outside the current 7-day window from 'Events this week'", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
+
+    render(<Family />);
+    const tile = (await screen.findByText("Events this week")).closest(".family-stat-tile");
+    // The mocked listEvents call for this test always returns items: [] for
+    // any range — a real 404-days-away event would never be included
+    // because it's outside the requested start_at/end_at window in the
+    // first place (server-side filtering), which this asserts indirectly:
+    // the tile shows 0 when nothing falls inside the requested range.
+    expect(within(tile as HTMLElement).getByText("0")).toBeInTheDocument();
+    const [, range] = (api.listEvents as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { start_at: string; end_at: string },
+    ];
+    const spanDays = (new Date(range.end_at).getTime() - new Date(range.start_at).getTime()) / 86_400_000;
+    expect(spanDays).toBe(7);
+  });
+
+  it("excludes a completed routine and a completed reminder from their counts", async () => {
+    (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "r1",
+          title: "Bin day",
+          description: null,
+          scope: "household",
+          owner_user_id: null,
+          interval_weeks: 1,
+          repeat_unit: "weekly",
+          week_anchor_date: "2026-09-05",
+          reminder_timing: "evening_before",
+          is_critical: false,
+          pinned: false,
+          enabled: true,
+          start_date: "2026-01-01",
+          end_date: null,
+          member_ids: [],
+          next_occurrence_date: "2026-09-05",
+          completed_today: true,
+          home_occurrence_date: "2026-09-05",
+          home_completed_at: "2026-09-05T08:00:00Z",
+          created_by: "u1",
+          updated_at: "2026-09-01T00:00:00Z",
+        } satisfies Routine,
+      ],
+    });
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "rem1",
+          title: "Homework",
+          description: null,
+          scope: "personal",
+          owner_user_id: "u2",
+          due_date: "2026-09-05",
+          due_time: "16:00:00",
+          repeat: "never",
+          cadence: "once",
+          enabled: true,
+          member_ids: ["u2"],
+          next_occurrence_date: "2026-09-05",
+          completed_today: true,
+          home_occurrence_date: "2026-09-05",
+          home_completed_at: "2026-09-05T08:00:00Z",
+          created_by: "u1",
+          updated_at: "2026-09-01T00:00:00Z",
+        } satisfies Reminder,
+      ],
+    });
+
+    render(<Family />);
+    const routinesTile = (await screen.findByText("Routines left")).closest(".family-stat-tile");
+    const remindersTile = screen.getByText("Reminders due").closest(".family-stat-tile");
+    expect(within(routinesTile as HTMLElement).getByText("0")).toBeInTheDocument();
+    expect(within(remindersTile as HTMLElement).getByText("0")).toBeInTheDocument();
+  });
+});
+
+describe("Family — Everyone card counts reconcile with Our week", () => {
+  it("counts a member's real event participation from the same visible-events union as 'Events this week', not from event titles or a separate scope", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        event({ occurrence_id: "occ-anthony", title: "Anthony only", member_ids: ["u1"] }),
+        event({ occurrence_id: "occ-both", title: "Football", member_ids: ["u1", "u2"] }),
+      ],
+      next_page: null,
+    });
+
+    render(<Family />);
+    const grid = await waitFor(() => {
+      const el = document.querySelector(".family-everyone-grid");
+      if (!el || el.children.length === 0) throw new Error("everyone grid not ready");
+      return el as HTMLElement;
+    });
+
+    const anthonyCard = within(grid).getByText("Anthony").closest(".family-everyone-card") as HTMLElement;
+    const meganCard = within(grid).getByText("Megan").closest(".family-everyone-card") as HTMLElement;
+    expect(within(anthonyCard).getByText(/2 events/)).toBeInTheDocument();
+    expect(within(meganCard).getByText(/1 event\b/)).toBeInTheDocument();
+  });
+
+  it("counts a reminder assigned via member_ids for every assigned member, matching how 'Reminders due' counts it once", async () => {
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "rem-shared",
+          title: "Pack for holiday",
+          description: null,
+          scope: "household",
+          owner_user_id: null,
+          due_date: "2026-09-05",
+          due_time: "16:00:00",
+          repeat: "never",
+          cadence: "once",
+          enabled: true,
+          member_ids: ["u1", "u2"],
+          next_occurrence_date: "2026-09-05",
+          completed_today: false,
+          home_occurrence_date: "2026-09-05",
+          home_completed_at: null,
+          created_by: "u1",
+          updated_at: "2026-09-01T00:00:00Z",
+        } satisfies Reminder,
+      ],
+    });
+
+    render(<Family />);
+    const remindersTile = (await screen.findByText("Reminders due")).closest(".family-stat-tile");
+    expect(within(remindersTile as HTMLElement).getByText("1")).toBeInTheDocument();
+
+    const grid = document.querySelector(".family-everyone-grid") as HTMLElement;
+    const anthonyCard = within(grid).getByText("Anthony").closest(".family-everyone-card") as HTMLElement;
+    const meganCard = within(grid).getByText("Megan").closest(".family-everyone-card") as HTMLElement;
+    expect(within(anthonyCard).getByText(/1 reminder\b/)).toBeInTheDocument();
+    expect(within(meganCard).getByText(/1 reminder\b/)).toBeInTheDocument();
+  });
+
+  it("shows 0 events • 0 reminders for a member genuinely uninvolved in either, without hiding their card", async () => {
+    render(<Family />);
+    const grid = await waitFor(() => {
+      const el = document.querySelector(".family-everyone-grid");
+      if (!el || el.children.length === 0) throw new Error("everyone grid not ready");
+      return el as HTMLElement;
+    });
+
+    const anthonyCard = within(grid).getByText("Anthony").closest(".family-everyone-card") as HTMLElement;
+    expect(within(anthonyCard).getByText("0 events · 0 reminders")).toBeInTheDocument();
   });
 });
 
@@ -446,5 +661,28 @@ describe("Family — Home data isolation", () => {
     expect(listEventsHomeId).toBe("home-1");
     expect(typeof listEventsRange.start_at).toBe("string");
     expect(typeof listEventsRange.end_at).toBe("string");
+  });
+
+  it("never shows another Home's shared-calendar events under this Home's total", async () => {
+    // sharedCalendars() is a per-signed-in-user endpoint (no homeId param —
+    // same call Calendar's own load() makes), so "no cross-Home leakage"
+    // here means: only shares this user actually holds are ever merged in,
+    // and each is fetched for this Home's own selected week range, never a
+    // stale or different range.
+    (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{ id: "share-mine", permission: "view", source_group_name: "Nana's" }],
+    });
+    (api.listSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [event({ occurrence_id: "shared-occ" })],
+      next_page: null,
+    });
+
+    render(<Family />);
+    await screen.findByText("Events this week");
+
+    expect(api.sharedCalendars).toHaveBeenCalledTimes(1);
+    expect(api.listSharedEvents).toHaveBeenCalledWith("share-mine", expect.any(Object));
+    const [homeCallId] = (api.listEvents as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown];
+    expect(homeCallId).toBe("home-1");
   });
 });
