@@ -16,6 +16,7 @@ import {
   Plus,
   Star,
   Trash2,
+  Users,
   UtensilsCrossed,
   X,
 } from "lucide-react";
@@ -51,10 +52,30 @@ import { useDaySwipe } from "./use-day-swipe";
 // primitive, added alongside this iteration rather than a second,
 // meal-specific shopping-list implementation.
 
-const SLOTS: { key: MealSlot; label: string }[] = [
-  { key: "breakfast", label: "Breakfast" },
-  { key: "lunch", label: "Lunch" },
-  { key: "dinner", label: "Dinner" },
+const SLOTS: {
+  key: MealSlot;
+  label: string;
+  subtitle: string;
+  icon: string;
+}[] = [
+  {
+    key: "breakfast",
+    label: "Breakfast",
+    subtitle: "Start the day well",
+    icon: "/images/meal-plans-breakfast.png",
+  },
+  {
+    key: "lunch",
+    label: "Lunch",
+    subtitle: "Keep everyone fuelled",
+    icon: "/images/meal-plans-lunch.png",
+  },
+  {
+    key: "dinner",
+    label: "Dinner",
+    subtitle: "Good food, great company",
+    icon: "/images/meal-plans-dinner.png",
+  },
 ];
 
 const MEAL_TYPES: { key: MealType; label: string }[] = [
@@ -254,13 +275,23 @@ export default function MealPlansPage() {
   return (
     <AppShellContent>
       <main className="standard-page meal-plans-page">
-        <div className="page-heading">
-          <div>
+        <div className="page-heading meal-plans-hero">
+          <div className="meal-plans-hero-text">
             <p className="eyebrow">
               <UtensilsCrossed size={14} aria-hidden="true" /> Meal Plans
             </p>
             <h1>Meal Plans</h1>
+            <p className="muted">
+              Plan, cook and enjoy mealtimes together.
+            </p>
           </div>
+          <img
+            className="meal-plans-hero-art"
+            src="/images/meal-plans-good-food.png"
+            alt="Good food, happier days"
+            width={640}
+            height={387}
+          />
         </div>
         <FormStatus error={error} />
         <div
@@ -401,8 +432,8 @@ function PlannerTab({
 
   return (
     <section>
-      <header className="calendar-toolbar-compact meal-plan-toolbar">
-        <div className="calendar-month-row">
+      <header className="meal-plans-toolbar">
+        <div className="meal-plans-date-nav">
           <button
             className="icon-button secondary"
             type="button"
@@ -413,7 +444,8 @@ function PlannerTab({
           >
             <ChevronLeft size={18} aria-hidden="true" />
           </button>
-          <strong>
+          <strong className="meal-plan-date-pill">
+            <CalendarDays size={15} aria-hidden="true" />
             {view === "day"
               ? dayHeading(focusDate)
               : `Week of ${dayHeading(week[0]!)}`}
@@ -429,18 +461,18 @@ function PlannerTab({
             <ChevronRight size={18} aria-hidden="true" />
           </button>
         </div>
-        <div className="meal-plan-toolbar-actions">
+        <div className="meal-plans-toolbar-right">
           {focusDate !== isoToday() && (
             <button
               type="button"
-              className="tertiary"
+              className="tertiary meal-plans-today-button"
               onClick={() => setFocusDate(isoToday())}
             >
               Today
             </button>
           )}
           <div
-            className="meal-view-toggle"
+            className="meal-view-toggle meal-plans-view-toggle"
             role="tablist"
             aria-label="Choose view"
           >
@@ -490,8 +522,21 @@ function PlannerTab({
         <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
           <div className="meal-slot-list">
             {SLOTS.map((slot) => (
-              <div className="meal-slot-section" key={slot.key}>
-                <h2>{slot.label}</h2>
+              <div className="card meal-slot-section" key={slot.key}>
+                <div className="meal-slot-heading">
+                  <img
+                    className="meal-slot-icon"
+                    src={slot.icon}
+                    alt=""
+                    aria-hidden="true"
+                    width={32}
+                    height={32}
+                  />
+                  <div>
+                    <h2>{slot.label}</h2>
+                    <p className="meal-slot-subtitle">{slot.subtitle}</p>
+                  </div>
+                </div>
                 {dayEntries
                   .filter((entry) => entry.meal_slot === slot.key)
                   .map((entry) => (
@@ -513,7 +558,10 @@ function PlannerTab({
                     })
                   }
                 >
-                  <Plus size={16} aria-hidden="true" /> Add
+                  <span className="meal-add-icon">
+                    <Plus size={16} aria-hidden="true" />
+                  </span>
+                  Add
                 </button>
               </div>
             ))}
@@ -657,7 +705,10 @@ function MealEntryCard({
             </span>
           )}
           {stackPeople.length > 0 && (
-            <span>{memberNamesFor(entry.member_ids, members)}</span>
+            <span>
+              <Users size={13} aria-hidden="true" />{" "}
+              {memberNamesFor(entry.member_ids, members)}
+            </span>
           )}
           {cook && (
             <span>

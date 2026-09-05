@@ -142,6 +142,95 @@ describe("Meal Plans — Family plan access", () => {
     expect(screen.getAllByText("Dinner").length).toBeGreaterThan(0);
   });
 
+  it("renders the hero subtitle and the 'Good food, happier days' artwork as a real image asset", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    render(<MealPlansPage />);
+    await screen.findByRole("tab", { name: "Plan" });
+
+    expect(
+      screen.getByText("Plan, cook and enjoy mealtimes together."),
+    ).toBeInTheDocument();
+    const art = screen.getByAltText("Good food, happier days");
+    expect(art.tagName).toBe("IMG");
+    expect(art).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/meal-plans-good-food.png"),
+    );
+  });
+
+  it("gives the toolbar its own Meal Plans-only layout wrapper, not the shared Calendar toolbar structure", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    const { container } = render(<MealPlansPage />);
+    await screen.findByRole("tab", { name: "Plan" });
+
+    const toolbar = container.querySelector(".meal-plans-toolbar");
+    expect(toolbar).toBeInTheDocument();
+    // Calendar's own toolbar classes must never appear on this page — the
+    // date-nav/Day-Week row is a page-local layout, not a reuse of
+    // .calendar-toolbar-compact/.calendar-month-row.
+    expect(container.querySelector(".calendar-toolbar-compact")).not.toBeInTheDocument();
+    expect(container.querySelector(".calendar-month-row")).not.toBeInTheDocument();
+
+    const dateNav = toolbar?.querySelector(".meal-plans-date-nav");
+    const toolbarRight = toolbar?.querySelector(".meal-plans-toolbar-right");
+    expect(dateNav).toBeInTheDocument();
+    expect(toolbarRight).toBeInTheDocument();
+    // Both groups are children of the same single toolbar row.
+    expect(dateNav?.parentElement).toBe(toolbar);
+    expect(toolbarRight?.parentElement).toBe(toolbar);
+
+    expect(
+      within(dateNav as HTMLElement).getByRole("button", { name: /previous day/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(dateNav as HTMLElement).getByRole("button", { name: /next day/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(toolbarRight as HTMLElement).getByRole("tab", { name: "Day" }),
+    ).toBeInTheDocument();
+    expect(
+      within(toolbarRight as HTMLElement).getByRole("tab", { name: "Week" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a friendly subtitle and icon for each meal slot", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    render(<MealPlansPage />);
+    await screen.findByRole("tab", { name: "Plan" });
+
+    const breakfastSection = screen
+      .getByText("Breakfast")
+      .closest(".meal-slot-section") as HTMLElement;
+    expect(
+      within(breakfastSection).getByText("Start the day well"),
+    ).toBeInTheDocument();
+    expect(breakfastSection.querySelector(".meal-slot-icon")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/meal-plans-breakfast.png"),
+    );
+
+    const lunchSection = screen
+      .getByText("Lunch")
+      .closest(".meal-slot-section") as HTMLElement;
+    expect(within(lunchSection).getByText("Keep everyone fuelled")).toBeInTheDocument();
+
+    const dinnerSection = screen
+      .getByText("Dinner")
+      .closest(".meal-slot-section") as HTMLElement;
+    expect(
+      within(dinnerSection).getByText("Good food, great company"),
+    ).toBeInTheDocument();
+  });
+
   it("switches to the Week view via the Day/Week control and fetches week data", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,
@@ -304,6 +393,47 @@ describe("Meal Plans — Family plan access", () => {
     expect(card.querySelector(".avatar-stack")).toBeInTheDocument();
     // jsdom does not perform layout; CSS min-width/flex sizing is verified by
     // the rendered hierarchy here and by the simulator retest.
+  });
+
+  it("shows a populated meal's real participants with a family icon and an overflow '+N' indicator, never hard-coded avatars", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+    (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({
+      date: "2026-08-29",
+      entries: [
+        {
+          id: "entry-pizza",
+          date: "2026-08-29",
+          meal_slot: "dinner",
+          meal_name: "Pizza Friday",
+          quick_meal_name: null,
+          meal_image_url: null,
+          time: null,
+          member_ids: ["u1", "u2", "u3", "u4"],
+          cook_member_id: null,
+          makes_leftovers: false,
+          is_favourite: false,
+        },
+      ],
+    });
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      member(),
+      member({ user_id: "u2", display_name: "Alex" }),
+      member({ user_id: "u3", display_name: "Sam" }),
+      member({ user_id: "u4", display_name: "Robin" }),
+    ]);
+
+    render(<MealPlansPage />);
+    const card = await screen.findByRole("button", { name: /pizza friday/i });
+
+    // "Everyone" comes from real member/entry data (memberNamesFor), not a
+    // hard-coded mockup label — every member here is assigned.
+    expect(within(card).getByText("Everyone")).toBeInTheDocument();
+    const stack = card.querySelector(".avatar-stack");
+    expect(stack).toBeInTheDocument();
+    expect(within(stack as HTMLElement).getByText("M")).toBeInTheDocument(); // Megan's initial fallback
+    expect(within(stack as HTMLElement).getByText("+1")).toBeInTheDocument();
   });
 });
 
