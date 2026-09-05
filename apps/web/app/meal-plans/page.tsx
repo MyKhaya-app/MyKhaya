@@ -87,8 +87,6 @@ const MEAL_TYPES: { key: MealType; label: string }[] = [
   { key: "other", label: "Other" },
 ];
 
-const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
-
 const QUICK_MEAL_PLACEHOLDERS: Record<MealSlot, string> = {
   breakfast: "e.g. Overnight oats, Toast, Cereal",
   lunch: "e.g. Sandwiches, School lunch, Leftovers",
@@ -122,9 +120,6 @@ function dayHeading(iso: string): string {
     month: "short",
     timeZone: "UTC",
   });
-}
-function dayNumber(iso: string): number {
-  return Number(iso.slice(8, 10));
 }
 function formatTime(value: string | null): string | null {
   if (!value) return null;
@@ -498,75 +493,30 @@ function PlannerTab({
         </div>
       </header>
 
-      {view === "day" && (
-        <div className="week-strip" role="tablist" aria-label="Choose a day">
-          {week.map((iso, index) => (
-            <button
-              key={iso}
-              type="button"
-              role="tab"
-              aria-selected={iso === focusDate}
-              className={`week-strip-day${iso === focusDate ? " active" : ""}${iso === isoToday() ? " today" : ""}`}
-              onClick={() => setFocusDate(iso)}
-            >
-              <span className="week-strip-letter">
-                {WEEKDAY_LETTERS[index]}
-              </span>
-              <span className="week-strip-number">{dayNumber(iso)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
       {view === "day" ? (
-        <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
-          <div className="meal-slot-list">
-            {SLOTS.map((slot) => (
-              <div className="card meal-slot-section" key={slot.key}>
-                <div className="meal-slot-heading">
-                  <img
-                    className="meal-slot-icon"
-                    src={slot.icon}
-                    alt=""
-                    aria-hidden="true"
-                    width={32}
-                    height={32}
-                  />
-                  <div>
-                    <h2>{slot.label}</h2>
-                    <p className="meal-slot-subtitle">{slot.subtitle}</p>
-                  </div>
-                </div>
-                {dayEntries
-                  .filter((entry) => entry.meal_slot === slot.key)
-                  .map((entry) => (
-                    <MealEntryCard
-                      key={entry.id}
-                      entry={entry}
-                      members={members}
-                      onOpen={() => setSheet({ mode: "view", entry })}
-                    />
-                  ))}
-                <button
-                  type="button"
-                  className="meal-add-button"
-                  onClick={() =>
+        <>
+          <h2 className="mealplan-section-title">Today&rsquo;s Plan</h2>
+          <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
+            <div className="meal-slot-list">
+              {SLOTS.map((slot) => (
+                <MealSlotCard
+                  key={slot.key}
+                  slot={slot}
+                  entries={dayEntries.filter((entry) => entry.meal_slot === slot.key)}
+                  members={members}
+                  onOpenEntry={(entry) => setSheet({ mode: "view", entry })}
+                  onAdd={() =>
                     setSheet({
                       mode: "create",
                       date: focusDate,
                       slot: slot.key,
                     })
                   }
-                >
-                  <span className="meal-add-icon">
-                    <Plus size={16} aria-hidden="true" />
-                  </span>
-                  Add
-                </button>
-              </div>
-            ))}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+        </>
       ) : (
         <>
           <button
@@ -666,63 +616,139 @@ function PlannerTab({
   );
 }
 
-function MealEntryCard({
-  entry,
-  members,
-  onOpen,
-}: {
-  entry: MealPlanEntry;
-  members: Member[];
-  onOpen: () => void;
-}) {
-  const time = formatTime(entry.time);
+// One row per meal period ("Today's Plan") in the Lists-row visual family:
+// a leading image, the meal-period label, the *real* planned content
+// beneath it (never a hard-coded example), and a trailing chevron/Add
+// control. A slot with exactly one entry collapses into a single tappable
+// row (matching the approved mockup exactly); a slot with several real
+// entries keeps the period label as a plain heading and lists each entry
+// as its own compact, individually-tappable line beneath it, since one
+// outer chevron could otherwise ambiguously mean "open which entry?".
+function MealEntryMeta({ entry, members }: { entry: MealPlanEntry; members: Member[] }) {
   const stackPeople = entry.member_ids
     .map((id) => members.find((member) => member.user_id === id))
     .filter((member): member is Member => Boolean(member));
-  const cook = members.find(
-    (member) => member.user_id === entry.cook_member_id,
-  );
+  const cook = members.find((member) => member.user_id === entry.cook_member_id);
+  if (stackPeople.length === 0 && !cook && !entry.makes_leftovers) return null;
   return (
-    <button type="button" className="card meal-entry-card" onClick={onOpen}>
-      {entry.meal_image_url && (
-        <img className="meal-entry-thumb" src={entry.meal_image_url} alt="" />
+    <span className="mealplan-entry-meta">
+      {stackPeople.length > 0 && (
+        <span>
+          <Users size={12} aria-hidden="true" /> {memberNamesFor(entry.member_ids, members)}
+        </span>
       )}
-      <div className="meal-entry-main">
-        <div className="meal-entry-heading">
-          <strong className="text-clamp-2">{entryTitle(entry)}</strong>
-          {entry.is_favourite && (
-            <Star
-              size={14}
-              aria-hidden="true"
-              className="meal-favourite-star"
-            />
-          )}
-        </div>
-        <div className="meal-entry-meta">
-          {time && (
-            <span>
-              <Clock size={13} aria-hidden="true" /> {time}
-            </span>
-          )}
-          {stackPeople.length > 0 && (
-            <span>
-              <Users size={13} aria-hidden="true" />{" "}
-              {memberNamesFor(entry.member_ids, members)}
-            </span>
-          )}
-          {cook && (
-            <span>
-              <ChefHat size={13} aria-hidden="true" /> {cook.display_name}{" "}
-              cooking
-            </span>
-          )}
-          {entry.makes_leftovers && (
-            <span className="quiet-state">Leftovers</span>
-          )}
+      {cook && (
+        <span>
+          <ChefHat size={12} aria-hidden="true" /> {cook.display_name} cooking
+        </span>
+      )}
+      {entry.makes_leftovers && <span className="quiet-state">Leftovers</span>}
+    </span>
+  );
+}
+
+function MealSlotCard({
+  slot,
+  entries,
+  members,
+  onOpenEntry,
+  onAdd,
+}: {
+  slot: { key: MealSlot; label: string; subtitle: string; icon: string };
+  entries: MealPlanEntry[];
+  members: Member[];
+  onOpenEntry: (entry: MealPlanEntry) => void;
+  onAdd: () => void;
+}) {
+  const icon = (
+    <img className="mealplan-slot-icon" src={slot.icon} alt="" aria-hidden="true" width={44} height={44} />
+  );
+
+  if (entries.length === 0) {
+    return (
+      <div className="card mealplan-slot-card">
+        <div className="mealplan-slot-row">
+          {icon}
+          <div className="mealplan-slot-body text-shrinkable">
+            <strong>{slot.label}</strong>
+            <span className="mealplan-slot-empty-text">Nothing planned yet</span>
+          </div>
+          <button type="button" className="mealplan-slot-add" onClick={onAdd}>
+            <Plus size={15} aria-hidden="true" /> Add
+          </button>
         </div>
       </div>
-      {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
-    </button>
+    );
+  }
+
+  if (entries.length === 1) {
+    const entry = entries[0]!;
+    const time = formatTime(entry.time);
+    const stackPeople = entry.member_ids
+      .map((id) => members.find((member) => member.user_id === id))
+      .filter((member): member is Member => Boolean(member));
+    return (
+      <button
+        type="button"
+        className="card mealplan-slot-card mealplan-slot-row-button"
+        onClick={() => onOpenEntry(entry)}
+      >
+        <div className="mealplan-slot-row">
+          {icon}
+          <div className="mealplan-slot-body text-shrinkable">
+            <span className="mealplan-slot-label-line">
+              <strong>{slot.label}</strong>
+              {entry.is_favourite && (
+                <Star size={13} aria-hidden="true" className="meal-favourite-star" />
+              )}
+            </span>
+            {time && <span className="mealplan-entry-time">{time}</span>}
+            <span className="mealplan-entry-title text-wrap-anywhere">{entryTitle(entry)}</span>
+            <MealEntryMeta entry={entry} members={members} />
+          </div>
+          {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
+          <ChevronRight size={18} className="mealplan-slot-chevron" aria-hidden="true" />
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className="card mealplan-slot-card">
+      <div className="mealplan-slot-row">
+        {icon}
+        <div className="mealplan-slot-body text-shrinkable">
+          <strong>{slot.label}</strong>
+          <div className="mealplan-entry-lines">
+            {entries.map((entry) => {
+              const time = formatTime(entry.time);
+              const stackPeople = entry.member_ids
+                .map((id) => members.find((member) => member.user_id === id))
+                .filter((member): member is Member => Boolean(member));
+              return (
+                <button
+                  type="button"
+                  className="mealplan-entry-line"
+                  key={entry.id}
+                  onClick={() => onOpenEntry(entry)}
+                >
+                  <span className="mealplan-entry-line-copy text-shrinkable">
+                    {time && <span className="mealplan-entry-time">{time}</span>}
+                    <span className="mealplan-entry-title text-wrap-anywhere">{entryTitle(entry)}</span>
+                    <MealEntryMeta entry={entry} members={members} />
+                  </span>
+                  {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
+                  <ChevronRight size={16} className="mealplan-slot-chevron" aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+          <button type="button" className="mealplan-slot-add-another" onClick={onAdd}>
+            <Plus size={13} aria-hidden="true" /> Add another
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

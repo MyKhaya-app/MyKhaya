@@ -142,6 +142,65 @@ describe("Meal Plans — Family plan access", () => {
     expect(screen.getAllByText("Dinner").length).toBeGreaterThan(0);
   });
 
+  it("removes the This Week weekday selector, the View week link and the Shopping List shortcut from this screen", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    render(<MealPlansPage />);
+    await screen.findByRole("tab", { name: "Plan" });
+
+    expect(screen.queryByText("This Week")).not.toBeInTheDocument();
+    expect(screen.queryByText(/view week/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/shopping list/i)).not.toBeInTheDocument();
+    expect(document.querySelector(".week-strip")).not.toBeInTheDocument();
+    // No leftover empty gap/container reserved for the removed section.
+    expect(document.querySelectorAll(".week-strip-day").length).toBe(0);
+  });
+
+  it("shows multiple real entries for the same slot as individually-tappable lines, each with its own real content", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+    (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({
+      date: "2026-09-05",
+      entries: [
+        {
+          id: "entry-a",
+          date: "2026-09-05",
+          meal_slot: "lunch",
+          meal_name: "Leftover pasta",
+          quick_meal_name: null,
+          meal_image_url: null,
+          time: "12:00:00",
+          member_ids: ["u1"],
+          cook_member_id: null,
+          makes_leftovers: false,
+          is_favourite: false,
+        },
+        {
+          id: "entry-b",
+          date: "2026-09-05",
+          meal_slot: "lunch",
+          meal_name: "School lunch",
+          quick_meal_name: null,
+          meal_image_url: null,
+          time: "12:15:00",
+          member_ids: ["u2"],
+          cook_member_id: null,
+          makes_leftovers: false,
+          is_favourite: false,
+        },
+      ],
+    });
+
+    render(<MealPlansPage />);
+    const lunchCard = (await screen.findByText("Leftover pasta")).closest(".mealplan-slot-card") as HTMLElement;
+    expect(within(lunchCard).getByText("School lunch")).toBeInTheDocument();
+    expect(within(lunchCard).getAllByRole("button").length).toBeGreaterThanOrEqual(2);
+    expect(within(lunchCard).getByRole("button", { name: /add another/i })).toBeInTheDocument();
+  });
+
   it("uses the shared .module-page compact-spacing standard, not a bespoke top-offset or the pre-auth .standard-page top inset alone", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,
@@ -216,7 +275,7 @@ describe("Meal Plans — Family plan access", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a friendly subtitle and icon for each meal slot", async () => {
+  it("shows a real icon and a compact empty state for each meal slot with nothing planned, under a Today's Plan heading", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,
     });
@@ -224,28 +283,26 @@ describe("Meal Plans — Family plan access", () => {
     render(<MealPlansPage />);
     await screen.findByRole("tab", { name: "Plan" });
 
+    expect(screen.getByRole("heading", { name: "Today’s Plan" })).toBeInTheDocument();
+
     const breakfastSection = screen
       .getByText("Breakfast")
-      .closest(".meal-slot-section") as HTMLElement;
-    expect(
-      within(breakfastSection).getByText("Start the day well"),
-    ).toBeInTheDocument();
-    expect(breakfastSection.querySelector(".meal-slot-icon")).toHaveAttribute(
+      .closest(".mealplan-slot-card") as HTMLElement;
+    expect(within(breakfastSection).getByText("Nothing planned yet")).toBeInTheDocument();
+    expect(breakfastSection.querySelector(".mealplan-slot-icon")).toHaveAttribute(
       "src",
       expect.stringContaining("/images/meal-plans-breakfast.png"),
     );
 
-    const lunchSection = screen
-      .getByText("Lunch")
-      .closest(".meal-slot-section") as HTMLElement;
-    expect(within(lunchSection).getByText("Keep everyone fuelled")).toBeInTheDocument();
+    const lunchSection = screen.getByText("Lunch").closest(".mealplan-slot-card") as HTMLElement;
+    expect(within(lunchSection).getByText("Nothing planned yet")).toBeInTheDocument();
 
-    const dinnerSection = screen
-      .getByText("Dinner")
-      .closest(".meal-slot-section") as HTMLElement;
-    expect(
-      within(dinnerSection).getByText("Good food, great company"),
-    ).toBeInTheDocument();
+    const dinnerSection = screen.getByText("Dinner").closest(".mealplan-slot-card") as HTMLElement;
+    expect(within(dinnerSection).getByText("Nothing planned yet")).toBeInTheDocument();
+
+    // No Snacks slot is ever rendered on this screen.
+    expect(screen.queryByText("Snack")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Snacks?$/)).not.toBeInTheDocument();
   });
 
   it("switches to the Week view via the Day/Week control and fetches week data", async () => {
@@ -400,12 +457,11 @@ describe("Meal Plans — Family plan access", () => {
     const card = await screen.findByRole("button", {
       name: /fish\/mozzarella sticks with chips and broccoli/i,
     });
-    const main = card.querySelector(".meal-entry-main");
-    const heading = card.querySelector(".meal-entry-heading");
-    expect(main).toHaveClass("meal-entry-main");
-    expect(heading?.querySelector("strong")).toHaveTextContent(
-      "Fish/Mozzarella Sticks with Chips and Broccoli",
-    );
+    const body = card.querySelector(".mealplan-slot-body");
+    const title = card.querySelector(".mealplan-entry-title");
+    expect(body).toHaveClass("text-shrinkable");
+    expect(title).toHaveClass("text-wrap-anywhere");
+    expect(title).toHaveTextContent("Fish/Mozzarella Sticks with Chips and Broccoli");
     expect(card.querySelector(".avatar")).toBeInTheDocument();
     expect(card.querySelector(".avatar-stack")).toBeInTheDocument();
     // jsdom does not perform layout; CSS min-width/flex sizing is verified by
@@ -467,7 +523,7 @@ describe("Meal Plans — Add meal sheet", () => {
     await screen.findByRole("tab", { name: "Plan" });
     const breakfastSection = screen
       .getByText("Breakfast")
-      .closest(".meal-slot-section");
+      .closest(".mealplan-slot-card");
     if (!breakfastSection) throw new Error("Breakfast section not found");
     await user.click(
       within(breakfastSection as HTMLElement).getByRole("button", {
