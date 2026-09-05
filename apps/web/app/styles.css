@@ -7213,7 +7213,35 @@ html.native-shell .more-hero {
   padding: 12px max(1.25rem, var(--safe-right)) 32px max(1.25rem, var(--safe-left));
 }
 
-/* --- Family tab: people-focused household overview --- */
+/* --- Family tab: people-focused household overview ---
+   Visual-fidelity correction pass against the approved mockup: the page's
+   own AppHeader already reserves the top safe-area inset (see .app-header's
+   `calc(var(--safe-top) + 13px)` padding above) before Family's content
+   ever starts, so .standard-page's own generic top inset — sized for
+   pre-auth pages that render with no header at all — was pure extra space
+   on top of that on a real notched/Dynamic-Island device. .family-page
+   overrides just that one property. Every card below used to sit flush
+   against the next with no gap at all (no wrapping element ever set one)
+   and each card's own internal padding/row-height was generous "settings
+   page" sizing rather than the mockup's compact activity-summary density;
+   .family-page-stack now supplies the one shared gap between blocks, and
+   each card's padding/row sizing below is tightened to match. */
+.family-page {
+  padding-top: 1rem;
+}
+.family-page-heading {
+  margin-bottom: 0.85rem;
+}
+.family-page-heading h1 {
+  margin: 0.1rem 0;
+}
+.family-page-heading p.muted {
+  margin: 0.15rem 0 0;
+}
+.family-page-stack {
+  display: grid;
+  gap: 12px;
+}
 /* Horizontally-scrolling member strip — avatar + name + a real (never
    fabricated) status label underneath. Scrolls rather than wrapping so a
    large household never breaks the row's height or overflows the page.
@@ -7222,9 +7250,9 @@ html.native-shell .more-hero {
    the app actually knows about a member. */
 .family-status-row {
   display: flex;
-  gap: 1.1rem;
+  gap: 0.85rem;
   overflow-x: auto;
-  padding: 0.2rem 0.1rem 0.6rem;
+  padding: 0.1rem 0.1rem 0.3rem;
   scrollbar-width: none;
 }
 .family-status-row::-webkit-scrollbar {
@@ -7234,10 +7262,10 @@ html.native-shell .more-hero {
   align-items: center;
   display: grid;
   flex: none;
-  gap: 0.3rem;
+  gap: 0.25rem;
   justify-items: center;
   text-align: center;
-  width: 68px;
+  width: 72px;
 }
 .family-status-name {
   font-size: var(--font-small);
@@ -7261,7 +7289,10 @@ html.native-shell .more-hero {
 }
 
 .family-chat-card {
-  padding: 18px;
+  padding: 14px 16px;
+}
+.family-chat-card .section-heading {
+  margin-bottom: 0;
 }
 .family-chat-lock {
   align-items: center;
@@ -7282,15 +7313,15 @@ html.native-shell .more-hero {
 }
 .family-chat-messages {
   display: grid;
-  gap: 0.6rem;
-  margin-top: 0.6rem;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 .family-chat-message {
   border-bottom: 1px solid #f1ece1;
   display: grid;
   gap: 0.1rem;
   grid-template-columns: minmax(0, 1fr) auto;
-  padding-bottom: 0.6rem;
+  padding-bottom: 0.5rem;
 }
 .family-chat-message strong {
   font-size: var(--font-small);
@@ -7307,15 +7338,17 @@ html.native-shell .more-hero {
   text-align: right;
 }
 .family-chat-open {
-  margin-top: 0.4rem;
+  margin-top: 0.3rem;
   padding-left: 0;
 }
+/* Compact placeholder, not a centred empty state: the mockup's chat
+   preview card is only slightly taller than its header row. */
 .family-chat-placeholder {
   align-items: center;
   display: grid;
-  gap: 0.5rem;
+  gap: 0.35rem;
   justify-items: center;
-  padding: 1.2rem 0.5rem 0.4rem;
+  padding: 0.4rem 0.4rem 0.1rem;
   text-align: center;
 }
 .family-chat-placeholder svg {
@@ -7325,9 +7358,16 @@ html.native-shell .more-hero {
   color: var(--colour-muted);
   margin: 0;
 }
+.family-chat-placeholder button {
+  min-height: 38px;
+  padding: 0.3rem 0.9rem;
+}
 
 .family-feed-card {
-  padding: 18px;
+  padding: 14px 16px;
+}
+.family-feed-card .section-heading {
+  margin-bottom: 0.3rem;
 }
 .family-feed-list {
   display: grid;
@@ -7337,15 +7377,15 @@ html.native-shell .more-hero {
   border-bottom: 1px solid #f1ece1;
   color: inherit;
   display: grid;
-  gap: 0.7rem;
+  gap: 0.6rem;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  min-height: 52px;
-  padding: 0.55rem 0.1rem;
+  min-height: 42px;
+  padding: 0.4rem 0.1rem;
 }
 a.family-feed-row {
   background: none;
   box-shadow: none;
-  min-height: 52px;
+  min-height: 42px;
 }
 .family-feed-list > :last-child {
   border-bottom: 0;
@@ -7380,18 +7420,21 @@ a.family-feed-row {
 }
 
 .family-stats-card {
-  padding: 18px;
+  padding: 14px 16px;
+}
+.family-stats-card .section-heading {
+  margin-bottom: 0.3rem;
 }
 .family-stats-grid {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.5rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 0.6rem;
+  margin-top: 0.5rem;
 }
 .family-stat-tile {
   background: var(--colour-cream-light);
   border-radius: 0.85rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.6rem 0.7rem;
 }
 .family-stat-tile strong {
   display: block;
@@ -7412,7 +7455,7 @@ a.family-feed-row {
   display: flex;
   font-weight: 600;
   justify-content: space-between;
-  padding: 14px 4px;
+  padding: 10px 4px;
 }
 
 .family-everyone-grid {

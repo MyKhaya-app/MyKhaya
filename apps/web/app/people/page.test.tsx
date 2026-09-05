@@ -185,9 +185,9 @@ describe("Family — page intro and status row", () => {
 
   it("falls back to initials when a member has no avatar image", async () => {
     render(<Family />);
-    await findStatusRow();
+    const row = await findStatusRow();
 
-    const avatars = document.querySelectorAll(".avatar-lg");
+    const avatars = row.querySelectorAll(".avatar");
     expect(avatars.length).toBeGreaterThan(0);
     expect(Array.from(avatars).some((el) => el.textContent === "A")).toBe(true);
   });

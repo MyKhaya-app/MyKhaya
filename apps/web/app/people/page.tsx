@@ -27,14 +27,15 @@ import { localIsoDate, routineDueLabel } from "../home/routine-utils";
 // from the "Manage family members" link below) — this page only ever reads
 // Home-scoped data, never writes it.
 
-// No presence/location capability exists anywhere in the product today
-// (checked: Member carries no status/presence field, and the backend has
-// no such concept — see the task's own investigation requirement). Rather
-// than inventing one, or inferring physical location from anything
-// sensitive, the status row falls back to each member's real household
-// relationship — an honest, stable fact about them, never a fabricated
-// "Home"/"Away"/"Work" guess. There is deliberately no presence dot next
-// to the avatar either: even a neutral colour reads as an implied
+// Family status is currently presentation-only and is not derived from
+// live location/presence. No presence/location capability exists anywhere
+// in the product today (checked: Member carries no status/presence field,
+// and the backend has no such concept — see the task's own investigation
+// requirement). Rather than inventing one, or inferring physical location
+// from anything sensitive, the status row falls back to each member's real
+// household relationship — an honest, stable fact about them, never a
+// fabricated "Home"/"Away"/"Work" guess. There is deliberately no presence
+// dot next to the avatar either: even a neutral colour reads as an implied
 // online/location indicator, which would misrepresent what the app
 // actually knows.
 const relationshipStatusLabel: Record<HouseholdRelationship, string> = {
@@ -273,8 +274,8 @@ export default function Family() {
 
   return (
     <AppShellContent>
-      <main className="standard-page">
-        <div className="page-heading">
+      <main className="standard-page family-page">
+        <div className="page-heading family-page-heading">
           <div>
             <p className="eyebrow">{(activeHome?.name ?? "Your Home").toUpperCase()}</p>
             <h1>Family</h1>
@@ -288,141 +289,143 @@ export default function Family() {
           </p>
         )}
 
-        <div className="family-status-row" role="list" aria-label="Household members">
-          {members.map((member) => (
-            <div className="family-status-item" role="listitem" key={member.user_id}>
-              <Avatar
-                id={member.user_id}
-                name={member.display_name}
-                colour={member.colour}
-                avatarVersion={member.avatar_version}
-                size="lg"
-              />
-              <span className="family-status-name">{member.display_name}</span>
-              <span className="family-status-label">{relationshipStatusLabel[member.relationship]}</span>
-            </div>
-          ))}
-        </div>
-
-        <FamilyChatPreview enabled={FAMILY_CHAT_ENABLED} />
-
-        <section className="card family-feed-card">
-          <div className="section-heading">
-            <div>
-              <h2>Today with the family</h2>
-              <p className="muted">Here&rsquo;s what&rsquo;s coming up</p>
-            </div>
+        <div className="family-page-stack">
+          <div className="family-status-row" role="list" aria-label="Household members">
+            {members.map((member) => (
+              <div className="family-status-item" role="listitem" key={member.user_id}>
+                <Avatar
+                  id={member.user_id}
+                  name={member.display_name}
+                  colour={member.colour}
+                  avatarVersion={member.avatar_version}
+                  size="md"
+                />
+                <span className="family-status-name">{member.display_name}</span>
+                <span className="family-status-label">{relationshipStatusLabel[member.relationship]}</span>
+              </div>
+            ))}
           </div>
-          {feedRows.length === 0 ? (
-            <p className="empty-mini">Nothing on today — enjoy the quiet.</p>
-          ) : (
-            <div className="family-feed-list">
-              {feedRows.map((row) =>
-                row.href ? (
-                  <Link className="family-feed-row" href={row.href} key={row.key}>
-                    <FeedRowAvatar member={row.avatarMember} />
-                    <span className="family-feed-copy">
-                      <strong>{row.avatarMember?.display_name ?? "Family"}</strong>
-                      <span>{row.title}</span>
-                    </span>
-                    <span className="family-feed-time">{row.timeLabel}</span>
-                    <ChevronRight size={16} className="family-feed-chevron" aria-hidden="true" />
-                  </Link>
-                ) : (
-                  <div className="family-feed-row" key={row.key}>
-                    <FeedRowAvatar member={row.avatarMember} />
-                    <span className="family-feed-copy">
-                      <strong>{row.avatarMember?.display_name ?? "Family"}</strong>
-                      <span>{row.title}</span>
-                    </span>
-                    <span className="family-feed-time">{row.timeLabel}</span>
-                  </div>
-                ),
-              )}
-            </div>
-          )}
-        </section>
 
-        <section className="card family-stats-card">
-          <div className="section-heading">
-            <div>
-              <h2>Our week</h2>
-              <p className="muted">A quick overview</p>
-            </div>
-          </div>
-          <div className="family-stats-grid">
-            <div className="family-stat-tile">
-              <strong>{weekEventCount ?? "—"}</strong>
-              <span>Family events</span>
-            </div>
-            <div className="family-stat-tile">
-              <strong>{routinesLeftCount}</strong>
-              <span>Routines left</span>
-            </div>
-            <div className="family-stat-tile">
-              <strong>{remindersDueCount}</strong>
-              <span>Reminders due</span>
-            </div>
-            <div className="family-stat-tile family-stat-tile-text">
-              <strong>
-                {upcomingBirthdays.length === 0
-                  ? "No birthdays"
-                  : `${upcomingBirthdays.length} birthday${upcomingBirthdays.length === 1 ? "" : "s"}`}
-              </strong>
-              <span>This month</span>
-            </div>
-          </div>
-        </section>
+          <FamilyChatPreview enabled={FAMILY_CHAT_ENABLED} />
 
-        <Link className="family-manage-link" href="/settings/members">
-          Manage family members
-          <ChevronRight size={18} aria-hidden="true" />
-        </Link>
-
-        {members.length > 0 && (
-          <section aria-labelledby="family-everyone-title">
+          <section className="card family-feed-card">
             <div className="section-heading">
-              <h2 id="family-everyone-title">Everyone</h2>
+              <div>
+                <h2>Today with the family</h2>
+                <p className="muted">Here&rsquo;s what&rsquo;s coming up</p>
+              </div>
             </div>
-            <div className="family-everyone-grid">
-              {members.map((member) => {
-                const eventsToday = (summary?.today_events ?? []).filter((event) =>
-                  event.member_ids.includes(member.user_id),
-                ).length;
-                const remindersForMember = openReminders.filter(
-                  (reminder) => reminder.owner_user_id === member.user_id,
-                ).length;
-                return (
-                  <Link
-                    className="card family-everyone-card"
-                    href="/settings/members"
-                    key={member.user_id}
-                  >
-                    <Avatar
-                      id={member.user_id}
-                      name={member.display_name}
-                      colour={member.colour}
-                      avatarVersion={member.avatar_version}
-                      size="lg"
-                    />
-                    <span className="family-everyone-name">
-                      <strong>{member.display_name}</strong>
-                      <span className="role-badge">{relationshipStatusLabel[member.relationship]}</span>
-                    </span>
-                    <span className="family-everyone-summary">
-                      {eventsToday} event{eventsToday === 1 ? "" : "s"} · {remindersForMember} reminder
-                      {remindersForMember === 1 ? "" : "s"}
-                    </span>
-                    <span className="family-everyone-view">
-                      Manage member
-                      <ChevronRight size={14} aria-hidden="true" />
-                    </span>
-                  </Link>
-                );
-              })}
+            {feedRows.length === 0 ? (
+              <p className="empty-mini">Nothing on today — enjoy the quiet.</p>
+            ) : (
+              <div className="family-feed-list">
+                {feedRows.map((row) =>
+                  row.href ? (
+                    <Link className="family-feed-row" href={row.href} key={row.key}>
+                      <FeedRowAvatar member={row.avatarMember} />
+                      <span className="family-feed-copy">
+                        <strong>{row.avatarMember?.display_name ?? "Family"}</strong>
+                        <span>{row.title}</span>
+                      </span>
+                      <span className="family-feed-time">{row.timeLabel}</span>
+                      <ChevronRight size={16} className="family-feed-chevron" aria-hidden="true" />
+                    </Link>
+                  ) : (
+                    <div className="family-feed-row" key={row.key}>
+                      <FeedRowAvatar member={row.avatarMember} />
+                      <span className="family-feed-copy">
+                        <strong>{row.avatarMember?.display_name ?? "Family"}</strong>
+                        <span>{row.title}</span>
+                      </span>
+                      <span className="family-feed-time">{row.timeLabel}</span>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="card family-stats-card">
+            <div className="section-heading">
+              <div>
+                <h2>Our week</h2>
+                <p className="muted">A quick overview</p>
+              </div>
+            </div>
+            <div className="family-stats-grid">
+              <div className="family-stat-tile">
+                <strong>{weekEventCount ?? "—"}</strong>
+                <span>Family events</span>
+              </div>
+              <div className="family-stat-tile">
+                <strong>{routinesLeftCount}</strong>
+                <span>Routines left</span>
+              </div>
+              <div className="family-stat-tile">
+                <strong>{remindersDueCount}</strong>
+                <span>Reminders due</span>
+              </div>
+              <div className="family-stat-tile family-stat-tile-text">
+                <strong>
+                  {upcomingBirthdays.length === 0
+                    ? "No birthdays"
+                    : `${upcomingBirthdays.length} birthday${upcomingBirthdays.length === 1 ? "" : "s"}`}
+                </strong>
+                <span>This month</span>
+              </div>
             </div>
           </section>
-        )}
+
+          <Link className="family-manage-link" href="/settings/members">
+            Manage family members
+            <ChevronRight size={18} aria-hidden="true" />
+          </Link>
+
+          {members.length > 0 && (
+            <section aria-labelledby="family-everyone-title">
+              <div className="section-heading">
+                <h2 id="family-everyone-title">Everyone</h2>
+              </div>
+              <div className="family-everyone-grid">
+                {members.map((member) => {
+                  const eventsToday = (summary?.today_events ?? []).filter((event) =>
+                    event.member_ids.includes(member.user_id),
+                  ).length;
+                  const remindersForMember = openReminders.filter(
+                    (reminder) => reminder.owner_user_id === member.user_id,
+                  ).length;
+                  return (
+                    <Link
+                      className="card family-everyone-card"
+                      href="/settings/members"
+                      key={member.user_id}
+                    >
+                      <Avatar
+                        id={member.user_id}
+                        name={member.display_name}
+                        colour={member.colour}
+                        avatarVersion={member.avatar_version}
+                        size="lg"
+                      />
+                      <span className="family-everyone-name">
+                        <strong>{member.display_name}</strong>
+                        <span className="role-badge">{relationshipStatusLabel[member.relationship]}</span>
+                      </span>
+                      <span className="family-everyone-summary">
+                        {eventsToday} event{eventsToday === 1 ? "" : "s"} · {remindersForMember} reminder
+                        {remindersForMember === 1 ? "" : "s"}
+                      </span>
+                      <span className="family-everyone-view">
+                        Manage member
+                        <ChevronRight size={14} aria-hidden="true" />
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+        </div>
       </main>
     </AppShellContent>
   );
