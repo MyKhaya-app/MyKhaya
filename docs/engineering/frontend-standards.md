@@ -10,3 +10,14 @@
 - Implement loading, empty, success and failure states deliberately.
 - Do not use broad CSP exceptions to fix implementation problems.
 - Test critical journeys with Playwright.
+
+## Shared module controls
+
+Reuse established MyKhaya interaction patterns across modules. Segmented
+selectors use the shared `.rr-segmented` container and `.rr-segment` buttons,
+with the appropriate active-state class. A module's primary create action uses
+the shared `.rr-fab` floating `+ Add` control, including its bottom-navigation
+and safe-area clearance. Do not introduce an inline module-specific `+ New`
+variant when the module has a single primary creation flow; preserve the
+existing search, content width, and module-specific content around these
+shared controls.

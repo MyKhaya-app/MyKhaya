@@ -144,12 +144,12 @@ export default function ListsPage() {
         </div>
         <FormStatus error={error} />
 
-        <div className="meal-tabs" role="tablist" aria-label="Lists sections">
+        <div className="rr-segmented" role="tablist" aria-label="Lists sections">
           <button
             type="button"
             role="tab"
             aria-selected={tab === "mine"}
-            className={tab === "mine" ? "toggle-active" : "secondary"}
+            className={`rr-segment${tab === "mine" ? " rr-segment-active" : ""}`}
             onClick={() => setTab("mine")}
           >
             My Lists
@@ -158,7 +158,7 @@ export default function ListsPage() {
             type="button"
             role="tab"
             aria-selected={tab === "templates"}
-            className={tab === "templates" ? "toggle-active" : "secondary"}
+            className={`rr-segment${tab === "templates" ? " rr-segment-active" : ""}`}
             onClick={() => setTab("templates")}
           >
             Templates
@@ -181,9 +181,6 @@ export default function ListsPage() {
 
             <div className="section-heading">
               <h2>Household Lists</h2>
-              <button type="button" className="lists-new-button" onClick={() => setCreating(true)}>
-                <Plus size={16} aria-hidden="true" /> New list
-              </button>
             </div>
 
             {lists.length === 0 ? (
@@ -235,6 +232,11 @@ export default function ListsPage() {
             )}
           </>
         )}
+
+        <button type="button" className="rr-fab" aria-label="Add" onClick={() => setCreating(true)}>
+          <Plus size={22} aria-hidden="true" />
+          <span aria-hidden="true">Add</span>
+        </button>
 
         {actionsFor && (
           <BottomSheet title={actionsFor.name} onDismiss={() => setActionsFor(null)}>

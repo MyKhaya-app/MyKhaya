@@ -208,7 +208,7 @@ describe("Lists — Family plan overview", () => {
     expect(screen.getByText(/complete · 6 items/i)).toBeInTheDocument();
   });
 
-  it("creates a new list from the New list sheet", async () => {
+  it("uses the shared segmented control and creates a new list from the floating Add action", async () => {
     (api.createList as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "list-9",
       name: "Packing",
@@ -223,7 +223,13 @@ describe("Lists — Family plan overview", () => {
 
     render(<ListsPage />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /new list/i }));
+    const add = await screen.findByRole("button", { name: "Add" });
+    const segmented = screen.getByRole("tablist", { name: "Lists sections" });
+    expect(segmented).toHaveClass("rr-segmented");
+    expect(screen.getByRole("tab", { name: "My Lists" })).toHaveClass("rr-segment-active");
+
+    expect(add).toHaveClass("rr-fab");
+    await user.click(add);
     await user.type(screen.getByLabelText(/list name/i), "Packing");
     await user.click(screen.getByRole("button", { name: /create list/i }));
 
@@ -233,7 +239,7 @@ describe("Lists — Family plan overview", () => {
   it("filters lists by search", async () => {
     (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
     render(<ListsPage />);
-    await screen.findByRole("button", { name: /new list/i });
+    await screen.findByRole("button", { name: "Add" });
     fireEvent.change(screen.getByLabelText(/search lists/i), { target: { value: "pack" } });
 
     await waitFor(
