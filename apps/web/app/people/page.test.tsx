@@ -143,6 +143,15 @@ describe("Family — page intro and status row", () => {
     expect(screen.getByText("What's happening with your people".replace("'", "’"))).toBeInTheDocument();
   });
 
+  it("uses the shared .module-page compact-spacing standard beneath the global header, not a page-local override", async () => {
+    const { container } = render(<Family />);
+    await screen.findByRole("heading", { name: "Family", level: 1 });
+
+    const main = container.querySelector("main");
+    expect(main).toHaveClass("standard-page");
+    expect(main).toHaveClass("module-page");
+  });
+
   it("does not render a non-functional Family activity control — there is no activity destination yet", async () => {
     render(<Family />);
     await screen.findByRole("heading", { name: "Family", level: 1 });

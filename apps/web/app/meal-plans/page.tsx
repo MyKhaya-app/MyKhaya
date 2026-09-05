@@ -227,7 +227,7 @@ export default function MealPlansPage() {
   if (!activeHomeId || !billing || moduleReleased === null) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <p role="status">Loading Meal Plans…</p>
         </main>
       </AppShellContent>
@@ -237,7 +237,7 @@ export default function MealPlansPage() {
   if (!billing.meals_enabled) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">Meal Plans</p>
@@ -256,7 +256,7 @@ export default function MealPlansPage() {
   if (!moduleReleased) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">Meal Plans</p>
@@ -274,7 +274,7 @@ export default function MealPlansPage() {
 
   return (
     <AppShellContent>
-      <main className="standard-page meal-plans-page">
+      <main className="standard-page module-page meal-plans-page">
         <div className="page-heading meal-plans-hero">
           <div className="meal-plans-hero-text">
             <p className="eyebrow">

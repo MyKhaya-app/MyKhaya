@@ -288,7 +288,7 @@ export default function Family() {
 
   return (
     <AppShellContent>
-      <main className="standard-page family-page">
+      <main className="standard-page module-page">
         <div className="page-heading family-page-heading">
           <div>
             <p className="eyebrow">{(activeHome?.name ?? "Your Home").toUpperCase()}</p>

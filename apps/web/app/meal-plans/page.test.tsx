@@ -142,6 +142,23 @@ describe("Meal Plans — Family plan access", () => {
     expect(screen.getAllByText("Dinner").length).toBeGreaterThan(0);
   });
 
+  it("uses the shared .module-page compact-spacing standard, not a bespoke top-offset or the pre-auth .standard-page top inset alone", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    const { container } = render(<MealPlansPage />);
+    await screen.findByRole("tab", { name: "Plan" });
+
+    const main = container.querySelector("main");
+    expect(main).toHaveClass("standard-page");
+    expect(main).toHaveClass("module-page");
+    // A page-local class asserting its own top offset (the pattern this
+    // standard replaces) would be a regression back to chasing this issue
+    // module by module — Meal Plans must rely on the shared class only.
+    expect(main?.className).not.toMatch(/meal-plans-top|meal-plans-hero-offset/);
+  });
+
   it("renders the hero subtitle and the 'Good food, happier days' artwork as a real image asset", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,

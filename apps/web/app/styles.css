@@ -1305,7 +1305,13 @@ html.native-shell .bottom-nav {
    previous version of this rule required an additional JS-toggled class
    on the document root, added by a dedicated root-layout-mounted
    component, before any padding applied at all — removed once it was
-   clear plain env()'s own zero fallback already made that unnecessary). */
+   clear plain env()'s own zero fallback already made that unnecessary).
+
+   Module pages mounted inside AppShell (i.e. almost every authenticated
+   page) should begin close beneath the global app header, not repeat
+   this same top inset on top of the header's own — see `.module-page`
+   further down (search for "MyKhaya module-page spacing standard") for
+   the shared standard class and why it lives there rather than here. */
 .home-page {
   margin: auto;
   max-width: 640px;
@@ -7364,22 +7370,61 @@ html.native-shell .more-hero {
   padding: 12px max(1.25rem, var(--safe-right)) 32px max(1.25rem, var(--safe-left));
 }
 
-/* --- Family tab: people-focused household overview ---
-   Visual-fidelity correction pass against the approved mockup: the page's
-   own AppHeader already reserves the top safe-area inset (see .app-header's
-   `calc(var(--safe-top) + 13px)` padding above) before Family's content
-   ever starts, so .standard-page's own generic top inset — sized for
-   pre-auth pages that render with no header at all — was pure extra space
-   on top of that on a real notched/Dynamic-Island device. .family-page
-   overrides just that one property. Every card below used to sit flush
-   against the next with no gap at all (no wrapping element ever set one)
-   and each card's own internal padding/row-height was generous "settings
-   page" sizing rather than the mockup's compact activity-summary density;
-   .family-page-stack now supplies the one shared gap between blocks, and
-   each card's padding/row sizing below is tightened to match. */
-.family-page {
-  padding-top: 1rem;
+/* --- MyKhaya module-page spacing standard ---------------------------------
+   .standard-page's own top inset (defined near the top of this file, see
+   its safe-area strategy comment there) is sized for pages with NO
+   AppShell header at all (pre-auth routes like calendar-shares/accept),
+   where the page itself is the only thing that can ever clear the notch.
+   Every authenticated module page sits inside AppShell instead, below
+   .app-header — a sticky element that already reserves the exact same
+   safe-area inset itself (see `.app-header`'s
+   `padding: calc(var(--safe-top) + 13px) ...` further up). Stacking
+   .standard-page's own safe-top-sized padding on top of that is pure
+   extra dead space on any device with a real inset (a notch, an installed
+   iOS PWA, or the Capacitor native shell) — it was never compensating for
+   anything the header hadn't already handled.
+
+   THE STANDARD: every module page mounted inside AppShell should add
+   `.module-page` alongside `.standard-page` (or a page's own equivalent
+   root) so it begins compactly beneath the header — roughly 20–28px of
+   breathing room on mobile, slightly more on desktop — rather than
+   re-deriving safe-top itself. Do not give an individual module its own
+   bespoke large top margin/padding to solve this; add `.module-page`
+   instead, so the fix (and any future refinement to it) lives in one
+   place. .standard-page's own safe-top handling remains untouched and
+   correct for the pre-auth pages that still need it — this class only
+   ever overrides the one `padding-top` property, on pages that opt in by
+   adding it.
+
+   Deliberately declared here, after every `.standard-page` rule in this
+   file (including its `@media (max-width: 800px)`/`(max-width: 360px)`
+   overrides above) rather than near .standard-page's own definition: two
+   equal-specificity single-class rules cascade by source order, so a
+   `.module-page` placed earlier than one of those media-query overrides
+   would lose to it at the very mobile widths this exists to fix. Keep any
+   future edit to this rule below the last `.standard-page` declaration in
+   the file. First proven on the Family/People redesign (see
+   .family-page-heading below), now generalised here for reuse. */
+.module-page {
+  padding-top: 1.4rem;
 }
+@media (min-width: 800px) {
+  .module-page {
+    padding-top: 1.6rem;
+  }
+}
+
+/* --- Family tab: people-focused household overview ---
+   The compact top spacing here now comes from the shared `.module-page`
+   class (see its own docstring immediately above) rather than a bespoke
+   `.family-page` rule — this was the page that first proved the fix,
+   since generalised as the standard for every module page. Every
+   card below used to sit flush against the next with no gap at all (no
+   wrapping element ever set one) and each card's own internal
+   padding/row-height was generous "settings page" sizing rather than the
+   mockup's compact activity-summary density; .family-page-stack now
+   supplies the one shared gap between blocks, and each card's
+   padding/row sizing below is tightened to match. */
 .family-page-heading {
   margin-bottom: 0.85rem;
 }
