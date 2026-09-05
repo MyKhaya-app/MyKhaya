@@ -55,7 +55,7 @@ beforeEach(() => {
 // asserted verbatim so a future edit can't silently drift the copy.
 const MOCKUP_ROWS: Record<string, [string, string]> = {
   "Home settings": ["Name, details, region and ownership", "/settings/home"],
-  "Members and roles": ["Relationships, invitations and access", "/people"],
+  "Members and roles": ["Relationships, invitations and access", "/settings/members"],
   "Child permissions": ["Guardians, age bands and privacy", "/khaya-control-centre/children"],
   "Calendar tags": ["Colour and organise your events", "/settings/calendar-tags"],
   "Home calendars": ["Manage shared calendars and permissions", "/calendar/calendars"],

@@ -638,7 +638,7 @@ export default function HomePage() {
                 </Link>
               )}
               {canInviteMore && (activeHome?.capabilities ?? []).includes("members.invite") && (
-                <Link className="quick-action" href="/people">
+                <Link className="quick-action" href="/settings/members">
                   <UserPlus size={20} aria-hidden="true" />
                   Invite family
                 </Link>

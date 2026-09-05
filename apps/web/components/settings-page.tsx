@@ -70,7 +70,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
     label: "Home & people",
     items: [
       { name: "Home settings", detail: "Name, details, region and ownership", href: "/settings/home", icon: Home, tone: "sage", gate: "adult" },
-      { name: "Members and roles", detail: "Relationships, invitations and access", href: "/people", icon: Users, tone: "cream", gate: "adult" },
+      { name: "Members and roles", detail: "Relationships, invitations and access", href: "/settings/members", icon: Users, tone: "cream", gate: "adult" },
       { name: "Child permissions", detail: "Guardians, age bands and privacy", href: "/khaya-control-centre/children", icon: Baby, tone: "coral", gate: "homeAdmin" },
     ],
   },

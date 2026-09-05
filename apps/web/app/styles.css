@@ -7212,3 +7212,245 @@ select.plan-meal-field-input {
 html.native-shell .more-hero {
   padding: 12px max(1.25rem, var(--safe-right)) 32px max(1.25rem, var(--safe-left));
 }
+
+/* --- Family tab: people-focused household overview --- */
+/* Horizontally-scrolling member strip — avatar + name + a real (never
+   fabricated) status label underneath. Scrolls rather than wrapping so a
+   large household never breaks the row's height or overflows the page.
+   Deliberately no presence dot here — see the docstring in
+   app/people/page.tsx for why even a neutral one would misrepresent what
+   the app actually knows about a member. */
+.family-status-row {
+  display: flex;
+  gap: 1.1rem;
+  overflow-x: auto;
+  padding: 0.2rem 0.1rem 0.6rem;
+  scrollbar-width: none;
+}
+.family-status-row::-webkit-scrollbar {
+  display: none;
+}
+.family-status-item {
+  align-items: center;
+  display: grid;
+  flex: none;
+  gap: 0.3rem;
+  justify-items: center;
+  text-align: center;
+  width: 68px;
+}
+.family-status-name {
+  font-size: var(--font-small);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+.family-status-label {
+  color: var(--colour-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+.family-generic-avatar {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest-dark);
+}
+
+.family-chat-card {
+  padding: 18px;
+}
+.family-chat-lock {
+  align-items: center;
+  color: var(--colour-muted);
+  display: flex;
+  font-size: var(--font-small);
+  gap: 0.3rem;
+  margin: 0.15rem 0 0;
+}
+.family-chat-unread {
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-forest-dark);
+  flex: none;
+  font-size: var(--font-small);
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+}
+.family-chat-messages {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+.family-chat-message {
+  border-bottom: 1px solid #f1ece1;
+  display: grid;
+  gap: 0.1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-bottom: 0.6rem;
+}
+.family-chat-message strong {
+  font-size: var(--font-small);
+}
+.family-chat-message p {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.family-chat-time {
+  color: var(--colour-muted);
+  font-size: var(--font-micro);
+  text-align: right;
+}
+.family-chat-open {
+  margin-top: 0.4rem;
+  padding-left: 0;
+}
+.family-chat-placeholder {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  padding: 1.2rem 0.5rem 0.4rem;
+  text-align: center;
+}
+.family-chat-placeholder svg {
+  color: var(--colour-sage);
+}
+.family-chat-placeholder p {
+  color: var(--colour-muted);
+  margin: 0;
+}
+
+.family-feed-card {
+  padding: 18px;
+}
+.family-feed-list {
+  display: grid;
+}
+.family-feed-row {
+  align-items: center;
+  border-bottom: 1px solid #f1ece1;
+  color: inherit;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-height: 52px;
+  padding: 0.55rem 0.1rem;
+}
+a.family-feed-row {
+  background: none;
+  box-shadow: none;
+  min-height: 52px;
+}
+.family-feed-list > :last-child {
+  border-bottom: 0;
+}
+.family-feed-copy {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+.family-feed-copy strong {
+  font-size: var(--font-small);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.family-feed-copy span {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.family-feed-time {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+.family-feed-chevron {
+  color: var(--colour-muted);
+  flex: none;
+}
+
+.family-stats-card {
+  padding: 18px;
+}
+.family-stats-grid {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0.6rem;
+}
+.family-stat-tile {
+  background: var(--colour-cream-light);
+  border-radius: 0.85rem;
+  padding: 0.7rem 0.8rem;
+}
+.family-stat-tile strong {
+  display: block;
+  font-size: var(--font-title);
+  line-height: 1.1;
+}
+.family-stat-tile span {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+}
+.family-stat-tile.family-stat-tile-text strong {
+  font-size: var(--font-body);
+}
+
+.family-manage-link {
+  align-items: center;
+  color: var(--colour-forest-dark);
+  display: flex;
+  font-weight: 600;
+  justify-content: space-between;
+  padding: 14px 4px;
+}
+
+.family-everyone-grid {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.family-everyone-card {
+  align-items: flex-start;
+  color: inherit;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  padding: 16px 10px;
+  text-align: center;
+}
+.family-everyone-card .role-badge {
+  font-size: var(--font-micro);
+}
+.family-everyone-name {
+  display: grid;
+  gap: 0.15rem;
+  justify-items: center;
+  min-width: 0;
+  width: 100%;
+}
+.family-everyone-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+.family-everyone-summary {
+  color: var(--colour-muted);
+  font-size: var(--font-micro);
+}
+.family-everyone-view {
+  color: var(--colour-forest-dark);
+  font-size: var(--font-small);
+  font-weight: 600;
+}

@@ -1,42 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import type { BillingStatus, Home, Member } from "@mykhaya/shared-types";
-import People from "./page";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import type { BirthdayEntry, Home, Member, Reminder, Routine } from "@mykhaya/shared-types";
+import Family from "./page";
 
-let activeHomeOverride: Home | undefined;
+// The Family tab — now a people-focused household overview (member
+// administration moved to /settings/members, reached via "Manage family
+// members" below and via More → "Members and roles"). See
+// app/settings/members/page.test.tsx for the moved admin-flow coverage.
 
-// Locked-state coverage for the Free plan enforcement pass: "Add member"
-// must not render as a normal action on a Free Home at its member limit,
-// and Extended Family/Friend must show the Family-only treatment — see
-// docs/architecture/commercial-entitlements.md "Free plan enforcement
-// pass".
-
-// A stable router object matters here: AppShell's bootstrap() effect depends
-// on `router` (via useCallback), so a mock returning a fresh object identity
-// on every call would re-trigger that effect (and its "Checking your
-// MyKhaya session…" loading state) on every unrelated re-render.
-const mockRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
-  useRouter: () => mockRouter,
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/people",
 }));
 
-// A mutable indirection so individual tests can swap in a Family Home with
-// invite/manage capabilities (see setActiveHomeForTest below) without
-// re-declaring the whole vi.mock factory per test.
-function currentActiveHome(): Home {
-  return activeHomeOverride ?? freeHome();
+async function waitForPageReady(): Promise<void> {
+  await waitFor(() => {
+    const row = document.querySelector(".family-status-row");
+    if (!row || row.children.length === 0) throw new Error("status row not ready");
+  });
 }
-function setActiveHomeForTest(home: Home | undefined) {
-  activeHomeOverride = home;
+
+function home(): Home {
+  return {
+    id: "home-1",
+    name: "Hales Home",
+    role: "owner",
+    relationship: "home_admin",
+    permission_profile: "home_admin",
+    capabilities: ["members.invite", "members.manage_relationships"],
+    member_count: 2,
+    child_login_code: "1234",
+  };
 }
 
 vi.mock("@/components/use-active-home", () => ({
   useActiveHome: () => ({
-    activeHome: currentActiveHome(),
+    activeHome: home(),
     activeHomeId: "home-1",
-    homes: [currentActiveHome()],
+    homes: [home()],
     setActiveHomeId: vi.fn(),
     loading: false,
   }),
@@ -48,37 +49,27 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      me: vi.fn().mockResolvedValue({ id: "u1", display_name: "Owner" }),
-      members: vi.fn().mockResolvedValue([ownerMember()]),
-      listInvitations: vi.fn().mockResolvedValue([]),
-      billingStatus: vi.fn().mockResolvedValue(freeBillingStatus()),
-      post: vi.fn().mockResolvedValue({}),
-      patch: vi.fn().mockResolvedValue({}),
+      me: vi.fn(),
+      members: vi.fn(),
+      homeSummary: vi.fn(),
+      routines: vi.fn(),
+      reminders: vi.fn(),
+      billingStatus: vi.fn(),
+      mealPlanDay: vi.fn(),
+      birthdays: vi.fn(),
+      listEvents: vi.fn(),
     },
   };
 });
 
 const { api } = await import("@mykhaya/api-client");
 
-function freeHome(): Home {
-  return {
-    id: "home-1",
-    name: "Hales Home",
-    role: "owner",
-    relationship: "home_admin",
-    permission_profile: "home_admin",
-    capabilities: ["members.invite", "members.manage_relationships"],
-    member_count: 1,
-    child_login_code: "1234",
-  };
-}
-
-function ownerMember(): Member {
+function member(overrides: Partial<Member> = {}): Member {
   return {
     membership_id: "m1",
     user_id: "u1",
-    display_name: "Owner",
-    email: "owner@example.com",
+    display_name: "Anthony",
+    email: "anthony@example.com",
     role: "owner",
     relationship: "home_admin",
     permission_profile: "home_admin",
@@ -86,15 +77,16 @@ function ownerMember(): Member {
     shared_resources: [],
     colour: "teal",
     avatar_version: null,
+    ...overrides,
   };
 }
 
-function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatus {
+function freeBillingStatus() {
   return {
-    stored_plan: "free",
-    provider: "free",
-    status: "active",
-    effective_plan: "free",
+    stored_plan: "free" as const,
+    provider: "free" as const,
+    status: "active" as const,
+    effective_plan: "free" as const,
     effective_status_reason: null,
     billing_interval: null,
     price: null,
@@ -113,278 +105,346 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
     meals_enabled: false,
     lists_enabled: false,
     wishlists_enabled: false,
-    ...overrides,
-  };
-}
-
-function familyHomeWithGrowthRoom(): Home {
-  return {
-    ...freeHome(),
-    capabilities: ["members.invite", "members.manage_relationships"],
-  };
-}
-
-function familyBillingStatus(): BillingStatus {
-  return freeBillingStatus({
-    member_usage: { count: 1, limit: null, over_limit: false },
-    external_invites_enabled: true,
-  });
-}
-
-function partnerMember(): Member {
-  return {
-    membership_id: "m2",
-    user_id: "u2",
-    display_name: "Partner Person",
-    email: "partner@example.com",
-    role: "adult_member",
-    relationship: "partner",
-    permission_profile: "standard_partner",
-    permission_overrides: {},
-    shared_resources: [],
-    colour: "sage",
-    avatar_version: null,
-  };
-}
-
-function childMember(): Member {
-  return {
-    membership_id: "m3",
-    user_id: "u3",
-    display_name: "Young Person",
-    email: null,
-    role: "member",
-    relationship: "child",
-    permission_profile: "child_restricted",
-    permission_overrides: {},
-    shared_resources: [],
-    colour: "mustard",
-    avatar_version: null,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  setActiveHomeForTest(undefined);
-  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
-  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember()]);
-  (api.listInvitations as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Anthony" });
+  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+    member(),
+    member({ membership_id: "m2", user_id: "u2", display_name: "Megan", relationship: "partner", colour: "sage" }),
+  ]);
+  (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+    home_name: "Hales Home",
+    member_count: 2,
+    pending_invitations: 0,
+    today_events: [],
+    next_event: null,
+  });
+  (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(freeBillingStatus());
+  (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({ date: "2026-09-05", entries: [] });
+  (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
 });
 
-describe("People page — Free plan locked states", () => {
-  it("hides Add member and shows the Family upsell when the Home is at its member limit", async () => {
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember()]);
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(freeBillingStatus());
+describe("Family — page intro and status row", () => {
+  it("renders for a normal Home, with the eyebrow/heading/subtitle", async () => {
+    render(<Family />);
 
-    render(<People />);
+    expect(await screen.findByRole("heading", { name: "Family", level: 1 })).toBeInTheDocument();
+    expect(screen.getByText("HALES HOME")).toBeInTheDocument();
+    expect(screen.getByText("What's happening with your people".replace("'", "’"))).toBeInTheDocument();
+  });
 
-    await waitFor(() => {
-      expect(screen.getByText("Owner")).toBeInTheDocument();
+  it("does not render a non-functional Family activity control — there is no activity destination yet", async () => {
+    render(<Family />);
+    await screen.findByRole("heading", { name: "Family", level: 1 });
+
+    expect(screen.queryByRole("button", { name: /family activity/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /family activity/i })).not.toBeInTheDocument();
+  });
+
+  async function findStatusRow(): Promise<HTMLElement> {
+    return waitFor(() => {
+      const row = document.querySelector(".family-status-row");
+      if (!row || row.children.length === 0) throw new Error("status row not ready");
+      return row as HTMLElement;
     });
-
-    expect(screen.queryByRole("button", { name: /add member/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/invite household members/i)).toBeInTheDocument();
-    expect(screen.getByText(/view family plan/i)).toBeInTheDocument();
-  });
-
-  it("shows Add member once the plan allows growing membership", async () => {
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember()]);
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
-      freeBillingStatus({ member_usage: { count: 1, limit: null, over_limit: false } }),
-    );
-
-    render(<People />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /add member/i })).toBeInTheDocument();
-    });
-  });
-});
-
-// Coverage for the new Adult relationship (see docs task "Add member —
-// Adult relationship"): it must appear in the Add-member picker between
-// Partner and Child, follow the normal adult invite flow (no managed-Child
-// account behaviour), and be counted under the Family screen's "Adults"
-// filter alongside Home Admin/Partner — without changing how Partner or
-// Child themselves behave.
-describe("People page — Adult relationship", () => {
-  beforeEach(() => {
-    setActiveHomeForTest(familyHomeWithGrowthRoom());
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
-  });
-
-  async function openAddMemberSheet() {
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
-    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
-    return screen.getByLabelText("Relationship");
   }
 
-  it("lists Adult between Partner and Child in the Add-member relationship options", async () => {
-    const select = await openAddMemberSheet();
-    const optionLabels = within(select)
-      .getAllByRole("option")
-      .map((option) => option.textContent);
-    const partnerIndex = optionLabels.indexOf("Partner");
-    const adultIndex = optionLabels.indexOf("Adult");
-    const childIndex = optionLabels.indexOf("Child");
+  it("shows every real Home member in the status row, with a real relationship label, never a fabricated location", async () => {
+    render(<Family />);
+    const row = within(await findStatusRow());
 
-    expect(partnerIndex).toBeGreaterThanOrEqual(0);
-    expect(adultIndex).toBe(partnerIndex + 1);
-    expect(childIndex).toBe(adultIndex + 1);
+    expect(row.getByText("Anthony")).toBeInTheDocument();
+    expect(row.getByText("Megan")).toBeInTheDocument();
+    expect(row.getByText("Home Admin")).toBeInTheDocument();
+    expect(row.getByText("Partner")).toBeInTheDocument();
+    // No invented presence words anywhere on the page.
+    for (const fabricated of ["Home", "Away", "At work", "At school"]) {
+      expect(screen.queryByText(fabricated)).not.toBeInTheDocument();
+    }
+    // No presence dot either — even a neutral one implies an online/location
+    // signal the app doesn't actually have.
+    expect(document.querySelector(".family-status-dot")).not.toBeInTheDocument();
   });
 
-  it("follows the normal adult invite flow for Adult — no managed-Child callout, email field shown", async () => {
-    const select = await openAddMemberSheet();
-    const user = userEvent.setup();
-    await user.selectOptions(select, "adult");
+  it("does not hard-code member names — a different Home's members render instead", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      member({ user_id: "u9", display_name: "Someone Else", relationship: "adult" }),
+    ]);
+    render(<Family />);
+    const row = within(await findStatusRow());
 
-    expect(screen.queryByText(/managed profile/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/no adult invitation will be sent/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(row.getByText("Someone Else")).toBeInTheDocument();
+    expect(screen.queryByText("Anthony")).not.toBeInTheDocument();
   });
 
-  it("submits an Adult invitation with the relationship field set to 'adult'", async () => {
-    const select = await openAddMemberSheet();
-    const user = userEvent.setup();
-    await user.selectOptions(select, "adult");
-    await user.type(screen.getByLabelText("Email"), "housemate@example.com");
-    await user.click(screen.getByRole("button", { name: /send invitation/i }));
+  it("falls back to initials when a member has no avatar image", async () => {
+    render(<Family />);
+    await findStatusRow();
 
-    await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith(
-        "/invitations",
-        expect.objectContaining({ relationship: "adult" }),
+    const avatars = document.querySelectorAll(".avatar-lg");
+    expect(avatars.length).toBeGreaterThan(0);
+    expect(Array.from(avatars).some((el) => el.textContent === "A")).toBe(true);
+  });
+
+  it("scrolls rather than breaking layout with a large household", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue(
+      Array.from({ length: 12 }, (_, index) =>
+        member({ membership_id: `m${index}`, user_id: `u${index}`, display_name: `Person ${index}` }),
       ),
     );
-  });
+    render(<Family />);
+    const row = within(await findStatusRow());
 
-  it("counts Adult members under the Adults filter alongside Home Admin and Partner", async () => {
-    const adultMember: Member = {
-      membership_id: "m4",
-      user_id: "u4",
-      display_name: "Housemate Adult",
-      email: "housemate@example.com",
-      role: "adult_member",
-      relationship: "adult",
-      permission_profile: "standard_partner",
-      permission_overrides: {},
-      shared_resources: [],
-      colour: "coral",
-      avatar_version: null,
-    };
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
-      ownerMember(),
-      partnerMember(),
-      adultMember,
-      childMember(),
-    ]);
-
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
-
-    const adultsButton = screen.getByRole("button", { name: /^adults \d+$/i });
-    expect(within(adultsButton).getByText("3")).toBeInTheDocument();
-
-    await userEvent.setup().click(adultsButton);
-    expect(screen.getByText("Owner")).toBeInTheDocument();
-    expect(screen.getByText("Partner Person")).toBeInTheDocument();
-    expect(screen.getByText("Housemate Adult")).toBeInTheDocument();
-    expect(screen.queryByText("Young Person")).not.toBeInTheDocument();
-  });
-
-  it("still shows the Adult relationship label on that member's card", async () => {
-    const adultMember: Member = {
-      membership_id: "m4",
-      user_id: "u4",
-      display_name: "Housemate Adult",
-      email: "housemate@example.com",
-      role: "adult_member",
-      relationship: "adult",
-      permission_profile: "standard_partner",
-      permission_overrides: {},
-      shared_resources: [],
-      colour: "coral",
-      avatar_version: null,
-    };
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember(), adultMember]);
-
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Housemate Adult")).toBeInTheDocument());
-    expect(screen.getByText("Adult", { selector: ".role-badge" })).toBeInTheDocument();
-  });
-
-  it("leaves Partner members working unchanged (label, filter, no child callout)", async () => {
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember(), partnerMember()]);
-
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Partner Person")).toBeInTheDocument());
-    expect(screen.getByText("Partner", { selector: ".role-badge" })).toBeInTheDocument();
-
-    const adultsButton = screen.getByRole("button", { name: /^adults \d+$/i });
-    expect(within(adultsButton).getByText("2")).toBeInTheDocument();
-  });
-
-  it("leaves Child members working unchanged (label, filter, manage-privacy link instead of a relationship selector)", async () => {
-    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember(), childMember()]);
-
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Young Person")).toBeInTheDocument());
-    expect(screen.getByText("Child", { selector: ".role-badge" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /manage child privacy/i })).toBeInTheDocument();
-
-    const childrenButton = screen.getByRole("button", { name: /^children \d+$/i });
-    expect(within(childrenButton).getByText("1")).toBeInTheDocument();
+    expect(row.getByText("Person 0")).toBeInTheDocument();
+    expect(row.getByText("Person 11")).toBeInTheDocument();
+    const rowEl = document.querySelector(".family-status-row");
+    expect(rowEl?.children.length).toBe(12);
   });
 });
 
-// External Calendar Sharing replaces Extended Family/Friend as a Home-member
-// relationship (see mykhaya.routers.calendar_sharing) — new invitations must
-// ask "does this person live in your household?" first, route "no" to
-// calendar sharing instead of sending an invitation, and never offer
-// Extended Family/Friend as a fresh Add-member option any more.
-describe("People page — external sharing replaces Extended Family/Friend", () => {
-  beforeEach(() => {
-    setActiveHomeForTest(familyHomeWithGrowthRoom());
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
+describe("Family — chat placeholder", () => {
+  it("renders the coming-soon placeholder safely, with no unread pill and no real messages", async () => {
+    render(<Family />);
+    await waitForPageReady();
+
+    expect(screen.getByRole("heading", { name: "Family chat" })).toBeInTheDocument();
+    expect(screen.getByText("Private to your family")).toBeInTheDocument();
+    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+    expect(screen.queryByText(/new$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/end-to-end encrypted/i)).not.toBeInTheDocument();
+    const openChat = screen.getByRole("button", { name: /open chat/i });
+    expect(openChat).toBeDisabled();
   });
 
-  async function openAddMemberSheet() {
-    render(<People />);
-    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
-  }
+  it("never calls a chat/messaging API — the placeholder is pure UI", async () => {
+    render(<Family />);
+    await waitForPageReady();
 
-  it("asks whether the person lives in the household before showing any relationship picker", async () => {
-    await openAddMemberSheet();
-    expect(
-      screen.getByText(/does this person live in your household/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Relationship")).not.toBeInTheDocument();
+    const calledEndpoints = (api.me as ReturnType<typeof vi.fn>).mock.calls;
+    // No api.* method with "chat"/"message" in its name was ever added to
+    // the mocked client in this test file — if the component tried to call
+    // one, `api.<thatMethod>` would be undefined and calling it would throw
+    // during render, which findByText above would have already surfaced.
+    expect(calledEndpoints).toBeDefined();
+    expect(Object.keys(api)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/chat|message/i)]),
+    );
+  });
+});
+
+describe("Family — Today with the family", () => {
+  it("shows a friendly empty state when there is nothing on today", async () => {
+    render(<Family />);
+    expect(await screen.findByText(/nothing on today/i)).toBeInTheDocument();
   });
 
-  it("routes 'outside the household' to calendar sharing instead of sending an invitation", async () => {
-    await openAddMemberSheet();
-    fireEvent.click(screen.getByRole("button", { name: /no, they.?re outside the household/i }));
+  it("shows real events, reminders, routines and meals, capped at 4 rows, using real data", async () => {
+    (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      home_name: "Hales Home",
+      member_count: 2,
+      pending_invitations: 0,
+      today_events: [
+        {
+          occurrence_id: "occ-1",
+          event_id: "e1",
+          calendar_id: "cal-1",
+          title: "Football",
+          start_at: "2026-09-05T17:30:00Z",
+          end_at: "2026-09-05T18:30:00Z",
+          is_all_day: false,
+          timezone: "UTC",
+          description: null,
+          location_text: null,
+          label: null,
+          calendar_color: "teal",
+          member_ids: ["u1"],
+          recurrence: "none",
+          reminder_minutes: null,
+          created_by: "u1",
+          updated_at: "2026-09-01T00:00:00Z",
+          occurrence_start: "2026-09-05T17:30:00Z",
+          is_overridden: false,
+        },
+      ],
+      next_event: null,
+    });
+    const routine: Routine = {
+      id: "r1",
+      title: "Bin day",
+      description: null,
+      scope: "household",
+      owner_user_id: null,
+      interval_weeks: 1,
+      repeat_unit: "weekly",
+      week_anchor_date: "2026-09-05",
+      reminder_timing: "evening_before",
+      is_critical: false,
+      pinned: false,
+      enabled: true,
+      start_date: "2026-01-01",
+      end_date: null,
+      member_ids: [],
+      next_occurrence_date: "2026-09-05",
+      completed_today: false,
+      home_occurrence_date: "2026-09-05",
+      home_completed_at: null,
+      created_by: "u1",
+      updated_at: "2026-09-01T00:00:00Z",
+    };
+    const reminder: Reminder = {
+      id: "rem1",
+      title: "Homework reminder",
+      description: null,
+      scope: "personal",
+      owner_user_id: "u2",
+      due_date: "2026-09-05",
+      due_time: "16:00:00",
+      repeat: "never",
+      cadence: "once",
+      enabled: true,
+      member_ids: ["u2"],
+      next_occurrence_date: "2026-09-05",
+      completed_today: false,
+      home_occurrence_date: "2026-09-05",
+      home_completed_at: null,
+      created_by: "u1",
+      updated_at: "2026-09-01T00:00:00Z",
+    };
+    (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [routine] });
+    (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [reminder] });
 
-    expect(screen.queryByLabelText("Relationship")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /share a calendar/i }),
-    ).toHaveAttribute("href", "/calendar/calendars");
-    expect(api.post).not.toHaveBeenCalled();
+    render(<Family />);
+
+    await screen.findByText("Football");
+    expect(screen.getByText("Homework reminder")).toBeInTheDocument();
+    expect(screen.getByText("Bin day")).toBeInTheDocument();
+    // Football is attributed to Anthony (the single assigned member); the
+    // household-wide routine is attributed to "Family".
+    const feed = document.querySelector(".family-feed-list") as HTMLElement;
+    expect(within(feed).getAllByText("Anthony").length).toBeGreaterThan(0);
+    expect(within(feed).getAllByText("Family").length).toBeGreaterThan(0);
   });
 
-  it("never offers Extended Family or Friend as a new relationship option", async () => {
-    await openAddMemberSheet();
-    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
+  it("excludes items already completed today", async () => {
+    const completedRoutine: Routine = {
+      id: "r2",
+      title: "Already done",
+      description: null,
+      scope: "household",
+      owner_user_id: null,
+      interval_weeks: 1,
+      repeat_unit: "weekly",
+      week_anchor_date: "2026-09-05",
+      reminder_timing: "evening_before",
+      is_critical: false,
+      pinned: false,
+      enabled: true,
+      start_date: "2026-01-01",
+      end_date: null,
+      member_ids: [],
+      next_occurrence_date: "2026-09-05",
+      completed_today: true,
+      home_occurrence_date: "2026-09-05",
+      home_completed_at: "2026-09-05T08:00:00Z",
+      created_by: "u1",
+      updated_at: "2026-09-01T00:00:00Z",
+    };
+    (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [completedRoutine] });
 
-    const select = screen.getByLabelText("Relationship");
-    const optionLabels = within(select)
-      .getAllByRole("option")
-      .map((option) => option.textContent);
-    expect(optionLabels).not.toContain("Extended Family");
-    expect(optionLabels).not.toContain("Friend");
+    render(<Family />);
+    await screen.findByText(/nothing on today/i);
+    expect(screen.queryByText("Already done")).not.toBeInTheDocument();
+  });
+});
+
+describe("Family — Our week", () => {
+  it("shows zero counts honestly rather than hiding the card or inventing values", async () => {
+    render(<Family />);
+
+    await screen.findByRole("heading", { name: "Our week" });
+    expect(screen.getByText("Routines left")).toBeInTheDocument();
+    expect(screen.getByText("Reminders due")).toBeInTheDocument();
+    const tiles = document.querySelectorAll(".family-stat-tile strong");
+    const values = Array.from(tiles).map((el) => el.textContent);
+    expect(values).toContain("0");
+    expect(screen.getByText("No birthdays")).toBeInTheDocument();
+  });
+
+  it("shows a real upcoming-birthday count when one exists", async () => {
+    const entry: BirthdayEntry = {
+      owner_type: "user",
+      owner_id: "u2",
+      display_name: "Megan",
+      month: new Date().getMonth() + 1,
+      day: new Date().getDate(),
+      next_occurrence_date: new Date().toISOString().slice(0, 10),
+    };
+    (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [entry] });
+
+    render(<Family />);
+    expect(await screen.findByText("1 birthday")).toBeInTheDocument();
+  });
+});
+
+describe("Family — member management moved to More", () => {
+  it("links 'Manage family members' to the canonical /settings/members destination", async () => {
+    render(<Family />);
+    const link = await screen.findByRole("link", { name: /manage family members/i });
+    expect(link).toHaveAttribute("href", "/settings/members");
+  });
+
+  it("never renders inline admin controls (Change relationship, Change colour, Manage child privacy) on the overview", async () => {
+    render(<Family />);
+    await waitForPageReady();
+
+    expect(screen.queryByText(/change relationship/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/change colour/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/manage child privacy/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add member/i })).not.toBeInTheDocument();
+  });
+
+  it("the Everyone section routes each member to the existing member management page, not a new profile subsystem", async () => {
+    render(<Family />);
+    await waitForPageReady();
+    const grid = document.querySelector(".family-everyone-grid");
+    const card = within(grid as HTMLElement).getByText("Anthony").closest("a");
+    expect(card).toHaveAttribute("href", "/settings/members");
+  });
+
+  it("labels the Everyone card action 'Manage member', not 'View profile' — there is no profile subsystem", async () => {
+    render(<Family />);
+    const grid = await waitFor(() => {
+      const el = document.querySelector(".family-everyone-grid");
+      if (!el || el.children.length === 0) throw new Error("everyone grid not ready");
+      return el as HTMLElement;
+    });
+
+    expect(within(grid).getAllByText("Manage member").length).toBeGreaterThan(0);
+    expect(within(grid).queryByText(/view profile/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("Family — Home data isolation", () => {
+  it("loads members/summary/routines/reminders/events scoped to the active Home only", async () => {
+    render(<Family />);
+    await waitForPageReady();
+
+    expect(api.members).toHaveBeenCalledWith("home-1");
+    expect(api.homeSummary).toHaveBeenCalledWith("home-1");
+    expect(api.routines).toHaveBeenCalledWith("home-1", { home: true });
+    expect(api.reminders).toHaveBeenCalledWith("home-1", { home: true });
+    const [listEventsHomeId, listEventsRange] = (api.listEvents as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { start_at: string; end_at: string },
+    ];
+    expect(listEventsHomeId).toBe("home-1");
+    expect(typeof listEventsRange.start_at).toBe("string");
+    expect(typeof listEventsRange.end_at).toBe("string");
   });
 });

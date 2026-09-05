@@ -941,7 +941,7 @@ describe("Home — Invite family is capability-gated, not role-gated", () => {
 
     expect(await screen.findByRole("link", { name: /invite family/i })).toHaveAttribute(
       "href",
-      "/people",
+      "/settings/members",
     );
   });
 
