@@ -93,6 +93,87 @@ describe("Lists — Family plan overview", () => {
     expect(screen.getByRole("button", { name: /create your first list/i })).toBeInTheDocument();
   });
 
+  it("renders the hero artwork with the correct asset path and alt text, and uses the shared compact module-page spacing", async () => {
+    const { container } = render(<ListsPage />);
+    await screen.findByRole("heading", { name: "Lists", level: 1 });
+
+    const art = screen.getByAltText("Small lists, big things together");
+    expect(art.tagName).toBe("IMG");
+    expect(art).toHaveAttribute("src", expect.stringContaining("/images/lists-hero.png"));
+
+    const main = container.querySelector("main");
+    expect(main).toHaveClass("standard-page");
+    expect(main).toHaveClass("module-page");
+  });
+
+  it("keeps the existing My Lists view functional and shows a calm, non-fabricated placeholder for Templates", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "list-1",
+          name: "Groceries",
+          icon: "groceries",
+          item_count: 8,
+          remaining_count: 3,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+    render(<ListsPage />);
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("link", { name: /groceries/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Templates" }));
+
+    expect(screen.getByText(/templates.*coming soon/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /groceries/i })).not.toBeInTheDocument();
+    // No fabricated template data — Templates never calls a lists-fetching
+    // endpoint of its own, since no such backend concept exists yet.
+    expect(api.lists).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives each recognised list category a real image icon, and falls back to the generic icon for an unrecognised/custom one", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "list-1",
+          name: "Groceries",
+          icon: "groceries",
+          item_count: 1,
+          remaining_count: 1,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "list-2",
+          name: "Something bespoke",
+          icon: null,
+          item_count: 1,
+          remaining_count: 1,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+    const groceriesCard = (await screen.findByRole("link", { name: /groceries/i })).closest(".lists-card");
+    const customCard = screen.getByRole("link", { name: /something bespoke/i }).closest(".lists-card");
+
+    expect(groceriesCard?.querySelector(".lists-card-icon")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/lists-groceries.png"),
+    );
+    expect(customCard?.querySelector(".lists-card-icon")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/lists-other.png"),
+    );
+  });
+
   it("renders list cards with remaining/total counts", async () => {
     (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [

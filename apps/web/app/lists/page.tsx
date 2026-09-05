@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { ListChecks, MoreVertical, Plus } from "lucide-react";
+import { ChevronRight, ListChecks, MoreVertical, Plus } from "lucide-react";
 import type { BillingStatus, HouseholdList, ListIcon } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -10,7 +10,7 @@ import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
-import { LIST_ICON_OPTIONS, listIconGlyph } from "./list-icons";
+import { LIST_ICON_OPTIONS, listIconImage } from "./list-icons";
 
 // Lists is a native MyKhaya module built on the HouseholdList/HouseholdListItem
 // primitive introduced for Meal Plans' "Add ingredients to list" — this page
@@ -29,6 +29,11 @@ export default function ListsPage() {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [moduleReleased, setModuleReleased] = useState<boolean | null>(null);
   const [lists, setLists] = useState<HouseholdList[]>([]);
+  // "Templates" doesn't exist as a real feature yet (no backend concept of a
+  // list template) — this tab is a visual placeholder only, matching the
+  // approved mockup's segmented control, never a fake/hard-coded template
+  // list. See the redesign completion report for the full gap.
+  const [tab, setTab] = useState<"mine" | "templates">("mine");
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [actionsFor, setActionsFor] = useState<HouseholdList | null>(null);
@@ -76,7 +81,7 @@ export default function ListsPage() {
   if (!activeHomeId || !billing || moduleReleased === null) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <p role="status">Loading Lists…</p>
         </main>
       </AppShellContent>
@@ -86,7 +91,7 @@ export default function ListsPage() {
   if (!billing.lists_enabled) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">Lists</p>
@@ -105,7 +110,7 @@ export default function ListsPage() {
   if (!moduleReleased) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">Lists</p>
@@ -120,78 +125,115 @@ export default function ListsPage() {
 
   return (
     <AppShellContent>
-      <main className="standard-page lists-page">
-        <div className="page-heading">
-          <div>
+      <main className="standard-page module-page lists-page">
+        <div className="page-heading module-hero">
+          <div className="module-hero-text">
             <p className="eyebrow">
               <ListChecks size={14} aria-hidden="true" /> Lists
             </p>
             <h1>Lists</h1>
+            <p className="muted">Keep track of the things that matter, together.</p>
           </div>
+          <img
+            className="module-hero-art"
+            src="/images/lists-hero.png"
+            alt="Small lists, big things together"
+            width={640}
+            height={410}
+          />
         </div>
         <FormStatus error={error} />
 
-        <div className="lists-toolbar">
-          <input
-            type="search"
-            placeholder="Search lists…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Search lists"
-          />
-          <button type="button" onClick={() => setCreating(true)}>
-            <Plus size={16} aria-hidden="true" /> New list
+        <div className="meal-tabs" role="tablist" aria-label="Lists sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "mine"}
+            className={tab === "mine" ? "toggle-active" : "secondary"}
+            onClick={() => setTab("mine")}
+          >
+            My Lists
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "templates"}
+            className={tab === "templates" ? "toggle-active" : "secondary"}
+            onClick={() => setTab("templates")}
+          >
+            Templates
           </button>
         </div>
 
-        {lists.length === 0 ? (
-          query ? (
-            <p className="empty-mini">No lists match.</p>
-          ) : (
-            <div className="meal-empty-state">
-              <p>
-                <strong>No lists yet</strong>
-              </p>
-              <p className="muted">Keep groceries, packing and household bits together.</p>
-              <button type="button" className="secondary" onClick={() => setCreating(true)}>
-                <Plus size={16} aria-hidden="true" /> Create your first list
+        {tab === "templates" ? (
+          <p className="empty-mini">List templates are coming soon.</p>
+        ) : (
+          <>
+            <div className="lists-toolbar">
+              <input
+                type="search"
+                placeholder="Search lists…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Search lists"
+              />
+            </div>
+
+            <div className="section-heading">
+              <h2>Household Lists</h2>
+              <button type="button" className="lists-new-button" onClick={() => setCreating(true)}>
+                <Plus size={16} aria-hidden="true" /> New list
               </button>
             </div>
-          )
-        ) : (
-          <div className="lists-grid">
-            {lists.map((list) => {
-              const Glyph = listIconGlyph(list.icon);
-              const complete = list.item_count > 0 && list.remaining_count === 0;
-              return (
-                <article className="card lists-card" key={list.id}>
-                  <Link className="lists-card-body" href={`/lists/${list.id}`}>
-                    <span className="lists-card-icon" aria-hidden="true">
-                      <Glyph size={20} />
-                    </span>
-                    <span className="lists-card-copy">
-                      <strong>{list.name}</strong>
-                      <span className={complete ? "quiet-state lists-card-complete" : "quiet-state"}>
-                        {list.item_count === 0
-                          ? "No items yet"
-                          : complete
-                            ? `Complete · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`
-                            : `${list.remaining_count} remaining · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`}
-                      </span>
-                    </span>
-                  </Link>
-                  <button
-                    type="button"
-                    className="icon-button secondary"
-                    aria-label={`More actions for ${list.name}`}
-                    onClick={() => setActionsFor(list)}
-                  >
-                    <MoreVertical size={16} aria-hidden="true" />
+
+            {lists.length === 0 ? (
+              query ? (
+                <p className="empty-mini">No lists match.</p>
+              ) : (
+                <div className="meal-empty-state">
+                  <p>
+                    <strong>No lists yet</strong>
+                  </p>
+                  <p className="muted">Keep groceries, packing and household bits together.</p>
+                  <button type="button" className="secondary" onClick={() => setCreating(true)}>
+                    <Plus size={16} aria-hidden="true" /> Create your first list
                   </button>
-                </article>
-              );
-            })}
-          </div>
+                </div>
+              )
+            ) : (
+              <div className="lists-grid">
+                {lists.map((list) => {
+                  const complete = list.item_count > 0 && list.remaining_count === 0;
+                  return (
+                    <article className="card lists-card" key={list.id}>
+                      <Link className="lists-card-body" href={`/lists/${list.id}`}>
+                        <img className="lists-card-icon" src={listIconImage(list.icon)} alt="" aria-hidden="true" />
+                        <span className="lists-card-copy">
+                          <strong>{list.name}</strong>
+                          <span className={complete ? "lists-card-status lists-card-complete" : "lists-card-status"}>
+                            {list.item_count === 0
+                              ? "No items yet"
+                              : complete
+                                ? `Complete · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`
+                                : `${list.remaining_count} remaining · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`}
+                          </span>
+                        </span>
+                        <ChevronRight size={18} className="lists-card-chevron" aria-hidden="true" />
+                      </Link>
+                      <button
+                        type="button"
+                        className="icon-button secondary"
+                        aria-label={`More actions for ${list.name}`}
+                        onClick={() => setActionsFor(list)}
+                      >
+                        <MoreVertical size={16} aria-hidden="true" />
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
 
         {actionsFor && (

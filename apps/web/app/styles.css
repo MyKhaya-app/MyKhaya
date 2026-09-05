@@ -6249,21 +6249,63 @@ select.plan-meal-field-input {
   color: var(--colour-slate);
 }
 
-/* --- Lists --- */
+/* --- Lists ---
+   Visual redesign against the approved mockup, reusing the same shared
+   patterns already established for Meal Plans/Family: .module-page for
+   compact header spacing, .meal-tabs for the joined My-Lists/Templates
+   segmented control (reused as-is rather than duplicated under a new
+   name), and .module-hero* (below, extracted from Meal Plans' own hero —
+   byte-identical rules — since Lists needed the same "compact hero with
+   artwork" shape; Meal Plans could migrate to these same class names in a
+   future no-visual-change rename). List-category artwork
+   (apps/web/public/images/lists-*.png) is real image assets per
+   list-icons.ts's listIconImage, never emoji/CSS shapes. */
+.module-hero {
+  align-items: center;
+  gap: 1rem;
+}
+.module-hero-text {
+  flex: 1;
+  min-width: 0;
+}
+.module-hero-art {
+  flex: none;
+  height: 72px;
+  object-fit: contain;
+  width: auto;
+}
+@media (max-width: 420px) {
+  .module-hero-art {
+    height: 56px;
+  }
+}
+@media (min-width: 900px) {
+  .module-hero-art {
+    height: 96px;
+  }
+}
+
 .lists-toolbar {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 .lists-toolbar input[type="search"] {
   flex: 1;
   min-width: 160px;
 }
+.lists-new-button {
+  border-radius: 999px;
+  flex: none;
+  font-size: var(--font-small);
+  min-height: 40px;
+  padding: 0.5rem 1rem;
+}
 .lists-grid {
   display: grid;
-  gap: var(--space-card-stack);
+  gap: 12px;
 }
 .lists-card {
   align-items: center;
@@ -6281,18 +6323,15 @@ select.plan-meal-field-input {
   padding: 0.6rem 0;
 }
 .lists-card-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
   border-radius: 50%;
-  color: var(--colour-sage-dark);
-  display: flex;
   flex: none;
-  height: 40px;
-  justify-content: center;
-  width: 40px;
+  height: 44px;
+  object-fit: cover;
+  width: 44px;
 }
 .lists-card-copy {
   display: grid;
+  flex: 1;
   gap: 0.2rem;
   min-width: 0;
 }
@@ -6301,8 +6340,22 @@ select.plan-meal-field-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Plain caption text, not the shared .quiet-state callout box (background +
+   1rem padding) — that box reads as a highlighted panel, too heavy for a
+   one-line count inside an already-compact card. */
+.lists-card-status {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lists-card-complete {
   color: var(--colour-sage-dark);
+}
+.lists-card-chevron {
+  color: var(--colour-muted);
+  flex: none;
 }
 
 /* --- Lists: individual list --- */
