@@ -464,6 +464,8 @@ describe("Meal Plans — Family plan access", () => {
     expect(title).toHaveTextContent("Fish/Mozzarella Sticks with Chips and Broccoli");
     expect(card.querySelector(".avatar")).toBeInTheDocument();
     expect(card.querySelector(".avatar-stack")).toBeInTheDocument();
+    expect(card.querySelector(".mealplan-slot-actions")).toBeInTheDocument();
+    expect(card.querySelector(".mealplan-slot-actions .mealplan-slot-chevron")).toBeInTheDocument();
     // jsdom does not perform layout; CSS min-width/flex sizing is verified by
     // the rendered hierarchy here and by the simulator retest.
   });

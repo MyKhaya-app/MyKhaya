@@ -5805,6 +5805,13 @@ button.danger,
   gap: 0.15rem;
   min-width: 0;
 }
+.mealplan-slot-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  margin-left: auto;
+}
 .mealplan-slot-label-line {
   align-items: center;
   display: flex;

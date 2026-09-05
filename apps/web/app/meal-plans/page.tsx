@@ -706,8 +706,10 @@ function MealSlotCard({
             <span className="mealplan-entry-title text-wrap-anywhere">{entryTitle(entry)}</span>
             <MealEntryMeta entry={entry} members={members} />
           </div>
-          {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
-          <ChevronRight size={18} className="mealplan-slot-chevron" aria-hidden="true" />
+          <span className="mealplan-slot-actions">
+            {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
+            <ChevronRight size={18} className="mealplan-slot-chevron" aria-hidden="true" />
+          </span>
         </div>
       </button>
     );
@@ -737,8 +739,10 @@ function MealSlotCard({
                     <span className="mealplan-entry-title text-wrap-anywhere">{entryTitle(entry)}</span>
                     <MealEntryMeta entry={entry} members={members} />
                   </span>
-                  {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
-                  <ChevronRight size={16} className="mealplan-slot-chevron" aria-hidden="true" />
+                  <span className="mealplan-slot-actions">
+                    {stackPeople.length > 0 && <AvatarStack people={stackPeople} size="sm" />}
+                    <ChevronRight size={16} className="mealplan-slot-chevron" aria-hidden="true" />
+                  </span>
                 </button>
               );
             })}
