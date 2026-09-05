@@ -538,22 +538,27 @@ describe("Home — Coming up", () => {
 
   it("shows a compact 24-hour start/end range for a same-day timed event", async () => {
     enableCalendarOnly();
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setUTCHours(0, 0, 0, 0);
+    const at = (hours: number, minutes: number) =>
+      new Date(tomorrow.getTime() + (hours * 60 + minutes) * 60_000).toISOString();
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
-        occurrence({
-          occurrence_id: "occ-timed-range",
-          title: "School run",
-          start_at: minutesFromNow(60),
-          end_at: minutesFromNow(150),
-        }),
+        occurrence({ occurrence_id: "occ-1", title: "Morning", start_at: at(9, 45), end_at: at(12, 45) }),
+        occurrence({ occurrence_id: "occ-2", title: "Lunch", start_at: at(12, 0), end_at: at(18, 0) }),
+        occurrence({ occurrence_id: "occ-3", title: "Evening", start_at: at(19, 0), end_at: at(22, 30) }),
       ],
       next_page: null,
     });
 
     const { container } = render(<HomePage />);
 
-    await screen.findByText("School run");
-    expect(container.querySelector(".home-event-time")?.textContent).toMatch(/^\d{2}:\d{2}–\d{2}:\d{2}$/);
+    await screen.findByText("Morning");
+    expect([...container.querySelectorAll(".home-event-time")].map((node) => node.textContent)).toEqual([
+      "09:45–12:45",
+      "12:00–18:00",
+      "19:00–22:30",
+    ]);
   });
 
   it("shows a multi-day continuation in the date column and end metadata", async () => {

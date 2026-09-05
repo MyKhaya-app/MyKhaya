@@ -1665,9 +1665,9 @@ html.native-shell .home-section-overlap {
   font-size: 0.58rem;
   letter-spacing: -0.02em;
   line-height: 1.05;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
+  width: max-content;
   white-space: nowrap;
 }
 .home-event-copy {
