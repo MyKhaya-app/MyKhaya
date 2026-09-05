@@ -1660,6 +1660,9 @@ html.native-shell .home-section-overlap {
   color: var(--colour-muted);
   font-size: var(--font-micro);
 }
+.home-event-date-stack .home-event-time {
+  white-space: nowrap;
+}
 .home-event-copy {
   display: grid;
   gap: 0.1rem;

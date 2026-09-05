@@ -43,17 +43,20 @@ import { eventDateBounds, isEventStillUpcoming } from "../calendar/calendar-util
 
 function eventTime(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
-    timeStyle: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
     timeZone: timezone,
   }).format(new Date(value));
 }
 
-function eventDateStack(value: string, timezone: string) {
+function eventDateStack(value: string, timezone: string, isAllDay = false) {
   const date = new Date(value);
+  const dateTimeZone = isAllDay ? "UTC" : timezone;
   return {
-    weekday: new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: timezone }).format(date),
-    day: new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: timezone }).format(date),
-    month: new Intl.DateTimeFormat("en-GB", { month: "short", timeZone: timezone }).format(date),
+    weekday: new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: dateTimeZone }).format(date),
+    day: new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: dateTimeZone }).format(date),
+    month: new Intl.DateTimeFormat("en-GB", { month: "short", timeZone: dateTimeZone }).format(date),
   };
 }
 
@@ -95,15 +98,36 @@ async function fetchUpcomingCandidates(homeId: string): Promise<EventOccurrence[
 }
 
 function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number {
-  const leftBounds = eventDateBounds(left, left.timezone);
-  const rightBounds = eventDateBounds(right, right.timezone);
+  const startDifference = new Date(left.start_at).getTime() - new Date(right.start_at).getTime();
   return (
-    leftBounds.startKey.localeCompare(rightBounds.startKey) ||
+    startDifference ||
     Number(right.is_all_day) - Number(left.is_all_day) ||
     left.start_at.localeCompare(right.start_at) ||
     left.title.localeCompare(right.title) ||
     left.occurrence_id.localeCompare(right.occurrence_id)
   );
+}
+
+function eventTiming(event: EventOccurrence) {
+  const bounds = eventDateBounds(event, event.timezone);
+  const multiDay = bounds.startKey !== bounds.endKey;
+  const startTime = eventTime(event.start_at, event.timezone);
+  const startsAtMidnight = startTime === "00:00";
+  const effectivelyAllDay = event.is_all_day || startsAtMidnight;
+  if (!multiDay) {
+    return {
+      leading: event.is_all_day ? "All day" : `${startTime}–${eventTime(event.end_at, event.timezone)}`,
+      ending: null,
+    };
+  }
+
+  const end = event.is_all_day
+    ? eventDateStack(`${bounds.endKey}T00:00:00.000Z`, "UTC", true)
+    : eventDateStack(event.end_at, event.timezone);
+  return {
+    leading: effectivelyAllDay ? "Multi-day" : `${startTime} →`,
+    ending: `Ends ${end.weekday} ${end.day} ${end.month}${effectivelyAllDay ? "" : ` · ${eventTime(event.end_at, event.timezone)}`}`,
+  };
 }
 
 function greeting() {
@@ -156,10 +180,12 @@ function EventRow({
   event,
   members,
   leading,
+  ending,
 }: {
   event: EventOccurrence;
   members: Member[];
   leading: React.ReactNode;
+  ending?: string | null;
 }) {
   const [firstMember] = members;
   return (
@@ -177,6 +203,7 @@ function EventRow({
       <span className="home-event-copy">
         <strong>{event.title}</strong>
         {event.location_text && <small>{event.location_text}</small>}
+        {ending && <small>{ending}</small>}
       </span>
       {members.length > 0 ? (
         <AvatarStack people={members} size="sm" />
@@ -306,8 +333,13 @@ export default function HomePage() {
           // today's remaining events from Coming Up too, since Today lists
           // the whole day, not just its past.
           setUpcoming(
-            upcomingRows
-              .filter((event) => isEventStillUpcoming(event))
+            Array.from(
+              new Map(
+                upcomingRows
+                  .filter((event) => isEventStillUpcoming(event))
+                  .map((event) => [event.occurrence_id, event]),
+              ).values(),
+            )
               .sort(compareUpcoming)
               .slice(0, 3),
           );
@@ -603,7 +635,8 @@ export default function HomePage() {
             ) : (
               <div className="home-event-list">
                 {upcoming.map((event) => {
-                  const stack = eventDateStack(event.start_at, event.timezone);
+                  const stack = eventDateStack(event.start_at, event.timezone, event.is_all_day);
+                  const timing = eventTiming(event);
                   return (
                     <EventRow
                       key={event.occurrence_id}
@@ -615,8 +648,10 @@ export default function HomePage() {
                             {stack.weekday} {stack.day}
                           </strong>
                           <small>{stack.month}</small>
+                          <small className="home-event-time">{timing.leading}</small>
                         </span>
                       }
+                      ending={timing.ending}
                     />
                   );
                 })}

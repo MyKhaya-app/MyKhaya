@@ -533,6 +533,62 @@ describe("Home — Coming up", () => {
     render(<HomePage />);
 
     expect(await screen.findByText("Sports Day")).toBeInTheDocument();
+    expect(screen.getByText("All day")).toBeInTheDocument();
+  });
+
+  it("shows a compact 24-hour start/end range for a same-day timed event", async () => {
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-timed-range",
+          title: "School run",
+          start_at: minutesFromNow(60),
+          end_at: minutesFromNow(150),
+        }),
+      ],
+      next_page: null,
+    });
+
+    const { container } = render(<HomePage />);
+
+    await screen.findByText("School run");
+    expect(container.querySelector(".home-event-time")?.textContent).toMatch(/^\d{2}:\d{2}–\d{2}:\d{2}$/);
+  });
+
+  it("shows a multi-day continuation in the date column and end metadata", async () => {
+    enableCalendarOnly();
+    const start = new Date(Date.now() + 86_400_000);
+    start.setUTCHours(10, 0, 0, 0);
+    const end = new Date(start.getTime() + 2 * 86_400_000);
+    end.setUTCHours(14, 0, 0, 0);
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({
+          occurrence_id: "occ-multi-day",
+          title: "Family trip",
+          start_at: start.toISOString(),
+          end_at: end.toISOString(),
+          location_text: "York",
+        }),
+        occurrence({
+          occurrence_id: "occ-multi-day",
+          title: "Family trip",
+          start_at: start.toISOString(),
+          end_at: end.toISOString(),
+          location_text: "York",
+        }),
+      ],
+      next_page: null,
+    });
+
+    const { container } = render(<HomePage />);
+
+    await screen.findByText("Family trip");
+    expect(container.querySelectorAll(".home-event-row")).toHaveLength(1);
+    expect(screen.getByText("10:00 →")).toBeInTheDocument();
+    expect(screen.getByText(/Ends \w+ \d+ \w+ · 14:00/)).toBeInTheDocument();
+    expect(screen.getByText("York")).toBeInTheDocument();
   });
 
   it("includes an event currently in progress", async () => {
