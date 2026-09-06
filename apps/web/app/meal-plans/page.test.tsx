@@ -458,8 +458,13 @@ describe("Meal Plans — Family plan access", () => {
       name: /fish\/mozzarella sticks with chips and broccoli/i,
     });
     const body = card.querySelector(".mealplan-slot-body");
+    const row = card.querySelector(".mealplan-slot-row");
     const title = card.querySelector(".mealplan-entry-title");
     expect(body).toHaveClass("text-shrinkable");
+    expect(row).toBeInTheDocument();
+    expect(row?.firstElementChild).toHaveClass("mealplan-slot-icon");
+    expect(row?.querySelector(".mealplan-slot-body")).toBe(body);
+    expect(row?.querySelector(".mealplan-slot-actions")).toBeInTheDocument();
     expect(title).toHaveClass("text-wrap-anywhere");
     expect(title).toHaveTextContent("Fish/Mozzarella Sticks with Chips and Broccoli");
     expect(card.querySelector(".avatar")).toBeInTheDocument();

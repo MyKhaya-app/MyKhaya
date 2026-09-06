@@ -5814,6 +5814,14 @@ button.danger,
 }
 .mealplan-slot-row-button {
   color: inherit;
+  justify-content: flex-start;
+  text-align: left;
+}
+.mealplan-slot-row-button > .mealplan-slot-row {
+  justify-content: flex-start;
+  width: 100%;
+}
+.mealplan-slot-row-button .mealplan-slot-body {
   text-align: left;
 }
 .mealplan-slot-row-button:hover {
