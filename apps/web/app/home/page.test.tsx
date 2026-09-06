@@ -394,6 +394,7 @@ describe("Home — Coming up", () => {
 
     await screen.findByText("Coming up");
     expect(await screen.findByText("Nothing else planned yet.")).toBeInTheDocument();
+    expect(document.querySelector('img[src="/images/home-coming-up.svg"]')).toBeInTheDocument();
   });
 
   // Coming up must show the next 3 chronological events from right now —
@@ -738,6 +739,7 @@ describe("Home — household routines", () => {
     render(<HomePage />);
 
     expect(await screen.findByText("Put green bin out")).toBeInTheDocument();
+    expect(document.querySelector('img[src="/images/home-to-do.svg"]')).toBeInTheDocument();
     expect(screen.getByText(/Tomorrow · Household/)).toBeInTheDocument();
     screen.getByRole("button", { name: /complete put green bin out/i }).click();
     expect(await screen.findByText(/Done by Megan/)).toBeInTheDocument();

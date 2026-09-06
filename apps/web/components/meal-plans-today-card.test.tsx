@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { MealPlanEntry } from "@mykhaya/shared-types";
+import type { MealPlanEntry, Member } from "@mykhaya/shared-types";
 import { MealPlansTodayCard } from "./meal-plans-today-card";
 
 // Regression coverage for the Home screen's Meals card. It used to be
@@ -91,6 +91,22 @@ describe("MealPlansTodayCard — slot selection", () => {
     expect(screen.queryByText(/tonight/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Dinner/)).toBeInTheDocument();
     expect(screen.getByText(/Pizza Friday/)).toBeInTheDocument();
+    expect(document.querySelector('img[src="/images/home-meals.svg"]')).toBeInTheDocument();
+  });
+
+  it("shows real meal participants in the existing avatar stack", async () => {
+    mockDay([entry({ meal_slot: "dinner", member_ids: ["u1", "u2"] })]);
+    render(
+      <MealPlansTodayCard
+        homeId="home-1"
+        members={[
+          { user_id: "u1", display_name: "Alice", colour: null, avatar_version: null },
+          { user_id: "u2", display_name: "Bob", colour: null, avatar_version: null },
+        ] as Member[]}
+      />,
+    );
+
+    expect(await screen.findByRole("img", { name: "Alice and Bob" })).toBeInTheDocument();
   });
 
   it("shows Breakfast and Lunch, in that order, when both are planned", async () => {

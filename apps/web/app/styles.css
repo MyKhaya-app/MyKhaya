@@ -1402,6 +1402,36 @@ html.native-shell .home-section-overlap {
   margin-bottom: 1rem;
   padding: 20px;
 }
+.home-summary-card {
+  padding: 14px 16px 16px;
+}
+.home-summary-card .section-heading {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  margin-bottom: 0.75rem;
+}
+.home-summary-card .section-heading h2 {
+  align-self: center;
+  font-size: var(--font-display);
+}
+.home-card-image {
+  border-radius: 1rem;
+  display: block;
+  height: 56px;
+  object-fit: cover;
+  width: 56px;
+}
+.home-card-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.2rem;
+  justify-self: end;
+  white-space: nowrap;
+}
+.home-card-action svg {
+  flex: none;
+}
 .home-section-overlap {
   margin-top: -48px;
 }
@@ -6233,14 +6263,59 @@ select.plan-meal-field-input {
 }
 .meal-today-summary {
   align-items: center;
-  color: var(--colour-muted);
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.6rem;
+  gap: 0.8rem;
   margin: 0;
+  min-width: 0;
+  padding-left: calc(56px + 0.8rem);
 }
-.meal-today-summary strong {
+.meal-today-copy {
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.meal-today-copy > span {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+}
+.meal-today-copy strong {
   color: var(--colour-slate);
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
+}
+.meal-today-copy small {
+  align-items: center;
+  color: var(--colour-muted);
+  display: inline-flex;
+  font-size: var(--font-small);
+  gap: 0.35rem;
+}
+.meal-today-summary .avatar-stack,
+.meal-today-summary > .avatar {
+  border-left: 1px solid #efe9dd;
+  padding-left: 0.8rem;
+}
+
+@media (max-width: 420px) {
+  .home-summary-card .section-heading {
+    gap: 0.6rem;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+  }
+  .home-card-image {
+    border-radius: 0.85rem;
+    height: 48px;
+    width: 48px;
+  }
+  .home-summary-card .section-heading h2 {
+    font-size: var(--font-body);
+  }
+  .home-card-action {
+    font-size: var(--font-small);
+  }
+  .meal-today-summary {
+    padding-left: calc(48px + 0.6rem);
+  }
 }
 
 /* --- Lists ---

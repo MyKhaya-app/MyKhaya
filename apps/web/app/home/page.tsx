@@ -6,6 +6,7 @@ import {
   Bell,
   CalendarPlus,
   Check,
+  ChevronRight,
   ClipboardList,
   Gift,
   ListChecks,
@@ -557,11 +558,13 @@ export default function HomePage() {
         )}
 
         {todoItems.length > 0 && (
-          <section className="card home-section home-todo-section">
+          <section className="card home-section home-summary-card home-todo-section">
             <div className="section-heading">
+              <img className="home-card-image" src="/images/home-to-do.svg" alt="" aria-hidden="true" />
               <h2>To do</h2>
-              <Link className="tertiary" href="/settings/routines-reminders">
+              <Link className="tertiary home-card-action" href="/settings/routines-reminders">
                 See all
+                <ChevronRight size={20} aria-hidden="true" />
               </Link>
             </div>
             <div className="home-routine-list" id="home-routine-list">
@@ -620,14 +623,16 @@ export default function HomePage() {
           </section>
         )}
 
-        {activeHomeId && <MealPlansTodayCard homeId={activeHomeId} />}
+        {activeHomeId && <MealPlansTodayCard homeId={activeHomeId} members={members} />}
 
         {calendarEnabled && (
-          <section className="card home-section">
+          <section className="card home-section home-summary-card home-coming-up-card">
             <div className="section-heading">
+              <img className="home-card-image" src="/images/home-coming-up.svg" alt="" aria-hidden="true" />
               <h2>Coming up</h2>
-              <Link className="tertiary" href="/calendar">
+              <Link className="tertiary home-card-action" href="/calendar">
                 See all
+                <ChevronRight size={20} aria-hidden="true" />
               </Link>
             </div>
             {!upcoming.length ? (

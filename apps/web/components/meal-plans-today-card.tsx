@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { MealPlanEntry, MealSlot } from "@mykhaya/shared-types";
+import type { MealPlanEntry, MealSlot, Member } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
+import { ChevronRight, Utensils } from "lucide-react";
+import { AvatarStack } from "./avatar";
 
 // The Home screen's "smallest clean integration" for Meal Plans (see
 // docs/architecture/meal-plans.md) — deliberately a small, self-contained
@@ -36,7 +38,7 @@ function entryTitle(entry: MealPlanEntry): string {
   return entry.meal_name ?? entry.quick_meal_name ?? "Meal";
 }
 
-export function MealPlansTodayCard({ homeId }: { homeId: string }) {
+export function MealPlansTodayCard({ homeId, members = [] }: { homeId: string; members?: Member[] }) {
   const [enabled, setEnabled] = useState(false);
   const [todayEntries, setTodayEntries] = useState<MealPlanEntry[]>([]);
   const [checked, setChecked] = useState(false);
@@ -64,21 +66,25 @@ export function MealPlansTodayCard({ homeId }: { homeId: string }) {
   );
 
   return (
-    <section className="card home-section">
+    <section className="card home-section home-summary-card home-meals-card">
       <div className="section-heading">
+        <img className="home-card-image" src="/images/home-meals.svg" alt="" aria-hidden="true" />
         <h2>Meals</h2>
-        <Link className="tertiary" href="/meal-plans">
+        <Link className="tertiary home-card-action" href="/meal-plans">
           View meal plan
+          <ChevronRight size={20} aria-hidden="true" />
         </Link>
       </div>
       <div className="meal-today-list">
         {mealsBySlot.map(({ slot, entry }) => (
-          <p className="meal-today-summary" key={slot.key}>
-            <span>{slot.label}</span>
-            <strong> · {entryTitle(entry)}</strong>
-            {entry.time && <span> · {entry.time.slice(0, 5)}</span>}
-            {entry.member_ids.length > 0 && <span> · {entry.member_ids.length} eating</span>}
-          </p>
+          <div className="meal-today-summary" key={slot.key}>
+            <div className="meal-today-copy">
+              <span>{slot.label}</span>
+              <strong>{entryTitle(entry)}</strong>
+              <small><Utensils size={16} aria-hidden="true" /> {entry.member_ids.length} eating</small>
+            </div>
+            <AvatarStack people={members.filter((member) => entry.member_ids.includes(member.user_id))} size="sm" />
+          </div>
         ))}
       </div>
     </section>
