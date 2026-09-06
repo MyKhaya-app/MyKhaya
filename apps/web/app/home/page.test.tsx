@@ -270,6 +270,7 @@ describe("Home — Routines shortcut", () => {
     const { container } = render(<HomePage />);
 
     await screen.findByRole("link", { name: /add event/i });
+    expect(container.querySelector('img[src="/images/home-around-house.svg"]')).toBeInTheDocument();
 
     const topRow = container.querySelector(".quick-actions-row-2");
     const bottomRow = container.querySelector(".quick-actions-row-3");

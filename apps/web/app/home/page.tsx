@@ -665,8 +665,9 @@ export default function HomePage() {
           </section>
         )}
 
-        <section className="card home-section">
+        <section className="card home-section home-summary-card home-around-house-card">
           <div className="section-heading">
+            <img className="home-card-image" src="/images/home-around-house.svg" alt="" aria-hidden="true" />
             <h2>Around the house</h2>
           </div>
           <div className="quick-actions">
