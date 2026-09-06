@@ -11,46 +11,8 @@ import argparse
 import asyncio
 import os
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
-
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from mykhaya.db import SessionFactory
-from mykhaya.entitlements import ensure_home_subscription, record_subscription_event
-from mykhaya.models import (
-    AuthIdentity,
-    CalendarEvent,
-    CalendarEventMember,
-    ChildAgeBand,
-    ChildProfile,
-    Group,
-    GuardianAssignment,
-    HomeCalendar,
-    HouseholdList,
-    HouseholdListItem,
-    HouseholdRelationship,
-    HouseholdRoutine,
-    HouseholdRoutineMember,
-    Meal,
-    MealPlanEntry,
-    MealPlanParticipant,
-    MealSlot,
-    MealType,
-    Membership,
-    PermissionProfile,
-    Reminder,
-    ReminderCadence,
-    ReminderMember,
-    ReminderRepeat,
-    Role,
-    RoutineReminderTiming,
-    RoutineScope,
-    SubscriptionPlan,
-    SubscriptionProvider,
-    User,
-)
-from mykhaya.security import normalise_email, password_hash
 
 FIXTURE_EMAIL = "apple-review@mykhaya.app"
 FIXTURE_HOME_NAME = "Apple Review Home"
@@ -97,8 +59,13 @@ def fixture_meal_dates(today: date) -> tuple[date, ...]:
 
 
 async def _user(
-    db: AsyncSession, email: str, name: str, *, password: str | None = None
-) -> User:
+    db: Any, email: str, name: str, *, password: str | None = None
+) -> Any:
+    from sqlalchemy import select
+
+    from mykhaya.models import AuthIdentity, User
+    from mykhaya.security import normalise_email, password_hash
+
     existing = await db.scalar(select(User).where(User.email == normalise_email(email)))
     if existing:
         existing.display_name = name
@@ -129,7 +96,12 @@ async def _user(
     return user
 
 
-async def _remove_existing_fixture(db: AsyncSession) -> None:
+async def _remove_existing_fixture(db: Any) -> None:
+    from sqlalchemy import delete, select
+
+    from mykhaya.models import AuthIdentity, Group, Membership, User
+    from mykhaya.security import normalise_email
+
     group = await db.scalar(select(Group).where(Group.child_login_code == FIXTURE_HOME_CODE))
     if group is None:
         return
@@ -154,6 +126,38 @@ async def _remove_existing_fixture(db: AsyncSession) -> None:
 
 async def create_fixture() -> None:
     password = _password()
+    from mykhaya.db import SessionFactory
+    from mykhaya.entitlements import ensure_home_subscription, record_subscription_event
+    from mykhaya.models import (
+        CalendarEvent,
+        CalendarEventMember,
+        ChildAgeBand,
+        ChildProfile,
+        Group,
+        GuardianAssignment,
+        HomeCalendar,
+        HouseholdList,
+        HouseholdListItem,
+        HouseholdRelationship,
+        HouseholdRoutine,
+        HouseholdRoutineMember,
+        Meal,
+        MealPlanEntry,
+        MealPlanParticipant,
+        MealSlot,
+        MealType,
+        Membership,
+        PermissionProfile,
+        Reminder,
+        ReminderCadence,
+        ReminderMember,
+        ReminderRepeat,
+        Role,
+        RoutineReminderTiming,
+        RoutineScope,
+        SubscriptionPlan,
+        SubscriptionProvider,
+    )
     async with SessionFactory() as db:
         await _remove_existing_fixture(db)
         owner = await _user(db, FIXTURE_EMAIL, "Alex Review", password=password)
@@ -307,6 +311,8 @@ async def create_fixture() -> None:
 
 
 async def remove_fixture() -> None:
+    from mykhaya.db import SessionFactory
+
     async with SessionFactory() as db:
         await _remove_existing_fixture(db)
         await db.commit()
