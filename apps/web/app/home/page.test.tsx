@@ -396,6 +396,7 @@ describe("Home — Coming up", () => {
     await screen.findByText("Coming up");
     expect(await screen.findByText("Nothing else planned yet.")).toBeInTheDocument();
     expect(document.querySelector('img[src="/images/home-coming-up.svg"]')).toBeInTheDocument();
+    expect(document.querySelector('img[src="/images/home-today.svg"]')).toBeInTheDocument();
   });
 
   // Coming up must show the next 3 chronological events from right now —

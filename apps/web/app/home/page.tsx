@@ -525,11 +525,13 @@ export default function HomePage() {
         })()}
 
         {calendarEnabled && (
-          <section className="card home-section home-section-overlap">
+          <section className="card home-section home-section-overlap home-summary-card home-today-card">
             <div className="section-heading">
+              <img className="home-card-image" src="/images/home-today.svg" alt="" aria-hidden="true" />
               <h2>Today</h2>
-              <Link className="tertiary" href="/calendar">
+              <Link className="tertiary home-card-action" href="/calendar">
                 See all
+                <ChevronRight size={20} aria-hidden="true" />
               </Link>
             </div>
             {!summary?.today_events?.length ? (
