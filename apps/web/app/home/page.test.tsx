@@ -45,6 +45,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       homeSummary: vi.fn(),
       listEvents: vi.fn(),
       listUpcomingEvents: vi.fn(),
+      listCalendars: vi.fn(),
       sharedCalendars: vi.fn(),
       listUpcomingSharedEvents: vi.fn(),
       routines: vi.fn(),
@@ -88,6 +89,10 @@ beforeEach(() => {
     next_event: null,
   });
   (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], next_page: null });
+  (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+    items: [{ is_primary: true, timezone: "UTC" }],
+    personal_calendar: null,
+  });
   (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.listUpcomingSharedEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
     items: [],
@@ -406,7 +411,7 @@ describe("Home — Coming up", () => {
   // (minutesFromNow is the module-level helper defined above, next to
   // occurrence()).
 
-  it("includes an event later today, even though Today's own card also shows it", async () => {
+  it("excludes an event occurring today when Today's own card also shows it", async () => {
     enableCalendarOnly();
     const laterToday = minutesFromNow(60);
     (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -428,8 +433,8 @@ describe("Home — Coming up", () => {
     // past and future) and once in Coming up (the next 3 events from now) —
     // the two cards answer different questions and are expected to overlap
     // on a day that still has events left, not dedupe each other away.
-    await screen.findAllByText("Breakfast @ Jacks");
-    expect(screen.getAllByText("Breakfast @ Jacks")).toHaveLength(2);
+    await screen.findByText("Breakfast @ Jacks");
+    expect(screen.getAllByText("Breakfast @ Jacks")).toHaveLength(1);
   });
 
   it("excludes an event earlier today that has already finished", async () => {
@@ -453,29 +458,32 @@ describe("Home — Coming up", () => {
     expect(screen.queryByText("Fergie Juniors")).not.toBeInTheDocument();
   });
 
-  it("returns two events later today before tomorrow's event, in chronological order", async () => {
+  it("returns the next three events from tomorrow onward, in chronological order", async () => {
     enableCalendarOnly();
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setUTCHours(0, 0, 0, 0);
+    const at = (hours: number) => new Date(tomorrow.getTime() + hours * 3_600_000).toISOString();
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
         // Deliberately out of order in the API response — the page must
         // still sort by actual start time.
         occurrence({
-          occurrence_id: "occ-tomorrow",
+          occurrence_id: "occ-third",
           title: "Tomorrow's event",
-          start_at: minutesFromNow(60 * 30),
-          end_at: minutesFromNow(60 * 30 + 30),
+          start_at: at(12),
+          end_at: at(12.5),
         }),
         occurrence({
           occurrence_id: "occ-erin",
           title: "Erin Drumming",
-          start_at: minutesFromNow(150),
-          end_at: minutesFromNow(180),
+          start_at: at(3),
+          end_at: at(3.5),
         }),
         occurrence({
           occurrence_id: "occ-breakfast",
           title: "Breakfast @ Jacks",
-          start_at: minutesFromNow(60),
-          end_at: minutesFromNow(90),
+          start_at: at(1),
+          end_at: at(1.5),
         }),
       ],
       next_page: null,
@@ -516,7 +524,7 @@ describe("Home — Coming up", () => {
     expect(screen.queryByText("Finished earlier")).not.toBeInTheDocument();
   });
 
-  it("includes an all-day event covering today", async () => {
+  it("does not duplicate an all-day event spanning today into Coming up", async () => {
     enableCalendarOnly();
     const todayKey = new Date().toISOString().slice(0, 10);
     const tomorrowKey = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
@@ -535,8 +543,8 @@ describe("Home — Coming up", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByText("Sports Day")).toBeInTheDocument();
-    expect(screen.getByText("All day")).toBeInTheDocument();
+    await screen.findByText("Nothing else planned yet.");
+    expect(screen.queryByText("Sports Day")).not.toBeInTheDocument();
   });
 
   it("shows a compact 24-hour start/end range for a same-day timed event", async () => {
@@ -599,7 +607,7 @@ describe("Home — Coming up", () => {
     expect(screen.getByText("York")).toBeInTheDocument();
   });
 
-  it("includes an event currently in progress", async () => {
+  it("excludes an event currently in progress today", async () => {
     enableCalendarOnly();
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
@@ -615,10 +623,11 @@ describe("Home — Coming up", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByText("Swimming lesson")).toBeInTheDocument();
+    await screen.findByText("Nothing else planned yet.");
+    expect(screen.queryByText("Swimming lesson")).not.toBeInTheDocument();
   });
 
-  it("includes a recurring occurrence later today", async () => {
+  it("excludes a recurring occurrence later today", async () => {
     enableCalendarOnly();
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
@@ -635,18 +644,21 @@ describe("Home — Coming up", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByText("Weekly Piano")).toBeInTheDocument();
+    await screen.findByText("Nothing else planned yet.");
+    expect(screen.queryByText("Weekly Piano")).not.toBeInTheDocument();
   });
 
   it("returns exactly 3 results when more than 3 future occurrences exist", async () => {
     enableCalendarOnly();
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setUTCHours(0, 0, 0, 0);
     (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [1, 2, 3, 4, 5].map((n) =>
         occurrence({
           occurrence_id: `occ-${n}`,
           title: `Event ${n}`,
-          start_at: minutesFromNow(n * 30),
-          end_at: minutesFromNow(n * 30 + 15),
+          start_at: new Date(tomorrow.getTime() + n * 30 * 60_000).toISOString(),
+          end_at: new Date(tomorrow.getTime() + (n * 30 + 15) * 60_000).toISOString(),
         }),
       ),
       next_page: null,

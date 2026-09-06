@@ -40,7 +40,15 @@ import {
   upcomingBirthdayLabel,
 } from "./birthday-utils";
 import { routineDueLabel } from "./routine-utils";
-import { eventDateBounds, isEventStillUpcoming } from "../calendar/calendar-utils";
+import {
+  FALLBACK_TIMEZONE,
+  calendarDateAfter,
+  dateKey,
+  eventDateBounds,
+  isEventStillUpcoming,
+  zonedTimeToUtc,
+  zonedToday,
+} from "../calendar/calendar-utils";
 
 function eventTime(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -64,16 +72,19 @@ function eventDateStack(value: string, timezone: string, isAllDay = false) {
 // The backend answers "next N occurrences on/after a cursor" per source
 // (Home + each externally shared calendar) with no future-date horizon —
 // see calendar_occurrences.upcoming_candidate_filter/next_occurrence_on_or_after.
-// The cursor here is a generous 24h-back UTC buffer (comfortably more than
-// any real UTC offset) so a boundary occurrence is never missed before the
-// exact isEventStillUpcoming/compareUpcoming pass below narrows it down to
-// the real "hasn't finished yet" set; UPCOMING_FETCH_LIMIT similarly asks
-// for more than the 3 ultimately shown so that pass always has enough to
-// choose from.
+// Home's cursor is the next local midnight in the primary Home calendar
+// timezone, so events represented by Today are not duplicated here.
+// UPCOMING_FETCH_LIMIT asks for more than the 3 ultimately shown so the
+// Home-specific date filter still has enough candidates.
 const UPCOMING_FETCH_LIMIT = 8;
 
 async function fetchUpcomingCandidates(homeId: string): Promise<EventOccurrence[]> {
-  const after = new Date(Date.now() - 86_400_000).toISOString();
+  const calendarRows = await api.listCalendars(homeId).catch(() => null);
+  const homeTimezone =
+    calendarRows?.items.find((calendar) => calendar.is_primary)?.timezone ?? FALLBACK_TIMEZONE;
+  const tomorrowKey = calendarDateAfter(dateKey(zonedToday(homeTimezone)), 1);
+  const [year, month, day] = tomorrowKey.split("-").map(Number);
+  const after = zonedTimeToUtc(year!, month!, day!, 0, 0, homeTimezone).toISOString();
   const [homeUpcoming, shares] = await Promise.all([
     api.listUpcomingEvents(homeId, { after, limit: UPCOMING_FETCH_LIMIT }),
     api.sharedCalendars().catch(() => ({ items: [] })),
@@ -95,7 +106,9 @@ async function fetchUpcomingCandidates(homeId: string): Promise<EventOccurrence[
         .catch(() => []),
     ),
   );
-  return [...homeUpcoming.items, ...sharedUpcomingLists.flat()];
+  return [...homeUpcoming.items, ...sharedUpcomingLists.flat()].filter(
+    (event) => eventDateBounds(event, homeTimezone).startKey >= tomorrowKey,
+  );
 }
 
 function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number {
