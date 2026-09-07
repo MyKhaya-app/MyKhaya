@@ -535,7 +535,7 @@ async def test_send_test_email_is_rate_limited(
     ) as client:
         await login(client, admin)
         await unsafe(client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())
-        await reset_rate_limit("platform-test-email", "127.0.0.50")
+        await reset_rate_limit("platform-test-email", "127.0.0.1")
         monkeypatch.setattr(platform_router, "send_email", lambda *args, **kwargs: None)
 
         statuses = []
