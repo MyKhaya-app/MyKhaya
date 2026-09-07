@@ -56,7 +56,7 @@ def resolve_app_version() -> str:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
-    environment: Literal["development", "test", "production"] = "development"
+    environment: Literal["lab", "development", "test", "production"] = "development"
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
@@ -172,7 +172,7 @@ class Settings(BaseSettings):
     status_public_enabled: bool = True
     commit_sha: str = "unknown"
     build_time: str = "unknown"
-    build_channel: Literal["development", "stable"] = "development"
+    build_channel: Literal["lab", "development", "stable"] = "development"
 
     @field_validator("version", mode="before")
     @classmethod
@@ -258,6 +258,17 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MYKHAYA_ADMIN_MFA_REQUIRED may be false only for pure localhost development."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def secure_lab_defaults(self) -> "Settings":
+        if self.environment == "lab":
+            if not self.cookie_secure:
+                raise ValueError("MYKHAYA_COOKIE_SECURE must be true in Lab")
+            if self.cookie_domain is not None:
+                raise ValueError("MYKHAYA_COOKIE_DOMAIN must be unset in Lab")
+            if not self.admin_mfa_required:
+                raise ValueError("MYKHAYA_ADMIN_MFA_REQUIRED must be true in Lab")
         return self
 
     @model_validator(mode="after")
@@ -374,7 +385,7 @@ class Settings(BaseSettings):
                 )
             parts = urlsplit(url)
             assert parts.hostname is not None  # guaranteed by is_valid_http_url above
-            if self.environment == "production" and parts.scheme != "https":
+            if self.environment in {"production", "lab"} and parts.scheme != "https":
                 raise ValueError(
                     f"MYKHAYA_{field_name.upper()} must use https in production "
                     f"(got {url!r}) — WebAuthn and secure cookies both depend on it."

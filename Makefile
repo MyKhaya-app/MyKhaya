@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update lab-up lab-down lab-update lab-health lab-logs lab-reset lab-rebuild lab-seed
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -120,3 +120,27 @@ dev-health:
 
 dev-update:
 	sh infrastructure/scripts/update-dev.sh
+
+lab-up:
+	sh infrastructure/scripts/lab-deploy.sh up
+
+lab-down:
+	sh infrastructure/scripts/lab-deploy.sh down
+
+lab-update:
+	sh infrastructure/scripts/lab-deploy.sh update
+
+lab-health:
+	sh infrastructure/scripts/lab-deploy.sh health
+
+lab-logs:
+	sh infrastructure/scripts/lab-deploy.sh logs
+
+lab-reset:
+	sh infrastructure/scripts/lab-deploy.sh reset
+
+lab-rebuild:
+	sh infrastructure/scripts/lab-deploy.sh rebuild
+
+lab-seed:
+	sh infrastructure/scripts/lab-seed.sh

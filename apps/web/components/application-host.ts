@@ -1,17 +1,20 @@
 const PLATFORM_CONTROL_CENTRE_HOSTS: ReadonlySet<string> = new Set([
   "admin.mykhaya.app",
   "admin.dev.mykhaya.app",
+  "admin.lab.mykhaya.app",
   "admin.localhost",
 ]);
 const CONSUMER_HOSTS: ReadonlySet<string> = new Set([
   "mykhaya.app",
   "dev.mykhaya.app",
+  "lab.mykhaya.app",
   "localhost",
   "127.0.0.1",
 ]);
 const STATUS_HOSTS: ReadonlySet<string> = new Set([
   "status.mykhaya.app",
   "status.dev.mykhaya.app",
+  "status.lab.mykhaya.app",
   "status.localhost",
 ]);
 

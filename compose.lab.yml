@@ -1,0 +1,110 @@
+name: mykhaya-lab
+
+services:
+  caddy:
+    ports:
+      - "${MYKHAYA_LAB_BIND_ADDRESS:-127.0.0.1}:${MYKHAYA_LAB_HTTP_PORT:-8081}:80"
+      - "${MYKHAYA_LAB_BIND_ADDRESS:-127.0.0.1}:${MYKHAYA_LAB_HTTPS_PORT:-8444}:443"
+    volumes:
+      - "./infrastructure/caddy/Caddyfile.lab:/etc/caddy/Caddyfile:ro"
+      - "mykhaya_lab_caddy_data:/data"
+      - "mykhaya_lab_caddy_config:/config"
+    environment:
+      MYKHAYA_TRUSTED_PROXY_CIDRS: "${MYKHAYA_TRUSTED_PROXY_CIDRS:-127.0.0.1/32}"
+      CADDY_TRUSTED_PROXY_CIDRS: "${CADDY_TRUSTED_PROXY_CIDRS:-127.0.0.1/32}"
+    networks: !override [lab_edge, lab_app]
+  web:
+    env_file: !override [.env.lab]
+    environment:
+      API_INTERNAL_URL: "http://api:8000"
+      MYKHAYA_ENVIRONMENT: lab
+      MYKHAYA_BUILD_CHANNEL: lab
+    networks: !override [lab_app]
+  api:
+    env_file: !override [.env.lab]
+    environment:
+      MYKHAYA_ENVIRONMENT: lab
+      MYKHAYA_BUILD_CHANNEL: lab
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya_lab"
+      MYKHAYA_NODE_ID: mk-lab-01
+      MYKHAYA_REGION: uk
+    networks: !override [lab_edge, lab_app, lab_data]
+    volumes: !override ["mykhaya_lab_avatar_data:/data/avatars"]
+  worker:
+    env_file: !override [.env.lab]
+    environment:
+      MYKHAYA_ENVIRONMENT: lab
+      MYKHAYA_BUILD_CHANNEL: lab
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya_lab"
+      MYKHAYA_NODE_ID: mk-lab-01
+      MYKHAYA_REGION: uk
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
+    networks: !override [lab_edge, lab_app, lab_data]
+    volumes: !override ["mykhaya_lab_avatar_data:/data/avatars"]
+  scheduler:
+    env_file: !override [.env.lab]
+    environment:
+      MYKHAYA_ENVIRONMENT: lab
+      MYKHAYA_BUILD_CHANNEL: lab
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya_lab"
+      MYKHAYA_NODE_ID: mk-lab-01
+      MYKHAYA_REGION: uk
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
+    networks: !override [lab_edge, lab_app, lab_data]
+    volumes: !override ["mykhaya_lab_avatar_data:/data/avatars"]
+  migrate:
+    env_file: !override [.env.lab]
+    environment:
+      MYKHAYA_ENVIRONMENT: lab
+      MYKHAYA_BUILD_CHANNEL: lab
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_migrator:${MYKHAYA_MIGRATION_DB_PASSWORD}@postgres:5432/mykhaya_lab"
+      MYKHAYA_NODE_ID: mk-lab-01
+      MYKHAYA_REGION: uk
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
+    networks: !override [lab_data]
+  test:
+    env_file: !override [.env.lab]
+    environment:
+      MYKHAYA_ENVIRONMENT: test
+      MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya_lab"
+    networks: !override [lab_app, lab_data]
+  postgres:
+    env_file: !override [.env.lab]
+    environment:
+      POSTGRES_DB: mykhaya_lab
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${MYKHAYA_POSTGRES_ADMIN_PASSWORD}"
+    volumes: !override
+      - "mykhaya_lab_postgres_data:/var/lib/postgresql/data"
+      - "./infrastructure/docker/init-db-lab.sh:/docker-entrypoint-initdb.d/10-init.sh:ro"
+    networks: !override [lab_data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d mykhaya_lab"]
+  redis:
+    volumes: !override ["mykhaya_lab_redis_data:/data"]
+    networks: !override [lab_data]
+  mailpit:
+    ports: ["127.0.0.1:${MYKHAYA_LAB_MAILPIT_PORT:-18025}:8025"]
+    networks: !override [lab_data]
+
+networks: !override
+  lab_edge:
+    name: mykhaya_lab_edge
+  lab_app:
+    name: mykhaya_lab_app
+    internal: true
+  lab_data:
+    name: mykhaya_lab_data
+    internal: true
+
+volumes: !override
+  mykhaya_lab_postgres_data:
+    name: mykhaya_lab_postgres_data
+  mykhaya_lab_redis_data:
+    name: mykhaya_lab_redis_data
+  mykhaya_lab_avatar_data:
+    name: mykhaya_lab_avatar_data
+  mykhaya_lab_caddy_data:
+    name: mykhaya_lab_caddy_data
+  mykhaya_lab_caddy_config:
+    name: mykhaya_lab_caddy_config
