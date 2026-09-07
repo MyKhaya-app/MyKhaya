@@ -20,7 +20,7 @@ from mykhaya.models import (
     PlatformSessionStatus,
     PlatformSetting,
 )
-from mykhaya.security import hash_secret, resolve_client_ip
+from mykhaya.security import hash_secret, resolve_admin_client_ip
 
 MFA_POLICY_SETTING_KEY = "admin_mfa_required"
 
@@ -33,7 +33,9 @@ def _in_any(address: ipaddress.IPv4Address | ipaddress.IPv6Address, networks: li
 
 
 def enforce_admin_network(request: Request, settings: Settings) -> str:
-    client = resolve_client_ip(request, settings)
+    client = resolve_admin_client_ip(request, settings)
+    if client is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     address = ipaddress.ip_address(client)
     if not settings.admin_allowed_networks or not _in_any(address, settings.admin_allowed_networks):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")

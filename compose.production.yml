@@ -6,6 +6,7 @@ services:
       API_DOMAIN: "${API_DOMAIN:-api.mykhaya.app}"
       ADMIN_DOMAIN: "${ADMIN_DOMAIN:-admin.mykhaya.app}"
       STATUS_DOMAIN: "${STATUS_DOMAIN:-status.mykhaya.app}"
+      MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS: "${MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS:?Set exact NetBird/Cloudflare proxy CIDRs in production .env}"
     volumes:
       [
         "./infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro",

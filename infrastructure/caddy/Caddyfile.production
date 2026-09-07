@@ -1,11 +1,33 @@
+{
+	servers {
+		# Only the upstream proxy chain may supply the client-IP header. The
+		# production value must be narrowed to the actual NetBird/Caddy peer
+		# ranges in the host .env after live validation.
+		trusted_proxies static {$MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS}
+		trusted_proxies_strict
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+(mykhaya_proxy_headers) {
+	header_up Host {host}
+	header_up X-Forwarded-Host {host}
+	header_up X-Forwarded-Proto {scheme}
+	header_up X-Forwarded-For {client_ip}
+}
+
 {$WEB_DOMAIN:mykhaya.app} {
 	encode zstd gzip
 	request_body {
 		max_size 10MB
 	}
 	@api path /api/*
-	reverse_proxy @api api:8000
-	reverse_proxy web:3000
+	reverse_proxy @api api:8000 {
+		import mykhaya_proxy_headers
+	}
+	reverse_proxy web:3000 {
+		import mykhaya_proxy_headers
+	}
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -25,7 +47,9 @@
 }
 {$API_DOMAIN:api.mykhaya.app} {
 	encode zstd gzip
-	reverse_proxy api:8000
+	reverse_proxy api:8000 {
+	import mykhaya_proxy_headers
+	}
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -43,8 +67,12 @@
 {$ADMIN_DOMAIN:admin.mykhaya.app} {
 	encode zstd gzip
 	@api path /api/*
-	reverse_proxy @api api:8000
-	reverse_proxy web:3000
+	reverse_proxy @api api:8000 {
+		import mykhaya_proxy_headers
+	}
+	reverse_proxy web:3000 {
+		import mykhaya_proxy_headers
+	}
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -65,8 +93,12 @@
 {$STATUS_DOMAIN:status.mykhaya.app} {
 	encode zstd gzip
 	@api path /api/*
-	reverse_proxy @api api:8000
-	reverse_proxy web:3000
+	reverse_proxy @api api:8000 {
+		import mykhaya_proxy_headers
+	}
+	reverse_proxy web:3000 {
+		import mykhaya_proxy_headers
+	}
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

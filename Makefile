@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update prod-install prod-update prod-health prod-logs prod-config prod-backup prod-restore
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -51,7 +51,22 @@ reset:
 	docker compose down -v
 	docker compose up --build -d
 prod:
-	docker compose -f compose.yml -f compose.production.yml up --build -d
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-install.sh
+prod-install:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-install.sh
+prod-update:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-deploy.sh update
+prod-health:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-health.sh
+prod-logs:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-logs.sh
+prod-config:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-deploy.sh validate
+prod-backup:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/backup.sh
+prod-restore:
+	@test -n "$(FILE)" || (echo "Use make prod-restore FILE=/absolute/path/backup.sql.gz" && exit 1)
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/restore.sh "$(FILE)"
 backup:
 	sh infrastructure/scripts/backup.sh
 restore:

@@ -402,6 +402,43 @@ def resolve_client_ip(request: Request, settings: Settings) -> str:
     return str(current)
 
 
+def resolve_admin_client_ip(request: Request, settings: Settings) -> str | None:
+    """Resolve a PCC source address with a fail-closed policy.
+
+    Ordinary rate limiting may use the socket peer when no trusted proxy is
+    configured. PCC access is different: allowing the NetBird/Caddy peer as
+    the apparent operator would turn a missing or malformed forwarding chain
+    into an allowlist bypass. Every hop must therefore be parseable, the
+    direct peer must be trusted, and the resulting address must be outside the
+    proxy ranges.
+    """
+    peer_text = request.client.host if request.client else ""
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return None
+    if not settings.trusted_proxy_cidrs or not _in_any(peer, settings.trusted_proxy_cidrs):
+        return None
+    raw = request.headers.get("x-forwarded-for", "")
+    if not raw.strip():
+        return None
+    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            return None
+        try:
+            chain.append(ipaddress.ip_address(item))
+        except ValueError:
+            return None
+    current = peer
+    for candidate in reversed(chain):
+        if not _in_any(current, settings.trusted_proxy_cidrs):
+            return str(current)
+        current = candidate
+    return None if _in_any(current, settings.trusted_proxy_cidrs) else str(current)
+
+
 def resolve_forwarded_proto(request: Request, settings: Settings) -> str:
     """Mirrors ADR 0008: X-Forwarded-Proto is trusted only from a configured proxy CIDR."""
     if _forwarded_scheme_is_trusted(request, settings):

@@ -509,6 +509,23 @@ def test_untrusted_proxy_header_cannot_change_client_address() -> None:
     assert resolve_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings) == "198.51.100.3"
 
 
+def test_admin_client_ip_requires_trusted_proxy_and_valid_chain() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert resolve_admin_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings) == "198.51.100.3"
+    assert resolve_admin_client_ip(make_request("203.0.113.2", "198.51.100.3"), settings) is None
+    assert resolve_admin_client_ip(make_request("10.0.0.2", "not-an-ip"), settings) is None
+    assert resolve_admin_client_ip(make_request("10.0.0.2"), settings) is None
+
+
+def test_admin_client_ip_never_returns_proxy_address() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert resolve_admin_client_ip(make_request("10.0.0.2", "10.0.0.3"), settings) is None
+
+
 def test_admin_audit_redacts_secret_shaped_values() -> None:
     assert safe_values({"smtp_password": "secret", "api_key": "value", "enabled": True}) == {
         "smtp_password": "[REDACTED]",

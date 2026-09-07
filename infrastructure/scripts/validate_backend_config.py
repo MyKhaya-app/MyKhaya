@@ -10,12 +10,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-COMPOSE = ("docker", "compose", "-f", "compose.yml", "-f", "compose.dev.yml")
+COMPOSE = (
+    "docker",
+    "compose",
+    "-f",
+    "compose.yml",
+    "-f",
+    "compose.production.yml" if os.environ.get("MYKHAYA_PRODUCTION") == "1" else "compose.dev.yml",
+)
 SERVICES = ("api", "worker", "scheduler", "migrate")
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
 
