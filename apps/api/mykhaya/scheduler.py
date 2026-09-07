@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent
 from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
@@ -30,6 +31,8 @@ async def run() -> None:
     try:
         while True:
             async with SessionFactory() as db:
+                await ManagedDemoService.expire_due(db)
+                await db.commit()
                 # Durable scans — no in-memory timers. Each computes fresh from current
                 # data and inserts idempotent outbox rows; see mykhaya/notifications/
                 # reminders.py, briefing.py, routines.py and birthdays.py.

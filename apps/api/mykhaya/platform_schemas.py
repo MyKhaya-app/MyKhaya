@@ -224,6 +224,43 @@ class NoteRequest(StrictModel):
     body: str = Field(min_length=2, max_length=1000)
 
 
+class ManagedDemoHomeCreate(StrictModel):
+    fixture_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]+$")
+    display_name: str = Field(min_length=2, max_length=100)
+    fixture_type: Literal["apple_review", "demo", "qa_test"]
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
+    expires_at: datetime | None = None
+    enabled: bool = True
+
+
+class ManagedDemoHomeResponse(BaseModel):
+    id: uuid.UUID
+    fixture_key: str
+    display_name: str
+    fixture_type: Literal["apple_review", "demo", "qa_test"]
+    home_id: uuid.UUID
+    owner_user_id: uuid.UUID
+    status: Literal["enabled", "disabled", "expired"]
+    template_version: str
+    expires_at: datetime | None
+    refreshed_at: datetime | None
+    created_at: datetime
+    created_by: uuid.UUID | None
+    disabled_at: datetime | None
+    account_email: EmailStr
+    email_verified: bool
+    access: Literal["family"] = "family"
+
+
+class ManagedDemoPasswordReset(StrictModel):
+    password: str = Field(min_length=12, max_length=128)
+
+
+class ManagedDemoExpiryUpdate(StrictModel):
+    expires_at: datetime | None = None
+
+
 class SettingUpdate(StrictModel):
     value: bool | int | str | list[str]
     reason: str = Field(min_length=10, max_length=500)

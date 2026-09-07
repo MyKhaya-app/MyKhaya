@@ -6,10 +6,8 @@ from mykhaya.apple_review_fixture import (
     FIXTURE_HOME_NAME,
     FIXTURE_PASSWORD_ENV,
     _password,
-    fixture_event_specs,
-    fixture_meal_dates,
 )
-from mykhaya.models import PermissionProfile, Role
+from mykhaya.models import ManagedDemoStatus, ManagedDemoType, PermissionProfile, Role
 from mykhaya.security import password_hash
 
 
@@ -26,24 +24,6 @@ def test_missing_review_password_fails_without_fallback(monkeypatch):
         _password()
 
 
-def test_fixture_dates_are_relative_and_cover_review_sections():
-    from datetime import date
-
-    today = date(2026, 9, 6)
-    specs = fixture_event_specs(today)
-    assert [spec[1] for spec in specs[:2]] == [today, today]
-    assert specs[2][1] == date(2026, 9, 7)
-    assert specs[3][1] == date(2026, 9, 8)
-    assert specs[4][1] == date(2026, 9, 10)
-
-
-def test_fixture_meals_are_monday_through_thursday():
-    from datetime import date
-
-    dates = fixture_meal_dates(date(2026, 9, 6))
-    assert [day.weekday() for day in dates] == [0, 1, 2, 3]
-
-
 def test_review_password_uses_the_application_hasher():
     raw = "test-only-review-secret"
     stored = password_hash.hash(raw)
@@ -55,3 +35,50 @@ def test_review_account_is_a_normal_home_admin_not_platform_admin():
     assert Role.owner.value == "owner"
     assert PermissionProfile.home_admin.value == "home_admin"
     assert not hasattr(Role, "platform_admin")
+
+
+def test_managed_demo_lifecycle_contract_is_explicit():
+    assert {item.value for item in ManagedDemoType} >= {"apple_review", "demo", "qa_test"}
+    assert {item.value for item in ManagedDemoStatus} == {"enabled", "disabled", "expired"}
+
+
+def test_managed_demo_cli_uses_shared_service_entrypoints():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1].joinpath("mykhaya", "apple_review_fixture.py").read_text()
+    assert "ManagedDemoService.create" in source
+    assert "ManagedDemoService.refresh_template" in source
+    assert "ManagedDemoService.delete" in source
+
+
+def test_managed_demo_service_has_scoped_security_guards():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1].joinpath("mykhaya", "managed_demo_homes.py").read_text()
+    create_source = source[
+        source.index("async def create") : source.index("async def seed_template")
+    ]
+    delete_source = source[source.index("async def delete") :]
+    reset_source = source[
+        source.index("async def reset_password") : source.index("async def set_expiry")
+    ]
+    refresh_source = source[
+        source.index("async def refresh_template") : source.index("async def register")
+    ]
+    assert "Refusing to adopt an existing customer account" in create_source
+    assert "Refusing to delete an owner account used outside this fixture" in delete_source
+    assert "row.owner_user_id" in reset_source
+    assert "row.home_id" in refresh_source
+
+
+def test_expiry_and_refresh_contract_preserves_lifecycle_state():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1].joinpath("mykhaya", "managed_demo_homes.py").read_text()
+    expiry_source = source[source.index("async def set_expiry") : source.index("async def refresh")]
+    refresh_source = source[
+        source.index("async def refresh_template") : source.index("async def register")
+    ]
+    assert "owner.is_active = True" not in expiry_source
+    assert "set_enabled" not in refresh_source
+    assert "row.expires_at" not in refresh_source

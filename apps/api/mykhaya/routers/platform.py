@@ -39,6 +39,7 @@ from mykhaya.entitlements import (
     resolve_effective_state,
 )
 from mykhaya.mailer import resolve_smtp_config, send_email
+from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
@@ -58,6 +59,8 @@ from mykhaya.models import (
     HouseholdRelationship,
     IncidentLifecycleState,
     Invitation,
+    ManagedDemoHome,
+    ManagedDemoType,
     Membership,
     NotificationChannel,
     NotificationDelivery,
@@ -150,6 +153,10 @@ from mykhaya.platform_schemas import (
     MfaPolicyResponse,
     MfaPolicyUpdate,
     ModuleUpdate,
+    ManagedDemoExpiryUpdate,
+    ManagedDemoHomeCreate,
+    ManagedDemoHomeResponse,
+    ManagedDemoPasswordReset,
     NoteRequest,
     NotificationTemplatePreviewRequest,
     NotificationTemplatePreviewResponse,
@@ -254,6 +261,188 @@ log = structlog.get_logger()
 ALL_ROLES = tuple(PlatformRole)
 OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
 SUPPORT = (*OPERATORS, PlatformRole.support)
+
+
+def _managed_demo_response(row: ManagedDemoHome, owner: User) -> ManagedDemoHomeResponse:
+    return ManagedDemoHomeResponse(
+        id=row.id,
+        fixture_key=row.fixture_key,
+        display_name=row.display_name,
+        fixture_type=row.fixture_type.value,
+        home_id=row.home_id,
+        owner_user_id=row.owner_user_id,
+        status=row.status.value,
+        template_version=row.template_version,
+        expires_at=row.expires_at,
+        refreshed_at=row.refreshed_at,
+        created_at=row.created_at,
+        created_by=row.created_by,
+        disabled_at=row.disabled_at,
+        account_email=owner.email,
+        email_verified=owner.email_verified_at is not None,
+    )
+
+
+@router.get("/demo-test-homes", response_model=list[ManagedDemoHomeResponse])
+async def managed_demo_homes(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ManagedDemoHomeResponse]:
+    rows = (await db.scalars(select(ManagedDemoHome).order_by(ManagedDemoHome.created_at))).all()
+    result: list[ManagedDemoHomeResponse] = []
+    for row in rows:
+        owner = await db.get(User, row.owner_user_id)
+        if owner is not None:
+            result.append(_managed_demo_response(row, owner))
+    return result
+
+
+@router.post("/demo-test-homes", response_model=ManagedDemoHomeResponse, status_code=201)
+async def create_managed_demo_home(
+    body: ManagedDemoHomeCreate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    settings = get_settings()
+    require_recent_auth(context, settings)
+    try:
+        row = await ManagedDemoService.create(
+            db,
+            fixture_key=body.fixture_key,
+            display_name=body.display_name,
+            fixture_type=ManagedDemoType(body.fixture_type),
+            email=str(body.email),
+            password=body.password,
+            created_by=context.administrator.id,
+            expires_at=body.expires_at,
+            enabled=body.enabled,
+        )
+    except ManagedDemoError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    platform_audit(db, request, context, "managed_demo.created", "managed_demo_home", row.id,
+                   new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value})
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return _managed_demo_response(row, owner)
+
+
+@router.post("/demo-test-homes/{fixture_id}/enable", response_model=ManagedDemoHomeResponse)
+async def enable_managed_demo_home(
+    fixture_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    return await _set_managed_demo_enabled(fixture_id, True, request, context, db)
+
+
+@router.post("/demo-test-homes/{fixture_id}/disable", response_model=ManagedDemoHomeResponse)
+async def disable_managed_demo_home(
+    fixture_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    return await _set_managed_demo_enabled(fixture_id, False, request, context, db)
+
+
+async def _set_managed_demo_enabled(
+    fixture_id: uuid.UUID, enabled: bool, request: Request,
+    context: PlatformContext, db: AsyncSession,
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.set_enabled(db, row, enabled)
+    platform_audit(db, request, context, f"managed_demo.{ 'enabled' if enabled else 'disabled' }",
+                   "managed_demo_home", row.id)
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return _managed_demo_response(row, owner)
+
+
+@router.post("/demo-test-homes/{fixture_id}/password", status_code=204)
+async def reset_managed_demo_password(
+    fixture_id: uuid.UUID,
+    body: ManagedDemoPasswordReset,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.reset_password(db, row, body.password)
+    platform_audit(db, request, context, "managed_demo.password_reset", "managed_demo_home", row.id)
+    await db.commit()
+
+
+@router.post("/demo-test-homes/{fixture_id}/refresh", response_model=ManagedDemoHomeResponse)
+async def refresh_managed_demo_home(
+    fixture_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.refresh_template(db, row)
+    platform_audit(db, request, context, "managed_demo.refreshed", "managed_demo_home", row.id,
+                   reason=body.reason)
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return _managed_demo_response(row, owner)
+
+
+@router.patch("/demo-test-homes/{fixture_id}/expiry", response_model=ManagedDemoHomeResponse)
+async def update_managed_demo_expiry(
+    fixture_id: uuid.UUID,
+    body: ManagedDemoExpiryUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.set_expiry(db, row, body.expires_at)
+    platform_audit(db, request, context, "managed_demo.expiry_changed", "managed_demo_home", row.id,
+                   new={"expires_at": body.expires_at.isoformat() if body.expires_at else None})
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return _managed_demo_response(row, owner)
+
+
+@router.delete("/demo-test-homes/{fixture_id}", status_code=204)
+async def delete_managed_demo_home(
+    fixture_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        return
+    try:
+        await ManagedDemoService.delete(db, row)
+    except ManagedDemoError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    platform_audit(db, request, context, "managed_demo.deleted", "managed_demo_home", fixture_id,
+                   reason=body.reason)
+    await db.commit()
 SECURITY = (PlatformRole.owner, PlatformRole.security)
 SETTINGS = (PlatformRole.owner,)
 # Arbitrary fixed key for the transaction-scoped advisory lock guarding the

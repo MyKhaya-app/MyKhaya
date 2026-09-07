@@ -25,6 +25,37 @@ export type PlatformActor = {
   recovery_codes?: string[] | null;
 };
 
+export type ManagedDemoType = "apple_review" | "demo" | "qa_test";
+export type ManagedDemoStatus = "enabled" | "disabled" | "expired";
+export type ManagedDemoHome = {
+  id: string;
+  fixture_key: string;
+  display_name: string;
+  fixture_type: ManagedDemoType;
+  home_id: string;
+  owner_user_id: string;
+  status: ManagedDemoStatus;
+  template_version: string;
+  expires_at: string | null;
+  refreshed_at: string | null;
+  created_at: string;
+  created_by: string | null;
+  disabled_at: string | null;
+  account_email: string;
+  email_verified: boolean;
+  access: "family";
+};
+
+export type ManagedDemoHomeCreateRequest = {
+  fixture_key: string;
+  display_name: string;
+  fixture_type: ManagedDemoType;
+  email: string;
+  password: string;
+  expires_at: string | null;
+  enabled: boolean;
+};
+
 export type WebAuthnCredential = {
   id: string;
   label: string;

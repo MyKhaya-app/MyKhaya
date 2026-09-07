@@ -13,6 +13,7 @@ const navigation = [
   ["Health", "/health"], ["Jobs", "/jobs"], ["Email", "/mail"], ["Push", "/push"],
   ["Payments", "/payments"],
   ["Notifications", "/notifications"], ["Communications", "/communications"],
+  ["Demo & Test Homes", "/demo-test-homes"],
   ["Timeline", "/timeline"], ["Diagnostics", "/diagnostics"],
   ["Settings", "/settings"], ["Modules & Features", "/modules"],
   ["Administrators", "/administrators"], ["Security", "/security"], ["Audit", "/audit"],

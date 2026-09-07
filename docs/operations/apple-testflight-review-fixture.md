@@ -1,4 +1,29 @@
-# Apple TestFlight review fixture
+# Managed Demo & Test Homes
+
+Managed Demo/Test Homes are explicit PCC-managed non-customer environments for
+Apple review, demos, QA/UAT and training. PCC operators find them at
+`Operations → Demo & Test Homes`. Mutations use the existing PCC operator boundary
+(`PlatformRole.owner`/`administrator`), MFA-complete sessions, recent-auth checks,
+CSRF protection and platform audit logging; the project has no separate granular
+PCC permission registry, so introducing `demo_test_homes.manage` would otherwise
+create a parallel authorization model.
+
+The `managed_demo_homes` record is authoritative for fixture ownership and the
+stable `fixture_key`; Home names and emails are display data only. Apple Review is
+registered as `apple-review` and uses the existing complimentary Family
+subscription path with reason `Apple TestFlight review fixture`. It creates no
+Stripe subscription. The managed record and subscription are scoped to the same
+Home and are removed together by the managed delete path.
+
+Supported types are `apple_review`, `demo`, and `qa_test`. Apple Review currently
+uses the existing canonical sample content. The PCC create endpoint provisions a
+verified normal Home Admin account and Home; template-specific content should be
+seeded by the corresponding managed template before external review.
+
+Expiry is processed by the existing scheduler: it marks the managed record
+`expired`, disables only its owner account, and retains Home data and audit history.
+It is idempotent. Refreshes must not reactivate an expired/disabled account unless
+an operator explicitly enables it.
 
 The fixture is opt-in and is never created during application startup or a migration.
 Run it against the intended review environment from the API container:

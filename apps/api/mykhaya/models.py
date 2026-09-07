@@ -314,6 +314,48 @@ class Group(UuidTimeMixin, Base):
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
 
 
+class ManagedDemoType(StrEnum):
+    apple_review = "apple_review"
+    demo = "demo"
+    qa_test = "qa_test"
+
+
+class ManagedDemoStatus(StrEnum):
+    enabled = "enabled"
+    disabled = "disabled"
+    expired = "expired"
+
+
+class ManagedDemoHome(UuidTimeMixin, Base):
+    """PCC-owned identity for an explicitly provisioned non-customer Home."""
+
+    __tablename__ = "managed_demo_homes"
+    __table_args__ = (UniqueConstraint("fixture_key", name="uq_managed_demo_fixture_key"),)
+    fixture_key: Mapped[str] = mapped_column(String(80), index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    fixture_type: Mapped[ManagedDemoType] = mapped_column(
+        Enum(ManagedDemoType, name="managed_demo_type")
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    status: Mapped[ManagedDemoStatus] = mapped_column(
+        Enum(ManagedDemoStatus, name="managed_demo_status"),
+        default=ManagedDemoStatus.enabled,
+        server_default=ManagedDemoStatus.enabled.value,
+    )
+    template_version: Mapped[str] = mapped_column(String(40), default="1", server_default="1")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Membership(UuidTimeMixin, Base):
     __tablename__ = "group_memberships"
     __table_args__ = (
