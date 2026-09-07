@@ -1,10 +1,17 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Settings as SettingsIcon } from "lucide-react";
 import { platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { titleCase } from "@/components/platform-format";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcCard } from "@/components/control-centre/section";
+import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 
 type ValueType = "text" | "email" | "url" | "boolean" | "integer" | "list";
 type Risk = "normal" | "sensitive";
@@ -139,45 +146,45 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
   const caption = stateCaption(item.state);
 
   return (
-    <div className="action-panel setting-row">
-      <div className="setting-row-heading">
-        <h2>{item.label}</h2>
-        <small className="setting-row-key">{item.key}</small>
-      </div>
-      <p className="muted">{item.description}</p>
-      {item.runtime_effect === "not_enforced" && (
-        <p className="notice">Not yet enforced by the application.</p>
-      )}
+    <CcCard
+      className="setting-row"
+      title={item.label}
+      description={
+        <>
+          {item.description} <small className="setting-row-key">{item.key}</small>
+        </>
+      }
+    >
+      {item.runtime_effect === "not_enforced" && <CcNotice tone="warning">Not yet enforced by the application.</CcNotice>}
       <form className="setting-row-form" onSubmit={onSubmit}>
         {item.value_type === "boolean" ? (
-          <label className="check-row">
+          <CcField label="Enabled" help={caption}>
             <input
               type="checkbox"
               checked={boolDraft}
               onChange={(event) => setBoolDraft(event.target.checked)}
             />
-            Enabled
-          </label>
+          </CcField>
         ) : (
-          <input
-            type={
-              item.value_type === "email"
-                ? "email"
-                : item.value_type === "url"
-                  ? "url"
-                  : item.value_type === "integer"
-                    ? "number"
-                    : "text"
-            }
-            value={draft}
-            placeholder={item.state === "unset" ? "Not yet set" : undefined}
-            onChange={(event) => setDraft(event.target.value)}
-          />
+          <CcField label="Value" help={caption}>
+            <input
+              type={
+                item.value_type === "email"
+                  ? "email"
+                  : item.value_type === "url"
+                    ? "url"
+                    : item.value_type === "integer"
+                      ? "number"
+                      : "text"
+              }
+              value={draft}
+              placeholder={item.state === "unset" ? "Not yet set" : undefined}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </CcField>
         )}
-        {caption && <small className="setting-row-caption">{caption}</small>}
         {item.risk !== "sensitive" && (
-          <label>
-            Reason for this change
+          <CcField label="Reason for this change">
             <input
               type="text"
               value={reason}
@@ -186,17 +193,13 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
               required={dirty}
               onChange={(event) => setReason(event.target.value)}
             />
-          </label>
+          </CcField>
         )}
         <button type="submit" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save"}
         </button>
       </form>
-      {error && (
-        <p className="notice error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <CcNotice tone="error">{error}</CcNotice>}
       <CcConfirmDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
@@ -211,7 +214,7 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
           await save(confirmReason);
         }}
       />
-    </div>
+    </CcCard>
   );
 }
 
@@ -234,35 +237,23 @@ export default function PlatformSettingsPage() {
 
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Control Centre</p>
-            <h1>Settings</h1>
-          </div>
-        </div>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
+      <CcPage>
+        <CcPageHeader eyebrow="Control Centre" title="Settings" />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
         {!data && !error ? (
-          <p role="status">Loading settings…</p>
+          <CcLoadingState label="Loading settings…" />
         ) : (
           data && (
             <>
-              <section className="overview-panel">
-                <h2>Environment</h2>
-                <p className="notice">Managed by the deployment environment — edit the server's .env and redeploy.</p>
-                <dl>
+              <CcCard title="Environment" description="Managed by the deployment environment — edit the server's .env and redeploy." icon={SettingsIcon}>
+                <CcMetadataGrid>
                   {data.environment.map((item) => (
-                    <div key={item.key}>
-                      <dt>{titleCase(item.key)}</dt>
-                      <dd>{item.value}</dd>
-                    </div>
+                    <CcMetadataItem key={item.key} label={titleCase(item.key)}>
+                      {item.value}
+                    </CcMetadataItem>
                   ))}
-                </dl>
-              </section>
+                </CcMetadataGrid>
+              </CcCard>
               {groupBySection(data.settings).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">
                   <h2>{section}</h2>
@@ -276,7 +267,7 @@ export default function PlatformSettingsPage() {
             </>
           )
         )}
-      </main>
+      </CcPage>
     </PlatformShell>
   );
 }

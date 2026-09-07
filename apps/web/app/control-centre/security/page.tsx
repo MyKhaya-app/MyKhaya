@@ -1,11 +1,19 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { ShieldCheck } from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
-import { PlatformReauthModal } from "@/components/platform-reauth-modal";
+import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { readableDate, titleCase } from "@/components/platform-format";
 import type { MfaPolicy } from "@/components/platform-types";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcCard } from "@/components/control-centre/section";
+import { CcBadge } from "@/components/control-centre/badge";
+import { CcNotice, CcLoadingState, CcEmptyState } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 
 type SecurityEvent = {
   id: string;
@@ -16,6 +24,10 @@ type SecurityEvent = {
   safe_detail: string | null;
 };
 
+function safeError(cause: unknown, fallback: string): string {
+  return cause instanceof ApiError ? cause.message : fallback;
+}
+
 export default function GlobalSecurityPage() {
   const [policy, setPolicy] = useState<MfaPolicy | null>(null);
   const [events, setEvents] = useState<SecurityEvent[] | null>(null);
@@ -23,7 +35,7 @@ export default function GlobalSecurityPage() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingChange, setPendingChange] = useState<boolean | null>(null);
-  const [showReauth, setShowReauth] = useState(false);
+  const { guarded, modal } = useReauthGuard();
 
   const load = useCallback(async () => {
     setError("");
@@ -35,173 +47,138 @@ export default function GlobalSecurityPage() {
       setPolicy(policyResult);
       setEvents(eventsResult.items);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not load security policy.");
+      setError(safeError(cause, "Could not load security policy."));
     }
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
 
-  function requestToggle(nextRequired: boolean) {
-    setPendingChange(nextRequired);
-    setShowReauth(true);
+  // PUT /auth/mfa/policy is guarded server-side with require_recent_auth()
+  // (apps/api/mykhaya/routers/platform.py) — a 403 here transparently opens
+  // PlatformReauthModal and retries the same submit once verified, same as
+  // every other recent-auth-gated mutation in the Control Centre.
+  const applyChange = useCallback(
+    (reasonText: string) =>
+      guarded(async () => {
+        if (pendingChange === null) return;
+        setSaving(true);
+        setError("");
+        setMessage("");
+        try {
+          const result = await platformApi.put<MfaPolicy>("/auth/mfa/policy", {
+            required: pendingChange,
+            reason: reasonText,
+            confirmed: true,
+          });
+          setPolicy(result);
+          setMessage(
+            result.required
+              ? "MFA is now required for every platform administrator."
+              : "MFA is now optional for platform administrators.",
+          );
+          setPendingChange(null);
+        } catch (cause) {
+          if (cause instanceof ApiError && cause.status === 403) throw cause;
+          setError(safeError(cause, "The policy could not be changed."));
+        } finally {
+          setSaving(false);
+        }
+      })(),
+    [pendingChange, guarded],
+  );
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    void applyChange(String(data.get("reason") ?? ""));
   }
 
-  async function applyChange(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (pendingChange === null) return;
-    setSaving(true);
-    setError("");
-    setMessage("");
-    const data = new FormData(event.currentTarget);
-    try {
-      const result = await platformApi.put<MfaPolicy>("/auth/mfa/policy", {
-        required: pendingChange,
-        reason: data.get("reason"),
-        confirmed: true,
-      });
-      setPolicy(result);
-      setMessage(
-        result.required
-          ? "MFA is now required for every platform administrator."
-          : "MFA is now optional for platform administrators.",
-      );
-      setPendingChange(null);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "The policy could not be changed.");
-    } finally {
-      setSaving(false);
-    }
-  }
+  const columns: CcTableColumn<SecurityEvent>[] = [
+    { key: "when", header: "When", render: (row) => readableDate(row.created_at) },
+    { key: "event", header: "Event", render: (row) => titleCase(row.event_type) },
+    { key: "severity", header: "Severity", render: (row) => titleCase(row.severity) },
+    { key: "outcome", header: "Outcome", render: (row) => titleCase(row.outcome) },
+    { key: "detail", header: "Detail", render: (row) => row.safe_detail ?? "—" },
+  ];
 
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Global platform security policy</p>
-            <h1>Security</h1>
-          </div>
-          <button className="secondary" onClick={load}>
-            Refresh
-          </button>
-        </div>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
-        {message && (
-          <p className="notice" role="status">
-            {message}
-          </p>
-        )}
+      <CcPage>
+        <CcPageHeader
+          eyebrow="Global platform security policy"
+          title="Security"
+          secondaryActions={
+            <button className="secondary" onClick={load}>
+              Refresh
+            </button>
+          }
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        {message && <CcNotice tone="success">{message}</CcNotice>}
+
         {!policy ? (
-          <p role="status">Loading security policy…</p>
+          <CcLoadingState label="Loading security policy…" />
         ) : (
-          <section className="action-panel">
-            <div className="diagnostic-heading">
-              <h2>Require MFA for platform administrators</h2>
-              <strong className={`state-label ${policy.required ? "state-healthy" : "state-not-configured"}`}>
-                {policy.required ? "Required" : "Optional"}
-              </strong>
-            </div>
-            <p>
-              <span className="scope-note">Platform setting — changes here affect every platform
-              administrator across the whole MyKhaya installation.</span>
-            </p>
+          <CcCard
+            title="Require MFA for platform administrators"
+            description="Platform setting — changes here affect every platform administrator across the whole MyKhaya installation."
+            icon={ShieldCheck}
+            actions={<CcBadge tone={policy.required ? "success" : "warning"}>{policy.required ? "Required" : "Optional"}</CcBadge>}
+          >
             {policy.environment_enforced ? (
-              <p className="notice">
-                Managed by the deployment environment (MYKHAYA_ADMIN_MFA_REQUIRED). MFA is
-                permanently required in this deployment and cannot be turned off here.
-              </p>
+              <CcNotice tone="warning">
+                Managed by the deployment environment (MYKHAYA_ADMIN_MFA_REQUIRED). MFA is permanently
+                required in this deployment and cannot be turned off here.
+              </CcNotice>
             ) : (
               <>
                 <p>
-                  When enabled, every platform administrator must have at least one MFA method
-                  (a passkey or an authenticator app) configured before they can use the Control
-                  Centre. An administrator who signs in without one is sent through mandatory
-                  enrollment rather than being locked out.
+                  When enabled, every platform administrator must have at least one MFA method (a
+                  passkey or an authenticator app) configured before they can use the Control Centre.
+                  An administrator who signs in without one is sent through mandatory enrollment rather
+                  than being locked out.
                 </p>
                 {pendingChange === null ? (
-                  <button
-                    className={policy.required ? "secondary" : undefined}
-                    onClick={() => requestToggle(!policy.required)}
-                  >
+                  <button className={policy.required ? "secondary" : undefined} onClick={() => setPendingChange(!policy.required)}>
                     {policy.required ? "Make MFA optional" : "Require MFA for all administrators"}
                   </button>
                 ) : (
-                  <form onSubmit={applyChange} className="mfa-method">
-                    <label>
-                      Reason for this change
+                  <form onSubmit={onSubmit} className="mfa-method">
+                    <CcField label="Reason for this change">
                       <input name="reason" minLength={10} maxLength={500} required autoFocus />
-                    </label>
+                    </CcField>
                     <div className="platform-modal-actions">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => setPendingChange(null)}
-                        disabled={saving}
-                      >
+                      <button type="button" className="secondary" onClick={() => setPendingChange(null)} disabled={saving}>
                         Cancel
                       </button>
                       <button disabled={saving}>
-                        {saving
-                          ? "Saving…"
-                          : pendingChange
-                            ? "Require MFA"
-                            : "Make MFA optional"}
+                        {saving ? "Saving…" : pendingChange ? "Require MFA" : "Make MFA optional"}
                       </button>
                     </div>
                   </form>
                 )}
               </>
             )}
-          </section>
+          </CcCard>
         )}
-        <section>
-          <h2>Recent security events</h2>
+
+        <CcCard title="Recent security events">
           {!events ? (
-            <p role="status">Loading security events…</p>
+            <CcLoadingState label="Loading security events…" />
           ) : events.length === 0 ? (
-            <p className="quiet-state">No recent security events.</p>
+            <CcEmptyState>No recent security events.</CcEmptyState>
           ) : (
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Event</th>
-                    <th>Severity</th>
-                    <th>Outcome</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((event) => (
-                    <tr key={event.id}>
-                      <td>{readableDate(event.created_at)}</td>
-                      <td>{titleCase(event.event_type)}</td>
-                      <td>{titleCase(event.severity)}</td>
-                      <td>{titleCase(event.outcome)}</td>
-                      <td>{event.safe_detail ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <CcTable
+              columns={columns}
+              rows={events}
+              rowKey={(row) => row.id}
+              caption="Recent security events"
+            />
           )}
-        </section>
-      </main>
-      {showReauth && (
-        <PlatformReauthModal
-          onVerified={() => setShowReauth(false)}
-          onCancel={() => {
-            setShowReauth(false);
-            setPendingChange(null);
-          }}
-        />
-      )}
+        </CcCard>
+      </CcPage>
+      {modal}
     </PlatformShell>
   );
 }
