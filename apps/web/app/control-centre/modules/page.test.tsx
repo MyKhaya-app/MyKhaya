@@ -57,7 +57,7 @@ describe("Modules & Features", () => {
     // Still disabled: reason not yet provided.
     expect(applyButton).toBeDisabled();
 
-    const reasonInput = screen.getAllByRole("textbox")[0];
+    const reasonInput = screen.getByLabelText("Reason");
     await userEvent.type(reasonInput, "Rolling back to beta for testing");
     expect(applyButton).toBeEnabled();
   });
@@ -66,7 +66,7 @@ describe("Modules & Features", () => {
     render(<ModulesPage />);
     await screen.findByText("Calendar");
     const select = screen.getByRole("combobox");
-    const reasonInput = screen.getAllByRole("textbox")[0];
+    const reasonInput = screen.getByLabelText("Reason");
     await userEvent.type(reasonInput, "Testing dirty tracking behaviour");
     await userEvent.selectOptions(select, "beta");
     const applyButton = screen.getByRole("button", { name: "Apply change" });
@@ -80,7 +80,7 @@ describe("Modules & Features", () => {
     await screen.findByText("Calendar");
     const select = screen.getByRole("combobox");
     await userEvent.selectOptions(select, "beta");
-    const reasonInput = screen.getAllByRole("textbox")[0];
+    const reasonInput = screen.getByLabelText("Reason");
     await userEvent.type(reasonInput, "Rolling back to beta for testing");
     await userEvent.click(screen.getByRole("button", { name: "Apply change" }));
 
@@ -107,7 +107,7 @@ describe("Modules & Features", () => {
     render(<ModulesPage />);
     await screen.findByText("Calendar");
     await userEvent.selectOptions(screen.getByRole("combobox"), "beta");
-    await userEvent.type(screen.getAllByRole("textbox")[0], "Rolling back to beta for testing");
+    await userEvent.type(screen.getByLabelText("Reason"), "Rolling back to beta for testing");
     await userEvent.click(screen.getByRole("button", { name: "Apply change" }));
     const dialog = await screen.findByRole("dialog", { name: /Apply lifecycle change/i });
     await userEvent.click(within(dialog).getByRole("button", { name: "Apply change" }));
