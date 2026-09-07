@@ -86,7 +86,6 @@ beforeEach(() => {
   put.mockReset();
   del.mockReset();
   post.mockReset();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -319,7 +318,7 @@ describe("NotificationTemplatesPage — protected templates", () => {
 });
 
 describe("NotificationTemplatesPage — reset behaviour", () => {
-  it("resets a single customised template back to its default after confirmation", async () => {
+  it("resets a single customised template back to its default after confirming in the dialog", async () => {
     const user = userEvent.setup();
     mockRoutes();
     del.mockResolvedValue(undefined);
@@ -328,22 +327,26 @@ describe("NotificationTemplatesPage — reset behaviour", () => {
     await user.click(screen.getAllByText("email_verification")[0]!);
 
     await user.click(screen.getByRole("button", { name: "Reset to default" }));
-    expect(window.confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "Reset to default wording" });
+    await user.click(within(dialog).getByRole("button", { name: "Reset to default" }));
+
     await waitFor(() => expect(del).toHaveBeenCalledWith("/notification-templates/email_verification"));
     expect(await screen.findByText("Reset to the built-in default.")).toBeInTheDocument();
     expect(screen.getByLabelText("Subject")).toHaveValue("Verify your email");
     expect(screen.getByLabelText(/Enabled/)).toBeChecked();
   });
 
-  it("does not call delete when the reset confirmation is declined", async () => {
+  it("does not call delete when the reset dialog is cancelled", async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     mockRoutes();
     render(<NotificationTemplatesPage />);
     await waitFor(() => expect(screen.getByText("email_verification")).toBeInTheDocument());
     await user.click(screen.getAllByText("email_verification")[0]!);
 
     await user.click(screen.getByRole("button", { name: "Reset to default" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset to default wording" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
     expect(del).not.toHaveBeenCalled();
   });
 
@@ -356,18 +359,16 @@ describe("NotificationTemplatesPage — reset behaviour", () => {
     expect(screen.queryByRole("button", { name: "Reset to default" })).not.toBeInTheDocument();
   });
 
-  it("requires an explicit second confirmation before restoring all templates", async () => {
+  it("does not restore all templates until the reason is submitted and confirmed in the dialog", async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     mockRoutes();
     render(<NotificationTemplatesPage />);
     await waitFor(() => expect(screen.getByText("calendar.event.reminder")).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Restore all templates to defaults" }));
-    await user.type(screen.getByLabelText("Reason"), "Undo a bad bulk customisation");
-    await user.click(screen.getByRole("button", { name: /Confirm — restore all defaults/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Restore all templates to defaults" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
-    expect(window.confirm).toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -379,8 +380,12 @@ describe("NotificationTemplatesPage — reset behaviour", () => {
     await waitFor(() => expect(screen.getByText("calendar.event.reminder")).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Restore all templates to defaults" }));
-    await user.type(screen.getByLabelText("Reason"), "Undo a bad bulk customisation");
-    await user.click(screen.getByRole("button", { name: /Confirm — restore all defaults/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Restore all templates to defaults" });
+    await user.type(
+      within(dialog).getByLabelText(/Reason for this administrative action/),
+      "Undo a bad bulk customisation",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Confirm — restore all defaults" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/notification-templates/reset-all", {

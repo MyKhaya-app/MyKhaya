@@ -9,6 +9,9 @@ import {
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { resolveLoginDestination } from "@/components/platform-mfa-logic";
 import type { PlatformActor } from "@/components/platform-types";
+import { CcAuthShell } from "@/components/control-centre/auth-shell";
+import { CcNotice } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
 
 type Step = "password" | "verify";
 type VerifyMethod = "passkey" | "totp" | "recovery";
@@ -120,113 +123,82 @@ export default function PlatformLogin() {
 
   if (step === "verify") {
     return (
-      <main className="platform-login">
-        <section>
-          <p className="platform-kicker">Restricted management plane</p>
-          <h1>Verify it&rsquo;s you</h1>
-          <p>This administrator account requires a second step to finish signing in.</p>
-          {error && (
-            <p className="notice error" role="alert">
-              {error}
-            </p>
-          )}
+      <CcAuthShell>
+        <h1>Verify it&rsquo;s you</h1>
+        <p>This administrator account requires a second step to finish signing in.</p>
+        {error && <CcNotice tone="error">{error}</CcNotice>}
 
-          {method === "passkey" && (
-            <div className="mfa-method">
-              <button onClick={signInWithPasskey} disabled={busy}>
-                {busy ? "Waiting for your passkey…" : "Sign in with passkey"}
+        {method === "passkey" && (
+          <div className="mfa-method">
+            <button onClick={signInWithPasskey} disabled={busy}>
+              {busy ? "Waiting for your passkey…" : "Sign in with passkey"}
+            </button>
+            {availableFactors.includes("totp") && (
+              <button type="button" className="tertiary" onClick={() => setMethod("totp")}>
+                Use an authenticator app instead
               </button>
-              {availableFactors.includes("totp") && (
-                <button type="button" className="tertiary" onClick={() => setMethod("totp")}>
-                  Use an authenticator app instead
-                </button>
-              )}
-            </div>
-          )}
+            )}
+          </div>
+        )}
 
-          {method === "totp" && (
-            <form onSubmit={submitTotp} className="mfa-method">
-              <label>
-                6-digit authenticator code
-                <input
-                  name="code"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  autoComplete="one-time-code"
-                  minLength={6}
-                  maxLength={6}
-                  autoFocus
-                  required
-                />
-              </label>
-              <button disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
-              {availableFactors.includes("passkey") && (
-                <button type="button" className="tertiary" onClick={() => setMethod("passkey")}>
-                  Use my passkey instead
-                </button>
-              )}
-            </form>
-          )}
-
-          {method === "recovery" && (
-            <form onSubmit={submitRecoveryCode} className="mfa-method">
-              <label>
-                Recovery code
-                <input
-                  name="code"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoFocus
-                  required
-                  maxLength={32}
-                />
-              </label>
-              <button disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
-            </form>
-          )}
-
-          {method !== "recovery" && availableFactors.includes("recovery_code") && (
-            <p className="mfa-recovery-link">
-              <button type="button" className="link-button" onClick={() => setMethod("recovery")}>
-                Use a recovery code instead
+        {method === "totp" && (
+          <form onSubmit={submitTotp} className="mfa-method">
+            <CcField label="6-digit authenticator code">
+              <input
+                name="code"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="one-time-code"
+                minLength={6}
+                maxLength={6}
+                autoFocus
+                required
+              />
+            </CcField>
+            <button disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
+            {availableFactors.includes("passkey") && (
+              <button type="button" className="tertiary" onClick={() => setMethod("passkey")}>
+                Use my passkey instead
               </button>
-            </p>
-          )}
-        </section>
-      </main>
+            )}
+          </form>
+        )}
+
+        {method === "recovery" && (
+          <form onSubmit={submitRecoveryCode} className="mfa-method">
+            <CcField label="Recovery code">
+              <input name="code" autoComplete="off" autoCapitalize="off" autoFocus required maxLength={32} />
+            </CcField>
+            <button disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
+          </form>
+        )}
+
+        {method !== "recovery" && availableFactors.includes("recovery_code") && (
+          <p className="mfa-recovery-link">
+            <button type="button" className="link-button" onClick={() => setMethod("recovery")}>
+              Use a recovery code instead
+            </button>
+          </p>
+        )}
+      </CcAuthShell>
     );
   }
 
   return (
-    <main className="platform-login">
-      <section>
-        <p className="platform-kicker">Restricted management plane</p>
-        <h1>MyKhaya Platform Control Centre</h1>
-        <p>Use your separate operator credentials. Household accounts cannot sign in here.</p>
-        <form onSubmit={submitPassword}>
-          <label>
-            Operator email
-            <input name="email" type="email" autoComplete="username" required maxLength={320} />
-          </label>
-          <label>
-            Password
-            <input
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              maxLength={128}
-            />
-          </label>
-          {error && (
-            <p className="notice error" role="alert">
-              {error}
-            </p>
-          )}
-          <button disabled={busy}>{busy ? "Signing in…" : "Sign in to Control Centre"}</button>
-        </form>
-        <small>Access is logged. Mandatory MFA is required by production policy.</small>
-      </section>
-    </main>
+    <CcAuthShell>
+      <h1>MyKhaya Platform Control Centre</h1>
+      <p>Use your separate operator credentials. Household accounts cannot sign in here.</p>
+      <form onSubmit={submitPassword}>
+        <CcField label="Operator email">
+          <input name="email" type="email" autoComplete="username" required maxLength={320} />
+        </CcField>
+        <CcField label="Password">
+          <input name="password" type="password" autoComplete="current-password" required maxLength={128} />
+        </CcField>
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        <button disabled={busy}>{busy ? "Signing in…" : "Sign in to Control Centre"}</button>
+      </form>
+      <small>Access is logged. Mandatory MFA is required by production policy.</small>
+    </CcAuthShell>
   );
 }

@@ -24,7 +24,15 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "public_web_url": "http://localhost:8089",
         "admin_url": "http://admin.localhost:8089",
         "status_url": "http://status.localhost:8089",
-        "trusted_hosts": ["localhost", "127.0.0.1", "admin.localhost", "status.localhost"],
+        "native_api_url": "http://api.localhost:8089",
+        "trusted_hosts": [
+            "localhost",
+            "127.0.0.1",
+            "admin.localhost",
+            "status.localhost",
+            "api.localhost",
+            "api.mykhaya.app",
+        ],
         "cors_origins": ["http://localhost:8089", "http://admin.localhost:8089"],
     }
     kwargs.update(overrides)
@@ -91,9 +99,11 @@ async def test_database_configuration_uses_pcc_acquisition_switch() -> None:
         db.add(row)
         await db.commit()
         config = await resolve_stripe_config(settings, db)
-    assert config.source == "database"
-    assert config.configured is True
-    assert config.acquisition_enabled is False
+        assert config.source == "database"
+        assert config.configured is True
+        assert config.acquisition_enabled is False
+        await db.delete(row)
+        await db.commit()
 
 
 @pytest.mark.parametrize(
@@ -132,10 +142,12 @@ def test_test_key_in_production_is_rejected() -> None:
             public_web_url="https://mykhaya.example.com",
             admin_url="https://admin.mykhaya.example.com",
             status_url="https://status.mykhaya.example.com",
+            native_api_url="https://api.mykhaya.example.com",
             trusted_hosts=[
                 "mykhaya.example.com",
                 "admin.mykhaya.example.com",
                 "status.mykhaya.example.com",
+                "api.mykhaya.example.com",
             ],
             cors_origins=["https://admin.mykhaya.example.com"],
             cookie_secure=True,
@@ -153,10 +165,12 @@ def test_live_key_in_production_is_accepted() -> None:
         public_web_url="https://mykhaya.example.com",
         admin_url="https://admin.mykhaya.example.com",
         status_url="https://status.mykhaya.example.com",
+        native_api_url="https://api.mykhaya.example.com",
         trusted_hosts=[
             "mykhaya.example.com",
             "admin.mykhaya.example.com",
             "status.mykhaya.example.com",
+            "api.mykhaya.example.com",
         ],
         cors_origins=["https://admin.mykhaya.example.com"],
         cookie_secure=True,

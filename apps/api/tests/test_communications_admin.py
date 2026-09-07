@@ -36,9 +36,9 @@ AdminFactory = Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44240)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44240)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as value:
         yield value
 

@@ -37,9 +37,9 @@ from mykhaya.security import hash_secret, normalise_email
 
 def new_admin_client() -> AsyncClient:
     return AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44000)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44000)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     )
 
 

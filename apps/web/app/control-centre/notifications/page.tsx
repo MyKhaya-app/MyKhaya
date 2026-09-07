@@ -2,9 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { FileText, Radio } from "lucide-react";
 import { platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { NotificationsSubNav } from "@/components/notifications-subnav";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcCard } from "@/components/control-centre/section";
+import { CcBadge } from "@/components/control-centre/badge";
+import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcActionBar } from "@/components/control-centre/action-bar";
 
 type Template = {
   template_type: string;
@@ -59,103 +67,71 @@ export default function NotificationsOverviewPage() {
 
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Notifications</p>
-            <h1>Overview</h1>
-          </div>
-          <button className="secondary" onClick={load}>
-            Refresh
-          </button>
-        </div>
+      <CcPage>
+        <CcPageHeader
+          eyebrow="Notifications"
+          title="Overview"
+          secondaryActions={
+            <button className="secondary" onClick={load}>
+              Refresh
+            </button>
+          }
+        />
         <NotificationsSubNav />
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
+        {error && <CcNotice tone="error">{error}</CcNotice>}
         {!templates ? (
-          <p role="status">Loading…</p>
+          <CcLoadingState label="Loading…" />
         ) : (
           <>
             <section>
               <h2>Templates</h2>
-              <div className="metric-grid">
-                <article>
-                  <strong>{templates.length}</strong>
-                  <span>Registered types</span>
-                </article>
-                <article>
-                  <strong>{customised}</strong>
-                  <span>Customised</span>
-                </article>
-                <article>
-                  <strong>{usingDefaults}</strong>
-                  <span>Using built-in default</span>
-                </article>
-                <article>
-                  <strong>{enabled}</strong>
-                  <span>Enabled</span>
-                </article>
-                <article>
-                  <strong>{disabled}</strong>
-                  <span>Disabled</span>
-                </article>
-              </div>
+              <CcMetadataGrid>
+                <CcMetadataItem label="Registered types">{templates.length}</CcMetadataItem>
+                <CcMetadataItem label="Customised">{customised}</CcMetadataItem>
+                <CcMetadataItem label="Using built-in default">{usingDefaults}</CcMetadataItem>
+                <CcMetadataItem label="Enabled">{enabled}</CcMetadataItem>
+                <CcMetadataItem label="Disabled">{disabled}</CcMetadataItem>
+              </CcMetadataGrid>
             </section>
 
             {health && (
               <section>
                 <h2>Channel health</h2>
-                <div className="metric-grid">
-                  <article>
-                    <strong>{health.smtp.configured ? "🟢" : "⚪"}</strong>
-                    <span>Email {health.smtp.configured ? "configured" : "not configured"}</span>
-                  </article>
-                  <article>
-                    <strong>{health.push.configured ? "🟢" : "⚪"}</strong>
-                    <span>Push {health.push.configured ? "configured" : "not configured"}</span>
-                  </article>
-                  <article>
-                    <strong>{health.deliveries_today}</strong>
-                    <span>Deliveries today</span>
-                  </article>
-                  <article>
-                    <strong>{health.failures_today}</strong>
-                    <span>Failures today</span>
-                  </article>
-                </div>
+                <CcMetadataGrid>
+                  <CcMetadataItem label={`Email ${health.smtp.configured ? "configured" : "not configured"}`}>
+                    <CcBadge tone={health.smtp.configured ? "success" : "neutral"}>
+                      {health.smtp.configured ? "Configured" : "Not configured"}
+                    </CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label={`Push ${health.push.configured ? "configured" : "not configured"}`}>
+                    <CcBadge tone={health.push.configured ? "success" : "neutral"}>
+                      {health.push.configured ? "Configured" : "Not configured"}
+                    </CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Deliveries today">{health.deliveries_today}</CcMetadataItem>
+                  <CcMetadataItem label="Failures today">{health.failures_today}</CcMetadataItem>
+                </CcMetadataGrid>
                 {health.failures_today > 0 && (
-                  <p className="notice error">
-                    {health.failures_today} delivery failure{health.failures_today === 1 ? "" : "s"}{" "}
-                    today —{" "}
-                    <Link href="/notifications/delivery-logs">
-                      view delivery logs
-                    </Link>
-                    .
-                  </p>
+                  <CcNotice tone="error">
+                    {health.failures_today} delivery failure{health.failures_today === 1 ? "" : "s"} today —{" "}
+                    <Link href="/notifications/delivery-logs">view delivery logs</Link>.
+                  </CcNotice>
                 )}
               </section>
             )}
 
-            <section>
-              <h2>Shortcuts</h2>
-              <div className="sheet-actions">
-                <Link className="button secondary" href="/notifications/templates">
-                  Browse templates
-                </Link>
-                <Link className="button secondary" href="/notifications/test-centre">
-                  Send a test notification
-                </Link>
-                <Link className="button secondary" href="/notifications/delivery-logs">
-                  View delivery failures
-                </Link>
-              </div>
-            </section>
+            <CcCard title="Shortcuts">
+              <CcActionBar
+                actions={[
+                  { key: "templates", label: "Browse templates", icon: FileText, href: "/notifications/templates" },
+                  { key: "test-centre", label: "Send a test notification", icon: Radio, href: "/notifications/test-centre" },
+                  { key: "delivery-logs", label: "View delivery failures", href: "/notifications/delivery-logs" },
+                ]}
+              />
+            </CcCard>
           </>
         )}
-      </main>
+      </CcPage>
     </PlatformShell>
   );
 }

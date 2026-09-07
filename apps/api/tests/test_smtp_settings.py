@@ -41,9 +41,9 @@ AdminFactory = Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44100)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44100)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as value:
         yield value
 
@@ -529,9 +529,9 @@ async def test_send_test_email_is_rate_limited(
     # fixture, to avoid sharing a rate-limit bucket with other tests in this file.
     admin = await admin_factory(PlatformRole.owner)
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.50", 44199)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44199)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as client:
         await login(client, admin)
         await unsafe(client, "PUT", "/api/v1/platform/mail/smtp-settings", json=valid_payload())

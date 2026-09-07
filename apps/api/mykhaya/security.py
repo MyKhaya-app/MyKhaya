@@ -432,9 +432,12 @@ def resolve_admin_client_ip(request: Request, settings: Settings) -> str | None:
         except ValueError:
             return None
     current = peer
-    for candidate in reversed(chain):
+    for index, candidate in enumerate(reversed(chain)):
         if not _in_any(current, settings.trusted_proxy_cidrs):
-            return str(current)
+            # Once the first untrusted address is reached, it must be the
+            # left-most client address. Any remaining entries would describe
+            # an untrusted intermediate hop and are therefore ambiguous.
+            return str(current) if index == len(chain) else None
         current = candidate
     return None if _in_any(current, settings.trusted_proxy_cidrs) else str(current)
 

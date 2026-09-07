@@ -250,9 +250,9 @@ async def test_pcc_returns_last_login_and_last_activity_independently(client: As
 
     admin = await create_admin()
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44001)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44001)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as admin_client:
         await login(admin_client, admin)
         detail = await admin_client.get(f"/api/v1/platform/users/{user.id}")

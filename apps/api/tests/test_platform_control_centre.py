@@ -30,14 +30,16 @@ from mykhaya.security import password_hash
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
 PASSWORD = "A separate operator password!"
+TEST_PROXY_PEER = "172.16.0.2"
+TEST_CLIENT_IP = "127.0.0.1"
 
 
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44000)),
+        transport=ASGITransport(app=app, client=(TEST_PROXY_PEER, 44000)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": TEST_CLIENT_IP},
     ) as value:
         yield value
 
@@ -513,10 +515,25 @@ def test_admin_client_ip_requires_trusted_proxy_and_valid_chain() -> None:
     from mykhaya.security import resolve_admin_client_ip
 
     settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
-    assert resolve_admin_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings) == "198.51.100.3"
+    assert (
+        resolve_admin_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings)
+        == "198.51.100.3"
+    )
     assert resolve_admin_client_ip(make_request("203.0.113.2", "198.51.100.3"), settings) is None
     assert resolve_admin_client_ip(make_request("10.0.0.2", "not-an-ip"), settings) is None
     assert resolve_admin_client_ip(make_request("10.0.0.2"), settings) is None
+
+
+def test_admin_client_ip_rejects_an_untrusted_intermediate_hop() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert (
+        resolve_admin_client_ip(
+            make_request("10.0.0.2", "198.51.100.3, 203.0.113.9, 10.0.0.3"), settings
+        )
+        is None
+    )
 
 
 def test_admin_client_ip_never_returns_proxy_address() -> None:

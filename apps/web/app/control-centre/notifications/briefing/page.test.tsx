@@ -100,7 +100,6 @@ beforeEach(() => {
   get.mockReset();
   put.mockReset();
   del.mockReset();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -168,7 +167,7 @@ describe("DailyBriefingPage", () => {
     expect(within(introSection).getByRole("button", { name: "Reset to default" })).toBeInTheDocument();
   });
 
-  it("resets a fragment back to default after confirmation", async () => {
+  it("resets a fragment back to default after confirming in the dialog", async () => {
     const user = userEvent.setup();
     mockRoutes();
     del.mockResolvedValue(undefined);
@@ -178,8 +177,25 @@ describe("DailyBriefingPage", () => {
     const introSection = screen.getByText("Intro line").closest("section")!;
     await user.click(within(introSection).getByRole("button", { name: "Reset to default" }));
 
-    expect(window.confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "Reset to default wording" });
+    await user.click(within(dialog).getByRole("button", { name: "Reset to default" }));
+
     await waitFor(() => expect(del).toHaveBeenCalledWith("/notification-templates/briefing.intro"));
     expect(await screen.findByText(/Reset "briefing.intro" to its default/)).toBeInTheDocument();
+  });
+
+  it("does not call delete when the reset dialog is cancelled", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    render(<DailyBriefingPage />);
+    await waitFor(() => expect(screen.getByText("Intro line")).toBeInTheDocument());
+
+    const introSection = screen.getByText("Intro line").closest("section")!;
+    await user.click(within(introSection).getByRole("button", { name: "Reset to default" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Reset to default wording" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(del).not.toHaveBeenCalled();
   });
 });

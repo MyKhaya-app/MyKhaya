@@ -20,7 +20,11 @@ from mykhaya.models import (
     PlatformSessionStatus,
     PlatformSetting,
 )
-from mykhaya.security import hash_secret, resolve_admin_client_ip
+from mykhaya.security import (  # noqa: F401
+    hash_secret,
+    resolve_admin_client_ip,
+    resolve_client_ip,
+)
 
 MFA_POLICY_SETTING_KEY = "admin_mfa_required"
 

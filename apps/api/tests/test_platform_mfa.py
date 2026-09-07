@@ -21,6 +21,8 @@ from sqlalchemy import delete, func, select, update
 from test_platform_control_centre import (  # noqa: F401
     ADMIN_ORIGIN,
     PASSWORD,
+    TEST_CLIENT_IP,
+    TEST_PROXY_PEER,
     admin_client,
     admin_factory,
     login,
@@ -65,9 +67,9 @@ async def _reset_mfa_rate_limits() -> AsyncIterator[None]:
 
 def new_admin_client() -> AsyncClient:
     return AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44000)),
+        transport=ASGITransport(app=app, client=(TEST_PROXY_PEER, 44000)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": TEST_CLIENT_IP},
     )
 
 

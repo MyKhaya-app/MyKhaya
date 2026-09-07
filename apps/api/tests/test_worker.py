@@ -36,13 +36,14 @@ async def test_database_rejects_duplicate_scheduler_occurrence() -> None:
         first = OutboxEvent(topic="notification.test", payload={}, dedupe_key=key)
         db.add(first)
         await db.commit()
+        first_id = first.id
         try:
             db.add(OutboxEvent(topic="notification.test", payload={}, dedupe_key=key))
             with pytest.raises(IntegrityError):
                 await db.commit()
         finally:
             await db.rollback()
-            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == first.id))
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == first_id))
             await db.commit()
 
 

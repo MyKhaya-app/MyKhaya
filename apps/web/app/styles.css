@@ -4127,6 +4127,31 @@ select.icon-row-control {
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
+.cc-auth-brand {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  margin-bottom: 1.1rem;
+}
+.cc-auth-brand > span {
+  align-items: center;
+  background: var(--cc-primary);
+  border-radius: var(--cc-radius-sm);
+  color: white;
+  display: flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+.cc-auth-brand strong {
+  color: var(--cc-text);
+  display: block;
+  font-size: 0.92rem;
+}
+.cc-auth-brand small {
+  color: var(--cc-text-muted);
+  font-size: 0.72rem;
+}
 .platform-shell {
   background: var(--platform-surface);
   display: grid;
@@ -5149,6 +5174,9 @@ select.icon-row-control {
 }
 .mfa-choice-card:hover {
   border-color: var(--platform-blue);
+}
+.mfa-choice-card svg {
+  color: var(--cc-primary);
 }
 .mfa-choice-card p {
   color: #53666e;

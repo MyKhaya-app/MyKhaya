@@ -48,7 +48,7 @@
 {$API_DOMAIN:api.mykhaya.app} {
 	encode zstd gzip
 	reverse_proxy api:8000 {
-	import mykhaya_proxy_headers
+		import mykhaya_proxy_headers
 	}
 	header {
 		-Server
