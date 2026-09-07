@@ -50,7 +50,7 @@ describe("Demo & Test Homes PCC list", () => {
     await userEvent.type(screen.getByLabelText("New password"), "long-enough-password");
     await userEvent.type(screen.getByLabelText("Confirm password"), "long-enough-password");
     await userEvent.click(screen.getByRole("button", { name: /^Create$/ }));
-    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/control-centre/demo-test-homes/new"));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/demo-test-homes/new"));
     expect(post).toHaveBeenCalledWith("/demo-test-homes", expect.objectContaining({ fixture_type: "apple_review", password: "long-enough-password" }));
   });
 });
