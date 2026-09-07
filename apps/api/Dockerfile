@@ -53,4 +53,4 @@ RUN mkdir -p /data/avatars && chown mykhaya:mykhaya /data/avatars
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"
-CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000","--proxy-headers","--forwarded-allow-ips","10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
+CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000"]

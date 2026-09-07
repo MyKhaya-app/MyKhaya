@@ -26,7 +26,7 @@ from mykhaya.models import (
 )
 from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
-from mykhaya.security import password_hash
+from mykhaya.security import password_hash, resolve_forwarded_proto
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
 PASSWORD = "A separate operator password!"
@@ -489,8 +489,18 @@ async def test_public_status_contains_only_customer_facing_keys() -> None:
         assert forbidden not in serialised
 
 
-def make_request(peer: str, forwarded: str | None = None) -> Request:
-    headers = Headers({"x-forwarded-for": forwarded} if forwarded else {})
+def make_request(
+    peer: str,
+    forwarded: str | None = None,
+    forwarded_proto: str | None = None,
+    scheme: str = "https",
+) -> Request:
+    raw_headers = {}
+    if forwarded:
+        raw_headers["x-forwarded-for"] = forwarded
+    if forwarded_proto:
+        raw_headers["x-forwarded-proto"] = forwarded_proto
+    headers = Headers(raw_headers)
     return Request(
         {
             "type": "http",
@@ -498,7 +508,7 @@ def make_request(peer: str, forwarded: str | None = None) -> Request:
             "path": "/",
             "headers": headers.raw,
             "client": (peer, 443),
-            "scheme": "https",
+            "scheme": scheme,
             "server": ("admin.mykhaya.app", 443),
             "query_string": b"",
         }
@@ -522,6 +532,32 @@ def test_admin_client_ip_requires_trusted_proxy_and_valid_chain() -> None:
     assert resolve_admin_client_ip(make_request("203.0.113.2", "198.51.100.3"), settings) is None
     assert resolve_admin_client_ip(make_request("10.0.0.2", "not-an-ip"), settings) is None
     assert resolve_admin_client_ip(make_request("10.0.0.2"), settings) is None
+
+
+def test_trusted_proxy_resolution_keeps_the_direct_peer_and_trusts_forwarded_proto() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["172.16.0.0/12"]})
+    request = make_request(
+        "172.16.0.2",
+        "185.241.225.58",
+        forwarded_proto="https",
+        scheme="http",
+    )
+
+    assert request.client is not None
+    assert request.client.host == "172.16.0.2"
+    assert resolve_admin_client_ip(request, settings) == "185.241.225.58"
+    assert resolve_forwarded_proto(request, settings) == "https"
+
+    untrusted = make_request(
+        "203.0.113.9",
+        "185.241.225.58",
+        forwarded_proto="https",
+        scheme="http",
+    )
+    assert resolve_admin_client_ip(untrusted, settings) is None
+    assert resolve_forwarded_proto(untrusted, settings) == "http"
 
 
 def test_admin_client_ip_rejects_an_untrusted_intermediate_hop() -> None:

@@ -70,6 +70,29 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         for target in ("dev-up", "dev-down", "dev-logs", "dev-update"):
             self.assertRegex(makefile, rf"(?m)^{target}:")
 
+    def test_api_runtime_leaves_proxy_resolution_to_mykhaya(self) -> None:
+        dockerfile = (ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(
+            'CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000"]',
+            dockerfile,
+        )
+        self.assertNotIn("--proxy-headers", dockerfile)
+        self.assertNotIn("--forwarded-allow-ips", dockerfile)
+
+    def test_caddy_preserves_proxy_headers_for_api(self) -> None:
+        for relative in (
+            "infrastructure/caddy/Caddyfile.dev",
+            "infrastructure/caddy/Caddyfile.production",
+        ):
+            caddyfile = (ROOT / relative).read_text(encoding="utf-8")
+            for header in (
+                "header_up Host",
+                "header_up X-Forwarded-Host",
+                "header_up X-Forwarded-Proto",
+                "header_up X-Forwarded-For",
+            ):
+                self.assertIn(header, caddyfile, relative)
+
 
 if __name__ == "__main__":
     unittest.main()
