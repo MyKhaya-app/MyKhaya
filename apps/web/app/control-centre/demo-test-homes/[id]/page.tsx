@@ -8,6 +8,7 @@ import type { ManagedDemoHome } from "@/components/platform-types";
 
 const formatDate = (value: string | null) => value ? new Date(value).toLocaleString() : "No expiry";
 const typeLabel = (value: ManagedDemoHome["fixture_type"]) => value === "apple_review" ? "Apple Review" : value === "demo" ? "Family Demo" : "QA Test";
+const safeError = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
 
 export default function ManagedDemoHomeDetailPage() {
   const params = useParams<{ id: string }>();
@@ -31,7 +32,7 @@ export default function ManagedDemoHomeDetailPage() {
       setHome(found);
       setExpiry(found?.expires_at ? new Date(found.expires_at).toISOString().slice(0, 16) : "");
       if (!found) setError("Managed Demo/Test Home not found.");
-    } catch { setError("Unable to load this managed Demo/Test Home."); }
+    } catch (error) { setError(safeError(error, "Unable to load this managed Demo/Test Home.")); }
     finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, [id]);
@@ -50,7 +51,7 @@ export default function ManagedDemoHomeDetailPage() {
       await platformApi.post(`/demo-test-homes/${id}/${action}`, body);
       setMessage(action === "refresh" ? "Demo/Test Home refreshed." : `Demo/Test Home ${action}d.`);
       await load();
-    } catch { setError(`Unable to ${action} this Demo/Test Home.`); }
+    } catch (error) { setError(safeError(error, `Unable to ${action} this Demo/Test Home.`)); }
     finally { setBusy(""); }
   }
 
@@ -60,14 +61,14 @@ export default function ManagedDemoHomeDetailPage() {
     if (!window.confirm(`Reset password for ${home?.account_email ?? "this managed account"}?`)) return;
     setBusy("password"); setError("");
     try { await platformApi.post(`/demo-test-homes/${id}/password`, { password }); setPassword(""); setConfirmPassword(""); setPasswordOpen(false); setMessage("Password reset successfully."); }
-    catch { setError("Unable to reset the managed account password."); }
+    catch (error) { setError(safeError(error, "Unable to reset the managed account password.")); }
     finally { setBusy(""); }
   }
 
   async function saveExpiry(event: React.FormEvent) {
     event.preventDefault(); setBusy("expiry"); setError("");
     try { await platformApi.patch(`/demo-test-homes/${id}/expiry`, { expires_at: expiry ? new Date(expiry).toISOString() : null }); setMessage("Expiry updated."); await load(); }
-    catch { setError("Unable to update expiry."); }
+    catch (error) { setError(safeError(error, "Unable to update expiry.")); }
     finally { setBusy(""); }
   }
 
@@ -75,7 +76,7 @@ export default function ManagedDemoHomeDetailPage() {
     if (!home || !window.confirm(`Delete this Demo/Test Home? ${home.display_name} and its fixture-owned data will be permanently removed. This cannot be undone.`)) return;
     setBusy("delete"); setError("");
     try { await platformApi.delete(`/demo-test-homes/${id}`, { reason: `Delete managed Demo/Test Home ${home.display_name}`, confirmed: true }); router.push("/control-centre/demo-test-homes"); }
-    catch { setError("Unable to delete this managed Demo/Test Home."); setBusy(""); }
+    catch (error) { setError(safeError(error, "Unable to delete this managed Demo/Test Home.")); setBusy(""); }
   }
 
   const statusText = useMemo(() => home?.status === "expired" ? `Expired${home.expires_at ? `: ${formatDate(home.expires_at)}` : ""}` : home?.status ?? "", [home]);
