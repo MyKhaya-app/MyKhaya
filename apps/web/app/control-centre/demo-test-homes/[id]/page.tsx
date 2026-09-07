@@ -3,14 +3,26 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { KeyRound, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
+import {
+  CalendarClock,
+  CheckCircle2,
+  Fingerprint,
+  Home as HomeIcon,
+  KeyRound,
+  Power,
+  PowerOff,
+  RefreshCw,
+  SlidersHorizontal,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
 import type { ManagedDemoHome } from "@/components/platform-types";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcSection, CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcCard, CcColumns } from "@/components/control-centre/section";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcActionBar, type CcAction } from "@/components/control-centre/action-bar";
@@ -201,15 +213,18 @@ export default function ManagedDemoHomeDetailPage() {
     await submitExpiry();
   }
 
-  const statusText = useMemo(
-    () =>
-      home?.status === "expired"
-        ? `Expired${home.expires_at ? `: ${formatDate(home.expires_at)}` : ""}`
-        : home
-          ? statusLabel[home.status]
-          : "",
-    [home],
-  );
+  const statusText = home ? statusLabel[home.status] : "";
+  const statusIcon = { enabled: CheckCircle2, disabled: XCircle, expired: XCircle } as const;
+  const statusDescription = useMemo(() => {
+    if (!home) return "";
+    if (home.status === "enabled") {
+      return "This managed account can sign in and use the Home normally.";
+    }
+    if (home.status === "expired") {
+      return "This managed Home's expiry has passed. It is not enabled — sign-in access should not be relied on until it is re-enabled.";
+    }
+    return "This managed account cannot currently sign in. The Home and its data are retained.";
+  }, [home]);
 
   const actions: CcAction[] = home
     ? [
@@ -280,50 +295,66 @@ export default function ManagedDemoHomeDetailPage() {
             {error && <CcNotice tone="error">{error}</CcNotice>}
 
             <CcColumns ratio="2-1">
-              <CcSection title="Home details">
-                <CcCard>
-                  <CcMetadataGrid>
-                    <CcMetadataItem label="Template">{typeLabel(home.fixture_type)}</CcMetadataItem>
-                    <CcMetadataItem label="Owner account">{home.account_email}</CcMetadataItem>
-                    <CcMetadataItem label="Verification">
-                      <CcBadge tone={home.email_verified ? "success" : "warning"}>
-                        {home.email_verified ? "Verified" : "Unverified"}
-                      </CcBadge>
+              <CcCard title="Home details" icon={HomeIcon}>
+                <CcMetadataGrid columns="fixed-2">
+                  <CcMetadataItem label="Template">{typeLabel(home.fixture_type)}</CcMetadataItem>
+                  <CcMetadataItem label="Created">{formatDate(home.created_at)}</CcMetadataItem>
+                  <CcMetadataItem label="Owner account">{home.account_email}</CcMetadataItem>
+                  <CcMetadataItem label="Created by">
+                    <span className="cc-technical-value">{home.created_by ?? "CLI / system"}</span>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Verification">
+                    <CcBadge tone={home.email_verified ? "success" : "warning"}>
+                      {home.email_verified ? "Verified" : "Unverified"}
+                    </CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Last refreshed">
+                    {home.refreshed_at ? formatDate(home.refreshed_at) : "Never"}
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Family access">
+                    <CcBadge tone="info">{home.access === "family" ? "Family" : home.access}</CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Expiry">{formatDate(home.expires_at)}</CcMetadataItem>
+                  <CcMetadataItem label="Template version">
+                    <span className="cc-technical-value">{home.template_version}</span>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Fixture key">
+                    <span className="cc-technical-value">{home.fixture_key}</span>
+                  </CcMetadataItem>
+                  {home.disabled_at && (
+                    <CcMetadataItem label="Disabled at" span>
+                      {formatDate(home.disabled_at)}
                     </CcMetadataItem>
-                    <CcMetadataItem label="Family access">
-                      <CcBadge tone="info">{home.access === "family" ? "Family" : home.access}</CcBadge>
-                    </CcMetadataItem>
-                    <CcMetadataItem label="Template version">{home.template_version}</CcMetadataItem>
-                    <CcMetadataItem label="Created">{formatDate(home.created_at)}</CcMetadataItem>
-                    <CcMetadataItem label="Created by">{home.created_by ?? "CLI / system"}</CcMetadataItem>
-                    <CcMetadataItem label="Last refreshed">
-                      {home.refreshed_at ? formatDate(home.refreshed_at) : "Never"}
-                    </CcMetadataItem>
-                    <CcMetadataItem label="Expiry">{formatDate(home.expires_at)}</CcMetadataItem>
-                    <CcMetadataItem label="Fixture key">{home.fixture_key}</CcMetadataItem>
-                    {home.disabled_at && (
-                      <CcMetadataItem label="Disabled at">{formatDate(home.disabled_at)}</CcMetadataItem>
-                    )}
-                  </CcMetadataGrid>
-                </CcCard>
-              </CcSection>
+                  )}
+                </CcMetadataGrid>
+              </CcCard>
 
-              <CcSection title="Status">
+              <CcCard title="Status" icon={Fingerprint}>
                 <CcStatusCard
                   tone={statusTone[home.status]}
                   status={statusText}
-                  description="This is a managed test/demo Home — its data is fixture-owned and may be reset by a Refresh / Reset."
+                  description={statusDescription}
+                  icon={statusIcon[home.status]}
                   items={[
                     { label: "Expiry", value: formatDate(home.expires_at) },
                     { label: "Access", value: home.access === "family" ? "Family" : home.access },
                   ]}
-                />
-              </CcSection>
+                >
+                  <p className="cc-status-card-note">
+                    This is a managed demo/test Home — its data is fixture-owned and may be reset by a
+                    Refresh / Reset.
+                  </p>
+                </CcStatusCard>
+              </CcCard>
             </CcColumns>
 
-            <CcSection title="Lifecycle" description="Set, change or remove the expiry for this managed Home.">
-              <CcCard>
-                <form onSubmit={saveExpiry}>
+            <CcCard
+              title="Lifecycle"
+              description="Set, change or remove the expiry for this managed Home."
+              icon={CalendarClock}
+            >
+              <form onSubmit={saveExpiry}>
+                <div className="cc-lifecycle-row">
                   <CcField label="Set or change expiry">
                     <input type="datetime-local" value={expiry} onChange={(event) => setExpiry(event.target.value)} />
                   </CcField>
@@ -340,13 +371,17 @@ export default function ManagedDemoHomeDetailPage() {
                       Remove expiry
                     </button>
                   </div>
-                </form>
-              </CcCard>
-            </CcSection>
+                </div>
+              </form>
+            </CcCard>
 
-            <CcSection title="Actions">
+            <CcCard
+              title="Actions"
+              description="Manage this test Home's state and maintenance operations."
+              icon={SlidersHorizontal}
+            >
               <CcActionBar actions={actions} />
-            </CcSection>
+            </CcCard>
 
             <CcDangerZone
               title="Danger zone"

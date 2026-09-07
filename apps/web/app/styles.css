@@ -5827,6 +5827,146 @@ button.danger,
   }
 }
 
+/* ---------------------------------------------------------------------- */
+/* Control Centre UI foundation, Batch 4 — Demo/Test Home visual          */
+/* reference polish. Purely presentational: strengthens existing cc-card/ */
+/* cc-status-card/cc-metadata-grid treatments (used by every migrated     */
+/* detail page, not just Demo/Test Homes) and adds a couple of optional   */
+/* additive classes (cc-card-header/-description/-actions,               */
+/* cc-metadata-grid-2col, cc-metadata-technical, cc-status-card-note,     */
+/* cc-lifecycle-row) for pages that opt into the richer CcCard header or  */
+/* the two-column metadata layout. Nothing here renames or removes a      */
+/* class an existing page relies on.                                     */
+/* ---------------------------------------------------------------------- */
+
+.cc-page:not(.cc-page-wide) {
+  max-width: 1160px;
+}
+
+.cc-card {
+  box-shadow: var(--cc-shadow-sm);
+  padding: 1.35rem 1.5rem;
+}
+
+.cc-card-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #e4eaec;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.1rem;
+  padding-bottom: 0.9rem;
+}
+.cc-card-header-text h2 {
+  align-items: center;
+  color: var(--cc-text);
+  display: flex;
+  font-size: 1.05rem;
+  gap: 0.5rem;
+  margin: 0;
+}
+.cc-card-header-text h2 svg {
+  color: var(--cc-text-muted);
+  flex-shrink: 0;
+}
+.cc-card-description {
+  color: var(--cc-text-muted);
+  font-size: 0.84rem;
+  margin: 0.3rem 0 0;
+}
+.cc-card-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.cc-section-heading h2 {
+  font-size: 1.05rem;
+}
+
+.cc-metadata-grid dt {
+  font-size: 0.78rem;
+}
+.cc-metadata-grid dd {
+  font-size: 0.92rem;
+}
+
+.cc-metadata-grid-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* De-emphasises a technical-only metadata value (a raw UUID, fixture key,
+   template version) so it doesn't visually compete with operator-relevant
+   values, without hiding or removing it from the grid. */
+.cc-technical-value {
+  color: var(--cc-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cc-badge {
+  font-size: 0.72rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.cc-status-card-headline {
+  border-radius: var(--cc-radius-md);
+  padding: 0.9rem 1.1rem;
+}
+.cc-status-card-success .cc-status-card-headline {
+  background: var(--cc-success-bg);
+}
+.cc-status-card-warning .cc-status-card-headline {
+  background: var(--cc-warning-bg);
+}
+.cc-status-card-danger .cc-status-card-headline {
+  background: var(--cc-danger-bg);
+}
+.cc-status-card-info .cc-status-card-headline {
+  background: var(--cc-info-bg);
+}
+.cc-status-card-neutral .cc-status-card-headline {
+  background: var(--cc-neutral-bg);
+}
+.cc-status-card-note {
+  border-top: 1px solid var(--cc-border);
+  color: var(--cc-text-muted);
+  font-size: 0.8rem;
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+}
+
+.cc-lifecycle-row {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.25rem;
+}
+.cc-lifecycle-row .cc-field {
+  flex: 1 1 260px;
+  margin-bottom: 0;
+}
+.cc-lifecycle-row .cc-action-bar {
+  flex: 0 0 auto;
+  padding-bottom: 0.05rem;
+}
+
+@media (max-width: 640px) {
+  .cc-metadata-grid-2col {
+    grid-template-columns: 1fr;
+  }
+  .cc-lifecycle-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .cc-lifecycle-row .cc-action-bar {
+    width: 100%;
+  }
+}
+
 /* --- Meal Plans ---
    Visual redesign against the approved mockup: warm cream cards, a
    compact hero with the "Good food, happier days" artwork (a real asset —

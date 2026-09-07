@@ -27,15 +27,20 @@ export function CcStatusCard({
   status,
   description,
   items,
+  icon,
   children,
 }: {
   tone?: CcBadgeTone;
   status: ReactNode;
   description?: ReactNode;
   items?: CcStatusCardItem[];
+  /** Overrides the tone's default icon — for states (e.g. "Disabled") where
+   * the tone-derived icon (HelpCircle for neutral) doesn't read as clearly
+   * as a state-specific one. */
+  icon?: typeof CheckCircle2;
   children?: ReactNode;
 }) {
-  const Icon = toneIcon[tone];
+  const Icon = icon ?? toneIcon[tone];
   return (
     <div className={`cc-status-card cc-status-card-${tone}`}>
       <div className="cc-status-card-headline">

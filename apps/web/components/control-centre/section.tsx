@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
+
+type CcCardIcon = ComponentType<{ size?: number; strokeWidth?: number; "aria-hidden"?: boolean }>;
 
 /**
  * Grouped-information card. `columns` renders `children` inside a
@@ -37,8 +39,46 @@ export function CcSection({
   );
 }
 
-export function CcCard({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`cc-card ${className}`.trim()}>{children}</div>;
+/**
+ * `title`/`description`/`icon`/`actions` are optional — when given, they
+ * render as a header row *inside* the card (icon + heading, supporting
+ * copy, right-aligned actions) with a divider before `children`, so a
+ * card can carry its own heading instead of relying on a separate
+ * `CcSection` title floating above it. Omit them (as most existing call
+ * sites do) and `CcCard` behaves exactly as before.
+ */
+export function CcCard({
+  children,
+  className = "",
+  title,
+  description,
+  icon: Icon,
+  actions,
+}: {
+  children: ReactNode;
+  className?: string;
+  title?: ReactNode;
+  description?: ReactNode;
+  icon?: CcCardIcon;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className={`cc-card ${className}`.trim()}>
+      {(title || actions) && (
+        <div className="cc-card-header">
+          <div className="cc-card-header-text">
+            <h2>
+              {Icon && <Icon aria-hidden size={18} strokeWidth={2} />}
+              <span>{title}</span>
+            </h2>
+            {description && <p className="cc-card-description">{description}</p>}
+          </div>
+          {actions && <div className="cc-card-actions">{actions}</div>}
+        </div>
+      )}
+      {children}
+    </div>
+  );
 }
 
 export function CcColumns({

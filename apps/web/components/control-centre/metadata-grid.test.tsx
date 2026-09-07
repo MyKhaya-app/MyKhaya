@@ -26,4 +26,22 @@ describe("CcMetadataGrid", () => {
     const dt = screen.getByText("Note");
     expect(dt.parentElement?.className).toContain("cc-metadata-item-span");
   });
+
+  it("defaults to the auto-fit column layout", () => {
+    const { container } = render(
+      <CcMetadataGrid>
+        <CcMetadataItem label="A">1</CcMetadataItem>
+      </CcMetadataGrid>,
+    );
+    expect(container.querySelector("dl")?.className).not.toContain("cc-metadata-grid-2col");
+  });
+
+  it("applies the fixed two-column layout when requested", () => {
+    const { container } = render(
+      <CcMetadataGrid columns="fixed-2">
+        <CcMetadataItem label="A">1</CcMetadataItem>
+      </CcMetadataGrid>,
+    );
+    expect(container.querySelector("dl")?.className).toContain("cc-metadata-grid-2col");
+  });
 });

@@ -7,16 +7,43 @@ import {
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON,
 } from "@simplewebauthn/browser";
+import {
+  Fingerprint,
+  KeyRound,
+  LogOut,
+  Pencil,
+  Plus,
+  Power,
+  PowerOff,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+  UserCog,
+} from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { PlatformReauthModal } from "@/components/platform-reauth-modal";
 import { readableDate, relativeTime, titleCase } from "@/components/platform-format";
 import { isSelfAdministrator } from "@/components/platform-mfa-logic";
+import { PLATFORM_ROLES } from "@/components/platform-types";
 import type {
   AdministratorSecurity,
   AdminSessionSummary,
   PlatformActor,
 } from "@/components/platform-types";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcStatusCard } from "@/components/control-centre/status-card";
+import { CcActionBar, type CcAction } from "@/components/control-centre/action-bar";
+import { CcDangerZone } from "@/components/control-centre/danger-zone";
+import { CcBadge } from "@/components/control-centre/badge";
+import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
+import { CcDialog, CcDialogActions, CcConfirmDialog } from "@/components/control-centre/dialog";
+import { CcRecordList, CcRecordCard } from "@/components/control-centre/record-list";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 
 type Tab = "overview" | "security" | "sessions" | "activity";
 type AuditRow = {
@@ -28,6 +55,11 @@ type AuditRow = {
   target_id: string | null;
   reason: string | null;
 };
+
+function auditReason(formData: FormData): string {
+  const value = formData.get("audit_reason");
+  return typeof value === "string" ? value : "";
+}
 
 function useReauth() {
   const [pending, setPending] = useState<(() => void | Promise<void>) | null>(null);
@@ -66,6 +98,7 @@ export default function AdministratorDetailPage() {
   const reauth = useReauth();
 
   const isSelf = isSelfAdministrator(me, id);
+  const isOwner = me?.role === "platform_owner";
 
   const load = useCallback(async () => {
     setError("");
@@ -105,43 +138,43 @@ export default function AdministratorDetailPage() {
   if (error && !security) {
     return (
       <PlatformShell>
-        <main className="platform-page">
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        </main>
+        <CcPage>
+          <CcErrorState>{error}</CcErrorState>
+        </CcPage>
       </PlatformShell>
     );
   }
   if (!security || !me) {
     return (
       <PlatformShell>
-        <main className="platform-page">
-          <p role="status">Loading administrator…</p>
-        </main>
+        <CcPage>
+          <CcLoadingState label="Loading administrator…" />
+        </CcPage>
       </PlatformShell>
     );
   }
 
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>{isSelf ? "Your administrator account" : "Administrator"}</p>
-            <h1>{security.display_name}</h1>
-          </div>
-        </div>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
-        {message && (
-          <p className="notice" role="status">
-            {message}
-          </p>
-        )}
+      <CcPage>
+        <CcPageHeader
+          eyebrow={isSelf ? "Your administrator account" : "Administrator"}
+          title={
+            <>
+              {security.display_name}{" "}
+              <CcBadge tone={security.is_active ? "success" : "danger"}>
+                {security.is_active ? "Active" : "Deactivated"}
+              </CcBadge>{" "}
+              <CcBadge tone={security.mfa_enrolled ? "success" : "warning"}>
+                {security.mfa_enrolled ? "MFA enrolled" : "MFA not enrolled"}
+              </CcBadge>
+            </>
+          }
+          description={`${security.email} · ${titleCase(security.role)}`}
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        {message && <CcNotice tone="success">{message}</CcNotice>}
+
         <nav className="admin-detail-tabs" aria-label="Administrator sections">
           {(["overview", "security", "sessions", "activity"] as Tab[]).map((value) => (
             <button
@@ -159,6 +192,7 @@ export default function AdministratorDetailPage() {
           <OverviewTab
             security={security}
             isSelf={isSelf}
+            isOwner={isOwner}
             reauth={reauth}
             onChanged={(msg) => {
               setMessage(msg);
@@ -195,7 +229,7 @@ export default function AdministratorDetailPage() {
           />
         )}
         {tab === "activity" && <ActivityTab audit={audit} />}
-      </main>
+      </CcPage>
       {reauth.modal}
     </PlatformShell>
   );
@@ -204,23 +238,25 @@ export default function AdministratorDetailPage() {
 function OverviewTab({
   security,
   isSelf,
+  isOwner,
   reauth,
   onChanged,
   setError,
 }: {
   security: AdministratorSecurity;
   isSelf: boolean;
+  isOwner: boolean;
   reauth: ReturnType<typeof useReauth>;
   onChanged: (message: string) => void;
   setError: (value: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [activeConfirmOpen, setActiveConfirmOpen] = useState(false);
+  const [roleOpen, setRoleOpen] = useState(false);
+  const [proposedRole, setProposedRole] = useState(security.role);
 
-  async function toggleActive() {
-    const reason = window.prompt(
-      `Reason for ${security.is_active ? "deactivating" : "reactivating"} this administrator (at least 10 characters):`,
-    );
-    if (!reason || reason.trim().length < 10) return;
+  const runToggleActive = async (reason: string) => {
+    setActiveConfirmOpen(false);
     const run = async () => {
       setBusy(true);
       setError("");
@@ -243,42 +279,129 @@ function OverviewTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
+  };
+
+  const runRoleChange = async (reason: string) => {
+    setRoleOpen(false);
+    const run = async () => {
+      setBusy(true);
+      setError("");
+      try {
+        await platformApi.patch(`/administrators/${security.id}`, {
+          role: proposedRole,
+          reason,
+          confirmed: true,
+        });
+        onChanged(`Role changed to ${titleCase(proposedRole)}.`);
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 403) throw cause;
+        setError(cause instanceof ApiError ? cause.message : "The role could not be changed.");
+      } finally {
+        setBusy(false);
+      }
+    };
+    try {
+      await run();
+    } catch (cause) {
+      reauth.require(run)(cause);
+    }
+  };
+
+  const actions: CcAction[] = [];
+  if (!isSelf) {
+    actions.push({
+      key: "toggle-active",
+      label: security.is_active ? "Deactivate administrator" : "Reactivate administrator",
+      icon: security.is_active ? PowerOff : Power,
+      variant: security.is_active ? "caution" : "primary",
+      disabled: busy,
+      onClick: () => setActiveConfirmOpen(true),
+    });
+  }
+  if (isOwner && !isSelf) {
+    actions.push({
+      key: "change-role",
+      label: "Change role",
+      icon: UserCog,
+      variant: "secondary",
+      disabled: busy,
+      onClick: () => {
+        setProposedRole(security.role);
+        setRoleOpen(true);
+      },
+    });
   }
 
   return (
-    <section className="overview-panel">
-      <dl>
-        <div>
-          <dt>Email</dt>
-          <dd>{security.email}</dd>
-        </div>
-        <div>
-          <dt>Role</dt>
-          <dd>{titleCase(security.role)}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>
-            <strong className={`state-label ${security.is_active ? "state-healthy" : "state-unavailable"}`}>
-              {security.is_active ? "Active" : "Deactivated"}
-            </strong>
-          </dd>
-        </div>
-        <div>
-          <dt>MFA</dt>
-          <dd>
-            <strong className={`state-label ${security.mfa_enrolled ? "state-healthy" : "state-not-configured"}`}>
-              {security.mfa_enrolled ? "Enrolled" : "Not enrolled"}
-            </strong>
-          </dd>
-        </div>
-      </dl>
-      {!isSelf && (
-        <button className="secondary" onClick={toggleActive} disabled={busy}>
-          {security.is_active ? "Deactivate administrator" : "Reactivate administrator"}
-        </button>
+    <>
+      <CcColumns ratio="1-1">
+        <CcCard title="Account details">
+          <CcMetadataGrid>
+            <CcMetadataItem label="Email">{security.email}</CcMetadataItem>
+            <CcMetadataItem label="Role">{titleCase(security.role)}</CcMetadataItem>
+          </CcMetadataGrid>
+        </CcCard>
+        <CcCard title="Status" icon={ShieldCheck}>
+          <CcStatusCard
+            tone={security.is_active ? "success" : "danger"}
+            status={security.is_active ? "Active" : "Deactivated"}
+            description={
+              security.is_active
+                ? "This administrator can sign in to the Control Centre."
+                : "This administrator cannot currently sign in."
+            }
+            items={[
+              { label: "MFA", value: security.mfa_enrolled ? "Enrolled" : "Not enrolled" },
+            ]}
+          />
+        </CcCard>
+      </CcColumns>
+
+      {actions.length > 0 && (
+        <CcCard title="Actions" description="Manage this administrator's access and role." icon={UserCog}>
+          <CcActionBar actions={actions} />
+        </CcCard>
       )}
-    </section>
+
+      <CcConfirmDialog
+        open={activeConfirmOpen}
+        onClose={() => setActiveConfirmOpen(false)}
+        title={security.is_active ? "Deactivate administrator" : "Reactivate administrator"}
+        description={
+          security.is_active
+            ? `Deactivate ${security.display_name}? They will no longer be able to sign in.`
+            : `Reactivate ${security.display_name}? They will be able to sign in again.`
+        }
+        confirmLabel={security.is_active ? "Deactivate" : "Reactivate"}
+        variant={security.is_active ? "destructive" : "default"}
+        onConfirm={(formData) => runToggleActive(auditReason(formData))}
+      />
+
+      <CcConfirmDialog
+        open={roleOpen}
+        onClose={() => setRoleOpen(false)}
+        title="Change role"
+        description={
+          <>
+            Change {security.display_name}&rsquo;s role from <strong>{titleCase(security.role)}</strong> to{" "}
+            <strong>{titleCase(proposedRole)}</strong>?
+          </>
+        }
+        extraFields={
+          <CcField label="New role">
+            <select value={proposedRole} onChange={(event) => setProposedRole(event.target.value)}>
+              {PLATFORM_ROLES.map((role) => (
+                <option key={role.value} value={role.value}>
+                  {role.label}
+                </option>
+              ))}
+            </select>
+          </CcField>
+        }
+        confirmLabel="Change role"
+        onConfirm={(formData) => runRoleChange(auditReason(formData))}
+      />
+    </>
   );
 }
 
@@ -313,12 +436,10 @@ function OtherAdminSecurityTab({
   setError: (value: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
-  async function resetMfa() {
-    const reason = window.prompt(
-      "Reason for resetting this administrator's MFA — they will need to enrol again (at least 10 characters):",
-    );
-    if (!reason || reason.trim().length < 10) return;
+  const runResetMfa = async (reason: string) => {
+    setResetOpen(false);
     const run = async () => {
       setBusy(true);
       setError("");
@@ -337,7 +458,7 @@ function OtherAdminSecurityTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
-  }
+  };
 
   // PCC-SEC-006: an Administrator/Security viewer gets the reduced summary
   // shape (counts, no raw session IPs/user-agents/session IDs) — the full
@@ -346,36 +467,50 @@ function OtherAdminSecurityTab({
 
   return (
     <>
-      <section className="overview-grid">
-        <section className="overview-panel">
-          <h2>Authenticator app</h2>
+      <CcColumns ratio="1-1">
+        <CcCard title="Authenticator app" icon={KeyRound}>
           <p>{security.totp_enabled ? "Configured" : "Not configured"}</p>
-        </section>
-        <section className="overview-panel">
-          <h2>Passkeys</h2>
+        </CcCard>
+        <CcCard title="Passkeys" icon={Fingerprint}>
           <p>{passkeyCount} registered</p>
-        </section>
-        {security.sessions === undefined && (
-          <section className="overview-panel">
-            <h2>Active sessions</h2>
-            <p>
-              {security.active_session_count ?? 0}
-              {security.last_seen_at ? ` · last active ${relativeTime(security.last_seen_at)}` : ""}
-            </p>
-          </section>
-        )}
-      </section>
-      <section className="danger-zone">
-        <h2>Danger zone</h2>
-        <p>
-          Resetting this administrator&rsquo;s MFA removes every passkey, their authenticator app,
-          and their recovery codes, and signs them out everywhere. They will need to enrol a new
-          method the next time they sign in.
-        </p>
-        <button className="danger" onClick={resetMfa} disabled={busy}>
-          Reset MFA for this administrator
-        </button>
-      </section>
+        </CcCard>
+      </CcColumns>
+      {security.sessions === undefined && (
+        <CcCard title="Active sessions">
+          <p>
+            {security.active_session_count ?? 0}
+            {security.last_seen_at ? ` · last active ${relativeTime(security.last_seen_at)}` : ""}
+          </p>
+        </CcCard>
+      )}
+
+      <CcDangerZone
+        title="Danger zone"
+        description="Resetting this administrator's MFA removes every passkey, their authenticator app, and their recovery codes, and signs them out everywhere. They will need to enrol a new method the next time they sign in."
+      >
+        <CcActionBar
+          actions={[
+            {
+              key: "reset-mfa",
+              label: "Reset MFA for this administrator",
+              icon: ShieldAlert,
+              variant: "destructive",
+              disabled: busy,
+              onClick: () => setResetOpen(true),
+            },
+          ]}
+        />
+      </CcDangerZone>
+
+      <CcConfirmDialog
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        title="Reset MFA"
+        description="This removes every passkey, their authenticator app and their recovery codes, and signs them out everywhere."
+        confirmLabel="Reset MFA"
+        variant="destructive"
+        onConfirm={(formData) => runResetMfa(auditReason(formData))}
+      />
     </>
   );
 }
@@ -396,6 +531,9 @@ function SelfSecurityTab({
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [disableTotpOpen, setDisableTotpOpen] = useState(false);
+  const [recoveryConfirmOpen, setRecoveryConfirmOpen] = useState(false);
 
   useEffect(() => {
     platformApi
@@ -442,8 +580,8 @@ function SelfSecurityTab({
     }
   }
 
-  async function removePasskey(credentialId: string) {
-    if (!window.confirm("Remove this passkey? You will no longer be able to sign in with it.")) return;
+  const runRemovePasskey = async (credentialId: string) => {
+    setRemoveTarget(null);
     const run = async () => {
       setError("");
       try {
@@ -459,7 +597,7 @@ function SelfSecurityTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
-  }
+  };
 
   async function startTotp() {
     setError("");
@@ -491,9 +629,8 @@ function SelfSecurityTab({
     }
   }
 
-  async function disableTotp() {
-    const reason = window.prompt("Reason for disabling your authenticator app (at least 10 characters):");
-    if (!reason || reason.trim().length < 10) return;
+  const runDisableTotp = async (reason: string) => {
+    setDisableTotpOpen(false);
     const run = async () => {
       setError("");
       try {
@@ -509,20 +646,10 @@ function SelfSecurityTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
-  }
+  };
 
-  async function generateRecoveryCodes() {
-    const verb = (recoveryStatus ?? 0) > 0 ? "regenerate" : "generate";
-    if (
-      verb === "regenerate" &&
-      !window.confirm("Regenerating recovery codes invalidates every previous code. Continue?")
-    )
-      return;
-    const reason = window.prompt(
-      `Reason to ${verb} recovery codes (at least 10 characters):`,
-      "Refreshing recovery codes",
-    );
-    if (!reason || reason.trim().length < 10) return;
+  const runGenerateRecoveryCodes = async (reason: string) => {
+    setRecoveryConfirmOpen(false);
     const run = async () => {
       setError("");
       try {
@@ -542,7 +669,9 @@ function SelfSecurityTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
-  }
+  };
+
+  const recoveryVerb = (recoveryStatus ?? 0) > 0 ? "Regenerate" : "Generate";
 
   // Self-view always gets the full-detail shape from the backend (see
   // PCC-SEC-006), so this is never actually undefined here — the fallback is
@@ -551,55 +680,59 @@ function SelfSecurityTab({
 
   return (
     <>
-      <section className="action-panel">
-        <h2>Passkeys</h2>
-        {ownCredentials.length === 0 ? (
-          <p className="quiet-state">No passkeys registered yet.</p>
-        ) : (
-          <ul className="credential-list">
-            {ownCredentials.map((credential) => (
-              <li key={credential.id}>
-                <div>
-                  <strong>{credential.label}</strong>
-                  <small>
-                    Added {readableDate(credential.created_at)} · Last used{" "}
-                    {credential.last_used_at ? relativeTime(credential.last_used_at) : "never"}
-                  </small>
-                </div>
-                <div className="platform-modal-actions">
+      <CcCard
+        title="Passkeys"
+        icon={Fingerprint}
+        actions={
+          <button className="secondary" onClick={setUpPasskey} disabled={busy}>
+            <Plus aria-hidden size={16} strokeWidth={2} /> Add a passkey
+          </button>
+        }
+      >
+        <CcRecordList emptyMessage="No passkeys registered yet.">
+          {ownCredentials.map((credential) => (
+            <CcRecordCard
+              key={credential.id}
+              title={credential.label}
+              meta={[
+                `Added ${readableDate(credential.created_at)} · Last used ${
+                  credential.last_used_at ? relativeTime(credential.last_used_at) : "never"
+                }`,
+              ]}
+              actions={
+                <>
                   <button
                     type="button"
                     className="tertiary"
                     disabled={renaming === credential.id}
                     onClick={() => renamePasskey(credential.id, credential.label)}
                   >
-                    Rename
+                    <Pencil aria-hidden size={14} strokeWidth={2} /> Rename
                   </button>
-                  <button
-                    type="button"
-                    className="tertiary"
-                    onClick={() => removePasskey(credential.id)}
-                  >
-                    Remove
+                  <button type="button" className="tertiary" onClick={() => setRemoveTarget(credential.id)}>
+                    <Trash2 aria-hidden size={14} strokeWidth={2} /> Remove
                   </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        <button className="secondary" onClick={setUpPasskey} disabled={busy}>
-          Add a passkey
-        </button>
-      </section>
+                </>
+              }
+            />
+          ))}
+        </CcRecordList>
+      </CcCard>
 
-      <section className="action-panel">
-        <h2>Authenticator app</h2>
+      <CcCard title="Authenticator app" icon={KeyRound}>
         {security.totp_enabled ? (
           <>
-            <p>Configured{security.totp_verified_at && ` · verified ${readableDate(security.totp_verified_at)}`}.</p>
-            <button className="secondary" onClick={disableTotp}>
-              Disable authenticator app
-            </button>
+            <p>{`Configured${security.totp_verified_at ? ` · verified ${readableDate(security.totp_verified_at)}` : ""}.`}</p>
+            <CcActionBar
+              actions={[
+                {
+                  key: "disable-totp",
+                  label: "Disable authenticator app",
+                  variant: "caution",
+                  onClick: () => setDisableTotpOpen(true),
+                },
+              ]}
+            />
           </>
         ) : totpSetup ? (
           <form onSubmit={verifyTotp} className="mfa-method">
@@ -607,17 +740,9 @@ function SelfSecurityTab({
             <p>
               Manual key: <code>{totpSetup.secret}</code>
             </p>
-            <label>
-              6-digit code
-              <input
-                name="code"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                minLength={6}
-                maxLength={6}
-                required
-              />
-            </label>
+            <CcField label="6-digit code">
+              <input name="code" inputMode="numeric" pattern="[0-9]*" minLength={6} maxLength={6} required />
+            </CcField>
             <button disabled={busy}>{busy ? "Verifying…" : "Verify and enable"}</button>
           </form>
         ) : (
@@ -625,10 +750,9 @@ function SelfSecurityTab({
             Set up an authenticator app
           </button>
         )}
-      </section>
+      </CcCard>
 
-      <section className="action-panel">
-        <h2>Recovery codes</h2>
+      <CcCard title="Recovery codes" icon={ShieldCheck}>
         <p>
           {recoveryStatus === null
             ? "Loading…"
@@ -636,10 +760,9 @@ function SelfSecurityTab({
         </p>
         {recoveryCodes ? (
           <>
-            <p className="notice">
-              Save these now — they will not be shown again. Generating new codes invalidates
-              these.
-            </p>
+            <CcNotice tone="warning">
+              Save these now — they will not be shown again. Generating new codes invalidates these.
+            </CcNotice>
             <ul className="recovery-code-list">
               {recoveryCodes.map((code) => (
                 <li key={code}>{code}</li>
@@ -650,14 +773,60 @@ function SelfSecurityTab({
             </button>
           </>
         ) : (
-          <button className="secondary" onClick={generateRecoveryCodes} disabled={!security.mfa_enrolled}>
+          <button className="secondary" onClick={() => setRecoveryConfirmOpen(true)} disabled={!security.mfa_enrolled}>
             {(recoveryStatus ?? 0) > 0 ? "Regenerate recovery codes" : "Generate recovery codes"}
           </button>
         )}
         {!security.mfa_enrolled && (
           <small>Set up a passkey or authenticator app first — recovery codes back up an existing method.</small>
         )}
-      </section>
+      </CcCard>
+
+      {/* Plain confirm (no reason) — this mirrors the pre-migration
+          window.confirm behaviour exactly; removing a passkey never
+          required a reason, so CcConfirmDialog's mandatory reason field
+          would add a requirement that didn't exist before. */}
+      <CcDialog open={Boolean(removeTarget)} onClose={() => setRemoveTarget(null)} title="Remove passkey">
+        <div className="cc-dialog-scroll">
+          <p>Remove this passkey? You will no longer be able to sign in with it.</p>
+        </div>
+        <CcDialogActions>
+          <button type="button" className="secondary" onClick={() => setRemoveTarget(null)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => removeTarget && void runRemovePasskey(removeTarget)}
+          >
+            Remove
+          </button>
+        </CcDialogActions>
+      </CcDialog>
+
+      <CcConfirmDialog
+        open={disableTotpOpen}
+        onClose={() => setDisableTotpOpen(false)}
+        title="Disable authenticator app"
+        description="Disable your authenticator app? You can set it up again later."
+        confirmLabel="Disable"
+        variant="destructive"
+        onConfirm={(formData) => runDisableTotp(auditReason(formData))}
+      />
+
+      <CcConfirmDialog
+        open={recoveryConfirmOpen}
+        onClose={() => setRecoveryConfirmOpen(false)}
+        title={`${recoveryVerb} recovery codes`}
+        description={
+          recoveryVerb === "Regenerate"
+            ? "Regenerating recovery codes invalidates every previous code."
+            : "Generate a fresh set of recovery codes for this account."
+        }
+        confirmLabel={recoveryVerb}
+        variant={recoveryVerb === "Regenerate" ? "destructive" : "default"}
+        onConfirm={(formData) => runGenerateRecoveryCodes(auditReason(formData))}
+      />
     </>
   );
 }
@@ -678,6 +847,8 @@ function SessionsTab({
   setError: (value: string) => void;
 }) {
   const router = useRouter();
+  const [revokeAllOpen, setRevokeAllOpen] = useState(false);
+
   async function revokeOne(sessionId: string) {
     const run = async () => {
       setError("");
@@ -696,9 +867,8 @@ function SessionsTab({
     }
   }
 
-  async function revokeAllOthers() {
-    const reason = window.prompt("Reason for signing out every other device (at least 10 characters):");
-    if (!reason || reason.trim().length < 10) return;
+  const runRevokeAllOthers = async (reason: string) => {
+    setRevokeAllOpen(false);
     const run = async () => {
       setError("");
       try {
@@ -714,7 +884,7 @@ function SessionsTab({
     } catch (cause) {
       reauth.require(run)(cause);
     }
-  }
+  };
 
   const rows = isSelf ? ownSessions : security.sessions;
   // PCC-SEC-006: an Administrator/Security viewer only gets a session count
@@ -722,82 +892,83 @@ function SessionsTab({
   // IP/user-agent list an Owner sees — show that instead of a stuck spinner.
   if (!isSelf && security.sessions === undefined) {
     return (
-      <section className="action-panel">
-        <h2>Active sessions</h2>
+      <CcCard title="Active sessions">
         <p>
           {security.active_session_count ?? 0} active session
           {security.active_session_count === 1 ? "" : "s"}
           {security.last_seen_at ? ` · last active ${relativeTime(security.last_seen_at)}` : ""}
         </p>
         <small>Session IP/device detail is visible to Platform Owners only.</small>
-      </section>
+      </CcCard>
     );
   }
 
   return (
-    <section className="action-panel">
-      <h2>Active sessions</h2>
-      {!rows ? (
-        <p role="status">Loading sessions…</p>
-      ) : rows.length === 0 ? (
-        <p className="quiet-state">No active sessions.</p>
-      ) : (
-        <ul className="credential-list">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <div>
-                <strong>
-                  {row.user_agent}
-                  {"current" in row && row.current ? " · This device" : ""}
-                </strong>
-                <small>
-                  Signed in {readableDate(row.created_at)} · Last active {relativeTime(row.last_seen_at)} ·{" "}
-                  {row.source_ip}
-                </small>
-              </div>
-              {isSelf && !("current" in row && row.current) && (
-                <button type="button" className="tertiary" onClick={() => revokeOne(row.id)}>
-                  Revoke
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {isSelf && (
-        <button className="secondary" onClick={revokeAllOthers}>
-          Sign out every other device
-        </button>
-      )}
-    </section>
+    <>
+      <CcCard
+        title="Active sessions"
+        icon={Fingerprint}
+        actions={
+          isSelf ? (
+            <button className="secondary" onClick={() => setRevokeAllOpen(true)}>
+              <LogOut aria-hidden size={16} strokeWidth={2} /> Sign out every other device
+            </button>
+          ) : undefined
+        }
+      >
+        {!rows ? (
+          <CcLoadingState label="Loading sessions…" />
+        ) : (
+          <CcRecordList emptyMessage="No active sessions.">
+            {rows.map((row) => (
+              <CcRecordCard
+                key={row.id}
+                title={row.user_agent}
+                badge={"current" in row && row.current ? "This device" : undefined}
+                badgeTone="info"
+                meta={[`Signed in ${readableDate(row.created_at)} · Last active ${relativeTime(row.last_seen_at)} · ${row.source_ip}`]}
+                actions={
+                  isSelf && !("current" in row && row.current) ? (
+                    <button type="button" className="tertiary" onClick={() => revokeOne(row.id)}>
+                      Revoke
+                    </button>
+                  ) : undefined
+                }
+              />
+            ))}
+          </CcRecordList>
+        )}
+      </CcCard>
+
+      <CcConfirmDialog
+        open={revokeAllOpen}
+        onClose={() => setRevokeAllOpen(false)}
+        title="Sign out every other device"
+        description="This signs you out of every session except this one."
+        confirmLabel="Sign out other devices"
+        variant="destructive"
+        onConfirm={(formData) => runRevokeAllOthers(auditReason(formData))}
+      />
+    </>
   );
 }
 
 function ActivityTab({ audit }: { audit: AuditRow[] | null }) {
-  if (!audit) return <p role="status">Loading activity…</p>;
-  if (audit.length === 0) return <p className="quiet-state">No recorded activity for this administrator yet.</p>;
+  const columns: CcTableColumn<AuditRow>[] = [
+    { key: "when", header: "When", render: (row) => readableDate(row.created_at) },
+    { key: "action", header: "Action", render: (row) => titleCase(row.action) },
+    { key: "outcome", header: "Outcome", render: (row) => titleCase(row.outcome) },
+    { key: "reason", header: "Reason", render: (row) => row.reason ?? "—" },
+  ];
   return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Action</th>
-            <th>Outcome</th>
-            <th>Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {audit.map((row) => (
-            <tr key={row.id}>
-              <td>{readableDate(row.created_at)}</td>
-              <td>{titleCase(row.action)}</td>
-              <td>{titleCase(row.outcome)}</td>
-              <td>{row.reason ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <CcCard title="Activity">
+      <CcTable
+        columns={columns}
+        rows={audit}
+        rowKey={(row) => row.id}
+        emptyMessage="No recorded activity for this administrator yet."
+        caption="Administrator activity"
+      />
+    </CcCard>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { PowerOff } from "lucide-react";
 import { CcStatusCard } from "./status-card";
 
 describe("CcStatusCard", () => {
@@ -50,5 +51,10 @@ describe("CcStatusCard", () => {
     render(<CcStatusCard status="Unknown" />);
     const card = screen.getByText("Unknown").closest(".cc-status-card");
     expect(card?.className).toContain("cc-status-card-neutral");
+  });
+
+  it("lets a caller override the tone-derived icon", () => {
+    const { container } = render(<CcStatusCard tone="neutral" status="Disabled" icon={PowerOff} />);
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 });
