@@ -7,7 +7,7 @@ import { PlatformShell } from "@/components/platform-shell";
 import { readableDate, relativeTime, titleCase } from "@/components/platform-format";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcNotice } from "@/components/control-centre/status-message";
+import { CcNotice, CcEmptyState } from "@/components/control-centre/status-message";
 
 type Overview = {
   users: { total: number; verified: number; unverified: number; active: number; suspended: number };
@@ -225,7 +225,7 @@ export default function PlatformOverview() {
                     ))}
                   </ol>
                 ) : (
-                  <p className="quiet-state">No significant recent activity.</p>
+                  <CcEmptyState>No significant recent activity.</CcEmptyState>
                 )}
               </section>
             </div>

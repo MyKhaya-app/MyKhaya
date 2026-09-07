@@ -5,6 +5,10 @@ import Link from "next/link";
 import { platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { readableDate } from "@/components/platform-format";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcNotice } from "@/components/control-centre/status-message";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 
 // "security", "administrators", "subscriptions", "incidents" and
 // "settings" are deliberately not listed here — they now have dedicated
@@ -51,15 +55,41 @@ export default function PlatformSection({ params }: { params: Promise<{ section:
   }, [section, title]);
 
   const rows = flatten(payload);
-  const columns = Array.from(
+  const columnKeys = Array.from(
     new Set(rows.flatMap((row) => (row && typeof row === "object" ? Object.keys(row) : []))),
   ).slice(0, 8);
 
   if (!title) return <p>Not found</p>;
-  return <PlatformShell><main className="platform-page">
-    <div className="platform-heading"><div><p>Control Centre</p><h1>{title}</h1></div></div>
-    {error && <p className="notice error" role="alert">{error}</p>}
-    {!payload && !error ? <p role="status">Loading {title.toLowerCase()}…</p> : rows.length === 0 ? <p className="platform-empty">No records are available.</p> :
-      <div className="table-scroll" tabIndex={0} aria-label={`${title} table`}><table><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{columns.map((column) => { const value = (row as Record<string, unknown>)[column]; return <td key={column}>{column === "id" && (section === "users" || section === "homes") ? <Link className="table-link" href={`/${section}/${String(value)}`}>{String(value)}</Link> : displayValue(value)}</td>; })}</tr>)}</tbody></table></div>}
-  </main></PlatformShell>;
+
+  const columns: CcTableColumn<Record<string, unknown>>[] = columnKeys.map((key) => ({
+    key,
+    header: key.replaceAll("_", " "),
+    render: (row) => {
+      const value = row[key];
+      if (key === "id" && (section === "users" || section === "homes")) {
+        return (
+          <Link className="table-link" href={`/${section}/${String(value)}`}>
+            {String(value)}
+          </Link>
+        );
+      }
+      return displayValue(value);
+    },
+  }));
+
+  return (
+    <PlatformShell>
+      <CcPage wide>
+        <CcPageHeader eyebrow="Control Centre" title={title} />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        <CcTable
+          columns={columns}
+          rows={!payload && !error ? null : (rows as Record<string, unknown>[])}
+          rowKey={(row) => (typeof row.id === "string" ? row.id : JSON.stringify(row))}
+          emptyMessage="No records are available."
+          caption={`${title} table`}
+        />
+      </CcPage>
+    </PlatformShell>
+  );
 }

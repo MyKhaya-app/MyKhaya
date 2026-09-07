@@ -19,7 +19,7 @@ import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcSection, CcCard } from "@/components/control-centre/section";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcBadge } from "@/components/control-centre/badge";
-import { CcNotice } from "@/components/control-centre/status-message";
+import { CcNotice, CcEmptyState } from "@/components/control-centre/status-message";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 
 const LIFECYCLE_OPTIONS: { value: string; label: string }[] = [
@@ -188,7 +188,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
               description="Every entry here is (or was) visible on the public Status page, in order — updates are append-only and never edited in place."
             >
               {data.updates.length === 0 ? (
-                <p className="quiet-state">No updates recorded yet.</p>
+                <CcEmptyState>No updates recorded yet.</CcEmptyState>
               ) : (
                 <div className="record-list">
                   {data.updates.map((update) => (

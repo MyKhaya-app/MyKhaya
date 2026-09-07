@@ -23,7 +23,7 @@ import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcSection, CcCard, CcColumns } from "@/components/control-centre/section";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcBadge, toneFromStateClass } from "@/components/control-centre/badge";
-import { CcNotice } from "@/components/control-centre/status-message";
+import { CcNotice, CcEmptyState } from "@/components/control-centre/status-message";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 
@@ -475,7 +475,7 @@ export default function SubscriptionDetailPage({
 
               <CcSection title="Commercial event history">
                 {data.history.length === 0 ? (
-                  <p className="quiet-state">No commercial events recorded yet.</p>
+                  <CcEmptyState>No commercial events recorded yet.</CcEmptyState>
                 ) : (
                   <div className="record-list">
                     {data.history.map((event) => (
@@ -498,7 +498,7 @@ export default function SubscriptionDetailPage({
                   }
                 >
                   {data.recent_webhook_events.length === 0 ? (
-                    <p className="quiet-state">No webhook events recorded yet for this Home.</p>
+                    <CcEmptyState>No webhook events recorded yet for this Home.</CcEmptyState>
                   ) : (
                     <div className="record-list">
                       {data.recent_webhook_events.map((event) => (
@@ -517,7 +517,7 @@ export default function SubscriptionDetailPage({
               {data.subscription.provider === "stripe" && (
                 <CcSection title="Billing diagnostics">
                   {data.billing_diagnostics.length === 0 ? (
-                    <p className="quiet-state">No billing diagnostics recorded yet.</p>
+                    <CcEmptyState>No billing diagnostics recorded yet.</CcEmptyState>
                   ) : (
                     <div className="record-list">
                       {data.billing_diagnostics.slice(0, 10).map((diagnostic) => (
