@@ -1,29 +1,344 @@
 "use client";
 
-import { FormEvent, use, useEffect, useState } from "react";
-import { platformApi } from "@mykhaya/api-client";
+import { FormEvent, useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
+import { useReauthGuard } from "@/components/platform-reauth-modal";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcSection, CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcStatusCard } from "@/components/control-centre/status-card";
+import { CcActionBar, type CcAction } from "@/components/control-centre/action-bar";
+import { CcDangerZone } from "@/components/control-centre/danger-zone";
+import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
+import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
+import { CcConfirmDialog } from "@/components/control-centre/dialog";
+import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
+import { Power, PowerOff, ToggleLeft, ToggleRight } from "lucide-react";
 
-type HomeDetail = { id: string; name: string; active: boolean; created_at: string; members: { user_id: string; display_name: string; email: string; role: string }[]; pending_invitations: { id: string; email: string; role: string; expires_at: string }[]; feature_overrides: { feature: string; enabled: boolean }[]; notes: { id: string; body: string; created_at: string }[] };
-const features = ["calendar", "tasks", "shopping", "meals", "plans", "wish_lists", "notifications", "external_sharing"];
+type HomeDetail = {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+  members: { user_id: string; display_name: string; email: string; role: string }[];
+  pending_invitations: { id: string; email: string; role: string; expires_at: string }[];
+  feature_overrides: { feature: string; enabled: boolean }[];
+  notes: { id: string; body: string; created_at: string }[];
+};
 
-export default function PlatformHomeDetail({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params); const [data, setData] = useState<HomeDetail | null>(null); const [message, setMessage] = useState(""); const [reason, setReason] = useState("");
-  const load = () => platformApi.get<HomeDetail>(`/homes/${encodeURIComponent(id)}`).then(setData).catch((error: Error) => setMessage(error.message));
+const FEATURES = [
+  "calendar",
+  "tasks",
+  "shopping",
+  "meals",
+  "plans",
+  "wish_lists",
+  "notifications",
+  "external_sharing",
+] as const;
+
+const safeError = (error: unknown, fallback: string) =>
+  error instanceof Error && error.message ? error.message : fallback;
+
+const featureLabel = (feature: string) => feature.replaceAll("_", " ");
+
+export default function PlatformHomeDetail() {
+  const { id } = useParams<{ id: string }>();
+  const [data, setData] = useState<HomeDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [suspendOpen, setSuspendOpen] = useState(false);
+  const [reactivateOpen, setReactivateOpen] = useState(false);
+  const [featureDialog, setFeatureDialog] = useState<{ feature: string; enabled: boolean } | null>(null);
+  const { guarded, modal } = useReauthGuard();
+
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await platformApi.get<HomeDetail>(`/homes/${encodeURIComponent(id)}`);
+      setData(result);
+    } catch (cause) {
+      setError(safeError(cause, "Unable to load this Home."));
+    } finally {
+      setLoading(false);
+    }
+  }
   useEffect(() => {
-    void platformApi
-      .get<HomeDetail>(`/homes/${encodeURIComponent(id)}`)
-      .then(setData)
-      .catch((error: Error) => setMessage(error.message));
+    void load();
   }, [id]);
-  async function stateAction(action: string) { try { const result = await platformApi.post<{ message: string }>(`/homes/${encodeURIComponent(id)}/${action}`, { reason, confirmed: true }); setMessage(result.message); await load(); } catch (error) { setMessage((error as Error).message); } }
-  async function setFeature(feature: string, enabled: boolean) { if (!window.confirm(`${enabled ? "Enable" : "Disable"} ${feature.replaceAll("_", " ")} for this Home?`)) return; try { await platformApi.put(`/homes/${encodeURIComponent(id)}/feature-flags/${feature}`, { enabled, reason, confirmed: true }); setMessage(`${feature.replaceAll("_", " ")} override updated.`); await load(); } catch (error) { setMessage((error as Error).message); } }
-  async function addNote(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); await platformApi.post(`/homes/${encodeURIComponent(id)}/notes`, { body: form.get("note") }); event.currentTarget.reset(); setMessage("Administrative note added."); await load(); }
-  return <PlatformShell><main className="platform-page"><div className="platform-heading"><div><p>Home metadata</p><h1>{data?.name ?? "Home"}</h1></div><span>{data?.active ? "Active" : "Suspended"}</span></div>{message && <p className="notice" role="status">{message}</p>}{data && <>
-    <section className="action-panel"><h2>Controlled Home actions</h2><label>Reason for this action<input value={reason} onChange={event => setReason(event.target.value)} minLength={10} maxLength={500} required /></label><div>{data.active ? <button className="danger" disabled={reason.length < 10} onClick={() => stateAction("suspend")}>Suspend Home</button> : <button disabled={reason.length < 10} onClick={() => stateAction("reactivate")}>Reactivate Home</button>}</div><small>Home content is not available in this interface.</small></section>
-    <section><h2>Memberships</h2><div className="record-list">{data.members.map(member => <article key={member.user_id}><strong>{member.display_name}</strong><span>{member.email} · {member.role.replaceAll("_", " ")}</span></article>)}</div></section>
-    <section><h2>Pending invitations</h2><div className="record-list">{data.pending_invitations.map(invitation => <article key={invitation.id}><strong>{invitation.email}</strong><span>{invitation.role.replaceAll("_", " ")} · expires {new Date(invitation.expires_at).toLocaleDateString()}</span></article>)}</div></section>
-    <section><h2>Feature availability</h2><div className="flag-list">{features.map(feature => { const current = data.feature_overrides.find(item => item.feature === feature)?.enabled; return <article key={feature}><span>{feature.replaceAll("_", " ")}</span><button disabled={reason.length < 10} onClick={() => setFeature(feature, !current)}>{current ? `Disable ${feature.replaceAll("_", " ")}` : `Enable ${feature.replaceAll("_", " ")}`}</button></article>; })}</div></section>
-    <section><h2>Administrative notes</h2><form className="note-form" onSubmit={addNote}><label>New internal note<textarea name="note" minLength={2} maxLength={1000} required /></label><button>Add administrative note</button></form><div className="record-list">{data.notes.map(note => <article key={note.id}><p>{note.body}</p><time dateTime={note.created_at}>{new Date(note.created_at).toLocaleString()}</time></article>)}</div></section>
-  </>}</main></PlatformShell>;
+
+  // suspend/reactivate and feature-flag updates all hit endpoints the
+  // backend guards with require_recent_auth() (see
+  // apps/api/mykhaya/routers/platform.py: home_state,
+  // update_home_feature_flag) — `guarded` re-throws a 403 "recent
+  // authentication required" so useReauthGuard can show
+  // PlatformReauthModal and transparently retry the same action once the
+  // operator re-authenticates. The GET load and note-adding below are not
+  // recent-auth-gated server-side, so they are never wrapped.
+  const stateAction = guarded(async (action: "suspend" | "reactivate", formData: FormData) => {
+    setSuspendOpen(false);
+    setReactivateOpen(false);
+    setBusy(action);
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(`/homes/${encodeURIComponent(id)}/${action}`, {
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage(result.message);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, `Unable to ${action} this Home.`));
+    } finally {
+      setBusy("");
+    }
+  });
+
+  const setFeature = guarded(async (feature: string, enabled: boolean, formData: FormData) => {
+    setFeatureDialog(null);
+    setBusy(`feature:${feature}`);
+    setError("");
+    try {
+      await platformApi.put(`/homes/${encodeURIComponent(id)}/feature-flags/${feature}`, {
+        enabled,
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage(`${featureLabel(feature)} override updated.`);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, `Unable to update the ${featureLabel(feature)} override.`));
+    } finally {
+      setBusy("");
+    }
+  });
+
+  async function addNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    try {
+      await platformApi.post(`/homes/${encodeURIComponent(id)}/notes`, { body: form.get("note") });
+      formElement.reset();
+      setMessage("Administrative note added.");
+      await load();
+    } catch (cause) {
+      setError(safeError(cause, "Unable to add this note."));
+    }
+  }
+
+  const statusTone: CcBadgeTone = data?.active ? "success" : "danger";
+  const statusLabel = data?.active ? "Active" : "Suspended";
+
+  const actions: CcAction[] = data
+    ? data.active
+      ? []
+      : [
+          {
+            key: "reactivate",
+            label: "Reactivate Home",
+            icon: Power,
+            variant: "primary",
+            disabled: Boolean(busy),
+            onClick: () => setReactivateOpen(true),
+          },
+        ]
+    : [];
+
+  return (
+    <PlatformShell>
+      <CcPage>
+        <p>
+          <a href="/homes">&larr; Homes</a>
+        </p>
+        {loading ? (
+          <CcLoadingState label="Loading Home…" />
+        ) : !data ? (
+          <CcErrorState>{error || "Home not found."}</CcErrorState>
+        ) : (
+          <>
+            <CcPageHeader
+              eyebrow="Home account"
+              title={
+                <>
+                  {data.name} <CcBadge tone={statusTone}>{statusLabel}</CcBadge>
+                </>
+              }
+              description="Home content is not available in this interface."
+            />
+            {message && <CcNotice tone="success">{message}</CcNotice>}
+            {error && <CcNotice tone="error">{error}</CcNotice>}
+
+            <CcColumns ratio="2-1">
+              <CcSection title="Home details">
+                <CcCard>
+                  <CcMetadataGrid>
+                    <CcMetadataItem label="Home ID">{data.id}</CcMetadataItem>
+                    <CcMetadataItem label="Created">{new Date(data.created_at).toLocaleString()}</CcMetadataItem>
+                  </CcMetadataGrid>
+                </CcCard>
+              </CcSection>
+
+              <CcSection title="Status">
+                <CcStatusCard
+                  tone={statusTone}
+                  status={statusLabel}
+                  description="Home content is not available in this interface."
+                />
+              </CcSection>
+            </CcColumns>
+
+            <CcSection title="Memberships">
+              <CcRecordList emptyMessage="No members yet.">
+                {data.members.map((member) => (
+                  <CcRecordCard
+                    key={member.user_id}
+                    title={member.display_name}
+                    meta={[member.email, member.role.replaceAll("_", " ")]}
+                  />
+                ))}
+              </CcRecordList>
+            </CcSection>
+
+            <CcSection title="Pending invitations">
+              <CcRecordList emptyMessage="No pending invitations.">
+                {data.pending_invitations.map((invitation) => (
+                  <CcRecordCard
+                    key={invitation.id}
+                    title={invitation.email}
+                    meta={[
+                      invitation.role.replaceAll("_", " "),
+                      `expires ${new Date(invitation.expires_at).toLocaleDateString()}`,
+                    ]}
+                  />
+                ))}
+              </CcRecordList>
+            </CcSection>
+
+            <CcSection title="Feature availability">
+              <CcRecordList>
+                {FEATURES.map((feature) => {
+                  const enabled = Boolean(data.feature_overrides.find((item) => item.feature === feature)?.enabled);
+                  return (
+                    <CcRecordCard
+                      key={feature}
+                      title={featureLabel(feature)}
+                      badge={enabled ? "Enabled" : "Disabled"}
+                      badgeTone={enabled ? "success" : "neutral"}
+                      actions={
+                        <button
+                          type="button"
+                          className="secondary cc-action"
+                          disabled={Boolean(busy)}
+                          onClick={() => setFeatureDialog({ feature, enabled: !enabled })}
+                        >
+                          {enabled ? (
+                            <ToggleLeft aria-hidden size={16} strokeWidth={2} />
+                          ) : (
+                            <ToggleRight aria-hidden size={16} strokeWidth={2} />
+                          )}
+                          <span>{enabled ? "Disable" : "Enable"}</span>
+                        </button>
+                      }
+                    />
+                  );
+                })}
+              </CcRecordList>
+            </CcSection>
+
+            <CcSection title="Administrative notes">
+              <CcCard>
+                <form onSubmit={addNote}>
+                  <CcField label="New internal note">
+                    <textarea name="note" minLength={2} maxLength={1000} required />
+                  </CcField>
+                  <div className="cc-action-bar">
+                    <button className="cc-action cc-action-primary">Add administrative note</button>
+                  </div>
+                </form>
+              </CcCard>
+              <CcRecordList emptyMessage="No administrative notes yet.">
+                {data.notes.map((note) => (
+                  <CcRecordCard key={note.id} title={new Date(note.created_at).toLocaleString()}>
+                    <p>{note.body}</p>
+                  </CcRecordCard>
+                ))}
+              </CcRecordList>
+            </CcSection>
+
+            {!data.active && (
+              <CcSection title="Actions">
+                <CcActionBar actions={actions} />
+              </CcSection>
+            )}
+
+            {data.active && (
+              <CcDangerZone
+                title="Suspend Home"
+                description="Suspending this Home blocks access for every member until it is reactivated."
+              >
+                <CcActionBar
+                  actions={[
+                    {
+                      key: "suspend",
+                      label: "Suspend Home",
+                      icon: PowerOff,
+                      variant: "destructive",
+                      disabled: Boolean(busy),
+                      onClick: () => setSuspendOpen(true),
+                    },
+                  ]}
+                />
+              </CcDangerZone>
+            )}
+          </>
+        )}
+      </CcPage>
+
+      <CcConfirmDialog
+        open={suspendOpen}
+        onClose={() => setSuspendOpen(false)}
+        title="Suspend Home"
+        description="Suspend this Home? Every member will lose access until it is reactivated."
+        confirmLabel="Suspend Home"
+        variant="destructive"
+        onConfirm={(formData) => stateAction("suspend", formData)}
+      />
+
+      <CcConfirmDialog
+        open={reactivateOpen}
+        onClose={() => setReactivateOpen(false)}
+        title="Reactivate Home"
+        description="Reactivate this Home and restore access for its members?"
+        confirmLabel="Reactivate Home"
+        onConfirm={(formData) => stateAction("reactivate", formData)}
+      />
+
+      <CcConfirmDialog
+        open={featureDialog !== null}
+        onClose={() => setFeatureDialog(null)}
+        title={featureDialog ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureLabel(featureDialog.feature)}` : ""}
+        description={
+          featureDialog
+            ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureLabel(featureDialog.feature)} for this Home?`
+            : ""
+        }
+        confirmLabel={featureDialog?.enabled ? "Enable" : "Disable"}
+        onConfirm={(formData) => {
+          if (featureDialog) void setFeature(featureDialog.feature, featureDialog.enabled, formData);
+        }}
+      />
+
+      {modal}
+    </PlatformShell>
+  );
 }

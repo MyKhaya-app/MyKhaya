@@ -29,18 +29,39 @@ export function CcDialog({
   const generatedId = useId();
   const titleId = labelledBy ?? `cc-dialog-title-${generatedId}`;
 
+  // Keep the latest onClose available to the effect below without making it
+  // a dependency — callers routinely pass an inline arrow function, and a
+  // controlled input inside the dialog re-renders (and so re-identifies
+  // onClose) on every keystroke. If onClose were a dependency, that would
+  // re-run the effect and re-apply initial focus while the dialog stays
+  // open, stealing focus from whatever the operator is typing into.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Initial focus + capture of the previously-focused element: only on the
+  // real `open: false -> true` transition, never on an onClose identity
+  // change while already open.
   useEffect(() => {
     if (!open) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     const node = dialogRef.current;
     const focusable = node?.querySelector<HTMLElement>(
       "button:not([data-dialog-close]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
     );
     (focusable ?? node)?.focus();
+  }, [open]);
+
+  // Escape-key handling and body-scroll-lock: also gated on [open] only, and
+  // reads onClose via the ref so it always calls the latest callback without
+  // needing to be recreated when that identity changes.
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => {
@@ -48,7 +69,7 @@ export function CcDialog({
       document.body.style.overflow = previousOverflow;
       previouslyFocused.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

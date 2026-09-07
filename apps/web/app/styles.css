@@ -4019,14 +4019,73 @@ select.icon-row-control {
 }
 
 /* The Control Centre intentionally uses a restrained operational visual language. */
+/* PCC design tokens — deliberately separate from packages/design-tokens
+   (that package is consumer-app only, and this is an approved separate
+   token set for the admin surface). Values still draw on MyKhaya's real
+   brand palette (--colour-forest/--colour-forest-dark from
+   packages/design-tokens/src/tokens.css) rather than inventing a new
+   green, so PCC reads as the same product as the rest of the app. Every
+   `--platform-*` name below is now an alias onto one of these `--cc-*`
+   tokens — kept so the many rules elsewhere in this file that still
+   reference `--platform-*` don't need touching, while there is a single
+   source of truth for the actual colour values. */
 .platform-login,
 .platform-shell {
-  --platform-ink: #17212b;
-  --platform-navy: #243746;
-  --platform-blue: #416b7c;
-  --platform-line: #d8e0e3;
-  --platform-surface: #f4f7f8;
-  color: var(--platform-ink);
+  --cc-bg: #f4f7f8;
+  --cc-surface: #ffffff;
+  --cc-surface-muted: #f4f7f7;
+  --cc-text: #17212b;
+  --cc-text-muted: #5d6e76;
+  --cc-border: #d8e0e3;
+  --cc-primary: #3f5442;
+  --cc-primary-hover: #33452f;
+  --cc-success-bg: #e6f1ed;
+  --cc-success: #276149;
+  --cc-warning-bg: #fff0cd;
+  --cc-warning: #805507;
+  --cc-danger-bg: #f8dfdd;
+  --cc-danger: #8d342d;
+  --cc-danger-strong: #8c3d35;
+  --cc-danger-zone-bg: #fdf3f2;
+  --cc-danger-zone-border: #e3a29b;
+  --cc-info-bg: #e3edf4;
+  --cc-info: #416b7c;
+  --cc-neutral-bg: #eef1f2;
+  --cc-neutral: #53666e;
+  --cc-nav-bg: #243746;
+  --cc-nav-bg-hover: #304957;
+  --cc-nav-text: #d5e0e3;
+  --cc-nav-text-muted: #bfd0d5;
+  --cc-nav-border: #49606d;
+  --cc-radius-sm: 0.35rem;
+  --cc-radius-md: 0.5rem;
+  --cc-radius-lg: 0.65rem;
+  --cc-shadow-sm: 0 1px 3px rgb(23 33 43 / 8%);
+  --cc-shadow-md: 0 12px 28px rgb(23 33 43 / 12%);
+  --cc-space-xs: 0.4rem;
+  --cc-space-sm: 0.75rem;
+  --cc-space-md: 1rem;
+  --cc-space-lg: 1.5rem;
+  --cc-space-xl: 2rem;
+
+  /* Back-compat aliases (see comment above). */
+  --platform-ink: var(--cc-text);
+  --platform-navy: var(--cc-nav-bg);
+  --platform-blue: var(--cc-info);
+  --platform-line: var(--cc-border);
+  --platform-surface: var(--cc-bg);
+  --platform-success-bg: var(--cc-success-bg);
+  --platform-success-ink: var(--cc-success);
+  --platform-warning-bg: var(--cc-warning-bg);
+  --platform-warning-ink: var(--cc-warning);
+  --platform-danger-bg: var(--cc-danger-bg);
+  --platform-danger-ink: var(--cc-danger);
+  --platform-neutral-bg: var(--cc-neutral-bg);
+  --platform-neutral-ink: var(--cc-neutral);
+  --platform-info-bg: var(--cc-info-bg);
+  --platform-info-ink: var(--cc-info);
+
+  color: var(--cc-text);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 .platform-login {
@@ -4105,7 +4164,7 @@ select.icon-row-control {
   display: grid;
 }
 .platform-brand small {
-  color: #c3d2d7;
+  color: var(--cc-nav-text-muted);
   font-size: 0.68rem;
   margin-top: 0.15rem;
 }
@@ -4123,55 +4182,84 @@ select.icon-row-control {
 }
 .platform-shell aside nav {
   display: grid;
+  gap: 1.1rem;
+}
+.platform-nav-group {
+  display: grid;
   gap: 0.12rem;
 }
+.platform-nav-group-label {
+  color: var(--cc-nav-text-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0 0 0.3rem;
+  padding: 0 0.75rem;
+  text-transform: uppercase;
+}
 .platform-shell aside nav a {
+  align-items: center;
   border-left: 3px solid transparent;
-  color: #d5e0e3;
+  color: var(--cc-nav-text);
+  display: flex;
   font-size: 0.82rem;
   font-weight: 650;
+  gap: 0.65rem;
   padding: 0.62rem 0.75rem;
+}
+.platform-shell aside nav a svg {
+  flex: 0 0 auto;
 }
 .platform-shell aside nav a:hover,
 .platform-shell aside nav a.active {
-  background: #304957;
+  background: var(--cc-nav-bg-hover);
   border-left-color: #b9d2ca;
   color: white;
-}
-.operator-card {
-  border-top: 1px solid #49606d;
-  display: grid;
-  gap: 0.2rem;
-  margin-top: auto;
-  padding-top: 1rem;
-}
-.operator-card small {
-  color: #bfd0d5;
-  font-size: 0.72rem;
-  text-transform: capitalize;
-}
-.operator-card button {
-  background: transparent;
-  border: 1px solid #78909a;
-  font-size: 0.72rem;
-  margin-top: 0.7rem;
-  min-height: 38px;
 }
 .platform-main {
   min-width: 0;
 }
-.platform-main > header {
+.platform-topbar {
   align-items: center;
-  background: white;
-  border-bottom: 1px solid var(--platform-line);
+  background: var(--cc-surface);
+  border-bottom: 1px solid var(--cc-border);
   display: flex;
+  gap: 1rem;
   height: 64px;
   justify-content: space-between;
   padding: 0 2rem;
 }
-.platform-main > header span {
-  color: #697982;
+.platform-topbar-identity {
+  color: var(--cc-text-muted);
   font-size: 0.76rem;
+  min-width: 0;
+}
+.platform-topbar-identity strong {
+  color: var(--cc-text);
+  display: block;
+  font-size: 0.92rem;
+}
+.platform-topbar-account {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.9rem;
+}
+.platform-topbar-account .operator-identity {
+  text-align: right;
+}
+.platform-topbar-account .operator-identity small {
+  color: var(--cc-text-muted);
+  display: block;
+  text-transform: capitalize;
+}
+.platform-topbar-account button {
+  align-items: center;
+  display: inline-flex;
+  font-size: 0.78rem;
+  gap: 0.4rem;
+  min-height: 38px;
+  padding: 0.5rem 0.9rem;
 }
 .platform-page {
   margin: 0 auto;
@@ -4245,24 +4333,24 @@ select.icon-row-control {
   white-space: nowrap;
 }
 .badge-neutral {
-  background: #eef1f2;
-  color: #5d6e76;
+  background: var(--cc-neutral-bg);
+  color: var(--cc-neutral);
 }
 .badge-info {
-  background: #e3edf4;
-  color: var(--platform-blue);
+  background: var(--cc-info-bg);
+  color: var(--cc-info);
 }
 .badge-success {
-  background: #e2f0e5;
-  color: #2f7d43;
+  background: var(--cc-success-bg);
+  color: var(--cc-success);
 }
 .badge-warning {
-  background: #fbeee0;
-  color: #a3611a;
+  background: var(--cc-warning-bg);
+  color: var(--cc-warning);
 }
 .badge-danger {
-  background: #fbe4e1;
-  color: #a3382b;
+  background: var(--cc-danger-bg);
+  color: var(--cc-danger);
 }
 .metric-grid {
   display: grid;
@@ -4350,9 +4438,9 @@ select.icon-row-control {
 .record-card,
 .action-panel,
 .note-form {
-  background: white;
-  border: 1px solid var(--platform-line);
-  border-radius: 0.4rem;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-sm);
   padding: 1rem;
 }
 .action-panel > div {
@@ -4362,14 +4450,14 @@ select.icon-row-control {
   margin: 1rem 0;
 }
 .action-panel button {
-  background: var(--platform-blue);
+  background: var(--cc-primary);
   font-size: 0.78rem;
 }
 .action-panel button.danger {
-  background: #8c3d35;
+  background: var(--cc-danger);
 }
 .action-panel small {
-  color: #61727a;
+  color: var(--cc-text-muted);
 }
 .platform-settings-section {
   display: grid;
@@ -4404,15 +4492,15 @@ select.icon-row-control {
 }
 .record-list,
 .flag-list {
-  background: white;
-  border: 1px solid var(--platform-line);
-  border-radius: 0.4rem;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-sm);
   overflow: hidden;
 }
 .record-list article,
 .flag-list article {
   align-items: center;
-  border-bottom: 1px solid #e1e8ea;
+  border-bottom: 1px solid var(--cc-border);
   display: flex;
   justify-content: space-between;
   padding: 0.9rem;
@@ -4423,7 +4511,7 @@ select.icon-row-control {
 }
 .record-list span,
 .record-list time {
-  color: #62737b;
+  color: var(--cc-text-muted);
   font-size: 0.74rem;
 }
 .record-list p {
@@ -4863,9 +4951,9 @@ select.icon-row-control {
   font-size: 1.4rem;
 }
 .quiet-state {
-  background: #f4f7f7;
-  border-radius: 0.4rem;
-  color: #607179;
+  background: var(--cc-surface-muted);
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-text-muted);
   padding: 1rem;
 }
 .deployment-strip {
@@ -4910,9 +4998,9 @@ select.icon-row-control {
   margin: 0;
 }
 .state-label {
-  background: #e6f1ed;
+  background: var(--cc-success-bg);
   border-radius: 999px;
-  color: #276149;
+  color: var(--cc-success);
   display: inline-block;
   font-size: 0.68rem;
   padding: 0.28rem 0.55rem;
@@ -4921,14 +5009,14 @@ select.icon-row-control {
 .state-label.state-warning,
 .state-label.state-not-configured,
 .state-label.state-queued {
-  background: #fff0cd;
-  color: #805507;
+  background: var(--cc-warning-bg);
+  color: var(--cc-warning);
 }
 .state-label.state-degraded,
 .state-label.state-unavailable,
 .state-label.state-failed {
-  background: #f8dfdd;
-  color: #8d342d;
+  background: var(--cc-danger-bg);
+  color: var(--cc-danger);
 }
 .operator-action {
   background: #f7f2e7;
@@ -4962,9 +5050,9 @@ select.icon-row-control {
 }
 .module-list article {
   align-items: center;
-  background: white;
-  border: 1px solid var(--platform-line);
-  border-radius: 0.5rem;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
   display: grid;
   gap: 1.5rem;
   grid-template-columns: 1fr auto;
@@ -4976,12 +5064,12 @@ select.icon-row-control {
   text-transform: none;
 }
 .module-copy p {
-  color: #53666e;
+  color: var(--cc-neutral);
   margin: 0.35rem 0;
 }
 .module-copy span,
 .module-copy small {
-  color: #687981;
+  color: var(--cc-text-muted);
   font-size: 0.7rem;
 }
 .module-controls {
@@ -5002,8 +5090,8 @@ select.icon-row-control {
 }
 
 .state-label.state-not-applicable {
-  background: #eef1f2;
-  color: #53666e;
+  background: var(--cc-neutral-bg);
+  color: var(--cc-neutral);
 }
 .health-mark.state-not-applicable {
   background: #9aabb3;
@@ -5127,19 +5215,22 @@ select.icon-row-control {
 }
 
 .danger-zone {
-  background: #fdf3f2;
-  border: 1px solid #e3a29b;
-  border-radius: 0.5rem;
+  background: var(--cc-danger-zone-bg);
+  border: 1px solid var(--cc-danger-zone-border);
+  border-radius: var(--cc-radius-md);
   margin-top: 1.2rem;
   padding: 1.1rem;
 }
 .danger-zone h2 {
-  color: #8c3d35;
+  align-items: center;
+  color: var(--cc-danger-strong);
+  display: flex;
+  gap: 0.4rem;
 }
 button.danger,
 .danger-zone button.danger {
-  background: #8c3d35;
-  color: white;
+  background: var(--cc-danger-strong);
+  color: var(--cc-surface);
 }
 
 .platform-modal-backdrop {
@@ -5212,15 +5303,15 @@ button.danger,
     position: static;
   }
   .platform-shell aside nav {
+    gap: 0.7rem;
+  }
+  .platform-nav-group {
     grid-template-columns: repeat(2, 1fr);
   }
-  .operator-card {
-    margin-top: 1rem;
-  }
-  .platform-main > header {
+  .platform-topbar {
     padding: 0 1rem;
   }
-  .platform-main > header span {
+  .platform-topbar-identity {
     display: none;
   }
   .platform-page {
@@ -5281,23 +5372,9 @@ button.danger,
 
 /* ---------------------------------------------------------------------- */
 /* Control Centre UI foundation (Phase 1 sweep) — shared primitives used   */
-/* by apps/web/components/control-centre/*. Extends the existing          */
-/* --platform-* palette (defined above on .platform-shell/.platform-login) */
-/* rather than introducing a new one.                                     */
+/* by apps/web/components/control-centre/*. Uses the --cc-* token layer   */
+/* declared above on .platform-shell/.platform-login.                    */
 /* ---------------------------------------------------------------------- */
-.platform-shell,
-.platform-login {
-  --platform-success-bg: #e6f1ed;
-  --platform-success-ink: #276149;
-  --platform-warning-bg: #fff0cd;
-  --platform-warning-ink: #805507;
-  --platform-danger-bg: #f8dfdd;
-  --platform-danger-ink: #8d342d;
-  --platform-neutral-bg: #eef1f2;
-  --platform-neutral-ink: #53666e;
-  --platform-info-bg: #e7eef1;
-  --platform-info-ink: var(--platform-blue);
-}
 
 .cc-page-wide {
   max-width: 1680px;
@@ -5366,13 +5443,13 @@ button.danger,
   margin-bottom: 1.6rem;
 }
 .cc-section-danger {
-  background: #fdf3f2;
-  border: 1px solid #e3a29b;
-  border-radius: 0.5rem;
+  background: var(--cc-danger-zone-bg);
+  border: 1px solid var(--cc-danger-zone-border);
+  border-radius: var(--cc-radius-md);
   padding: 1.1rem;
 }
 .cc-section-danger h2 {
-  color: #8c3d35;
+  color: var(--cc-danger-strong);
 }
 .cc-section-heading {
   align-items: flex-start;
@@ -5394,9 +5471,9 @@ button.danger,
 }
 
 .cc-card {
-  background: white;
-  border: 1px solid var(--platform-line);
-  border-radius: 0.5rem;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
   padding: 1.1rem;
 }
 
@@ -5448,24 +5525,24 @@ button.danger,
   white-space: nowrap;
 }
 .cc-badge-success {
-  background: var(--platform-success-bg);
-  color: var(--platform-success-ink);
+  background: var(--cc-success-bg);
+  color: var(--cc-success);
 }
 .cc-badge-warning {
-  background: var(--platform-warning-bg);
-  color: var(--platform-warning-ink);
+  background: var(--cc-warning-bg);
+  color: var(--cc-warning);
 }
 .cc-badge-danger {
-  background: var(--platform-danger-bg);
-  color: var(--platform-danger-ink);
+  background: var(--cc-danger-bg);
+  color: var(--cc-danger);
 }
 .cc-badge-neutral {
-  background: var(--platform-neutral-bg);
-  color: var(--platform-neutral-ink);
+  background: var(--cc-neutral-bg);
+  color: var(--cc-neutral);
 }
 .cc-badge-info {
-  background: var(--platform-info-bg);
-  color: var(--platform-info-ink);
+  background: var(--cc-info-bg);
+  color: var(--cc-info);
 }
 
 .cc-notice {
@@ -5597,12 +5674,12 @@ button.danger,
   margin-bottom: 0.9rem;
 }
 .cc-field-help {
-  color: #687981;
+  color: var(--cc-text-muted);
   font-size: 0.76rem;
   margin: 0.15rem 0 0.4rem;
 }
 .cc-field-error {
-  color: #8d342d;
+  color: var(--cc-danger);
   font-size: 0.78rem;
   margin: 0.3rem 0 0;
 }
@@ -5616,6 +5693,119 @@ button.danger,
   padding: 0;
   position: absolute;
   width: 1px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Control Centre UI foundation, Batch 1 additions — CcStatusCard,        */
+/* CcActionBar, CcDangerZone, CcRecordList/CcRecordCard, CcToolbar,       */
+/* CcLoadingState/CcEmptyState/CcErrorState. Class names here follow the  */
+/* actual markup each component renders — see                            */
+/* apps/web/components/control-centre/{status-card,action-bar,           */
+/* danger-zone,record-list,status-message}.tsx.                          */
+/* ---------------------------------------------------------------------- */
+
+.cc-status-card {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-lg);
+  box-shadow: var(--cc-shadow-sm);
+  padding: 1.25rem 1.4rem;
+}
+.cc-status-card-headline {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+}
+.cc-status-card-headline strong {
+  font-size: 1.4rem;
+}
+.cc-status-card-success .cc-status-card-headline {
+  color: var(--cc-success);
+}
+.cc-status-card-warning .cc-status-card-headline {
+  color: var(--cc-warning);
+}
+.cc-status-card-danger .cc-status-card-headline {
+  color: var(--cc-danger);
+}
+.cc-status-card-info .cc-status-card-headline {
+  color: var(--cc-info);
+}
+.cc-status-card-neutral .cc-status-card-headline {
+  color: var(--cc-neutral);
+}
+.cc-status-card-description {
+  color: var(--cc-text-muted);
+  margin: 0.5rem 0 0;
+  max-width: 60ch;
+}
+.cc-status-card-items {
+  display: grid;
+  gap: 0.9rem 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin: 1rem 0 0;
+}
+.cc-status-card-items dt {
+  color: var(--cc-text-muted);
+  font-size: 0.76rem;
+  margin: 0 0 0.2rem;
+}
+.cc-status-card-items dd {
+  font-weight: 700;
+  margin: 0;
+}
+
+.cc-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.cc-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+.cc-action-primary {
+  background: var(--cc-primary);
+  color: white;
+}
+.cc-action-primary:hover {
+  background: var(--cc-primary-hover);
+}
+.cc-action-caution {
+  background: var(--cc-warning-bg);
+  color: var(--cc-warning);
+}
+
+.cc-record-card {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.cc-record-card-main {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.cc-record-card-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.cc-record-card-heading strong {
+  overflow-wrap: anywhere;
+}
+.cc-record-card-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.cc-toolbar-actions {
+  margin-left: auto;
 }
 
 @media (max-width: 1024px) {

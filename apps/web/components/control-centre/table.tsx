@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { CcEmptyState, CcLoadingState } from "./status-message";
 
 export type CcTableColumn<T> = {
   key: string;
@@ -29,10 +30,10 @@ export function CcTable<T>({
   caption?: string;
 }) {
   if (loading || rows === null) {
-    return <p role="status">Loading…</p>;
+    return <CcLoadingState />;
   }
   if (rows.length === 0) {
-    return <p className="quiet-state">{emptyMessage}</p>;
+    return <CcEmptyState>{emptyMessage}</CcEmptyState>;
   }
   return (
     <div className="table-scroll cc-table-scroll" tabIndex={0}>

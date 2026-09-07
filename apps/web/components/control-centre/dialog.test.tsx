@@ -1,7 +1,27 @@
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CcConfirmDialog, CcDialog } from "./dialog";
+
+/**
+ * Regression harness for the focus-stealing bug: a controlled input inside
+ * the dialog whose onChange triggers a parent re-render with a brand new
+ * inline `onClose` identity (as real callers do, e.g.
+ * `onClose={() => setOpen(false)}`). Before the fix, the dialog's
+ * focus-management effect depended on `[open, onClose]`, so this re-render
+ * re-ran the effect and yanked focus back to the first focusable element on
+ * every keystroke.
+ */
+function ControlledInputHarness() {
+  const [open, setOpen] = useState(true);
+  const [value, setValue] = useState("");
+  return (
+    <CcDialog open={open} onClose={() => setOpen(false)} title="Controlled">
+      <input aria-label="Reason" value={value} onChange={(event) => setValue(event.target.value)} />
+    </CcDialog>
+  );
+}
 
 describe("CcDialog", () => {
   it("renders nothing when closed", () => {
@@ -49,6 +69,45 @@ describe("CcDialog", () => {
     );
     fireEvent.click(screen.getByText("panel content"));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("restores focus to the previously-focused element after closing", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button onClick={() => setOpen(true)}>Open dialog</button>
+          <CcDialog open={open} onClose={() => setOpen(false)} title="Restorable">
+            <button>Inside</button>
+          </CcDialog>
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Open dialog" });
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Inside" })).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("does not steal focus from a controlled input inside the dialog while typing", async () => {
+    const user = userEvent.setup();
+    render(<ControlledInputHarness />);
+    const input = screen.getByLabelText("Reason");
+
+    await user.click(input);
+    expect(input).toHaveFocus();
+
+    await user.type(input, "hello world");
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("hello world");
   });
 });
 
