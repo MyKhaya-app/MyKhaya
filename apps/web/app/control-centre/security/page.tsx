@@ -91,7 +91,8 @@ export default function GlobalSecurityPage() {
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    void applyChange(String(data.get("reason") ?? ""));
+    const raw = data.get("reason");
+    void applyChange(typeof raw === "string" ? raw : "");
   }
 
   const columns: CcTableColumn<SecurityEvent>[] = [
