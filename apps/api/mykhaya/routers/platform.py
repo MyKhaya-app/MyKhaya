@@ -146,6 +146,9 @@ from mykhaya.platform_schemas import (
     AdministratorSecurityResponse,
     AdministratorSecuritySummaryResponse,
     AdministratorUpdate,
+    BulkLifecycleFailure,
+    BulkLifecycleRequest,
+    BulkLifecycleResponse,
     EntitlementsResponse,
     FeatureFlagUpdate,
     GrantComplimentaryRequest,
@@ -2223,6 +2226,88 @@ def _lifecycle_filter(
     return and_(model.is_active.is_(False), model.archived_at.is_(None))  # disabled
 
 
+class LifecycleActionError(Exception):
+    """A per-target lifecycle transition that can't be applied — expected,
+    recoverable, and safe to surface verbatim (never wraps an unexpected
+    exception). Raised by the _apply_*_disable/archive/restore helpers below
+    and caught by both the single-entity endpoints (→ HTTPException) and the
+    Slice 4 bulk endpoints (→ one entry in the response's `failed` list),
+    so both call sites reject the same transitions for the same reasons."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+async def _apply_user_disable(db: AsyncSession, user: User) -> str:
+    """Mutates `user` toward Disabled and revokes its Sessions/TrustedDevices
+    — the single source of truth for user suspend_user (single-entity) and
+    bulk_user_lifecycle (Slice 4) share. Returns the previous lifecycle
+    label for the caller's audit event. Does not write audit or commit —
+    callers differ on batching, so they own that."""
+    if user.archived_at is not None:
+        raise LifecycleActionError("archived", "This user is archived. Restore the user instead.")
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+    user.is_active = False
+    user.suspended_at = now
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    return previous_lifecycle
+
+
+async def _apply_user_archive(db: AsyncSession, user: User) -> str:
+    """Shared by archive_user (single-entity) and bulk_user_lifecycle. Always
+    a safe idempotent success on an already-archived user, matching
+    archive_user's existing behaviour."""
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+    user.is_active = False
+    user.suspended_at = now
+    user.archived_at = now
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    return previous_lifecycle
+
+
+def _apply_home_disable(group: Group) -> str:
+    """Shared by home_state's suspend action and bulk_home_lifecycle."""
+    if group.archived_at is not None:
+        raise LifecycleActionError("archived", "This Home is archived. Restore the Home instead.")
+    previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
+    group.is_active = False
+    group.suspended_at = datetime.now(UTC)
+    return previous_lifecycle
+
+
+def _apply_home_archive(group: Group) -> str:
+    """Shared by home_state's archive action and bulk_home_lifecycle. Only
+    the Home's own row changes — member User accounts are never touched."""
+    previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
+    now = datetime.now(UTC)
+    group.is_active = False
+    group.suspended_at = now
+    group.archived_at = now
+    return previous_lifecycle
+
+
 @router.get("/users", response_model=PageResponse)
 async def users(
     q: str | None = Query(default=None, max_length=100),
@@ -2402,24 +2487,20 @@ async def _user_state_action(
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
-    if user.archived_at is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "This user is archived. Restore the user instead."
-        )
-    previous = user.is_active
-    user.is_active = active
-    user.suspended_at = None if active else datetime.now(UTC)
-    if not active:
-        await db.execute(
-            update(Session)
-            .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
-        await db.execute(
-            update(TrustedDevice)
-            .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
+    if active:
+        if user.archived_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This user is archived. Restore the user instead."
+            )
+        previous = user.is_active
+        user.is_active = True
+        user.suspended_at = None
+    else:
+        try:
+            previous_lifecycle = await _apply_user_disable(db, user)
+        except LifecycleActionError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, error.message) from error
+        previous = previous_lifecycle == "active"
     platform_audit(
         db,
         request,
@@ -2477,21 +2558,8 @@ async def archive_user(
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
-    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
-    now = datetime.now(UTC)
-    user.is_active = False
-    user.suspended_at = now
-    user.archived_at = now
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
-    await db.execute(
-        update(TrustedDevice)
-        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
+    previous_lifecycle = await _apply_user_archive(db, user)
+    assert user.archived_at is not None  # _apply_user_archive always sets it
     platform_audit(
         db,
         request,
@@ -2501,7 +2569,7 @@ async def archive_user(
         user.id,
         reason=body.reason,
         previous={"lifecycle": previous_lifecycle},
-        new={"lifecycle": "archived", "archived_at": now.isoformat()},
+        new={"lifecycle": "archived", "archived_at": user.archived_at.isoformat()},
     )
     await db.commit()
     return {"message": "User archived and sessions revoked."}
@@ -2543,6 +2611,68 @@ async def restore_user(
     )
     await db.commit()
     return {"message": "User restored to Active."}
+
+
+@router.post("/users/bulk-lifecycle", response_model=BulkLifecycleResponse)
+async def bulk_user_lifecycle(
+    body: BulkLifecycleRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BulkLifecycleResponse:
+    """PCC → Account & Home Cleanup (Slice 4) — bulk Disable/Archive for
+    Users. Applies the exact same _apply_user_disable/_apply_user_archive
+    transitions suspend_user/archive_user use, once per target, each in its
+    own commit so one bad id can never roll back an already-succeeded one.
+    Every id is re-validated here regardless of what the cleanup UI already
+    filtered client-side. Deliberately excludes reactivate/restore — see
+    BulkLifecycleRequest's docstring."""
+    require_recent_auth(context, settings)
+    batch_id = uuid.uuid4()
+    succeeded: list[uuid.UUID] = []
+    failed: list[BulkLifecycleFailure] = []
+    seen: set[uuid.UUID] = set()
+    for user_id in body.ids:
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        user = await db.get(User, user_id, with_for_update=True)
+        if user is None:
+            failed.append(
+                BulkLifecycleFailure(
+                    id=user_id, code="not_found", message="That user could not be found."
+                )
+            )
+            continue
+        try:
+            if body.action == "disable":
+                previous_lifecycle = await _apply_user_disable(db, user)
+                new_lifecycle, audit_action = "disabled", "user.suspended"
+            else:
+                previous_lifecycle = await _apply_user_archive(db, user)
+                new_lifecycle, audit_action = "archived", "user.archived"
+        except LifecycleActionError as error:
+            # Nothing was mutated before the guard raised, so there is
+            # nothing to roll back — and rolling back here would expire
+            # context.administrator (loaded on this same session), breaking
+            # platform_audit() for every target processed afterwards.
+            failed.append(BulkLifecycleFailure(id=user_id, code=error.code, message=error.message))
+            continue
+        platform_audit(
+            db,
+            request,
+            context,
+            audit_action,
+            "user",
+            user.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": new_lifecycle, "batch_id": str(batch_id)},
+        )
+        await db.commit()
+        succeeded.append(user_id)
+    return BulkLifecycleResponse(succeeded=succeeded, failed=failed)
 
 
 _MOVE_MEMBER_ALLOWED_RELATIONSHIPS = {
@@ -3866,13 +3996,20 @@ async def home_state(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
 
     if action in ("suspend", "reactivate"):
-        if group.archived_at is not None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "This Home is archived. Restore the Home instead."
-            )
-        previous = group.is_active
-        group.is_active = action == "reactivate"
-        group.suspended_at = None if group.is_active else datetime.now(UTC)
+        if action == "suspend":
+            try:
+                previous_lifecycle = _apply_home_disable(group)
+            except LifecycleActionError as error:
+                raise HTTPException(status.HTTP_409_CONFLICT, error.message) from error
+            previous = previous_lifecycle == "active"
+        else:
+            if group.archived_at is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "This Home is archived. Restore the Home instead."
+                )
+            previous = group.is_active
+            group.is_active = True
+            group.suspended_at = None
         platform_audit(
             db,
             request,
@@ -3891,11 +4028,9 @@ async def home_state(
         # Only this Home's own row changes — member User accounts are never
         # touched, so users belonging to other active Homes keep working
         # normally (item 6 of the Slice 3 spec).
-        previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
-        now = datetime.now(UTC)
-        group.is_active = False
-        group.suspended_at = now
-        group.archived_at = now
+        previous_lifecycle = _apply_home_archive(group)
+        assert group.archived_at is not None  # _apply_home_archive always sets it
+        now = group.archived_at
         platform_audit(
             db,
             request,
@@ -3949,6 +4084,65 @@ async def home_state(
     )
     await db.commit()
     return {"message": "Home restored to Active."}
+
+
+@router.post("/homes/bulk-lifecycle", response_model=BulkLifecycleResponse)
+async def bulk_home_lifecycle(
+    body: BulkLifecycleRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BulkLifecycleResponse:
+    """PCC → Account & Home Cleanup (Slice 4) — bulk Disable/Archive for
+    Homes. Same _apply_home_disable/_apply_home_archive transitions
+    home_state's suspend/archive actions use, once per target, each in its
+    own commit. Member User accounts are never touched — only each Home's
+    own row changes."""
+    require_recent_auth(context, settings)
+    batch_id = uuid.uuid4()
+    succeeded: list[uuid.UUID] = []
+    failed: list[BulkLifecycleFailure] = []
+    seen: set[uuid.UUID] = set()
+    for group_id in body.ids:
+        if group_id in seen:
+            continue
+        seen.add(group_id)
+        group = await db.get(Group, group_id, with_for_update=True)
+        if group is None:
+            failed.append(
+                BulkLifecycleFailure(
+                    id=group_id, code="not_found", message="That Home could not be found."
+                )
+            )
+            continue
+        try:
+            if body.action == "disable":
+                previous_lifecycle = _apply_home_disable(group)
+                new_lifecycle, audit_action = "disabled", "home.suspended"
+            else:
+                previous_lifecycle = _apply_home_archive(group)
+                new_lifecycle, audit_action = "archived", "home.archived"
+        except LifecycleActionError as error:
+            # See the equivalent comment in bulk_user_lifecycle — no
+            # rollback needed (nothing was mutated), and rolling back here
+            # would expire context.administrator for the rest of the loop.
+            failed.append(BulkLifecycleFailure(id=group_id, code=error.code, message=error.message))
+            continue
+        platform_audit(
+            db,
+            request,
+            context,
+            audit_action,
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": new_lifecycle, "batch_id": str(batch_id)},
+        )
+        await db.commit()
+        succeeded.append(group_id)
+    return BulkLifecycleResponse(succeeded=succeeded, failed=failed)
 
 
 def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:

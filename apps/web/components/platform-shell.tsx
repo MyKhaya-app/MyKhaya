@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ComponentType } from "react";
 import {
+  Archive,
   Bell,
   Clock,
   CreditCard,
@@ -49,6 +50,7 @@ const navGroups: NavGroup[] = [
       { label: "Homes", href: "/homes", icon: House },
       { label: "Administrators", href: "/administrators", icon: UserCog },
       { label: "Demo & Test Homes", href: "/demo-test-homes", icon: FlaskConical },
+      { label: "Cleanup", href: "/cleanup", icon: Archive },
     ],
   },
   {

@@ -804,6 +804,34 @@ class MoveMemberRequest(SensitiveActionRequest):
     source_disposition: Literal["leave", "archive_if_empty"] = "leave"
 
 
+# Same cap the existing PCC list endpoints already use for page_size — a
+# familiar, already-reviewed ceiling rather than picking a new number, and
+# small enough that a single request can't trigger thousands of mutations
+# (Slice 4 §7).
+BULK_LIFECYCLE_MAX_TARGETS = 100
+
+
+class BulkLifecycleRequest(SensitiveActionRequest):
+    """PCC → Users/Homes cleanup — see routers.platform.bulk_user_lifecycle
+    / bulk_home_lifecycle. "disable" is the existing suspend transition;
+    "archive" is the Slice 3 Archived transition. Deliberately excludes
+    reactivate/restore — this tool is for cleanup, not mass restoration."""
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=BULK_LIFECYCLE_MAX_TARGETS)
+    action: Literal["disable", "archive"]
+
+
+class BulkLifecycleFailure(BaseModel):
+    id: uuid.UUID
+    code: str
+    message: str
+
+
+class BulkLifecycleResponse(BaseModel):
+    succeeded: list[uuid.UUID]
+    failed: list[BulkLifecycleFailure]
+
+
 class SubscriptionSummaryResponse(BaseModel):
     """Backend-computed factual counts only. Still no MRR/ARR: with multiple
     historical Stripe Prices, currencies and billing intervals possibly in
