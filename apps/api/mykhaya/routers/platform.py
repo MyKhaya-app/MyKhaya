@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.billing.diagnostics import record_billing_diagnostic
@@ -54,6 +55,10 @@ from mykhaya.models import (
     AuthIdentity,
     BackupRun,
     BillingInterval,
+    CalendarEvent,
+    CalendarEventLabel,
+    CalendarShare,
+    ChildProfile,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -62,12 +67,17 @@ from mykhaya.models import (
     HomeJoinRequestStatus,
     HomeSubscription,
     HomeSubscriptionEvent,
+    HouseholdList,
     HouseholdRelationship,
+    HouseholdRoutine,
     IncidentLifecycleState,
     Invitation,
     ManagedDemoHome,
     ManagedDemoType,
+    Meal,
+    MealPlanEntry,
     Membership,
+    NativePushDevice,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -86,6 +96,7 @@ from mykhaya.models import (
     PlatformStripeSettings,
     PublicIncident,
     PushSubscription,
+    Reminder,
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
@@ -101,6 +112,8 @@ from mykhaya.models import (
     TokenPurpose,
     TrustedDevice,
     User,
+    UserPasskey,
+    Wishlist,
     WorkerJobRecord,
 )
 from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
@@ -146,6 +159,8 @@ from mykhaya.platform_schemas import (
     AdministratorSecurityResponse,
     AdministratorSecuritySummaryResponse,
     AdministratorUpdate,
+    AnonymiseEligibilityResponse,
+    AnonymiseUserRequest,
     BulkLifecycleFailure,
     BulkLifecycleRequest,
     BulkLifecycleResponse,
@@ -153,6 +168,7 @@ from mykhaya.platform_schemas import (
     FeatureFlagUpdate,
     GrantComplimentaryRequest,
     HomeAdministratorSummary,
+    HomeDeleteEligibilityResponse,
     HomeSubscriptionResponse,
     IncidentCreate,
     IncidentDeleteRequest,
@@ -176,6 +192,7 @@ from mykhaya.platform_schemas import (
     NotificationTemplateTestSendRequest,
     NotificationTemplateUpdate,
     PageResponse,
+    PermanentDeleteHomeRequest,
     PlatformActorResponse,
     PlatformLoginRequest,
     PlatformReauthenticateRequest,
@@ -2208,6 +2225,19 @@ def _lifecycle_state(is_active: bool, archived_at: datetime | None) -> str:
     return "active" if is_active else "disabled"
 
 
+def _user_presentation_lifecycle(user: User) -> str:
+    """PCC display only (Slice 5B §20) — never used for filtering/
+    notification-eligibility, which stay exactly Active/Disabled/Archived
+    via _lifecycle_state (an anonymised user is, operationally, still just
+    Archived: is_active=False, archived_at set). This exists solely so the
+    User detail/list responses can render "Anonymised" instead of
+    "Archived" once anonymised_at is set, per the explicit instruction not
+    to invent a fourth operational lifecycle state anywhere else."""
+    if user.anonymised_at is not None:
+        return "anonymised"
+    return _lifecycle_state(user.is_active, user.archived_at)
+
+
 def _lifecycle_filter(
     model: type[User] | type[Group], lifecycle: LifecycleState | None
 ) -> Any | None:
@@ -2388,7 +2418,7 @@ async def users(
                 "display_name": row.display_name,
                 "verified": row.email_verified_at is not None,
                 "active": row.is_active,
-                "lifecycle": _lifecycle_state(row.is_active, row.archived_at),
+                "lifecycle": _user_presentation_lifecycle(row),
                 "created_at": row.created_at,
                 "last_login_at": row.last_login_at,
                 "last_activity_at": row.last_activity_at,
@@ -2444,7 +2474,8 @@ async def user_detail(
         "display_name": user.display_name,
         "verified": user.email_verified_at is not None,
         "active": user.is_active,
-        "lifecycle": _lifecycle_state(user.is_active, user.archived_at),
+        "lifecycle": _user_presentation_lifecycle(user),
+        "anonymised_at": user.anonymised_at,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
         "last_activity_at": user.last_activity_at,
@@ -2595,6 +2626,11 @@ async def restore_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
     if user.archived_at is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This user is not archived.")
+    if user.anonymised_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This user has been anonymised and cannot be restored.",
+        )
     user.is_active = True
     user.suspended_at = None
     user.archived_at = None
@@ -2611,6 +2647,214 @@ async def restore_user(
     )
     await db.commit()
     return {"message": "User restored to Active."}
+
+
+_USER_ANONYMISE_BLOCKER_MESSAGES = {
+    "not_archived": "This user must be Archived before they can be anonymised.",
+    "already_anonymised": "This user has already been anonymised.",
+    "last_home_admin": "Assign another Home Admin before anonymising this user.",
+    "billing_owner_of_non_free_subscription": (
+        "This person is the billing owner of a paid subscription. "
+        "Reassign billing ownership before anonymising them."
+    ),
+}
+
+
+async def _user_anonymise_blockers(db: AsyncSession, user: User) -> list[str]:
+    """Slice 5B — every reason `anonymise_user` would refuse, computed
+    up front (rather than fail-fast) so both the mutation and the read-only
+    eligibility preflight report the exact same set. Mirrors Slice 2's
+    last-Home-Admin and billing-owner guards exactly, applied across every
+    Home the user currently belongs to rather than just one Move Member
+    source Home."""
+    blockers: list[str] = []
+    if user.archived_at is None:
+        blockers.append("not_archived")
+    if user.anonymised_at is not None:
+        blockers.append("already_anonymised")
+
+    active_memberships = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.user_id == user.id, Membership.removed_at.is_(None)
+            )
+        )
+    ).all()
+    for membership in active_memberships:
+        if membership.relationship != HouseholdRelationship.home_admin:
+            continue
+        other_active_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == membership.group_id,
+                    Membership.user_id != user.id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if other_active_members > 0 and await home_admin_count(db, membership.group_id) <= 1:
+            blockers.append("last_home_admin")
+            break
+
+    non_free_billing = await db.scalar(
+        select(HomeSubscription.id).where(
+            HomeSubscription.billing_owner_user_id == user.id,
+            HomeSubscription.plan != SubscriptionPlan.free,
+        )
+    )
+    if non_free_billing is not None:
+        blockers.append("billing_owner_of_non_free_subscription")
+
+    return blockers
+
+
+async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int, str | None]:
+    """Mutates `user` and its dependent rows in place. Returns
+    (previous_lifecycle, memberships_removed_count, previous_avatar_key —
+    the caller deletes the file itself, best-effort, after commit). Does
+    not write audit or commit — the caller owns both."""
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+
+    # Membership (Slice 5B §5 — amends Slice 5A): preserve every row, but an
+    # anonymised user must not remain an active member of anything.
+    active_memberships = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.user_id == user.id, Membership.removed_at.is_(None)
+            )
+        )
+    ).all()
+    for membership in active_memberships:
+        membership.removed_at = now
+
+    # Auth/session/device data — hard-deleted where there is no "revoke"
+    # concept at all (password hash, passkey, device token, one-time
+    # token), revoked using the existing suspend/archive mechanism where
+    # one already exists (Session/TrustedDevice) rather than inventing a
+    # second one.
+    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user.id))
+    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user.id))
+    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id))
+    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user.id))
+    await db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+
+    # PII — overwritten, never fabricated; the tombstone email format
+    # mirrors the existing mykhaya.routers.children.anonymise_child
+    # convention exactly.
+    previous_avatar_key = user.avatar_key
+    user.display_name = "Deleted user"
+    user.email = f"deleted-{user.id}@removed.mykhaya.invalid"
+    user.avatar_key = None
+    user.avatar_updated_at = None
+    user.birth_month = None
+    user.birth_day = None
+    user.birth_year = None
+
+    # Lifecycle: anonymised implies archived implies disabled — never set
+    # is_active=True with anonymised_at set.
+    user.is_active = False
+    if user.suspended_at is None:
+        user.suspended_at = now
+    if user.archived_at is None:
+        user.archived_at = now
+    user.anonymised_at = now
+
+    return previous_lifecycle, len(active_memberships), previous_avatar_key
+
+
+@router.get("/users/{user_id}/anonymise/eligibility", response_model=AnonymiseEligibilityResponse)
+async def user_anonymise_eligibility(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> AnonymiseEligibilityResponse:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    blockers = await _user_anonymise_blockers(db, user)
+    return AnonymiseEligibilityResponse(eligible=not blockers, blockers=blockers)
+
+
+@router.post("/users/{user_id}/anonymise")
+async def anonymise_user(
+    user_id: uuid.UUID,
+    body: AnonymiseUserRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """PCC "Anonymise user" (Slice 5B). Irreversible — see restore_user's
+    anonymised_at guard. Never records the pre-anonymisation email/display
+    name/avatar in the audit event (Slice 5B §11 — a deliberate amendment
+    to Slice 5A's snapshot-before-delete proposal, since that would
+    preserve exactly the PII this action exists to erase)."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if body.confirmation_text != user.email:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Confirmation text does not match this user's current email.",
+        )
+    blockers = await _user_anonymise_blockers(db, user)
+    if blockers:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            _USER_ANONYMISE_BLOCKER_MESSAGES.get(
+                blockers[0], "This user cannot be anonymised right now."
+            ),
+        )
+
+    previous_lifecycle, removed_membership_count, previous_avatar_key = (
+        await _apply_user_anonymise(db, user)
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": previous_lifecycle},
+        new={
+            "lifecycle": "anonymised",
+            "anonymised_at": user.anonymised_at.isoformat() if user.anonymised_at else None,
+            "fields_anonymised": [
+                "display_name",
+                "email",
+                "avatar_key",
+                "birth_month",
+                "birth_day",
+                "birth_year",
+            ],
+            "memberships_removed": removed_membership_count,
+        },
+    )
+    await db.commit()
+
+    if previous_avatar_key:
+        storage = get_avatar_storage(settings)
+        try:
+            await storage.delete(previous_avatar_key)
+        except OSError:  # cleanup best-effort, never fail the request
+            await log.awarning("avatar_cleanup_failed", user_id=str(user_id))
+
+    return {"message": "User anonymised."}
 
 
 @router.post("/users/bulk-lifecycle", response_model=BulkLifecycleResponse)
@@ -3973,6 +4217,224 @@ async def update_home_feature_flag(
     )
     await db.commit()
     return {"key": key, "home_id": group_id, "enabled": body.enabled}
+
+
+_HOME_DELETE_BLOCKER_MESSAGES = {
+    "not_archived": "This Home must be Archived before it can be permanently deleted.",
+    "has_active_members": "This Home still has active members.",
+    "has_membership_history": (
+        "This Home has been used by more than one member historically and cannot be "
+        "permanently deleted."
+    ),
+    "has_calendar_events": "This Home has calendar events and cannot be permanently deleted.",
+    "has_custom_labels": (
+        "This Home has custom calendar categories and cannot be permanently deleted."
+    ),
+    "has_calendar_shares": (
+        "This Home has external calendar shares and cannot be permanently deleted."
+    ),
+    "has_routines": "This Home has household routines and cannot be permanently deleted.",
+    "has_reminders": "This Home has reminders and cannot be permanently deleted.",
+    "has_meals": "This Home has meal plan data and cannot be permanently deleted.",
+    "has_lists": "This Home has lists and cannot be permanently deleted.",
+    "has_wishlists": "This Home has wishlist data and cannot be permanently deleted.",
+    "has_invitations": "This Home has invitation history and cannot be permanently deleted.",
+    "has_join_requests": "This Home has join-request history and cannot be permanently deleted.",
+    "has_children": "This Home has managed child profiles and cannot be permanently deleted.",
+    "has_active_subscription": (
+        "This Home has a paid subscription and cannot be permanently deleted."
+    ),
+    "has_billing_history": "This Home has billing history and cannot be permanently deleted.",
+    "is_managed_demo_home": (
+        "This Home is a managed demo/test Home — use the Demo & Test Homes tool to delete "
+        "it instead."
+    ),
+}
+
+
+async def _home_delete_blockers(db: AsyncSession, group: Group) -> list[str]:
+    """Slice 5B §13-17 — every reason permanent_delete_home would refuse,
+    computed up front so both the mutation and the read-only eligibility
+    preflight report the same set. "Meaningful content" (§14) is defined as
+    any row at all in any of these tables — the only rows a genuinely
+    untouched Home is allowed to have are the ones create_group itself
+    always creates (the creator's own Membership, the 2 scaffold
+    HomeCalendars, the 7 system CalendarEventLabel rows, the Free
+    HomeSubscription and its "created" HomeSubscriptionEvent) — none of
+    which this function checks, by design, since none of them indicate the
+    Home was ever actually used."""
+    blockers: list[str] = []
+    if group.archived_at is None:
+        blockers.append("not_archived")
+
+    active_membership_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group.id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    if active_membership_count > 0:
+        blockers.append("has_active_members")
+
+    # §15: at most one Membership row, ever (the creator's own scaffold
+    # row) — a second row, active or historical, means a real second
+    # person was genuinely a member at some point.
+    total_membership_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(Membership.group_id == group.id)
+        )
+        or 0
+    )
+    if total_membership_count > 1:
+        blockers.append("has_membership_history")
+
+    if await db.scalar(
+        select(CalendarEvent.id).where(CalendarEvent.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_calendar_events")
+    # is_system=True labels are the 7 seeded on every Home creation — only
+    # an operator/household-created label indicates real use.
+    if await db.scalar(
+        select(CalendarEventLabel.id)
+        .where(CalendarEventLabel.group_id == group.id, CalendarEventLabel.is_system.is_(False))
+        .limit(1)
+    ):
+        blockers.append("has_custom_labels")
+    if await db.scalar(
+        select(CalendarShare.id).where(CalendarShare.source_group_id == group.id).limit(1)
+    ):
+        blockers.append("has_calendar_shares")
+    if await db.scalar(
+        select(HouseholdRoutine.id).where(HouseholdRoutine.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_routines")
+    if await db.scalar(select(Reminder.id).where(Reminder.group_id == group.id).limit(1)):
+        blockers.append("has_reminders")
+    if await db.scalar(
+        select(Meal.id).where(Meal.group_id == group.id).limit(1)
+    ) or await db.scalar(
+        select(MealPlanEntry.id).where(MealPlanEntry.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_meals")
+    if await db.scalar(
+        select(HouseholdList.id).where(HouseholdList.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_lists")
+    if await db.scalar(select(Wishlist.id).where(Wishlist.home_id == group.id).limit(1)):
+        blockers.append("has_wishlists")
+    if await db.scalar(select(Invitation.id).where(Invitation.group_id == group.id).limit(1)):
+        blockers.append("has_invitations")
+    if await db.scalar(
+        select(HomeJoinRequest.id).where(HomeJoinRequest.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_join_requests")
+    if await db.scalar(select(ChildProfile.id).where(ChildProfile.group_id == group.id).limit(1)):
+        blockers.append("has_children")
+
+    subscription = await get_home_subscription(db, group.id)
+    if subscription is not None and subscription.plan != SubscriptionPlan.free:
+        blockers.append("has_active_subscription")
+    # §16: any HISTORICAL non-free billing event blocks too, not just the
+    # current plan — protects local billing/audit history from the
+    # HomeSubscriptionEvent CASCADE a Group delete would otherwise trigger.
+    if await db.scalar(
+        select(HomeSubscriptionEvent.id)
+        .where(
+            HomeSubscriptionEvent.group_id == group.id,
+            HomeSubscriptionEvent.to_plan != SubscriptionPlan.free,
+        )
+        .limit(1)
+    ):
+        blockers.append("has_billing_history")
+
+    if await db.scalar(
+        select(ManagedDemoHome.id).where(ManagedDemoHome.home_id == group.id).limit(1)
+    ):
+        blockers.append("is_managed_demo_home")
+
+    return blockers
+
+
+@router.get(
+    "/homes/{group_id}/permanent-delete/eligibility",
+    response_model=HomeDeleteEligibilityResponse,
+)
+async def home_delete_eligibility(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> HomeDeleteEligibilityResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    blockers = await _home_delete_blockers(db, group)
+    return HomeDeleteEligibilityResponse(eligible=not blockers, blockers=blockers)
+
+
+@router.post("/homes/{group_id}/permanent-delete")
+async def permanent_delete_home(
+    group_id: uuid.UUID,
+    body: PermanentDeleteHomeRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """PCC "Permanently delete Home" (Slice 5B). Only ever reachable for a
+    genuinely empty, disposable Archived Home — see _home_delete_blockers.
+    Registered before home_state's `/homes/{group_id}/{action}` catch-all
+    so this more specific path is matched first (FastAPI/Starlette resolve
+    routes in registration order, not by specificity)."""
+    require_recent_auth(context, settings)
+    group = await db.get(Group, group_id, with_for_update=True)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    if body.confirmation_text != group.name:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Confirmation text does not match this Home's current name.",
+        )
+    blockers = await _home_delete_blockers(db, group)
+    if blockers:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            _HOME_DELETE_BLOCKER_MESSAGES.get(
+                blockers[0], "This Home cannot be permanently deleted right now."
+            ),
+        )
+
+    # Snapshot before deleting (Slice 5B §18 — Home-name retention is
+    # permitted here, unlike User anonymisation's PII, since this is an
+    # operational record of an administrative action, not the erasure of a
+    # person's identity). AdministrativeAuditEvent.target_id has no FK
+    # constraint, so this row survives the Group's deletion untouched.
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.permanently_deleted",
+        "home",
+        group.id,
+        reason=body.reason,
+        previous={"lifecycle": "archived", "name": group.name},
+        new={"lifecycle": "deleted"},
+    )
+    # A bulk statement, not `db.delete()` on loaded objects — Group.memberships
+    # has no cascade="all, delete-orphan"/passive_deletes configured at the
+    # ORM relationship level (only the DB-level FK is ondelete=CASCADE), so
+    # letting SQLAlchemy manage this itself would try to NULL out group_id
+    # on the up-to-one allowed historical Membership row (§15) before
+    # deleting the Group, which fails outright since group_id is NOT NULL.
+    # Deleting it explicitly first sidesteps the ORM relationship entirely;
+    # every other CASCADE (calendars, events, subscription, etc. — none of
+    # which _home_delete_blockers permits to have any rows anyway) is left
+    # to the database itself.
+    await db.execute(delete(Membership).where(Membership.group_id == group.id))
+    await db.delete(group)
+    await db.commit()
+    return {"message": "Home permanently deleted."}
 
 
 @router.post("/homes/{group_id}/{action}")

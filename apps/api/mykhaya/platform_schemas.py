@@ -832,6 +832,34 @@ class BulkLifecycleResponse(BaseModel):
     failed: list[BulkLifecycleFailure]
 
 
+class AnonymiseUserRequest(SensitiveActionRequest):
+    """PCC → User detail → "Anonymise user" — see
+    routers.platform.anonymise_user. `confirmation_text` must exactly match
+    the user's current email (checked server-side, never trusted from the
+    UI alone) — a stronger bar than the usual reason+confirmed pair, since
+    this is irreversible."""
+
+    confirmation_text: str = Field(min_length=1, max_length=320)
+
+
+class AnonymiseEligibilityResponse(BaseModel):
+    eligible: bool
+    blockers: list[str]
+
+
+class PermanentDeleteHomeRequest(SensitiveActionRequest):
+    """PCC → Home detail → "Permanently delete Home" — see
+    routers.platform.permanent_delete_home. `confirmation_text` must
+    exactly match the Home's current name."""
+
+    confirmation_text: str = Field(min_length=1, max_length=100)
+
+
+class HomeDeleteEligibilityResponse(BaseModel):
+    eligible: bool
+    blockers: list[str]
+
+
 class SubscriptionSummaryResponse(BaseModel):
     """Backend-computed factual counts only. Still no MRR/ARR: with multiple
     historical Stripe Prices, currencies and billing intervals possibly in

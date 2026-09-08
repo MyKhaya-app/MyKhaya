@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
@@ -26,6 +26,7 @@ import {
   Shuffle,
   ToggleLeft,
   ToggleRight,
+  Trash2,
 } from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived";
@@ -60,6 +61,7 @@ const featureLabel = (feature: string) => feature.replaceAll("_", " ");
 
 export default function PlatformHomeDetail() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [data, setData] = useState<HomeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -71,6 +73,8 @@ export default function PlatformHomeDetail() {
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [featureDialog, setFeatureDialog] = useState<{ feature: string; enabled: boolean } | null>(null);
   const [moveMemberTarget, setMoveMemberTarget] = useState<HomeDetail["members"][number] | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBlockers, setDeleteBlockers] = useState<string[] | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   async function load() {
@@ -136,6 +140,42 @@ export default function PlatformHomeDetail() {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(safeError(cause, `Unable to update the ${featureLabel(feature)} override.`));
     } finally {
+      setBusy("");
+    }
+  });
+
+  async function openDelete() {
+    setDeleteBlockers(null);
+    setDeleteOpen(true);
+    try {
+      const result = await platformApi.get<{ eligible: boolean; blockers: string[] }>(
+        `/homes/${encodeURIComponent(id)}/permanent-delete/eligibility`,
+      );
+      setDeleteBlockers(result.blockers);
+    } catch (cause) {
+      setDeleteBlockers([safeError(cause, "Unable to check deletion eligibility.")]);
+    }
+  }
+
+  // The backend independently revalidates every precondition on the
+  // mutation itself (see routers.platform.permanent_delete_home) — the
+  // eligibility preflight above is purely a UX convenience so operators see
+  // blockers before typing a confirmation, not a substitute for that
+  // server-side check.
+  const runDelete = guarded(async (formData: FormData) => {
+    setDeleteOpen(false);
+    setBusy("permanent-delete");
+    setError("");
+    try {
+      await platformApi.post<{ message: string }>(`/homes/${encodeURIComponent(id)}/permanent-delete`, {
+        reason: formData.get("audit_reason"),
+        confirmation_text: formData.get("confirmation_text"),
+        confirmed: true,
+      });
+      router.push("/homes");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to permanently delete this Home."));
       setBusy("");
     }
   });
@@ -358,6 +398,26 @@ export default function PlatformHomeDetail() {
                 />
               </CcDangerZone>
             )}
+
+            {data.lifecycle === "archived" && (
+              <CcDangerZone
+                title="Permanently delete Home"
+                description="This permanently removes this empty Home. This cannot be undone. Homes containing household history cannot be permanently deleted here."
+              >
+                <CcActionBar
+                  actions={[
+                    {
+                      key: "permanent-delete",
+                      label: "Permanently delete Home",
+                      icon: Trash2,
+                      variant: "destructive",
+                      disabled: Boolean(busy),
+                      onClick: () => void openDelete(),
+                    },
+                  ]}
+                />
+              </CcDangerZone>
+            )}
           </>
         )}
       </CcPage>
@@ -414,6 +474,32 @@ export default function PlatformHomeDetail() {
           if (featureDialog) void setFeature(featureDialog.feature, featureDialog.enabled, formData);
         }}
       />
+
+      {data && (
+        <CcConfirmDialog
+          open={deleteOpen}
+          onClose={() => setDeleteOpen(false)}
+          title="Permanently delete Home"
+          description="This permanently removes this empty Home. This cannot be undone. Homes containing household history cannot be permanently deleted here."
+          confirmLabel="Permanently delete Home"
+          variant="destructive"
+          onConfirm={(formData) => {
+            if (!deleteBlockers || deleteBlockers.length === 0) void runDelete(formData);
+          }}
+          extraFields={
+            <>
+              {deleteBlockers === null && <p>Checking eligibility…</p>}
+              {deleteBlockers && deleteBlockers.length > 0 && (
+                <CcNotice tone="error">This Home cannot be permanently deleted yet: {deleteBlockers.join(", ")}</CcNotice>
+              )}
+              <label>
+                Type this Home&rsquo;s name to confirm ({data.name})
+                <input name="confirmation_text" type="text" required autoComplete="off" />
+              </label>
+            </>
+          }
+        />
+      )}
 
       {data && moveMemberTarget && (
         <MoveMemberDialog

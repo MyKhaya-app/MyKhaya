@@ -3,8 +3,9 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DetailPage from "./page";
 
+const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: routerPush, replace: vi.fn() }),
   useParams: () => ({ id: "home-1" }),
   usePathname: () => "/homes/home-1",
 }));
@@ -41,6 +42,7 @@ function findDialog(name: RegExp | string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routerPush.mockClear();
   get.mockResolvedValue(activeHome);
   post.mockResolvedValue({ message: "ok" });
   put.mockResolvedValue({});
@@ -316,5 +318,66 @@ describe("Home detail — Move member", () => {
     await waitFor(() =>
       expect(get.mock.calls.filter((call) => call[0] === "/homes/home-1")).toHaveLength(2),
     );
+  });
+});
+
+describe("Home detail — Permanent delete", () => {
+  function mockEligibility(blockers: string[]) {
+    get.mockImplementation((path: string) => {
+      if (path === "/homes/home-1") return Promise.resolve(archivedHome);
+      if (path === "/homes/home-1/permanent-delete/eligibility") {
+        return Promise.resolve({ eligible: blockers.length === 0, blockers });
+      }
+      return Promise.resolve(archivedHome);
+    });
+  }
+
+  it("only offers Permanently delete Home for an archived Home, not active/disabled", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    expect(screen.queryByRole("button", { name: "Permanently delete Home" })).not.toBeInTheDocument();
+
+    get.mockResolvedValue(suspendedHome);
+    render(<DetailPage />);
+    await screen.findAllByText("The Smiths");
+    expect(screen.queryByRole("button", { name: "Permanently delete Home" })).not.toBeInTheDocument();
+
+    mockEligibility([]);
+    render(<DetailPage />);
+    await screen.findAllByText("The Smiths");
+    expect(screen.getByRole("button", { name: "Permanently delete Home" })).toBeInTheDocument();
+  });
+
+  it("checks eligibility on open and blocks confirmation while a blocker is present", async () => {
+    mockEligibility(["has_active_members"]);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Permanently delete Home" }));
+    const dialog = await findDialog(/Permanently delete Home/i);
+    expect(await within(dialog).findByText(/cannot be permanently deleted yet/i)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/type this home.?s name/i), "The Smiths");
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Accidental test Home");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Permanently delete Home" }));
+    expect(post).not.toHaveBeenCalledWith("/homes/home-1/permanent-delete", expect.anything());
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("submits the typed name confirmation and reason, then navigates back to Homes", async () => {
+    mockEligibility([]);
+    post.mockResolvedValue({ message: "Home permanently deleted." });
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Permanently delete Home" }));
+    const dialog = await findDialog(/Permanently delete Home/i);
+    await within(dialog).findByLabelText(/type this home.?s name/i);
+    await userEvent.type(within(dialog).getByLabelText(/type this home.?s name/i), "The Smiths");
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Accidental test Home");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Permanently delete Home" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/homes/home-1/permanent-delete", {
+        reason: "Accidental test Home",
+        confirmation_text: "The Smiths",
+        confirmed: true,
+      }),
+    );
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/homes"));
   });
 });

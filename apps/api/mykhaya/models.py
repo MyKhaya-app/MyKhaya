@@ -200,6 +200,12 @@ class User(UuidTimeMixin, Base):
     # set while is_active=True (enforced in the archive/restore/reactivate
     # endpoints, not the schema).
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Slice 5B — distinct from archived_at. Archive is reversible (Restore
+    # clears it); anonymisation is permanent (Restore refuses once this is
+    # set — see routers.platform.restore_user/anonymise_user). Always
+    # implies archived_at is also set and is_active=False, but not the
+    # reverse: an Archived user is not necessarily anonymised.
+    anonymised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     timezone: Mapped[str | None] = mapped_column(String(100))
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)

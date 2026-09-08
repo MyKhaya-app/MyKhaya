@@ -35,6 +35,14 @@ const verifiedUser = {
 const unverifiedUser = { ...verifiedUser, verified: false };
 const suspendedUser = { ...verifiedUser, active: false, lifecycle: "disabled" as const };
 const archivedUser = { ...verifiedUser, active: false, lifecycle: "archived" as const };
+const anonymisedUser = {
+  ...verifiedUser,
+  active: false,
+  lifecycle: "anonymised" as const,
+  display_name: "Deleted user",
+  email: "deleted-user-1@removed.mykhaya.invalid",
+  anonymised_at: "2026-03-05T00:00:00Z",
+};
 const emptyUser = { ...verifiedUser, homes: [], sessions: [], notes: [] };
 
 function findDialog(name: RegExp | string) {
@@ -381,5 +389,72 @@ describe("User detail — Move member", () => {
     await waitFor(() =>
       expect(get.mock.calls.filter((call) => call[0] === "/users/user-1")).toHaveLength(2),
     );
+  });
+});
+
+describe("User detail — Anonymise", () => {
+  function mockEligibility(blockers: string[]) {
+    get.mockImplementation((path: string) => {
+      if (path === "/users/user-1") return Promise.resolve(archivedUser);
+      if (path === "/users/user-1/anonymise/eligibility") return Promise.resolve({ eligible: blockers.length === 0, blockers });
+      return Promise.resolve(archivedUser);
+    });
+  }
+
+  it("only offers Anonymise user for an archived user, not active/disabled", async () => {
+    render(<DetailPage />);
+    await screen.findByText("Jane Smith");
+    expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();
+
+    get.mockResolvedValue(suspendedUser);
+    render(<DetailPage />);
+    await screen.findAllByText("Jane Smith");
+    expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();
+
+    mockEligibility([]);
+    render(<DetailPage />);
+    await screen.findAllByText("Jane Smith");
+    expect(screen.getByRole("button", { name: "Anonymise user" })).toBeInTheDocument();
+  });
+
+  it("checks eligibility on open and blocks confirmation while a blocker is present", async () => {
+    mockEligibility(["last_home_admin"]);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Anonymise user" }));
+    const dialog = await findDialog(/Anonymise user/i);
+    expect(await within(dialog).findByText(/cannot be anonymised yet/i)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/type this user.?s current email/i), "jane@example.com");
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Cleaning up test data");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Anonymise user" }));
+    expect(post).not.toHaveBeenCalledWith("/users/user-1/anonymise", expect.anything());
+  });
+
+  it("submits the typed email confirmation and reason once eligible", async () => {
+    mockEligibility([]);
+    post.mockResolvedValue({ message: "User anonymised." });
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Anonymise user" }));
+    const dialog = await findDialog(/Anonymise user/i);
+    await within(dialog).findByLabelText(/type this user.?s current email/i);
+    await userEvent.type(within(dialog).getByLabelText(/type this user.?s current email/i), "jane@example.com");
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Cleaning up test data");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Anonymise user" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/anonymise", {
+        reason: "Cleaning up test data",
+        confirmation_text: "jane@example.com",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("shows an Anonymised status with no Restore action once anonymised", async () => {
+    get.mockResolvedValue(anonymisedUser);
+    render(<DetailPage />);
+    await screen.findByText("Deleted user");
+    expect(screen.getAllByText("Anonymised").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Restore user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();
+    expect(screen.queryByText("jane@example.com")).not.toBeInTheDocument();
   });
 });

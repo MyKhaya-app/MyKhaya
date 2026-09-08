@@ -18,9 +18,9 @@ import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
-import { Archive, ArchiveRestore, KeyRound, Mail, Power, ShieldOff, Shuffle } from "lucide-react";
+import { Archive, ArchiveRestore, KeyRound, Mail, Power, ShieldOff, Shuffle, UserX } from "lucide-react";
 
-type Lifecycle = "active" | "disabled" | "archived";
+type Lifecycle = "active" | "disabled" | "archived" | "anonymised";
 
 type UserDetail = {
   id: string;
@@ -29,6 +29,7 @@ type UserDetail = {
   verified: boolean;
   active: boolean;
   lifecycle: Lifecycle;
+  anonymised_at?: string | null;
   created_at: string;
   last_login_at: string | null;
   homes: { id: string; name: string; role: string }[];
@@ -57,6 +58,8 @@ export default function PlatformUserDetail() {
   const [busy, setBusy] = useState("");
   const [openDialog, setOpenDialog] = useState<GatedAction | null>(null);
   const [moveMemberOpen, setMoveMemberOpen] = useState(false);
+  const [anonymiseOpen, setAnonymiseOpen] = useState(false);
+  const [anonymiseBlockers, setAnonymiseBlockers] = useState<string[] | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   async function load() {
@@ -101,6 +104,43 @@ export default function PlatformUserDetail() {
     }
   });
 
+  async function openAnonymise() {
+    setAnonymiseBlockers(null);
+    setAnonymiseOpen(true);
+    try {
+      const result = await platformApi.get<{ eligible: boolean; blockers: string[] }>(
+        `/users/${encodeURIComponent(id)}/anonymise/eligibility`,
+      );
+      setAnonymiseBlockers(result.blockers);
+    } catch (cause) {
+      setAnonymiseBlockers([safeError(cause, "Unable to check anonymisation eligibility.")]);
+    }
+  }
+
+  // The backend independently revalidates every precondition on the mutation
+  // itself (see routers.platform.anonymise_user) — the eligibility preflight
+  // above is purely a UX convenience so operators see blockers before typing
+  // a confirmation, not a substitute for that server-side check.
+  const runAnonymise = guarded(async (formData: FormData) => {
+    setAnonymiseOpen(false);
+    setBusy("anonymise");
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(`/users/${encodeURIComponent(id)}/anonymise`, {
+        reason: formData.get("audit_reason"),
+        confirmation_text: formData.get("confirmation_text"),
+        confirmed: true,
+      });
+      setMessage(result.message);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to anonymise this user."));
+    } finally {
+      setBusy("");
+    }
+  });
+
   async function addNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -117,27 +157,43 @@ export default function PlatformUserDetail() {
   }
 
   const statusTone: CcBadgeTone =
-    data?.lifecycle === "archived" ? "neutral" : data?.lifecycle === "active" ? "success" : "danger";
+    data?.lifecycle === "anonymised"
+      ? "neutral"
+      : data?.lifecycle === "archived"
+        ? "neutral"
+        : data?.lifecycle === "active"
+          ? "success"
+          : "danger";
   const statusLabel =
-    data?.lifecycle === "archived" ? "Archived" : data?.lifecycle === "active" ? "Active" : "Disabled";
+    data?.lifecycle === "anonymised"
+      ? "Anonymised"
+      : data?.lifecycle === "archived"
+        ? "Archived"
+        : data?.lifecycle === "active"
+          ? "Active"
+          : "Disabled";
 
-  // Archived is a retired/hidden record — no action makes sense on it
-  // except Restore (see Slice 3: "Do not offer nonsensical actions such as
-  // 'Reactivate' and 'Restore' simultaneously").
+  // Anonymised is a dead end — the identity is gone, so no action (not even
+  // Restore) makes sense on it (Slice 5B §20/§10). Archived is retired but
+  // reversible — Restore is its only sensible action (see Slice 3: "Do not
+  // offer nonsensical actions such as 'Reactivate' and 'Restore'
+  // simultaneously").
   const actions: CcAction[] = !data
     ? []
-    : data.lifecycle === "archived"
-      ? [
-          {
-            key: "restore",
-            label: "Restore user",
-            icon: ArchiveRestore,
-            variant: "primary" as const,
-            disabled: Boolean(busy),
-            onClick: () => setOpenDialog("restore"),
-          },
-        ]
-      : [
+    : data.lifecycle === "anonymised"
+      ? []
+      : data.lifecycle === "archived"
+        ? [
+            {
+              key: "restore",
+              label: "Restore user",
+              icon: ArchiveRestore,
+              variant: "primary" as const,
+              disabled: Boolean(busy),
+              onClick: () => setOpenDialog("restore"),
+            },
+          ]
+        : [
           ...(data.lifecycle === "disabled"
             ? [
                 {
@@ -328,7 +384,7 @@ export default function PlatformUserDetail() {
               <CcActionBar actions={actions} />
             </CcSection>
 
-            {data.lifecycle !== "archived" && (
+            {data.lifecycle !== "archived" && data.lifecycle !== "anonymised" && (
               <CcDangerZone
                 title="Suspend or archive user"
                 description="Suspending this user signs them out everywhere and blocks sign-in until reactivated. Archiving does the same but also retires the account from normal operational views — restore it later to bring it back."
@@ -359,6 +415,26 @@ export default function PlatformUserDetail() {
                 />
               </CcDangerZone>
             )}
+
+            {data.lifecycle === "archived" && (
+              <CcDangerZone
+                title="Anonymise user"
+                description="This permanently removes the user's identifying account information and sign-in credentials while retaining historical household records under an anonymised identity. This cannot be undone."
+              >
+                <CcActionBar
+                  actions={[
+                    {
+                      key: "anonymise",
+                      label: "Anonymise user",
+                      icon: UserX,
+                      variant: "destructive",
+                      disabled: Boolean(busy),
+                      onClick: () => void openAnonymise(),
+                    },
+                  ]}
+                />
+              </CcDangerZone>
+            )}
           </>
         )}
       </CcPage>
@@ -375,6 +451,32 @@ export default function PlatformUserDetail() {
           onConfirm={(formData) => runAction(action, formData)}
         />
       ))}
+
+      {data && (
+        <CcConfirmDialog
+          open={anonymiseOpen}
+          onClose={() => setAnonymiseOpen(false)}
+          title="Anonymise user"
+          description="This permanently removes the user's identifying account information and sign-in credentials while retaining historical household records under an anonymised identity. This cannot be undone. Restore will no longer be available."
+          confirmLabel="Anonymise user"
+          variant="destructive"
+          onConfirm={(formData) => {
+            if (!anonymiseBlockers || anonymiseBlockers.length === 0) void runAnonymise(formData);
+          }}
+          extraFields={
+            <>
+              {anonymiseBlockers === null && <p>Checking eligibility…</p>}
+              {anonymiseBlockers && anonymiseBlockers.length > 0 && (
+                <CcNotice tone="error">This user cannot be anonymised yet: {anonymiseBlockers.join(", ")}</CcNotice>
+              )}
+              <label>
+                Type this user&rsquo;s current email to confirm ({data.email})
+                <input name="confirmation_text" type="text" required autoComplete="off" />
+              </label>
+            </>
+          }
+        />
+      )}
 
       {data && (
         <MoveMemberDialog
