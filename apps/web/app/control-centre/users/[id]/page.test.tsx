@@ -325,6 +325,22 @@ describe("User detail — Move member", () => {
     expect(screen.queryByRole("button", { name: "Move member" })).not.toBeInTheDocument();
   });
 
+  it("renders the desktop two-column structure: source summary, destination results, and inline disposition options", async () => {
+    const dialog = await openAndFindDestination();
+
+    const sourcePanel = within(dialog).getByText("Source Home").closest("div")!;
+    expect(within(sourcePanel).getByText("The Smiths")).toBeInTheDocument();
+    expect(within(sourcePanel).getByText("owner")).toBeInTheDocument();
+
+    expect(
+      within(dialog).getByRole("button", { name: /Carol's Home/ }),
+    ).toHaveTextContent("1 member");
+
+    const dispositionGroup = within(dialog).getByRole("group", { name: /source home, once this member leaves/i });
+    expect(within(dispositionGroup).getByLabelText("Leave unchanged")).toBeInTheDocument();
+    expect(within(dispositionGroup).getByLabelText("Archive if empty")).toBeInTheDocument();
+  });
+
   it("searches for and selects a destination Home, then submits the expected payload", async () => {
     const dialog = await openAndFindDestination();
     await userEvent.selectOptions(within(dialog).getByLabelText(/new relationship/i), "adult");

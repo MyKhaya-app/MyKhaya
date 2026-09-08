@@ -7,7 +7,13 @@ import { CcDialog, CcDialogActions } from "./dialog";
 import { CcField } from "./form-field";
 import { CcNotice } from "./status-message";
 
-export type MoveMemberSourceHome = { id: string; name: string; role: string };
+export type MoveMemberSourceHome = {
+  id: string;
+  name: string;
+  role: string;
+  memberCount?: number;
+  lifecycle?: string;
+};
 
 type HomeSearchResult = {
   id: string;
@@ -154,99 +160,129 @@ export function MoveMemberDialog({
         <div className="cc-dialog-scroll">
           {error && <CcNotice tone="error">{error}</CcNotice>}
 
-          {sourceHomes.length > 1 ? (
-            <CcField label="From Home">
-              <select value={sourceGroupId} onChange={(event) => setSourceGroupId(event.target.value)}>
-                {sourceHomes.map((home) => (
-                  <option key={home.id} value={home.id}>
-                    {home.name} ({home.role.replaceAll("_", " ")})
+          <div className="cc-move-member-grid">
+            <div className="cc-move-member-source">
+              <h3>Source Home</h3>
+              {sourceHomes.length > 1 && (
+                <CcField label="From Home">
+                  <select value={sourceGroupId} onChange={(event) => setSourceGroupId(event.target.value)}>
+                    {sourceHomes.map((home) => (
+                      <option key={home.id} value={home.id}>
+                        {home.name} ({home.role.replaceAll("_", " ")})
+                      </option>
+                    ))}
+                  </select>
+                </CcField>
+              )}
+              {sourceHome && (
+                <dl>
+                  <dt>Home</dt>
+                  <dd>{sourceHome.name}</dd>
+                  <dt>Relationship</dt>
+                  <dd>{sourceHome.role.replaceAll("_", " ")}</dd>
+                  {sourceHome.memberCount !== undefined && (
+                    <>
+                      <dt>Members</dt>
+                      <dd>{sourceHome.memberCount}</dd>
+                    </>
+                  )}
+                  {sourceHome.lifecycle && (
+                    <>
+                      <dt>Status</dt>
+                      <dd>{sourceHome.lifecycle}</dd>
+                    </>
+                  )}
+                </dl>
+              )}
+            </div>
+
+            <div>
+              <div className="cc-field">
+                <label htmlFor={searchFieldId}>Find destination Home</label>
+                <p className="cc-field-help">Search active Homes by name.</p>
+                <div className="cc-move-member-search">
+                  <input
+                    id={searchFieldId}
+                    type="text"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Home name"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void search();
+                      }
+                    }}
+                  />
+                  <button type="button" className="secondary" onClick={() => void search()} disabled={searching}>
+                    {searching ? "Searching…" : "Search"}
+                  </button>
+                </div>
+              </div>
+
+              {results.length > 0 && (
+                <ul className="cc-move-member-results">
+                  {results.map((home) => (
+                    <li key={home.id}>
+                      <button
+                        type="button"
+                        aria-pressed={home.id === destinationGroupId}
+                        className={home.id === destinationGroupId ? "cc-move-member-result-selected" : undefined}
+                        onClick={() => {
+                          setDestinationGroupId(home.id);
+                          setDestinationName(home.name);
+                        }}
+                      >
+                        <span>{home.name}</span>
+                        <span>
+                          {home.member_count} member{home.member_count === 1 ? "" : "s"}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="cc-move-member-row">
+            <CcField label="New relationship in destination Home">
+              <select
+                value={relationship}
+                onChange={(event) => setRelationship(event.target.value as Relationship)}
+              >
+                {RELATIONSHIP_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
             </CcField>
-          ) : (
-            <p>
-              Moving from <strong>{sourceHome?.name ?? "this Home"}</strong>.
-            </p>
-          )}
 
-          <div className="cc-field">
-            <label htmlFor={searchFieldId}>Find destination Home</label>
-            <p className="cc-field-help">Search active Homes by name.</p>
-            <div className="cc-move-member-search">
-              <input
-                id={searchFieldId}
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Home name"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void search();
-                  }
-                }}
-              />
-              <button type="button" className="secondary" onClick={() => void search()} disabled={searching}>
-                {searching ? "Searching…" : "Search"}
-              </button>
-            </div>
+            <fieldset className="cc-move-member-disposition">
+              <legend>Source Home, once this member leaves</legend>
+              <div className="cc-move-member-disposition-options">
+                <label>
+                  <input
+                    type="radio"
+                    name="source_disposition"
+                    checked={disposition === "leave"}
+                    onChange={() => setDisposition("leave")}
+                  />
+                  Leave unchanged
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="source_disposition"
+                    checked={disposition === "archive_if_empty"}
+                    onChange={() => setDisposition("archive_if_empty")}
+                  />
+                  Archive if empty
+                </label>
+              </div>
+            </fieldset>
           </div>
-
-          {results.length > 0 && (
-            <ul className="cc-move-member-results">
-              {results.map((home) => (
-                <li key={home.id}>
-                  <button
-                    type="button"
-                    aria-pressed={home.id === destinationGroupId}
-                    className={home.id === destinationGroupId ? "cc-move-member-result-selected" : undefined}
-                    onClick={() => {
-                      setDestinationGroupId(home.id);
-                      setDestinationName(home.name);
-                    }}
-                  >
-                    {home.name} — {home.member_count} member{home.member_count === 1 ? "" : "s"}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <CcField label="New relationship in destination Home">
-            <select
-              value={relationship}
-              onChange={(event) => setRelationship(event.target.value as Relationship)}
-            >
-              {RELATIONSHIP_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </CcField>
-
-          <fieldset className="cc-move-member-disposition">
-            <legend>Source Home, once this member leaves</legend>
-            <label>
-              <input
-                type="radio"
-                name="source_disposition"
-                checked={disposition === "leave"}
-                onChange={() => setDisposition("leave")}
-              />
-              Leave unchanged
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="source_disposition"
-                checked={disposition === "archive_if_empty"}
-                onChange={() => setDisposition("archive_if_empty")}
-              />
-              Archive the source Home if this leaves it with no active members
-            </label>
-          </fieldset>
 
           {destinationGroupId && sourceHome && (
             <div className="cc-move-member-summary">

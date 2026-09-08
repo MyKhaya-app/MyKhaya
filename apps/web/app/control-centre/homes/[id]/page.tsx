@@ -508,7 +508,15 @@ export default function PlatformHomeDetail() {
           userId={moveMemberTarget.user_id}
           userDisplayName={moveMemberTarget.display_name}
           userEmail={moveMemberTarget.email}
-          sourceHomes={[{ id: data.id, name: data.name, role: moveMemberTarget.role }]}
+          sourceHomes={[
+            {
+              id: data.id,
+              name: data.name,
+              role: moveMemberTarget.role,
+              memberCount: data.members.length,
+              lifecycle: statusLabel,
+            },
+          ]}
           onMoved={(moveMessage) => {
             setMessage(moveMessage);
             setMoveMemberTarget(null);

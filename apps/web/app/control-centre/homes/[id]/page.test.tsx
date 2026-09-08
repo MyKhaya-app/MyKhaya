@@ -285,6 +285,10 @@ describe("Home detail — Move member", () => {
     // is only ever one source Home when opened from a Home's own member row.
     expect(within(dialog).queryByLabelText(/from home/i)).not.toBeInTheDocument();
     expect(within(dialog).getByText("The Smiths")).toBeInTheDocument();
+    // Source panel is passed this Home's own member count and lifecycle
+    // status, both cheaply available on the Home-detail page already.
+    expect(within(dialog).getByText("Active")).toBeInTheDocument();
+    expect(within(dialog).getByText("1")).toBeInTheDocument();
   });
 
   it("moves the member and reloads this Home afterwards", async () => {
