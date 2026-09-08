@@ -7622,7 +7622,7 @@ select.plan-meal-field-input {
 /* --- Routines & Reminders redesign --- */
 .rr-page {
   display: grid;
-  gap: var(--space-card-stack);
+  gap: 1rem;
 }
 .rr-intro {
   color: var(--colour-muted);
@@ -7642,6 +7642,14 @@ select.plan-meal-field-input {
   min-width: 0;
 }
 
+.rr-module-label {
+  color: var(--colour-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 .rr-intro-art {
   flex: none;
   height: 88px;
@@ -7649,15 +7657,15 @@ select.plan-meal-field-input {
   width: auto;
 }
 
-.rr-intro strong {
+.rr-intro h1 {
   color: var(--ink, #102c2a);
   font-size: clamp(2rem, 8vw, 3rem);
   line-height: 1;
+  margin: 0.25rem 0;
 }
 
-.rr-intro-text > span:last-child {
-  color: var(--muted, #65777b);
-  font-size: 1rem;
+.rr-intro-text p {
+  margin: 0.35rem 0;
 }
 
 @media (max-width: 420px) {

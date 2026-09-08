@@ -700,9 +700,9 @@ export default function RoutinesRemindersPage() {
       <div className="rr-page">
         <div className="rr-intro">
           <div className="rr-intro-text">
-            <span className="eyebrow">GENTLE PROMPTS FOR EVERYDAY LIFE</span>
-            <strong>Nudges</strong>
-            <span>Keep track without keeping it all in your head.</span>
+            <span className="rr-module-label">NUDGES</span>
+            <h1>Nudges</h1>
+            <p className="muted">Keep track without keeping it all in your head.</p>
           </div>
           <img
             className="rr-intro-art"
