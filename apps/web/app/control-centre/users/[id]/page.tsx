@@ -18,7 +18,9 @@ import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
-import { KeyRound, Mail, Power, ShieldOff, Shuffle } from "lucide-react";
+import { Archive, ArchiveRestore, KeyRound, Mail, Power, ShieldOff, Shuffle } from "lucide-react";
+
+type Lifecycle = "active" | "disabled" | "archived";
 
 type UserDetail = {
   id: string;
@@ -26,6 +28,7 @@ type UserDetail = {
   display_name: string;
   verified: boolean;
   active: boolean;
+  lifecycle: Lifecycle;
   created_at: string;
   last_login_at: string | null;
   homes: { id: string; name: string; role: string }[];
@@ -33,7 +36,14 @@ type UserDetail = {
   notes: { id: string; body: string; created_at: string }[];
 };
 
-type GatedAction = "suspend" | "reactivate" | "revoke-sessions" | "resend-verification" | "send-password-reset";
+type GatedAction =
+  | "suspend"
+  | "reactivate"
+  | "revoke-sessions"
+  | "resend-verification"
+  | "send-password-reset"
+  | "archive"
+  | "restore";
 
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
@@ -106,65 +116,81 @@ export default function PlatformUserDetail() {
     }
   }
 
-  const statusTone: CcBadgeTone = data?.active ? "success" : "danger";
-  const statusLabel = data?.active ? "Active" : "Suspended";
+  const statusTone: CcBadgeTone =
+    data?.lifecycle === "archived" ? "neutral" : data?.lifecycle === "active" ? "success" : "danger";
+  const statusLabel =
+    data?.lifecycle === "archived" ? "Archived" : data?.lifecycle === "active" ? "Active" : "Disabled";
 
-  const actions: CcAction[] = data
-    ? [
-        ...(data.active
-          ? []
-          : [
-              {
-                key: "reactivate",
-                label: "Reactivate user",
-                icon: Power,
-                variant: "primary" as const,
-                disabled: Boolean(busy),
-                onClick: () => setOpenDialog("reactivate"),
-              },
-            ]),
-        {
-          key: "revoke-sessions",
-          label: "Revoke all sessions",
-          icon: ShieldOff,
-          variant: "destructive",
-          disabled: Boolean(busy),
-          onClick: () => setOpenDialog("revoke-sessions"),
-        },
-        ...(data.homes.length > 0
-          ? [
-              {
-                key: "move-member",
-                label: "Move member",
-                icon: Shuffle,
-                variant: "secondary" as const,
-                disabled: Boolean(busy),
-                onClick: () => setMoveMemberOpen(true),
-              },
-            ]
-          : []),
-        ...(!data.verified
-          ? [
-              {
-                key: "resend-verification",
-                label: "Resend verification email",
-                icon: Mail,
-                variant: "secondary" as const,
-                disabled: Boolean(busy),
-                onClick: () => setOpenDialog("resend-verification"),
-              },
-            ]
-          : []),
-        {
-          key: "send-password-reset",
-          label: "Send password-reset email",
-          icon: KeyRound,
-          variant: "secondary",
-          disabled: Boolean(busy),
-          onClick: () => setOpenDialog("send-password-reset"),
-        },
-      ]
-    : [];
+  // Archived is a retired/hidden record — no action makes sense on it
+  // except Restore (see Slice 3: "Do not offer nonsensical actions such as
+  // 'Reactivate' and 'Restore' simultaneously").
+  const actions: CcAction[] = !data
+    ? []
+    : data.lifecycle === "archived"
+      ? [
+          {
+            key: "restore",
+            label: "Restore user",
+            icon: ArchiveRestore,
+            variant: "primary" as const,
+            disabled: Boolean(busy),
+            onClick: () => setOpenDialog("restore"),
+          },
+        ]
+      : [
+          ...(data.lifecycle === "disabled"
+            ? [
+                {
+                  key: "reactivate",
+                  label: "Reactivate user",
+                  icon: Power,
+                  variant: "primary" as const,
+                  disabled: Boolean(busy),
+                  onClick: () => setOpenDialog("reactivate"),
+                },
+              ]
+            : []),
+          {
+            key: "revoke-sessions",
+            label: "Revoke all sessions",
+            icon: ShieldOff,
+            variant: "destructive",
+            disabled: Boolean(busy),
+            onClick: () => setOpenDialog("revoke-sessions"),
+          },
+          ...(data.homes.length > 0
+            ? [
+                {
+                  key: "move-member",
+                  label: "Move member",
+                  icon: Shuffle,
+                  variant: "secondary" as const,
+                  disabled: Boolean(busy),
+                  onClick: () => setMoveMemberOpen(true),
+                },
+              ]
+            : []),
+          ...(!data.verified
+            ? [
+                {
+                  key: "resend-verification",
+                  label: "Resend verification email",
+                  icon: Mail,
+                  variant: "secondary" as const,
+                  disabled: Boolean(busy),
+                  onClick: () => setOpenDialog("resend-verification"),
+                },
+              ]
+            : []),
+          {
+            key: "send-password-reset",
+            label: "Send password-reset email",
+            icon: KeyRound,
+            variant: "secondary",
+            disabled: Boolean(busy),
+            onClick: () => setOpenDialog("send-password-reset"),
+          },
+        ];
 
   const dialogCopy: Record<GatedAction, { title: string; description: string; confirmLabel: string; variant?: "destructive" }> = {
     suspend: {
@@ -193,6 +219,18 @@ export default function PlatformUserDetail() {
       title: "Send password-reset email",
       description: "Send a password-reset email to this user?",
       confirmLabel: "Send reset email",
+    },
+    archive: {
+      title: "Archive user",
+      description:
+        "Archiving this user prevents sign-in and removes the account from normal operational views. Historical data and memberships are retained.",
+      confirmLabel: "Archive user",
+      variant: "destructive",
+    },
+    restore: {
+      title: "Restore user",
+      description: "Restore this user to Active? They will need to sign in again normally.",
+      confirmLabel: "Restore user",
     },
   };
 
@@ -290,20 +328,32 @@ export default function PlatformUserDetail() {
               <CcActionBar actions={actions} />
             </CcSection>
 
-            {data.active && (
+            {data.lifecycle !== "archived" && (
               <CcDangerZone
-                title="Suspend user"
-                description="Suspending this user signs them out everywhere and blocks sign-in until reactivated."
+                title="Suspend or archive user"
+                description="Suspending this user signs them out everywhere and blocks sign-in until reactivated. Archiving does the same but also retires the account from normal operational views — restore it later to bring it back."
               >
                 <CcActionBar
                   actions={[
+                    ...(data.lifecycle === "active"
+                      ? [
+                          {
+                            key: "suspend",
+                            label: "Suspend user",
+                            icon: ShieldOff,
+                            variant: "destructive" as const,
+                            disabled: Boolean(busy),
+                            onClick: () => setOpenDialog("suspend"),
+                          },
+                        ]
+                      : []),
                     {
-                      key: "suspend",
-                      label: "Suspend user",
-                      icon: ShieldOff,
+                      key: "archive",
+                      label: "Archive user",
+                      icon: Archive,
                       variant: "destructive",
                       disabled: Boolean(busy),
-                      onClick: () => setOpenDialog("suspend"),
+                      onClick: () => setOpenDialog("archive"),
                     },
                   ]}
                 />

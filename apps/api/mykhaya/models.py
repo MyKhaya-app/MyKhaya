@@ -194,6 +194,12 @@ class User(UuidTimeMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Retired/hidden lifecycle state, distinct from a Disabled (suspended_at
+    # set, archived_at NULL) account — see mykhaya.routers.platform.
+    # archive_user/restore_user. Always paired with is_active=False; never
+    # set while is_active=True (enforced in the archive/restore/reactivate
+    # endpoints, not the schema).
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     timezone: Mapped[str | None] = mapped_column(String(100))
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)
@@ -301,6 +307,9 @@ class Group(UuidTimeMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Same Disabled-vs-Archived distinction as User.archived_at — see
+    # mykhaya.routers.platform.archive_home/restore_home.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # A short, random, non-sequential code — never the Home name or id — that a
     # managed Child types in alongside their username/PIN to identify which Home
     # they belong to at sign-in, without exposing membership or enumerating real

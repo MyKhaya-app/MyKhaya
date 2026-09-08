@@ -2196,11 +2196,39 @@ async def overview(
     }
 
 
+LifecycleState = Literal["active", "disabled", "archived", "all"]
+
+
+def _lifecycle_state(is_active: bool, archived_at: datetime | None) -> str:
+    if archived_at is not None:
+        return "archived"
+    return "active" if is_active else "disabled"
+
+
+def _lifecycle_filter(
+    model: type[User] | type[Group], lifecycle: LifecycleState | None
+) -> Any | None:
+    """Shared Active/Disabled/Archived/All filter for the PCC users/homes
+    list endpoints (migration 0053_lifecycle_archived_state). Deliberately a
+    new, explicit `lifecycle` param rather than changing what the existing
+    `active` bool param means — `active=false` still matches every non-Active
+    row exactly as it always has, now including Archived ones too, which
+    were never a distinct row shape before this migration."""
+    if lifecycle is None or lifecycle == "all":
+        return None
+    if lifecycle == "archived":
+        return model.archived_at.is_not(None)
+    if lifecycle == "active":
+        return and_(model.is_active.is_(True), model.archived_at.is_(None))
+    return and_(model.is_active.is_(False), model.archived_at.is_(None))  # disabled
+
+
 @router.get("/users", response_model=PageResponse)
 async def users(
     q: str | None = Query(default=None, max_length=100),
     verified: bool | None = None,
     active: bool | None = None,
+    lifecycle: LifecycleState | None = Query(default=None),
     sort: Literal["created_at", "email", "display_name", "last_login_at"] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1, le=10_000),
@@ -2216,7 +2244,10 @@ async def users(
         filters.append(
             User.email_verified_at.is_not(None) if verified else User.email_verified_at.is_(None)
         )
-    if active is not None:
+    lifecycle_filter = _lifecycle_filter(User, lifecycle)
+    if lifecycle_filter is not None:
+        filters.append(lifecycle_filter)
+    elif active is not None:
         filters.append(User.is_active.is_(active))
     where = and_(*filters)
     total = await db.scalar(select(func.count(User.id)).where(where)) or 0
@@ -2272,6 +2303,7 @@ async def users(
                 "display_name": row.display_name,
                 "verified": row.email_verified_at is not None,
                 "active": row.is_active,
+                "lifecycle": _lifecycle_state(row.is_active, row.archived_at),
                 "created_at": row.created_at,
                 "last_login_at": row.last_login_at,
                 "last_activity_at": row.last_activity_at,
@@ -2327,6 +2359,7 @@ async def user_detail(
         "display_name": user.display_name,
         "verified": user.email_verified_at is not None,
         "active": user.is_active,
+        "lifecycle": _lifecycle_state(user.is_active, user.archived_at),
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
         "last_activity_at": user.last_activity_at,
@@ -2369,6 +2402,10 @@ async def _user_state_action(
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if user.archived_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This user is archived. Restore the user instead."
+        )
     previous = user.is_active
     user.is_active = active
     user.suspended_at = None if active else datetime.now(UTC)
@@ -2420,6 +2457,92 @@ async def reactivate_user(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     return await _user_state_action(user_id, True, body, request, context, db, settings)
+
+
+@router.post("/users/{user_id}/archive")
+async def archive_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Retire a User account: distinct from Disabled (suspend_user) — see the
+    three-state model in migration 0053_lifecycle_archived_state. Archiving
+    an already-archived user is a safe idempotent success (re-stamps
+    archived_at), matching suspend_user's existing behaviour for an
+    already-suspended user rather than introducing a new error case."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+    user.is_active = False
+    user.suspended_at = now
+    user.archived_at = now
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.archived",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": previous_lifecycle},
+        new={"lifecycle": "archived", "archived_at": now.isoformat()},
+    )
+    await db.commit()
+    return {"message": "User archived and sessions revoked."}
+
+
+@router.post("/users/{user_id}/restore")
+async def restore_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Restore an archived User to Active. Deliberately separate from
+    reactivate_user (which now refuses an archived user) so Disabled and
+    Archived never collapse back into one state. Sessions/trusted devices
+    revoked while archived stay revoked — the user must authenticate
+    normally again, the same as after a suspend."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if user.archived_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This user is not archived.")
+    user.is_active = True
+    user.suspended_at = None
+    user.archived_at = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.restored",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": "archived"},
+        new={"lifecycle": "active"},
+    )
+    await db.commit()
+    return {"message": "User restored to Active."}
 
 
 _MOVE_MEMBER_ALLOWED_RELATIONSHIPS = {
@@ -2613,15 +2736,14 @@ async def move_member(
         pending_destination_request.status = HomeJoinRequestStatus.cancelled
         pending_destination_request.decided_at = datetime.now(UTC)
 
-    # Source disposition — "deactivate_if_empty" reuses the *existing*
-    # Home is_active/suspended_at deactivation (the same one
-    # /homes/{id}/{action} already performs), not a new Archive tier; that
-    # belongs to the later Home-lifecycle slice. A Home that still has
+    # Source disposition — "archive_if_empty" uses the Archived lifecycle
+    # state (the same transition /homes/{id}/archive performs: is_active,
+    # suspended_at and archived_at all set together). A Home that still has
     # other active members is always left alone, regardless of what was
     # requested.
     await db.flush()
     source_disposition_result = "left_unchanged"
-    if body.source_disposition == "deactivate_if_empty":
+    if body.source_disposition == "archive_if_empty":
         remaining_source_members = (
             await db.scalar(
                 select(func.count(Membership.id)).where(
@@ -2632,9 +2754,11 @@ async def move_member(
             or 0
         )
         if remaining_source_members == 0:
+            now = datetime.now(UTC)
             source_group.is_active = False
-            source_group.suspended_at = datetime.now(UTC)
-            source_disposition_result = "deactivated_empty"
+            source_group.suspended_at = now
+            source_group.archived_at = now
+            source_disposition_result = "archived_empty"
 
     platform_audit(
         db,
@@ -2816,6 +2940,7 @@ async def add_user_note(
 async def homes(
     q: str | None = Query(default=None, max_length=100),
     active: bool | None = None,
+    lifecycle: LifecycleState | None = Query(default=None),
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=25, ge=1, le=100),
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -2824,7 +2949,10 @@ async def homes(
     filters: list[Any] = []
     if q:
         filters.append(Group.name.ilike(f"%{q.strip()}%"))
-    if active is not None:
+    lifecycle_filter = _lifecycle_filter(Group, lifecycle)
+    if lifecycle_filter is not None:
+        filters.append(lifecycle_filter)
+    elif active is not None:
         filters.append(Group.is_active.is_(active))
     where = and_(*filters)
     total = await db.scalar(select(func.count(Group.id)).where(where)) or 0
@@ -2881,6 +3009,7 @@ async def homes(
                 "member_count": member_count,
                 "invitation_count": invitation_count,
                 "active": group.is_active,
+                "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
             }
         )
     return PageResponse(items=items, page=page, page_size=page_size, total=total)
@@ -2970,6 +3099,7 @@ async def home_detail(
         "created_at": group.created_at,
         "last_activity_at": group.last_activity_at,
         "active": group.is_active,
+        "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
         "subscription": await _subscription_response(db, subscription),
         "members": [
             {
@@ -3718,33 +3848,107 @@ async def update_home_feature_flag(
 @router.post("/homes/{group_id}/{action}")
 async def home_state(
     group_id: uuid.UUID,
-    action: Literal["suspend", "reactivate"],
+    action: Literal["suspend", "reactivate", "archive", "restore"],
     body: SensitiveActionRequest,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    """suspend/reactivate are Disabled-state transitions; archive/restore are
+    the separate Archived-state ones (migration 0053_lifecycle_archived_
+    state) — kept on this one dynamic-action endpoint rather than splitting
+    into new routes, matching how this endpoint already owned suspend and
+    reactivate together."""
     require_recent_auth(context, settings)
     group = await db.get(Group, group_id, with_for_update=True)
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
-    previous = group.is_active
-    group.is_active = action == "reactivate"
-    group.suspended_at = None if group.is_active else datetime.now(UTC)
+
+    if action in ("suspend", "reactivate"):
+        if group.archived_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This Home is archived. Restore the Home instead."
+            )
+        previous = group.is_active
+        group.is_active = action == "reactivate"
+        group.suspended_at = None if group.is_active else datetime.now(UTC)
+        platform_audit(
+            db,
+            request,
+            context,
+            f"home.{action}d" if action == "suspend" else "home.reactivated",
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"active": previous},
+            new={"active": group.is_active},
+        )
+        await db.commit()
+        return {"message": f"Home {action}d." if action == "suspend" else "Home reactivated."}
+
+    if action == "archive":
+        # Only this Home's own row changes — member User accounts are never
+        # touched, so users belonging to other active Homes keep working
+        # normally (item 6 of the Slice 3 spec).
+        previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
+        now = datetime.now(UTC)
+        group.is_active = False
+        group.suspended_at = now
+        group.archived_at = now
+        platform_audit(
+            db,
+            request,
+            context,
+            "home.archived",
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": "archived", "archived_at": now.isoformat()},
+        )
+        await db.commit()
+        return {"message": "Home archived."}
+
+    # action == "restore"
+    if group.archived_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Home is not archived.")
+    # Section 7: validate a Home Admin still exists before restoring to
+    # normal use — a Home archived while its sole admin was later moved out
+    # (Slice 2) or otherwise removed must not silently come back with no one
+    # able to manage it. No billing-policy invention: HomeSubscription state
+    # isn't blocked here since Slice 2 established billing_owner_user_id is
+    # informational-only and never a gate on Home usability.
+    if await home_admin_count(db, group_id) < 1:
+        active_member_count = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == group_id, Membership.removed_at.is_(None)
+                )
+            )
+            or 0
+        )
+        if active_member_count > 0:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This Home has no Home Admin. Assign one before restoring it.",
+            )
+    group.is_active = True
+    group.suspended_at = None
+    group.archived_at = None
     platform_audit(
         db,
         request,
         context,
-        f"home.{action}d" if action == "suspend" else "home.reactivated",
+        "home.restored",
         "home",
         group.id,
         reason=body.reason,
-        previous={"active": previous},
-        new={"active": group.is_active},
+        previous={"lifecycle": "archived"},
+        new={"lifecycle": "active"},
     )
     await db.commit()
-    return {"message": f"Home {action}d." if action == "suspend" else "Home reactivated."}
+    return {"message": "Home restored to Active."}
 
 
 def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:

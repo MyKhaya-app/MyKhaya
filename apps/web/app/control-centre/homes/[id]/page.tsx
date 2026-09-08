@@ -18,12 +18,23 @@ import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
-import { Power, PowerOff, Shuffle, ToggleLeft, ToggleRight } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Power,
+  PowerOff,
+  Shuffle,
+  ToggleLeft,
+  ToggleRight,
+} from "lucide-react";
+
+type Lifecycle = "active" | "disabled" | "archived";
 
 type HomeDetail = {
   id: string;
   name: string;
   active: boolean;
+  lifecycle: Lifecycle;
   created_at: string;
   members: { user_id: string; display_name: string; email: string; role: string }[];
   pending_invitations: { id: string; email: string; role: string; expires_at: string }[];
@@ -56,6 +67,8 @@ export default function PlatformHomeDetail() {
   const [busy, setBusy] = useState("");
   const [suspendOpen, setSuspendOpen] = useState(false);
   const [reactivateOpen, setReactivateOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const [featureDialog, setFeatureDialog] = useState<{ feature: string; enabled: boolean } | null>(null);
   const [moveMemberTarget, setMoveMemberTarget] = useState<HomeDetail["members"][number] | null>(null);
   const { guarded, modal } = useReauthGuard();
@@ -83,25 +96,29 @@ export default function PlatformHomeDetail() {
   // PlatformReauthModal and transparently retry the same action once the
   // operator re-authenticates. The GET load and note-adding below are not
   // recent-auth-gated server-side, so they are never wrapped.
-  const stateAction = guarded(async (action: "suspend" | "reactivate", formData: FormData) => {
-    setSuspendOpen(false);
-    setReactivateOpen(false);
-    setBusy(action);
-    setError("");
-    try {
-      const result = await platformApi.post<{ message: string }>(`/homes/${encodeURIComponent(id)}/${action}`, {
-        reason: formData.get("audit_reason"),
-        confirmed: true,
-      });
-      setMessage(result.message);
-      await load();
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 403) throw cause;
-      setError(safeError(cause, `Unable to ${action} this Home.`));
-    } finally {
-      setBusy("");
-    }
-  });
+  const stateAction = guarded(
+    async (action: "suspend" | "reactivate" | "archive" | "restore", formData: FormData) => {
+      setSuspendOpen(false);
+      setReactivateOpen(false);
+      setArchiveOpen(false);
+      setRestoreOpen(false);
+      setBusy(action);
+      setError("");
+      try {
+        const result = await platformApi.post<{ message: string }>(
+          `/homes/${encodeURIComponent(id)}/${action}`,
+          { reason: formData.get("audit_reason"), confirmed: true },
+        );
+        setMessage(result.message);
+        await load();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 403) throw cause;
+        setError(safeError(cause, `Unable to ${action} this Home.`));
+      } finally {
+        setBusy("");
+      }
+    },
+  );
 
   const setFeature = guarded(async (feature: string, enabled: boolean, formData: FormData) => {
     setFeatureDialog(null);
@@ -138,23 +155,39 @@ export default function PlatformHomeDetail() {
     }
   }
 
-  const statusTone: CcBadgeTone = data?.active ? "success" : "danger";
-  const statusLabel = data?.active ? "Active" : "Suspended";
+  const statusTone: CcBadgeTone =
+    data?.lifecycle === "archived" ? "neutral" : data?.lifecycle === "active" ? "success" : "danger";
+  const statusLabel =
+    data?.lifecycle === "archived" ? "Archived" : data?.lifecycle === "active" ? "Active" : "Disabled";
 
-  const actions: CcAction[] = data
-    ? data.active
-      ? []
-      : [
+  // Archived is a retired/hidden record — only Restore makes sense on it
+  // (see Slice 3: "Do not offer nonsensical actions such as 'Reactivate'
+  // and 'Restore' simultaneously").
+  const actions: CcAction[] = !data
+    ? []
+    : data.lifecycle === "archived"
+      ? [
           {
-            key: "reactivate",
-            label: "Reactivate Home",
-            icon: Power,
-            variant: "primary",
+            key: "restore",
+            label: "Restore Home",
+            icon: ArchiveRestore,
+            variant: "primary" as const,
             disabled: Boolean(busy),
-            onClick: () => setReactivateOpen(true),
+            onClick: () => setRestoreOpen(true),
           },
         ]
-    : [];
+      : data.lifecycle === "disabled"
+        ? [
+            {
+              key: "reactivate",
+              label: "Reactivate Home",
+              icon: Power,
+              variant: "primary" as const,
+              disabled: Boolean(busy),
+              onClick: () => setReactivateOpen(true),
+            },
+          ]
+        : [];
 
   return (
     <PlatformShell>
@@ -288,26 +321,38 @@ export default function PlatformHomeDetail() {
               </CcRecordList>
             </CcSection>
 
-            {!data.active && (
+            {data.lifecycle !== "active" && (
               <CcSection title="Actions">
                 <CcActionBar actions={actions} />
               </CcSection>
             )}
 
-            {data.active && (
+            {data.lifecycle !== "archived" && (
               <CcDangerZone
-                title="Suspend Home"
-                description="Suspending this Home blocks access for every member until it is reactivated."
+                title="Suspend or archive Home"
+                description="Suspending this Home blocks access for every member until it is reactivated. Archiving does the same but also retires the Home from normal operational views — restore it later to bring it back."
               >
                 <CcActionBar
                   actions={[
+                    ...(data.lifecycle === "active"
+                      ? [
+                          {
+                            key: "suspend",
+                            label: "Suspend Home",
+                            icon: PowerOff,
+                            variant: "destructive" as const,
+                            disabled: Boolean(busy),
+                            onClick: () => setSuspendOpen(true),
+                          },
+                        ]
+                      : []),
                     {
-                      key: "suspend",
-                      label: "Suspend Home",
-                      icon: PowerOff,
+                      key: "archive",
+                      label: "Archive Home",
+                      icon: Archive,
                       variant: "destructive",
                       disabled: Boolean(busy),
-                      onClick: () => setSuspendOpen(true),
+                      onClick: () => setArchiveOpen(true),
                     },
                   ]}
                 />
@@ -334,6 +379,25 @@ export default function PlatformHomeDetail() {
         description="Reactivate this Home and restore access for its members?"
         confirmLabel="Reactivate Home"
         onConfirm={(formData) => stateAction("reactivate", formData)}
+      />
+
+      <CcConfirmDialog
+        open={archiveOpen}
+        onClose={() => setArchiveOpen(false)}
+        title="Archive Home"
+        description="Archiving this Home removes it from normal operational views and prevents members using it. The Home and its data are retained and can be restored later."
+        confirmLabel="Archive Home"
+        variant="destructive"
+        onConfirm={(formData) => stateAction("archive", formData)}
+      />
+
+      <CcConfirmDialog
+        open={restoreOpen}
+        onClose={() => setRestoreOpen(false)}
+        title="Restore Home"
+        description="Restore this Home to Active and allow members to use it again?"
+        confirmLabel="Restore Home"
+        onConfirm={(formData) => stateAction("restore", formData)}
       />
 
       <CcConfirmDialog

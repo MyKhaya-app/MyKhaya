@@ -24,13 +24,15 @@ const activeHome = {
   id: "home-1",
   name: "The Smiths",
   active: true,
+  lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
   members: [{ user_id: "u1", display_name: "Jane Smith", email: "jane@example.com", role: "owner" }],
   pending_invitations: [{ id: "inv-1", email: "invitee@example.com", role: "member", expires_at: "2026-12-01T00:00:00Z" }],
   feature_overrides: [{ feature: "calendar", enabled: true }],
   notes: [{ id: "note-1", body: "Called about billing.", created_at: "2026-02-01T00:00:00Z" }],
 };
-const suspendedHome = { ...activeHome, active: false };
+const suspendedHome = { ...activeHome, active: false, lifecycle: "disabled" as const };
+const archivedHome = { ...activeHome, active: false, lifecycle: "archived" as const };
 const emptyHome = { ...activeHome, members: [], pending_invitations: [], notes: [] };
 
 function findDialog(name: RegExp | string) {
@@ -52,11 +54,11 @@ describe("Home detail", () => {
     expect(screen.getByText("home-1")).toBeInTheDocument();
   });
 
-  it("shows a Suspended status and a Reactivate action when the home is suspended", async () => {
+  it("shows a Disabled status and a Reactivate action when the home is suspended", async () => {
     get.mockResolvedValue(suspendedHome);
     render(<DetailPage />);
     expect(await screen.findByText("The Smiths")).toBeInTheDocument();
-    expect(screen.getAllByText("Suspended").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Disabled").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Reactivate Home" })).toBeInTheDocument();
   });
 
@@ -174,6 +176,86 @@ describe("Home detail", () => {
     await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Suspending for review");
     await userEvent.click(within(dialog).getByRole("button", { name: "Suspend Home" }));
     expect(await screen.findByText("Home not found")).toBeInTheDocument();
+  });
+});
+
+describe("Home detail — Archive lifecycle", () => {
+  it("offers both Suspend and Archive for an active Home", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    expect(screen.getByRole("button", { name: "Suspend Home" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore Home" })).not.toBeInTheDocument();
+  });
+
+  it("offers Reactivate and Archive for a disabled Home", async () => {
+    get.mockResolvedValue(suspendedHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    expect(screen.getByRole("button", { name: "Reactivate Home" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Suspend Home" })).not.toBeInTheDocument();
+  });
+
+  it("shows Archived status and only a Restore action for an archived Home", async () => {
+    get.mockResolvedValue(archivedHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    expect(screen.getAllByText("Archived").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Restore Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Suspend Home" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reactivate Home" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Archive Home" })).not.toBeInTheDocument();
+  });
+
+  it("archives a Home with a reason and reloads", async () => {
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archive Home" }));
+    const dialog = await findDialog(/Archive Home/i);
+    await userEvent.type(
+      within(dialog).getByLabelText(/reason for this administrative action/i),
+      "Duplicate test Home",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive Home" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/homes/home-1/archive", {
+        reason: "Duplicate test Home",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("restores an archived Home with a reason and reloads", async () => {
+    get.mockResolvedValue(archivedHome);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Restore Home" }));
+    const dialog = await findDialog(/Restore Home/i);
+    await userEvent.type(
+      within(dialog).getByLabelText(/reason for this administrative action/i),
+      "Restoring by request",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restore Home" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/homes/home-1/restore", {
+        reason: "Restoring by request",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("shows a clear API error when restore is rejected (e.g. no Home Admin)", async () => {
+    get.mockResolvedValue(archivedHome);
+    post.mockRejectedValueOnce(
+      new ApiError(409, "This Home has no Home Admin. Assign one before restoring it."),
+    );
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Restore Home" }));
+    const dialog = await findDialog(/Restore Home/i);
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Restoring");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restore Home" }));
+    expect(
+      await screen.findByText("This Home has no Home Admin. Assign one before restoring it."),
+    ).toBeInTheDocument();
   });
 });
 

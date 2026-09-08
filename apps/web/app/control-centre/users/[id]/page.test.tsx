@@ -25,6 +25,7 @@ const verifiedUser = {
   display_name: "Jane Smith",
   verified: true,
   active: true,
+  lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
   last_login_at: "2026-02-01T00:00:00Z",
   homes: [{ id: "home-1", name: "The Smiths", role: "owner" }],
@@ -32,7 +33,8 @@ const verifiedUser = {
   notes: [{ id: "note-1", body: "Called about billing.", created_at: "2026-02-15T00:00:00Z" }],
 };
 const unverifiedUser = { ...verifiedUser, verified: false };
-const suspendedUser = { ...verifiedUser, active: false };
+const suspendedUser = { ...verifiedUser, active: false, lifecycle: "disabled" as const };
+const archivedUser = { ...verifiedUser, active: false, lifecycle: "archived" as const };
 const emptyUser = { ...verifiedUser, homes: [], sessions: [], notes: [] };
 
 function findDialog(name: RegExp | string) {
@@ -54,11 +56,11 @@ describe("User detail", () => {
     expect(screen.getAllByText("Verified").length).toBeGreaterThan(0);
   });
 
-  it("shows Suspended status when the user is suspended", async () => {
+  it("shows Disabled status when the user is suspended", async () => {
     get.mockResolvedValue(suspendedUser);
     render(<DetailPage />);
     await screen.findByText("Jane Smith");
-    expect(screen.getAllByText("Suspended").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Disabled").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Reactivate user" })).toBeInTheDocument();
   });
 
@@ -193,6 +195,96 @@ describe("User detail", () => {
     await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Suspending for review");
     await userEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
     expect(await screen.findByText("User not found")).toBeInTheDocument();
+  });
+});
+
+describe("User detail — Archive lifecycle", () => {
+  it("offers both Suspend and Archive for an active user", async () => {
+    render(<DetailPage />);
+    await screen.findByText("Jane Smith");
+    expect(screen.getByRole("button", { name: "Suspend user" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive user" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore user" })).not.toBeInTheDocument();
+  });
+
+  it("offers Reactivate and Archive for a disabled user", async () => {
+    get.mockResolvedValue(suspendedUser);
+    render(<DetailPage />);
+    await screen.findByText("Jane Smith");
+    expect(screen.getByRole("button", { name: "Reactivate user" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive user" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Suspend user" })).not.toBeInTheDocument();
+  });
+
+  it("shows Archived status and only a Restore action for an archived user — no Suspend/Reactivate/Archive", async () => {
+    get.mockResolvedValue(archivedUser);
+    render(<DetailPage />);
+    await screen.findByText("Jane Smith");
+    expect(screen.getAllByText("Archived").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Restore user" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Suspend user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reactivate user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Archive user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move member" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke all sessions" })).not.toBeInTheDocument();
+  });
+
+  it("archives a user with a reason and reloads", async () => {
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archive user" }));
+    const dialog = await findDialog(/Archive user/i);
+    await userEvent.type(
+      within(dialog).getByLabelText(/reason for this administrative action/i),
+      "Duplicate test account",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive user" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/archive", {
+        reason: "Duplicate test account",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("restores an archived user with a reason and reloads", async () => {
+    get.mockResolvedValue(archivedUser);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Restore user" }));
+    const dialog = await findDialog(/Restore user/i);
+    await userEvent.type(
+      within(dialog).getByLabelText(/reason for this administrative action/i),
+      "Restoring by request",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restore user" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/restore", {
+        reason: "Restoring by request",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("shows the reauth modal on a 403 and retries archive after re-authenticating", async () => {
+    post.mockImplementation((path: string) => {
+      if (path === "/auth/reauthenticate") return Promise.resolve(undefined);
+      if (path === "/users/user-1/archive") {
+        const attempts = post.mock.calls.filter((call) => call[0] === "/users/user-1/archive").length;
+        if (attempts === 1) return Promise.reject(new ApiError(403, "Recent administrator authentication required."));
+        return Promise.resolve({ message: "User archived and sessions revoked." });
+      }
+      return Promise.resolve({ message: "ok" });
+    });
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archive user" }));
+    const dialog = await findDialog(/Archive user/i);
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Duplicate account");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive user" }));
+
+    const reauthDialog = await screen.findByRole("dialog", { name: /Confirm it.?s you/i });
+    await userEvent.type(within(reauthDialog).getByLabelText("Password"), "operator-password");
+    await userEvent.click(within(reauthDialog).getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.getByText("User archived and sessions revoked.")).toBeInTheDocument());
   });
 });
 

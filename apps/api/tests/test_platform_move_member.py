@@ -135,7 +135,7 @@ async def test_successful_move_retains_user_id_and_transfers_membership() -> Non
         assert body["user_id"] == carol_user_id
         assert body["relationship"] == "partner"
         assert body["role"] == "adult_member"
-        assert body["source_disposition"] in ("deactivated_empty", "left_unchanged")
+        assert body["source_disposition"] in ("archived_empty", "left_unchanged")
 
         async with SessionFactory() as db:
             source_membership = await db.scalar(
@@ -196,7 +196,7 @@ async def test_move_leaves_a_default_source_disposition_home_active_when_not_req
 
 
 @pytest.mark.asyncio
-async def test_deactivate_if_empty_deactivates_only_when_source_becomes_empty() -> None:
+async def test_archive_if_empty_archives_only_when_source_becomes_empty() -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     async with (
         consumer_client() as alice,
@@ -218,20 +218,21 @@ async def test_deactivate_if_empty_deactivates_only_when_source_becomes_empty() 
             carol_user_id,
             carol_home_id,
             hales_home_id,
-            source_disposition="deactivate_if_empty",
+            source_disposition="archive_if_empty",
         )
         assert response.status_code == 200, response.text
-        assert response.json()["source_disposition"] == "deactivated_empty"
+        assert response.json()["source_disposition"] == "archived_empty"
 
         async with SessionFactory() as db:
             source_group = await db.get(Group, uuid.UUID(carol_home_id))
             assert source_group is not None
             assert source_group.is_active is False
             assert source_group.suspended_at is not None
+            assert source_group.archived_at is not None
 
 
 @pytest.mark.asyncio
-async def test_deactivate_if_empty_does_not_deactivate_a_home_with_remaining_members() -> None:
+async def test_archive_if_empty_does_not_archive_a_home_with_remaining_members() -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     async with (
         consumer_client() as alice,
@@ -271,7 +272,7 @@ async def test_deactivate_if_empty_does_not_deactivate_a_home_with_remaining_mem
             carol_home_id,
             hales_home_id,
             relationship="partner",
-            source_disposition="deactivate_if_empty",
+            source_disposition="archive_if_empty",
         )
         # Carol is the sole Home Admin with another active member remaining
         # — blocked, per the last-admin protection, before disposition even

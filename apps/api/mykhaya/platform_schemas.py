@@ -793,12 +793,15 @@ class MoveMemberRequest(SensitiveActionRequest):
     source_group_id: uuid.UUID
     destination_group_id: uuid.UUID
     destination_relationship: HouseholdRelationship
-    # "leave" is the only Slice 2 behaviour beyond the no-op default — full
-    # Home archive/restore lifecycle is a separate, later piece of work (see
-    # docs task "PCC Home lifecycle management"); this reuses the *existing*
-    # Group.is_active/suspended_at deactivation the Homes list/detail pages
-    # already expose, rather than inventing a parallel state.
-    source_disposition: Literal["leave", "deactivate_if_empty"] = "leave"
+    # "archive_if_empty" uses the Archived lifecycle state (migration
+    # 0053_lifecycle_archived_state / routers.platform.home_state) — the
+    # right primitive for "this was an accidental duplicate Home, hide it
+    # but keep everything": nothing is destroyed, and it's clearly
+    # distinguishable from an operator having deliberately Disabled the
+    # Home. Slice 2 originally used a plain deactivate ("deactivate_if_
+    # empty") before Archive existed; renamed once Archive landed in Slice 3
+    # rather than keeping two confusing source-disposition options.
+    source_disposition: Literal["leave", "archive_if_empty"] = "leave"
 
 
 class SubscriptionSummaryResponse(BaseModel):

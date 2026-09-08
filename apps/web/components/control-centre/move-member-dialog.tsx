@@ -17,7 +17,7 @@ type HomeSearchResult = {
 };
 
 type MoveHomeResponse = {
-  source_disposition: "left_unchanged" | "deactivated_empty";
+  source_disposition: "left_unchanged" | "archived_empty";
 };
 
 const RELATIONSHIP_OPTIONS = [
@@ -27,7 +27,7 @@ const RELATIONSHIP_OPTIONS = [
 ] as const;
 
 type Relationship = (typeof RELATIONSHIP_OPTIONS)[number]["value"];
-type SourceDisposition = "leave" | "deactivate_if_empty";
+type SourceDisposition = "leave" | "archive_if_empty";
 
 /**
  * PCC "Move member" — transfers a user's active membership from one Home to
@@ -134,8 +134,8 @@ export function MoveMemberDialog({
         },
       );
       const dispositionNote =
-        result.source_disposition === "deactivated_empty"
-          ? ` ${sourceHome?.name ?? "The source Home"} had no members left and was deactivated.`
+        result.source_disposition === "archived_empty"
+          ? ` ${sourceHome?.name ?? "The source Home"} had no members left and was archived.`
           : "";
       onMoved(`${userDisplayName} moved to ${destinationName}.${dispositionNote}`);
       onClose();
@@ -241,10 +241,10 @@ export function MoveMemberDialog({
               <input
                 type="radio"
                 name="source_disposition"
-                checked={disposition === "deactivate_if_empty"}
-                onChange={() => setDisposition("deactivate_if_empty")}
+                checked={disposition === "archive_if_empty"}
+                onChange={() => setDisposition("archive_if_empty")}
               />
-              Deactivate the source Home if this leaves it with no active members
+              Archive the source Home if this leaves it with no active members
             </label>
           </fieldset>
 
