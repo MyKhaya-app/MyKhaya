@@ -24,6 +24,7 @@ from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
@@ -35,11 +36,14 @@ from mykhaya.entitlements import (
     personal_routines_total,
     plan_definition_for,
     record_subscription_event,
+    require_within_limit,
     resolve_effective_plan,
     resolve_effective_state,
 )
+from mykhaya.household_permissions import default_profile, home_admin_count, legacy_role
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
+from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
@@ -54,6 +58,8 @@ from mykhaya.models import (
     FeatureKey,
     FeatureOverride,
     Group,
+    HomeJoinRequest,
+    HomeJoinRequestStatus,
     HomeSubscription,
     HomeSubscriptionEvent,
     HouseholdRelationship,
@@ -150,13 +156,14 @@ from mykhaya.platform_schemas import (
     IncidentResolveCreate,
     IncidentUpdateCreate,
     InvitationState,
-    MfaPolicyResponse,
-    MfaPolicyUpdate,
-    ModuleUpdate,
     ManagedDemoExpiryUpdate,
     ManagedDemoHomeCreate,
     ManagedDemoHomeResponse,
     ManagedDemoPasswordReset,
+    MfaPolicyResponse,
+    MfaPolicyUpdate,
+    ModuleUpdate,
+    MoveMemberRequest,
     NoteRequest,
     NotificationTemplatePreviewRequest,
     NotificationTemplatePreviewResponse,
@@ -2413,6 +2420,251 @@ async def reactivate_user(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     return await _user_state_action(user_id, True, body, request, context, db, settings)
+
+
+_MOVE_MEMBER_ALLOWED_RELATIONSHIPS = {
+    HouseholdRelationship.home_admin,
+    HouseholdRelationship.partner,
+    HouseholdRelationship.adult,
+}
+
+
+@router.post("/users/{user_id}/move-home")
+async def move_member(
+    user_id: uuid.UUID,
+    body: MoveMemberRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Move an existing user's active membership from one Home to another —
+    the PCC recovery path for "User B independently created their own Home
+    when they should have joined User A's" (see Slice 2 of the Home
+    membership/lifecycle work). A *membership transfer*, never a Home-data
+    merge: calendars/events/lists/routines/reminders/invitations/audit
+    history all stay put on the source Home. Mirrors the same
+    membership-creation shape routers.invitations.accept() and
+    routers.groups.approve_join_request() already use (role/permission
+    derived from relationship, colour assignment, Personal Calendar
+    provisioning, reuse-if-historically-removed via Membership's
+    (group_id, user_id) unique constraint) — kept as its own explicit block
+    here rather than extracted into a shared helper, so this PCC-only path
+    stays independently reviewable from the two existing consumer-facing
+    ones it deliberately parallels."""
+    require_recent_auth(context, settings)
+
+    if body.source_group_id == body.destination_group_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Source and destination Home must be different."
+        )
+    if body.destination_relationship not in _MOVE_MEMBER_ALLOWED_RELATIONSHIPS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Choose Home Admin, Partner or Adult as the destination relationship.",
+        )
+
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    source_group = await db.get(Group, body.source_group_id, with_for_update=True)
+    if source_group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That source Home could not be found.")
+    destination_group = await db.get(Group, body.destination_group_id, with_for_update=True)
+    if destination_group is None or not destination_group.is_active:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The destination Home could not be found or is not active.",
+        )
+
+    source_membership = await db.scalar(
+        select(Membership)
+        .where(
+            Membership.group_id == body.source_group_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if source_membership is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That user is not an active member of the source Home."
+        )
+    if source_membership.relationship == HouseholdRelationship.child:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Managed Child accounts cannot be moved with this workflow.",
+        )
+    previous_relationship = source_membership.relationship
+    previous_role = source_membership.role
+
+    # Sole-Home-Admin protection — reuses the exact same primitive
+    # routers.groups.update_member/remove_member already use. Moving the
+    # sole admin of an otherwise-*empty* source Home is fine (there is no
+    # one left to be orphaned); moving them while other members remain is
+    # exactly the "silently remove them" case the task spec forbids.
+    if previous_relationship == HouseholdRelationship.home_admin:
+        other_active_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == body.source_group_id,
+                    Membership.user_id != user_id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if other_active_members > 0 and await home_admin_count(db, body.source_group_id) <= 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Assign another Home Admin in the source Home before moving this member.",
+            )
+
+    existing_destination_membership = await db.scalar(
+        select(Membership)
+        .where(Membership.group_id == body.destination_group_id, Membership.user_id == user_id)
+        .with_for_update()
+    )
+    destination_already_active = (
+        existing_destination_membership is not None
+        and existing_destination_membership.removed_at is None
+    )
+    if destination_already_active:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That user is already an active member of the destination Home.",
+        )
+
+    # Race-safe destination member-limit check — identical shape/lock bucket
+    # to invitations.accept() and routers.groups.approve_join_request().
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"members:{body.destination_group_id}"},
+    )
+    destination_member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == body.destination_group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(
+        db, body.destination_group_id, "home.max_members", destination_member_count
+    )
+
+    # Billing-owner safety: billing_owner_user_id is informational-only on
+    # Free (see HomeSubscription's own docstring) but real for a paid or
+    # complimentary Home — moving that person out without reassigning it
+    # first would leave the source Home's subscription pointing at a
+    # non-member. Never silently transferred/reassigned/cancelled here.
+    source_subscription = await get_home_subscription(db, body.source_group_id)
+    if (
+        source_subscription is not None
+        and source_subscription.billing_owner_user_id == user_id
+        and source_subscription.plan != SubscriptionPlan.free
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This person is the billing owner of the source Home's "
+            f"{source_subscription.plan.value} subscription. Reassign billing ownership "
+            "before moving them.",
+        )
+
+    role = legacy_role(body.destination_relationship)
+    permission_profile = default_profile(body.destination_relationship)
+    if existing_destination_membership is None:
+        destination_membership = Membership(
+            group_id=body.destination_group_id,
+            user_id=user_id,
+            role=role,
+            relationship=body.destination_relationship,
+            permission_profile=permission_profile,
+            colour=await assign_member_colour(db, body.destination_group_id),
+        )
+        db.add(destination_membership)
+    else:
+        destination_membership = existing_destination_membership
+        destination_membership.removed_at = None
+        destination_membership.role = role
+        destination_membership.relationship = body.destination_relationship
+        destination_membership.permission_profile = permission_profile
+        if destination_membership.colour is None:
+            destination_membership.colour = await assign_member_colour(
+                db, body.destination_group_id
+            )
+    await ensure_personal_calendar(db, body.destination_group_id, user_id)
+
+    source_membership.removed_at = datetime.now(UTC)
+
+    # A pending join-code request the user already had for the destination
+    # Home is now moot — the PCC move establishes membership directly. Only
+    # ever touches a request for *this* (destination, user) pair; unrelated
+    # invitations/requests for either Home are never touched (see task
+    # spec's "do not silently destroy unrelated invitations").
+    pending_destination_request = await db.scalar(
+        select(HomeJoinRequest).where(
+            HomeJoinRequest.group_id == body.destination_group_id,
+            HomeJoinRequest.user_id == user_id,
+            HomeJoinRequest.status == HomeJoinRequestStatus.pending,
+        )
+    )
+    if pending_destination_request is not None:
+        pending_destination_request.status = HomeJoinRequestStatus.cancelled
+        pending_destination_request.decided_at = datetime.now(UTC)
+
+    # Source disposition — "deactivate_if_empty" reuses the *existing*
+    # Home is_active/suspended_at deactivation (the same one
+    # /homes/{id}/{action} already performs), not a new Archive tier; that
+    # belongs to the later Home-lifecycle slice. A Home that still has
+    # other active members is always left alone, regardless of what was
+    # requested.
+    await db.flush()
+    source_disposition_result = "left_unchanged"
+    if body.source_disposition == "deactivate_if_empty":
+        remaining_source_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == body.source_group_id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if remaining_source_members == 0:
+            source_group.is_active = False
+            source_group.suspended_at = datetime.now(UTC)
+            source_disposition_result = "deactivated_empty"
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "member.moved",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={
+            "source_group_id": str(body.source_group_id),
+            "relationship": previous_relationship.value,
+            "role": previous_role.value,
+        },
+        new={
+            "destination_group_id": str(body.destination_group_id),
+            "relationship": body.destination_relationship.value,
+            "role": role.value,
+            "source_disposition": source_disposition_result,
+        },
+    )
+    await db.commit()
+    return {
+        "user_id": user.id,
+        "source_group_id": source_group.id,
+        "destination_group_id": destination_group.id,
+        "relationship": body.destination_relationship.value,
+        "role": role.value,
+        "source_disposition": source_disposition_result,
+    }
 
 
 @router.post("/users/{user_id}/revoke-sessions")

@@ -18,8 +18,20 @@ export class PlatformClient {
       headers,
     });
     if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-      throw new ApiError(response.status, body?.detail ?? "The request could not be completed.");
+      const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+      const detail = body?.detail;
+      // The commercial-entitlement errors (e.g. require_within_limit, which
+      // the "Move member" destination-limit check reuses) return a
+      // structured {code, message, ...} detail rather than a plain string —
+      // unwrap it the same way the consumer client's parseApiResponse does,
+      // so it renders as readable text instead of "[object Object]".
+      if (detail && typeof detail === "object" && "message" in detail) {
+        throw new ApiError(response.status, String((detail as { message: unknown }).message));
+      }
+      throw new ApiError(
+        response.status,
+        typeof detail === "string" ? detail : "The request could not be completed.",
+      );
     }
     return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>);
   }

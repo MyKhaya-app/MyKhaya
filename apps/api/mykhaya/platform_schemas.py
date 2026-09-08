@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from mykhaya.models import (
     BillingInterval,
     FeatureKey,
+    HouseholdRelationship,
     IncidentLifecycleState,
     PlatformRole,
     ServiceState,
@@ -781,6 +782,23 @@ class GrantComplimentaryRequest(SensitiveActionRequest):
 
 class RevokeComplimentaryRequest(SensitiveActionRequest):
     pass
+
+
+class MoveMemberRequest(SensitiveActionRequest):
+    """PCC → Users/Homes "Move member" — see routers.platform.move_member.
+    Only the fields an operator actually chooses; every other detail
+    (current role, member counts, entitlement limits, admin safety) is
+    resolved and validated server-side, never trusted from the client."""
+
+    source_group_id: uuid.UUID
+    destination_group_id: uuid.UUID
+    destination_relationship: HouseholdRelationship
+    # "leave" is the only Slice 2 behaviour beyond the no-op default — full
+    # Home archive/restore lifecycle is a separate, later piece of work (see
+    # docs task "PCC Home lifecycle management"); this reuses the *existing*
+    # Group.is_active/suspended_at deactivation the Homes list/detail pages
+    # already expose, rather than inventing a parallel state.
+    source_disposition: Literal["leave", "deactivate_if_empty"] = "leave"
 
 
 class SubscriptionSummaryResponse(BaseModel):

@@ -176,3 +176,63 @@ describe("Home detail", () => {
     expect(await screen.findByText("Home not found")).toBeInTheDocument();
   });
 });
+
+describe("Home detail — Move member", () => {
+  beforeEach(() => {
+    get.mockImplementation((path: string) => {
+      if (path === "/homes/home-1") return Promise.resolve(activeHome);
+      if (path.startsWith("/homes?")) {
+        return Promise.resolve({
+          items: [{ id: "home-2", name: "Carol's Home", active: true, member_count: 1 }],
+        });
+      }
+      return Promise.resolve(activeHome);
+    });
+  });
+
+  it("opens the Move member dialog from a member row, fixed to this Home as the source", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const memberRow = screen.getByText("Jane Smith").closest("article")!;
+    await userEvent.click(within(memberRow).getByRole("button", { name: "Move" }));
+
+    const dialog = await findDialog(/Move member/i);
+    // Source Home is fixed to this Home — no "From Home" picker, since there
+    // is only ever one source Home when opened from a Home's own member row.
+    expect(within(dialog).queryByLabelText(/from home/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText("The Smiths")).toBeInTheDocument();
+  });
+
+  it("moves the member and reloads this Home afterwards", async () => {
+    post.mockImplementation((path: string) => {
+      if (path === "/users/u1/move-home") return Promise.resolve({ source_disposition: "left_unchanged" });
+      return Promise.resolve({ message: "ok" });
+    });
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const memberRow = screen.getByText("Jane Smith").closest("article")!;
+    await userEvent.click(within(memberRow).getByRole("button", { name: "Move" }));
+
+    const dialog = await findDialog(/Move member/i);
+    await userEvent.type(within(dialog).getByLabelText(/find destination home/i), "Carol's Home");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Search" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: /Carol's Home/ }));
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Reconciling Homes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move member" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/u1/move-home", {
+        source_group_id: "home-1",
+        destination_group_id: "home-2",
+        destination_relationship: "partner",
+        source_disposition: "leave",
+        reason: "Reconciling Homes",
+        confirmed: true,
+      }),
+    );
+    expect(await screen.findByText(/moved to Carol's Home/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(get.mock.calls.filter((call) => call[0] === "/homes/home-1")).toHaveLength(2),
+    );
+  });
+});

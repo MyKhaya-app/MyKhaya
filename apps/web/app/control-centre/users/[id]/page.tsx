@@ -17,7 +17,8 @@ import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-cen
 import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
-import { KeyRound, Mail, Power, ShieldOff } from "lucide-react";
+import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
+import { KeyRound, Mail, Power, ShieldOff, Shuffle } from "lucide-react";
 
 type UserDetail = {
   id: string;
@@ -45,6 +46,7 @@ export default function PlatformUserDetail() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [openDialog, setOpenDialog] = useState<GatedAction | null>(null);
+  const [moveMemberOpen, setMoveMemberOpen] = useState(false);
   const { guarded, modal } = useReauthGuard();
 
   async function load() {
@@ -129,6 +131,18 @@ export default function PlatformUserDetail() {
           disabled: Boolean(busy),
           onClick: () => setOpenDialog("revoke-sessions"),
         },
+        ...(data.homes.length > 0
+          ? [
+              {
+                key: "move-member",
+                label: "Move member",
+                icon: Shuffle,
+                variant: "secondary" as const,
+                disabled: Boolean(busy),
+                onClick: () => setMoveMemberOpen(true),
+              },
+            ]
+          : []),
         ...(!data.verified
           ? [
               {
@@ -311,6 +325,21 @@ export default function PlatformUserDetail() {
           onConfirm={(formData) => runAction(action, formData)}
         />
       ))}
+
+      {data && (
+        <MoveMemberDialog
+          open={moveMemberOpen}
+          onClose={() => setMoveMemberOpen(false)}
+          userId={data.id}
+          userDisplayName={data.display_name}
+          userEmail={data.email}
+          sourceHomes={data.homes}
+          onMoved={(moveMessage) => {
+            setMessage(moveMessage);
+            void load();
+          }}
+        />
+      )}
 
       {modal}
     </PlatformShell>

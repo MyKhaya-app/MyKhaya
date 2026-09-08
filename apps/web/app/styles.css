@@ -5670,6 +5670,76 @@ button.danger,
   width: 1px;
 }
 
+/* PCC "Move member" dialog — see
+   apps/web/components/control-centre/move-member-dialog.tsx. */
+.cc-move-member-search {
+  display: flex;
+  gap: 0.5rem;
+}
+.cc-move-member-search input {
+  flex: 1 1 auto;
+}
+.cc-move-member-results {
+  border: 1px solid var(--platform-line);
+  border-radius: 0.45rem;
+  list-style: none;
+  margin: -0.4rem 0 0.9rem;
+  max-height: 9rem;
+  overflow-y: auto;
+  padding: 0;
+}
+.cc-move-member-results li + li {
+  border-top: 1px solid var(--platform-line);
+}
+.cc-move-member-results button {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  display: block;
+  padding: 0.5rem 0.7rem;
+  text-align: left;
+  width: 100%;
+}
+.cc-move-member-results button:hover {
+  background: #f3f6f7;
+}
+.cc-move-member-result-selected {
+  background: var(--cc-accent-bg, #eaf3f2);
+  font-weight: 650;
+}
+.cc-move-member-disposition {
+  border: 1px solid var(--platform-line);
+  border-radius: 0.45rem;
+  margin: 0 0 0.9rem;
+  padding: 0.6rem 0.8rem 0.8rem;
+}
+.cc-move-member-disposition legend {
+  font-size: 0.78rem;
+  font-weight: 650;
+  padding: 0 0.2rem;
+}
+.cc-move-member-disposition label {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem !important;
+}
+.cc-move-member-summary {
+  background: #f3f6f7;
+  border-radius: 0.45rem;
+  margin: 0 0 0.9rem;
+  padding: 0.7rem 0.9rem;
+}
+.cc-move-member-summary h3 {
+  font-size: 0.85rem;
+  margin: 0 0 0.4rem;
+}
+.cc-move-member-summary ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Control Centre UI foundation, Batch 1 additions — CcStatusCard,        */
 /* CcActionBar, CcDangerZone, CcRecordList/CcRecordCard, CcToolbar,       */

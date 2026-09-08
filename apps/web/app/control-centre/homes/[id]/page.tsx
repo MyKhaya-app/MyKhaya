@@ -17,7 +17,8 @@ import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-cen
 import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
-import { Power, PowerOff, ToggleLeft, ToggleRight } from "lucide-react";
+import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
+import { Power, PowerOff, Shuffle, ToggleLeft, ToggleRight } from "lucide-react";
 
 type HomeDetail = {
   id: string;
@@ -56,6 +57,7 @@ export default function PlatformHomeDetail() {
   const [suspendOpen, setSuspendOpen] = useState(false);
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [featureDialog, setFeatureDialog] = useState<{ feature: string; enabled: boolean } | null>(null);
+  const [moveMemberTarget, setMoveMemberTarget] = useState<HomeDetail["members"][number] | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   async function load() {
@@ -204,6 +206,17 @@ export default function PlatformHomeDetail() {
                     key={member.user_id}
                     title={member.display_name}
                     meta={[member.email, member.role.replaceAll("_", " ")]}
+                    actions={
+                      <button
+                        type="button"
+                        className="secondary cc-action"
+                        disabled={Boolean(busy)}
+                        onClick={() => setMoveMemberTarget(member)}
+                      >
+                        <Shuffle aria-hidden size={16} strokeWidth={2} />
+                        <span>Move</span>
+                      </button>
+                    }
                   />
                 ))}
               </CcRecordList>
@@ -337,6 +350,22 @@ export default function PlatformHomeDetail() {
           if (featureDialog) void setFeature(featureDialog.feature, featureDialog.enabled, formData);
         }}
       />
+
+      {data && moveMemberTarget && (
+        <MoveMemberDialog
+          open
+          onClose={() => setMoveMemberTarget(null)}
+          userId={moveMemberTarget.user_id}
+          userDisplayName={moveMemberTarget.display_name}
+          userEmail={moveMemberTarget.email}
+          sourceHomes={[{ id: data.id, name: data.name, role: moveMemberTarget.role }]}
+          onMoved={(moveMessage) => {
+            setMessage(moveMessage);
+            setMoveMemberTarget(null);
+            void load();
+          }}
+        />
+      )}
 
       {modal}
     </PlatformShell>

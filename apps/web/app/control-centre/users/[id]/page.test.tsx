@@ -195,3 +195,99 @@ describe("User detail", () => {
     expect(await screen.findByText("User not found")).toBeInTheDocument();
   });
 });
+
+describe("User detail — Move member", () => {
+  function mockHomeSearch(items: { id: string; name: string; active: boolean; member_count: number }[]) {
+    get.mockImplementation((path: string) => {
+      if (path === "/users/user-1") return Promise.resolve(verifiedUser);
+      if (path.startsWith("/homes?")) return Promise.resolve({ items });
+      return Promise.resolve(verifiedUser);
+    });
+  }
+
+  async function openAndFindDestination(
+    home = { id: "home-2", name: "Carol's Home", active: true, member_count: 1 },
+  ) {
+    mockHomeSearch([home]);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Move member" }));
+    const dialog = await findDialog(/Move member/i);
+    await userEvent.type(within(dialog).getByLabelText(/find destination home/i), home.name);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Search" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: new RegExp(home.name) }));
+    return dialog;
+  }
+
+  it("is not shown when the user has no active Home memberships", async () => {
+    get.mockResolvedValue(emptyUser);
+    render(<DetailPage />);
+    await screen.findByText("Jane Smith");
+    expect(screen.queryByRole("button", { name: "Move member" })).not.toBeInTheDocument();
+  });
+
+  it("searches for and selects a destination Home, then submits the expected payload", async () => {
+    const dialog = await openAndFindDestination();
+    await userEvent.selectOptions(within(dialog).getByLabelText(/new relationship/i), "adult");
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Merging duplicate Homes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move member" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/move-home", {
+        source_group_id: "home-1",
+        destination_group_id: "home-2",
+        destination_relationship: "adult",
+        source_disposition: "leave",
+        reason: "Merging duplicate Homes",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("shows an impact summary naming the account-preservation guarantees before confirming", async () => {
+    const dialog = await openAndFindDestination();
+    expect(within(dialog).getByText(/Before you confirm/i, { selector: "h3" })).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/same user ID, and login credentials/i, { selector: "li" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Passkeys, trusted devices/i, { selector: "li" })).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/this moves membership only, never Home data/i, { selector: "li" }),
+    ).toBeInTheDocument();
+  });
+
+  it("disables Move member until a destination is chosen and a reason is entered", async () => {
+    mockHomeSearch([{ id: "home-2", name: "Carol's Home", active: true, member_count: 1 }]);
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Move member" }));
+    const dialog = await findDialog(/Move member/i);
+    const confirmButton = within(dialog).getByRole("button", { name: "Move member" });
+    expect(confirmButton).toBeDisabled();
+  });
+
+  it("shows a clear API error (e.g. the last-admin block) without crashing the dialog", async () => {
+    post.mockRejectedValueOnce(
+      new ApiError(409, "Assign another Home Admin in the source Home before moving this member."),
+    );
+    const dialog = await openAndFindDestination();
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Reconciling Homes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move member" }));
+    expect(
+      await within(dialog).findByText("Assign another Home Admin in the source Home before moving this member."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a success message and reloads the user after a successful move", async () => {
+    post.mockImplementation((path: string) => {
+      if (path === "/users/user-1/move-home") return Promise.resolve({ source_disposition: "left_unchanged" });
+      return Promise.resolve({ message: "ok" });
+    });
+    const dialog = await openAndFindDestination();
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Reconciling Homes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move member" }));
+
+    expect(await screen.findByText(/moved to Carol's Home/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(get.mock.calls.filter((call) => call[0] === "/users/user-1")).toHaveLength(2),
+    );
+  });
+});
