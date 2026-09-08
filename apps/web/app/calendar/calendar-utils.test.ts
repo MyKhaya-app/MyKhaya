@@ -796,6 +796,62 @@ describe("All-day events are pure calendar dates, immune to timezone conversion"
       expect(endKey).toBe("2026-08-16");
     }
   });
+
+  it("does not render a single-day event on the exclusive end date", () => {
+    const singleDay = allDayEvent({
+      start_at: "2026-09-09T00:00:00.000Z",
+      end_at: "2026-09-10T00:00:00.000Z",
+    });
+    expect(eventDateBounds(singleDay, "Europe/London")).toEqual({
+      startKey: "2026-09-09",
+      endKey: "2026-09-09",
+    });
+  });
+
+  it("keeps a two-day all-day event on exactly the selected dates", () => {
+    const twoDay = allDayEvent({
+      start_at: "2026-09-09T00:00:00Z",
+      end_at: "2026-09-11T00:00:00Z",
+    });
+    expect(eventDateBounds(twoDay, "UTC")).toEqual({
+      startKey: "2026-09-09",
+      endKey: "2026-09-10",
+    });
+  });
+
+  it("preserves an all-day range crossing a week boundary", () => {
+    const crossingWeek = allDayEvent({
+      start_at: "2026-09-06T00:00:00.000Z",
+      end_at: "2026-09-09T00:00:00.000Z",
+    });
+    expect(eventDateBounds(crossingWeek, "America/New_York")).toEqual({
+      startKey: "2026-09-06",
+      endKey: "2026-09-08",
+    });
+  });
+
+  it("keeps an all-day event on the correct date at month end", () => {
+    const monthEnd = allDayEvent({
+      start_at: "2026-09-30T00:00:00.000Z",
+      end_at: "2026-10-01T00:00:00.000Z",
+    });
+    expect(eventDateBounds(monthEnd, "Pacific/Auckland")).toEqual({
+      startKey: "2026-09-30",
+      endKey: "2026-09-30",
+    });
+  });
+
+  it("leaves timed event bounds on local calendar-date semantics", () => {
+    const timed = allDayEvent({
+      is_all_day: false,
+      start_at: "2026-09-09T23:00:00.000Z",
+      end_at: "2026-09-10T01:00:00.000Z",
+    });
+    expect(eventDateBounds(timed, "Europe/London")).toEqual({
+      startKey: "2026-09-10",
+      endKey: "2026-09-10",
+    });
+  });
 });
 
 describe("Overnight / multi-day timed events", () => {

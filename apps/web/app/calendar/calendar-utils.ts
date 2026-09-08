@@ -358,7 +358,10 @@ export function eventDateBounds(
 ): { startKey: string; endKey: string } {
   const startKey = occurrenceDateKey(event.start_at, event, timeZone);
   let endKey = occurrenceDateKey(event.end_at, event, timeZone);
-  if (event.is_all_day && event.end_at.endsWith("T00:00:00+00:00")) {
+  if (event.is_all_day) {
+    // The backend represents all-day ranges with an exclusive UTC-midnight
+    // end.  Do not depend on the serializer's spelling of UTC (Z, .000Z, or
+    // +00:00); all equivalent forms must produce the same visible dates.
     const endDate = new Date(event.end_at);
     endDate.setUTCDate(endDate.getUTCDate() - 1);
     endKey = dateKey(endDate);
