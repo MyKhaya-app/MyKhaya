@@ -19,6 +19,7 @@ from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
     FeatureKey,
+    Group,
     Meal,
     MealPlanEntry,
     MealPlanParticipant,
@@ -83,10 +84,13 @@ async def _eligible_recipients(
     return set(
         (
             await db.scalars(
-                select(Membership.user_id).where(
+                select(Membership.user_id)
+                .join(Group, Group.id == Membership.group_id)
+                .where(
                     Membership.group_id == entry.group_id,
                     Membership.removed_at.is_(None),
                     Membership.user_id.in_(candidates),
+                    Group.is_active.is_(True),
                 )
             )
         ).all()
@@ -219,7 +223,13 @@ async def briefing_items_for_user(
 ) -> list[MealBriefingItem]:
     memberships = (
         await db.scalars(
-            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            select(Membership)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                Group.is_active.is_(True),
+            )
         )
     ).all()
     group_ids = [

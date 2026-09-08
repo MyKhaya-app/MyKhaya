@@ -18,6 +18,7 @@ from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
     FeatureKey,
+    Group,
     HouseholdRoutine,
     HouseholdRoutineMember,
     Membership,
@@ -58,7 +59,11 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
     window_end_utc = now_utc + LOOKAHEAD
 
     routines = (
-        await db.scalars(select(HouseholdRoutine).where(HouseholdRoutine.enabled.is_(True)))
+        await db.scalars(
+            select(HouseholdRoutine)
+            .join(Group, Group.id == HouseholdRoutine.group_id)
+            .where(HouseholdRoutine.enabled.is_(True), Group.is_active.is_(True))
+        )
     ).all()
     for routine in routines:
         if not await is_feature_enabled(db, FeatureKey.notifications, routine.group_id):

@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
-from mykhaya.models import ChildProfile, FeatureKey, Membership, OutboxEvent, User
+from mykhaya.models import ChildProfile, FeatureKey, Group, Membership, OutboxEvent, User
 from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.lifecycle import is_home_operationally_active
 from mykhaya.notifications.quiet_hours import effective_timezone, home_timezone
 from mykhaya.notifications.templates import render_notification
 
@@ -32,10 +33,18 @@ SEND_TIME = time(7, 30)
 
 
 async def _user_household_ids(db: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """Only operationally active Homes (Slice 4.5) — a Disabled/Archived
+    Home the user belongs to contributes no birthday scheduling/recipient
+    eligibility here, but an active Home still does even if the user has
+    other inactive ones too."""
     rows = (
         await db.scalars(
-            select(Membership.group_id).where(
-                Membership.user_id == user_id, Membership.removed_at.is_(None)
+            select(Membership.group_id)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                Group.is_active.is_(True),
             )
         )
     ).all()
@@ -60,7 +69,11 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
 
     users = (
         await db.scalars(
-            select(User).where(User.birth_month.isnot(None), User.birth_day.isnot(None))
+            select(User).where(
+                User.birth_month.isnot(None),
+                User.birth_day.isnot(None),
+                User.is_active.is_(True),
+            )
         )
     ).all()
     for user in users:
@@ -96,6 +109,8 @@ async def scan_due_birthdays(db: AsyncSession, settings: Settings) -> None:
         membership = await db.get(Membership, child.membership_id)
         if membership is None or membership.removed_at is not None:
             continue
+        if not await is_home_operationally_active(db, membership.group_id):
+            continue
         if not await is_feature_enabled(db, FeatureKey.notifications, membership.group_id):
             continue
         tz = await home_timezone(db, membership.group_id, settings.default_timezone)
@@ -125,6 +140,8 @@ async def _deliver_user_birthday(
     user = await db.get(User, user_id)
     if user is None or user.birth_month is None or user.birth_day is None:
         return
+    if not user.is_active:
+        return  # Disabled/Archived since this was scanned
     tz = effective_timezone(user.timezone, settings.default_timezone)
     now_local_date = datetime.now(UTC).astimezone(tz).date()
     still_valid = now_local_date.year == year and is_birthday_date(
@@ -134,8 +151,13 @@ async def _deliver_user_birthday(
         return  # no longer valid — birthday was cleared/changed since this was scanned
 
     idempotency_key = f"birthday:user:{user_id}:{year}"
-    household_ids = await _user_household_ids(db, user_id)
-    co_member_ids: set[uuid.UUID] = set()
+    household_ids = await _user_household_ids(db, user_id)  # already active-only
+    # One representative (active) shared group_id per co-member, so notify()
+    # can still re-verify Home eligibility even though household_ids is
+    # already filtered — a co-member sharing several active Homes with the
+    # birthday person is only ever notified once, matching the existing
+    # de-duplication-by-flattening behaviour.
+    co_members: dict[uuid.UUID, uuid.UUID] = {}
     for group_id in household_ids:
         rows = (
             await db.scalars(
@@ -144,13 +166,14 @@ async def _deliver_user_birthday(
                 )
             )
         ).all()
-        co_member_ids.update(rows)
+        for co_member_id in rows:
+            co_members.setdefault(co_member_id, group_id)
 
     self_title, self_body = await render_notification(db, "birthday.reminder.self", {})
     other_title, other_body = await render_notification(
         db, "birthday.reminder.other", {"display_name": user.display_name}
     )
-    for recipient_id in co_member_ids:
+    for recipient_id, recipient_group_id in co_members.items():
         is_self = recipient_id == user_id
         title, body = (self_title, self_body) if is_self else (other_title, other_body)
         await notify(
@@ -161,6 +184,7 @@ async def _deliver_user_birthday(
             title=title,
             body=body,
             idempotency_key=f"{idempotency_key}:{recipient_id}",
+            group_id=recipient_group_id,
             related_entity_type="user",
             related_entity_id=user_id,
             deep_link=target("member", user_id),
@@ -178,6 +202,8 @@ async def _deliver_child_birthday(
     membership = await db.get(Membership, child.membership_id)
     if membership is None or membership.removed_at is not None:
         return
+    if not await is_home_operationally_active(db, membership.group_id):
+        return  # Home went inactive since this was scanned
     tz = await home_timezone(db, membership.group_id, settings.default_timezone)
     now_local_date = datetime.now(UTC).astimezone(tz).date()
     still_valid = now_local_date.year == year and is_birthday_date(

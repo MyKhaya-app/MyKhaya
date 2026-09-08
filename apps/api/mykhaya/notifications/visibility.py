@@ -22,6 +22,7 @@ from mykhaya.models import (
     CalendarEventMember,
     CalendarShare,
     CalendarShareStatus,
+    Group,
     HomeCalendar,
     Membership,
 )
@@ -30,11 +31,20 @@ from mykhaya.models import (
 async def active_membership(
     db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID
 ) -> Membership | None:
+    """Slice 4.5: also requires the Home itself to be operationally active
+    (Group.is_active) — a Disabled/Archived Home must not keep generating
+    reminders/briefing content for its members even though their
+    Membership row is technically still un-removed. This is the shared
+    gate `routines.py`/`standalone_reminders.py` reuse directly, and that
+    `can_view_event`/`viewer_ids_for_event` inherit transitively."""
     membership: Membership | None = await db.scalar(
-        select(Membership).where(
+        select(Membership)
+        .join(Group, Group.id == Membership.group_id)
+        .where(
             Membership.group_id == group_id,
             Membership.user_id == user_id,
             Membership.removed_at.is_(None),
+            Group.is_active.is_(True),
         )
     )
     return membership

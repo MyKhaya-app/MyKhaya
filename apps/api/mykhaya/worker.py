@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from pywebpush import WebPushException
@@ -23,6 +24,11 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
+from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES
+from mykhaya.notifications.lifecycle import (
+    is_home_operationally_active,
+    is_user_operationally_active,
+)
 from mykhaya.notifications.push import (
     ApnsPermanentError,
     is_subscription_gone,
@@ -51,6 +57,30 @@ def _backoff_seconds(attempts: int) -> int:
     return int(min(delay, MAX_BACKOFF_SECONDS))
 
 
+async def _lifecycle_suppression_reason(db: AsyncSession, payload: dict[str, Any]) -> str | None:
+    """Slice 4.5 delivery-time re-check: notify() already verified the
+    recipient/Home were active when this was enqueued, but push/email
+    dispatch can happen minutes or hours later — re-verify so a Home/user
+    that went inactive in the meantime is suppressed rather than delivered.
+    Returns a human-readable reason if ineligible, else None.
+
+    Mirrors notify()'s own MANDATORY_EMAIL_TYPES exemption exactly: those
+    types were deliberately enqueued regardless of recipient activity
+    (account-security / action-required messages), so this re-check must
+    not turn around and suppress them anyway. The Home check has no such
+    exemption — see notify()'s Home-check comment."""
+    if payload.get("notification_type") not in MANDATORY_EMAIL_TYPES:
+        recipient_user_id = payload.get("recipient_user_id")
+        if recipient_user_id and not await is_user_operationally_active(
+            db, uuid.UUID(recipient_user_id)
+        ):
+            return "Recipient is no longer active."
+    group_id = payload.get("group_id")
+    if group_id and not await is_home_operationally_active(db, uuid.UUID(group_id)):
+        return "Home is no longer active."
+    return None
+
+
 async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
     delivery_key = event.payload["delivery_idempotency_key"]
     delivery = await db.scalar(
@@ -59,6 +89,13 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
     subscription = await db.get(PushSubscription, uuid.UUID(event.payload["push_subscription_id"]))
     if delivery is None or subscription is None or subscription.disabled_at is not None:
         return  # already pruned or diagnostic record missing — nothing more to do
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return  # terminal, not retried — this is a policy decision, not a failure
 
     push_config = await resolve_push_config(settings, db)
     payload = {
@@ -108,6 +145,14 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
     device = await db.get(NativePushDevice, uuid.UUID(event.payload["native_push_device_id"]))
     if delivery is None or device is None or device.disabled_at is not None:
         return
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return
+
     payload = {
         "title": event.payload["title"],
         "body": event.payload["body"],
@@ -144,6 +189,13 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
     )
     if delivery is None:
         return  # diagnostic record missing — nothing more to do
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return
 
     smtp_config = await resolve_smtp_config(settings, db)
     try:

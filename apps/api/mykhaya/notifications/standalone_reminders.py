@@ -27,6 +27,7 @@ from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
     FeatureKey,
+    Group,
     Membership,
     OutboxEvent,
     Reminder,
@@ -78,7 +79,13 @@ def _current_slot(reminder: Reminder, due_at_utc: datetime, now_utc: datetime) -
 async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
 
-    reminders = (await db.scalars(select(Reminder).where(Reminder.enabled.is_(True)))).all()
+    reminders = (
+        await db.scalars(
+            select(Reminder)
+            .join(Group, Group.id == Reminder.group_id)
+            .where(Reminder.enabled.is_(True), Group.is_active.is_(True))
+        )
+    ).all()
     for reminder in reminders:
         if not await is_feature_enabled(db, FeatureKey.notifications, reminder.group_id):
             continue

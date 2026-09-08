@@ -30,6 +30,7 @@ from mykhaya.models import (
     CalendarShareStatus,
     ChildProfile,
     FeatureKey,
+    Group,
     Membership,
     NotificationPreferences,
     OutboxEvent,
@@ -38,6 +39,7 @@ from mykhaya.models import (
 from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
+from mykhaya.notifications.lifecycle import is_home_operationally_active
 from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
 from mykhaya.notifications.quiet_hours import effective_timezone
 from mykhaya.notifications.templates import render_notification
@@ -172,7 +174,15 @@ async def _events_for_user_today(
 
     memberships = (
         await db.scalars(
-            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            select(Membership)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                # Slice 4.5: a Disabled/Archived Home's events never appear
+                # in the briefing, even for a user with other active Homes.
+                Group.is_active.is_(True),
+            )
         )
     ).all()
 
@@ -238,6 +248,8 @@ async def _events_for_user_today(
         )
     ).all()
     for share in shares:
+        if not await is_home_operationally_active(db, share.source_group_id):
+            continue
         if not await is_feature_enabled(db, FeatureKey.calendar, share.source_group_id):
             continue
         if not await is_feature_enabled(db, FeatureKey.notifications, share.source_group_id):
@@ -278,7 +290,13 @@ async def _birthdays_for_user_today(
     just another calendar occurrence — see mykhaya.notifications.birthdays."""
     memberships = (
         await db.scalars(
-            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            select(Membership)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                Group.is_active.is_(True),
+            )
         )
     ).all()
 
@@ -298,6 +316,8 @@ async def _birthdays_for_user_today(
         for co_membership in co_members:
             user = await db.get(User, co_membership.user_id)
             if user is None or user.birth_month is None or user.birth_day is None:
+                continue
+            if not user.is_active:
                 continue
             if not is_birthday_date(user.birth_month, user.birth_day, local_date):
                 continue
@@ -344,7 +364,7 @@ async def scan_due_briefings(db: AsyncSession, settings: Settings) -> None:
     ).all()
     for prefs in prefs_rows:
         user = await db.get(User, prefs.user_id)
-        if user is None:
+        if user is None or not user.is_active:
             continue
         tz = effective_timezone(user.timezone, settings.default_timezone)
         now_local = now_utc.astimezone(tz)
@@ -374,8 +394,8 @@ async def deliver_daily_briefing(
     db: AsyncSession, settings: Settings, user_id: str, date_iso: str
 ) -> None:
     user = await db.get(User, uuid.UUID(user_id))
-    if user is None:
-        return
+    if user is None or not user.is_active:
+        return  # gone, or Disabled/Archived since this was scanned
     prefs = await get_or_create_preferences(db, user.id)
     if not prefs.daily_briefing_enabled:
         return  # disabled since this was scanned — do not send

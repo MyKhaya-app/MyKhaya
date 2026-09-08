@@ -1352,6 +1352,12 @@ class NotificationDeliveryStatus(StrEnum):
     sent = "sent"
     failed = "failed"
     cancelled = "cancelled"
+    # Suppressed because the recipient User or target Group had gone
+    # inactive (Disabled/Archived) by dispatch time — a policy decision,
+    # never retried, and distinct from `cancelled` (device/address is
+    # permanently invalid). See mykhaya.notifications.lifecycle and
+    # mykhaya.worker's _process_push/_process_native_push/_process_email.
+    skipped = "skipped"
 
 
 class LockScreenPreviewLevel(StrEnum):

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.calendar_occurrences import expand_occurrences
 from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
-from mykhaya.models import CalendarEvent, CalendarEventException, FeatureKey, OutboxEvent
+from mykhaya.models import CalendarEvent, CalendarEventException, FeatureKey, Group, OutboxEvent
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification
@@ -72,9 +72,16 @@ async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
 
     events = (
         await db.scalars(
-            select(CalendarEvent).where(
+            select(CalendarEvent)
+            .join(Group, Group.id == CalendarEvent.group_id)
+            .where(
                 CalendarEvent.deleted_at.is_(None),
                 CalendarEvent.reminder_minutes.isnot(None),
+                # Query-level lifecycle filter (Slice 4.5 §4) — deliver_event_
+                # reminder re-validates recipients via visibility.active_
+                # membership at dispatch time regardless, this just avoids
+                # scanning/enqueuing work for an already-inactive Home at all.
+                Group.is_active.is_(True),
             )
         )
     ).all()
