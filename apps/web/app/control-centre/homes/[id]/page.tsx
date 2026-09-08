@@ -273,7 +273,7 @@ export default function PlatformHomeDetail() {
             </CcColumns>
 
             <CcSection title="Memberships">
-              <CcRecordList emptyMessage="No members yet.">
+              <CcRecordList variant="grid" emptyMessage="No members yet.">
                 {data.members.map((member) => (
                   <CcRecordCard
                     key={member.user_id}
@@ -296,7 +296,7 @@ export default function PlatformHomeDetail() {
             </CcSection>
 
             <CcSection title="Pending invitations">
-              <CcRecordList emptyMessage="No pending invitations.">
+              <CcRecordList variant="grid" emptyMessage="No pending invitations.">
                 {data.pending_invitations.map((invitation) => (
                   <CcRecordCard
                     key={invitation.id}
@@ -311,7 +311,7 @@ export default function PlatformHomeDetail() {
             </CcSection>
 
             <CcSection title="Feature availability">
-              <CcRecordList>
+              <CcRecordList variant="grid">
                 {FEATURES.map((feature) => {
                   const enabled = Boolean(data.feature_overrides.find((item) => item.feature === feature)?.enabled);
                   return (

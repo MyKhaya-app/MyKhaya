@@ -52,14 +52,27 @@ export function CcRecordCard({
 export function CcRecordList({
   children,
   emptyMessage = "No records yet.",
+  variant = "list",
 }: {
   children: ReactNode;
   emptyMessage?: ReactNode;
+  /**
+   * "list" (default): the original bordered single-column stack — right
+   * for content whose body text benefits from full reading width (notes,
+   * audit entries). "grid": a compact multi-column card grid for short,
+   * uniform records (Home/session/passkey summaries) so they don't each
+   * consume the full width of a wide desktop page for two lines of text.
+   */
+  variant?: "list" | "grid";
 }) {
   const items = Array.isArray(children) ? children : [children];
   const hasItems = items.filter(Boolean).length > 0;
   if (!hasItems) {
     return <CcEmptyState>{emptyMessage}</CcEmptyState>;
   }
-  return <div className="record-list cc-record-list">{children}</div>;
+  return (
+    <div className={variant === "grid" ? "cc-record-list-grid" : "record-list cc-record-list"}>
+      {children}
+    </div>
+  );
 }

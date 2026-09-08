@@ -341,7 +341,7 @@ export default function PlatformUserDetail() {
             </CcColumns>
 
             <CcSection title="Homes and memberships">
-              <CcRecordList emptyMessage="Not a member of any Home.">
+              <CcRecordList variant="grid" emptyMessage="Not a member of any Home.">
                 {data.homes.map((home) => (
                   <CcRecordCard key={home.id} title={home.name} meta={[home.role.replaceAll("_", " ")]} />
                 ))}
@@ -349,7 +349,7 @@ export default function PlatformUserDetail() {
             </CcSection>
 
             <CcSection title="Active sessions">
-              <CcRecordList emptyMessage="No active sessions.">
+              <CcRecordList variant="grid" emptyMessage="No active sessions.">
                 {data.sessions.map((session) => (
                   <CcRecordCard
                     key={session.id}

@@ -5767,6 +5767,7 @@ button.danger,
   background: none;
   border: 0;
   border-radius: 0;
+  color: var(--cc-text);
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -5860,11 +5861,26 @@ button.danger,
 .cc-cleanup-toolbar {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  /* nowrap, not wrap: as a flex item nested inside .cc-section-heading's own
+     flex row, a wrapping child sizes to its largest single line rather than
+     its full unwrapped content — the browser was wrapping the filter select
+     onto its own row even with plenty of width free. Desktop PCC toolbars
+     don't need to wrap; @media below still stacks the whole section heading
+     (and this toolbar within it) to a column on narrow viewports. */
+  flex-wrap: nowrap;
   gap: 0.5rem;
 }
+/* The shared consumer form reset (input/select { width: 100% }) forces
+   every control here onto its own line — the exact "mobile-app control
+   stretched across a desktop screen" pattern PCC should not inherit. Each
+   control gets a sane intrinsic width instead so they sit inline. */
 .cc-cleanup-toolbar input[type="text"] {
-  min-width: 220px;
+  flex: 0 1 260px;
+  width: auto;
+}
+.cc-cleanup-toolbar select {
+  flex: 0 0 auto;
+  width: auto;
 }
 .cc-cleanup-bulk-bar {
   align-items: center;
@@ -5975,6 +5991,23 @@ button.danger,
   color: var(--cc-warning);
 }
 
+/* Compact multi-column alternative to the full-width .record-list stack —
+   see CcRecordList's `variant="grid"`. Short, uniform records (a Home
+   membership, a session, a passkey) waste a lot of desktop width as a
+   single full-width row each; laying them out as a card grid instead
+   keeps the row count down without forcing them onto one wasted line. */
+.cc-record-list-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.cc-record-list-grid .cc-record-card {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-sm);
+  padding: 0.8rem 0.9rem;
+}
+
 .cc-record-card {
   align-items: center;
   display: flex;
@@ -5993,6 +6026,12 @@ button.danger,
   gap: 0.5rem;
 }
 .cc-record-card-heading strong {
+  overflow-wrap: anywhere;
+}
+/* Meta lines (email addresses, etc.) have no natural break points — without
+   this an unbreakable string is clipped at the card edge instead of
+   wrapping, most visible in the compact .cc-record-list-grid cards. */
+.cc-record-card-main span {
   overflow-wrap: anywhere;
 }
 .cc-record-card-actions {
