@@ -9,6 +9,7 @@ import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pillow_heif
 import pytest
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
@@ -34,6 +35,8 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.security import derived_token
+
+pillow_heif.register_heif_opener()
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
@@ -61,6 +64,13 @@ def make_png(size: tuple[int, int] = (400, 900)) -> bytes:
     image = Image.new("RGB", size, (30, 80, 200))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def make_heif() -> bytes:
+    image = Image.new("RGB", (900, 600), (80, 160, 90))
+    buffer = io.BytesIO()
+    image.save(buffer, format="HEIF")
     return buffer.getvalue()
 
 
@@ -134,6 +144,13 @@ def test_process_avatar_upload_crops_resizes_and_strips_metadata() -> None:
 def test_process_avatar_upload_accepts_png_and_produces_square_output() -> None:
     processed = process_avatar_upload(make_png((400, 900)))
     image = Image.open(io.BytesIO(processed))
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_accepts_heif_and_produces_webp() -> None:
+    processed = process_avatar_upload(make_heif())
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
     assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
 
 

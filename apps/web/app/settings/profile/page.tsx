@@ -8,6 +8,7 @@ import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
+import { normalizeAvatarFile } from "@/components/avatar-upload";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -92,7 +93,7 @@ export default function Profile() {
 
     setAvatarBusy(true);
     try {
-      const updated = await api.uploadAvatar(file);
+      const updated = await api.uploadAvatar(await normalizeAvatarFile(file));
       setUser(updated);
       emitUserUpdated(updated);
     } catch (cause) {

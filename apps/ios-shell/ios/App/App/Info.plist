@@ -37,6 +37,10 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to securely unlock MyKhaya and access your family information.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MyKhaya uses the camera when you choose to take a profile photo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MyKhaya uses your Photo Library when you choose a profile photo.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
