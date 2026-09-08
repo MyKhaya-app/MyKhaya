@@ -1006,6 +1006,82 @@ class ReminderCompletionRequest(StrictModel):
     occurrence_date: date
 
 
+class TodoCategoryCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class TodoCategoryUpdate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    expected_updated_at: datetime
+
+
+class TodoCategoryResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class TodoCategoryListResponse(BaseModel):
+    items: list[TodoCategoryResponse]
+
+
+class TodoCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    category_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "TodoCreate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal To-do cannot have explicit members")
+        return self
+
+
+class TodoUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    category_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "TodoUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal To-do cannot have explicit members")
+        return self
+
+
+class TodoResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
+    category: TodoCategoryResponse | None
+    due_date: date
+    completed_at: datetime | None
+    completed_by: uuid.UUID | None
+    member_ids: list[uuid.UUID]
+    overdue: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class TodoListResponse(BaseModel):
+    items: list[TodoResponse]
+
+
+class TodoCompletionRequest(StrictModel):
+    completed: bool = True
+
+
 # ---------------------------------------------------------------------------
 # Meal Plans (Family-only) — see docs/architecture/meal-plans.md.
 # ---------------------------------------------------------------------------
@@ -1317,6 +1393,9 @@ class NotificationPreferencesResponse(BaseModel):
     briefing_time: str
     briefing_days: str
     empty_day_briefing_enabled: bool
+    nudges_evening_cleanup_enabled: bool
+    nudges_evening_time: str
+    nudges_day_complete_enabled: bool
     lock_screen_preview_level: str
     quiet_hours_start: str | None
     quiet_hours_end: str | None
@@ -1337,6 +1416,9 @@ class NotificationPreferencesUpdate(StrictModel):
     briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
     briefing_days: Literal["daily", "weekdays"]
     empty_day_briefing_enabled: bool
+    nudges_evening_cleanup_enabled: bool = True
+    nudges_evening_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+    nudges_day_complete_enabled: bool = True
     lock_screen_preview_level: Literal["full", "title_only", "hidden"]
     quiet_hours_start: str | None = Field(
         default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"

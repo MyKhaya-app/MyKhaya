@@ -51,6 +51,8 @@ PREFERENCE_GATES: dict[str, str] = {
     "wishlist_share_created": "wishlist_sharing_enabled",
     "wishlist_share_revoked": "wishlist_sharing_enabled",
     "daily_briefing": "daily_briefing_enabled",
+    "nudges_evening_cleanup": "nudges_evening_cleanup_enabled",
+    "nudges_day_complete": "nudges_day_complete_enabled",
 }
 
 # Notification types that must always be delivered by email regardless of any

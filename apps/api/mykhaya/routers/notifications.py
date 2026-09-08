@@ -125,6 +125,9 @@ async def get_preferences(
         briefing_time=_time_str(prefs.briefing_time) or "07:30",
         briefing_days=prefs.briefing_days.value,
         empty_day_briefing_enabled=prefs.empty_day_briefing_enabled,
+        nudges_evening_cleanup_enabled=prefs.nudges_evening_cleanup_enabled,
+        nudges_evening_time=_time_str(prefs.nudges_evening_time) or "20:30",
+        nudges_day_complete_enabled=prefs.nudges_day_complete_enabled,
         lock_screen_preview_level=prefs.lock_screen_preview_level.value,
         quiet_hours_start=_time_str(prefs.quiet_hours_start),
         quiet_hours_end=_time_str(prefs.quiet_hours_end),
@@ -152,6 +155,9 @@ async def update_preferences(
     prefs.briefing_time = time.fromisoformat(body.briefing_time)
     prefs.briefing_days = BriefingDays(body.briefing_days)
     prefs.empty_day_briefing_enabled = body.empty_day_briefing_enabled
+    prefs.nudges_evening_cleanup_enabled = body.nudges_evening_cleanup_enabled
+    prefs.nudges_evening_time = time.fromisoformat(body.nudges_evening_time)
+    prefs.nudges_day_complete_enabled = body.nudges_day_complete_enabled
     prefs.lock_screen_preview_level = LockScreenPreviewLevel(body.lock_screen_preview_level)
     prefs.quiet_hours_start = (
         time.fromisoformat(body.quiet_hours_start) if body.quiet_hours_start else None

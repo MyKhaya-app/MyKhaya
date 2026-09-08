@@ -681,6 +681,53 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/reminders/${encodeURIComponent(reminderId)}/complete/${encodeURIComponent(occurrenceDate)}`,
       { method: "DELETE" },
     );
+  todos = (homeId: string, params?: { include_completed?: boolean }) => {
+    const query = params?.include_completed === undefined
+      ? ""
+      : `?include_completed=${String(params.include_completed)}`;
+    return this.request<import("@mykhaya/shared-types").TodoListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/todos${query}`,
+    );
+  };
+  createTodo = (homeId: string, body: import("@mykhaya/shared-types").TodoPayload) =>
+    this.request<import("@mykhaya/shared-types").Todo>(
+      `/homes/${encodeURIComponent(homeId)}/todos`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateTodo = (homeId: string, todoId: string, body: import("@mykhaya/shared-types").TodoUpdatePayload) =>
+    this.request<import("@mykhaya/shared-types").Todo>(
+      `/homes/${encodeURIComponent(homeId)}/todos/${encodeURIComponent(todoId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteTodo = (homeId: string, todoId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/todos/${encodeURIComponent(todoId)}`,
+      { method: "DELETE" },
+    );
+  completeTodo = (homeId: string, todoId: string, completed = true) =>
+    this.request<import("@mykhaya/shared-types").Todo>(
+      `/homes/${encodeURIComponent(homeId)}/todos/${encodeURIComponent(todoId)}/complete`,
+      { method: "POST", body: JSON.stringify({ completed }) },
+    );
+  todoCategories = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").TodoCategoryListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/todo-categories`,
+    );
+  createTodoCategory = (homeId: string, name: string) =>
+    this.request<import("@mykhaya/shared-types").TodoCategory>(
+      `/homes/${encodeURIComponent(homeId)}/todo-categories`,
+      { method: "POST", body: JSON.stringify({ name }) },
+    );
+  updateTodoCategory = (homeId: string, categoryId: string, name: string, expected_updated_at: string) =>
+    this.request<import("@mykhaya/shared-types").TodoCategory>(
+      `/homes/${encodeURIComponent(homeId)}/todo-categories/${encodeURIComponent(categoryId)}`,
+      { method: "PATCH", body: JSON.stringify({ name, expected_updated_at }) },
+    );
+  deleteTodoCategory = (homeId: string, categoryId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/todo-categories/${encodeURIComponent(categoryId)}`,
+      { method: "DELETE" },
+    );
   // --- Meal Plans (Family-only) -------------------------------------------
   meals = (homeId: string, params?: { favourite?: boolean; q?: string }) => {
     const search = new URLSearchParams();

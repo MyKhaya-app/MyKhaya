@@ -473,6 +473,9 @@ export interface NotificationPreferences {
   briefing_time: string;
   briefing_days: BriefingDays;
   empty_day_briefing_enabled: boolean;
+  nudges_evening_cleanup_enabled: boolean;
+  nudges_evening_time: string;
+  nudges_day_complete_enabled: boolean;
   lock_screen_preview_level: LockScreenPreviewLevel;
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
@@ -590,6 +593,51 @@ export interface ReminderUpdatePayload extends ReminderPayload {
 
 export interface ReminderListResponse {
   items: Reminder[];
+}
+
+export interface TodoCategory {
+  id: string;
+  name: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Todo {
+  id: string;
+  title: string;
+  description: string | null;
+  scope: RoutineScope;
+  owner_user_id: string | null;
+  category: TodoCategory | null;
+  due_date: string;
+  completed_at: string | null;
+  completed_by: string | null;
+  member_ids: string[];
+  overdue: boolean;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface TodoPayload {
+  title: string;
+  description?: string | null;
+  scope: RoutineScope;
+  due_date: string;
+  category_id?: string | null;
+  member_ids: string[];
+}
+
+export interface TodoUpdatePayload extends TodoPayload {
+  expected_updated_at: string;
+}
+
+export interface TodoListResponse {
+  items: Todo[];
+}
+
+export interface TodoCategoryListResponse {
+  items: TodoCategory[];
 }
 
 // ---------------------------------------------------------------------------

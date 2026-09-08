@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarCheck2,
+  ClipboardCheck,
   ChevronRight,
   Clock,
   Home as HomeIcon,
@@ -24,6 +25,8 @@ import type {
   RoutineReminderTiming,
   RoutineRepeatUnit,
   RoutineScope,
+  Todo,
+  TodoCategory,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -68,24 +71,27 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-type TypeFilter = "all" | "routines" | "reminders";
+type TypeFilter = "all" | "routines" | "reminders" | "todos";
 type Section = "overdue" | "today" | "upcoming" | "completed";
 
 type UiItem =
   | { kind: "routine"; id: string; data: Routine }
-  | { kind: "reminder"; id: string; data: Reminder };
+  | { kind: "reminder"; id: string; data: Reminder }
+  | { kind: "todo"; id: string; data: Todo };
 
 function sectionFor(item: UiItem, today: string): Section | null {
-  if (item.data.completed_today) return "completed";
-  if (!item.data.next_occurrence_date) return null;
-  if (item.data.next_occurrence_date < today) return "overdue";
-  if (item.data.next_occurrence_date === today) return "today";
+  const completed = item.kind === "todo" ? item.data.completed_at !== null : item.data.completed_today;
+  const dueDate = item.kind === "todo" ? item.data.due_date : item.data.next_occurrence_date;
+  if (completed) return "completed";
+  if (!dueDate) return null;
+  if (dueDate < today) return "overdue";
+  if (dueDate === today) return "today";
   return "upcoming";
 }
 
 function compareItems(a: UiItem, b: UiItem): number {
-  const aDate = a.data.next_occurrence_date ?? "";
-  const bDate = b.data.next_occurrence_date ?? "";
+  const aDate = a.kind === "todo" ? a.data.due_date : a.data.next_occurrence_date ?? "";
+  const bDate = b.kind === "todo" ? b.data.due_date : b.data.next_occurrence_date ?? "";
   if (aDate !== bDate) return aDate < bDate ? -1 : 1;
   const aTime = a.kind === "reminder" ? a.data.due_time : "";
   const bTime = b.kind === "reminder" ? b.data.due_time : "";
@@ -103,10 +109,12 @@ function routineFrequencyLabel(routine: Routine): string {
 // dueLine below, shown separately so a Today/Overdue card — whose section
 // heading already says when — doesn't repeat itself).
 function kindScopeLabel(item: UiItem): string {
-  const kind = item.kind === "routine" ? "Routine" : "Reminder";
+  const kind = item.kind === "routine" ? "Routine" : item.kind === "reminder" ? "Reminder" : "To-do";
   const scopeLabel = item.data.scope === "household" ? "Household" : "Personal";
   const parts = [kind, scopeLabel];
   if (item.kind === "routine") parts.push(routineFrequencyLabel(item.data));
+  if (item.kind === "reminder") parts.push(item.data.due_time.slice(0, 5));
+  if (item.kind === "todo" && item.data.category) parts.splice(1, 0, item.data.category.name);
   return parts.join(" · ");
 }
 
@@ -114,14 +122,15 @@ function kindScopeLabel(item: UiItem): string {
 // page already relied on for its due-date wording, never reimplementing the
 // "how soon" calculation itself.
 function dueLine(item: UiItem): string | null {
-  if (!item.data.next_occurrence_date) return null;
-  const dueLabel = routineDueLabel(item.data.next_occurrence_date);
+  const date = item.kind === "todo" ? item.data.due_date : item.data.next_occurrence_date;
+  if (!date) return null;
+  const dueLabel = routineDueLabel(date);
   const time = item.kind === "reminder" ? ` at ${item.data.due_time.slice(0, 5)}` : "";
   return `${dueLabel}${time}`;
 }
 
 function itemIcon(item: UiItem) {
-  return item.kind === "routine" ? Repeat : Clock;
+  return item.kind === "routine" ? Repeat : item.kind === "reminder" ? Clock : ClipboardCheck;
 }
 
 function matchesSearch(item: UiItem, query: string): boolean {
@@ -129,7 +138,8 @@ function matchesSearch(item: UiItem, query: string): boolean {
   if (!needle) return true;
   return (
     item.data.title.toLowerCase().includes(needle) ||
-    (item.data.description?.toLowerCase().includes(needle) ?? false)
+    (item.data.description?.toLowerCase().includes(needle) ?? false) ||
+    (item.kind === "todo" && (item.data.category?.name.toLowerCase().includes(needle) ?? false))
   );
 }
 
@@ -142,7 +152,7 @@ export default function RoutinesRemindersPage() {
 
   const initialType = searchParams?.get("type");
   const [typeTab, setTypeTab] = useState<TypeFilter>(
-    initialType === "routines" || initialType === "reminders" ? initialType : "all",
+    initialType === "routines" || initialType === "reminders" || initialType === "todos" ? initialType : "all",
   );
   const [scopeTab, setScopeTab] = useState<RoutineScope>("personal");
   const [searchQuery, setSearchQuery] = useState("");
@@ -150,13 +160,16 @@ export default function RoutinesRemindersPage() {
 
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todoCategories, setTodoCategories] = useState<TodoCategory[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [householdRoutinesEnabled, setHouseholdRoutinesEnabled] = useState(false);
 
   const [showCreateMenu, setShowCreateMenu] = useState(false);
-  const [formKind, setFormKind] = useState<"routine" | "reminder" | null>(null);
+  const [formKind, setFormKind] = useState<"routine" | "reminder" | "todo" | null>(null);
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [repeatUnit, setRepeatUnit] = useState<RoutineRepeatUnit>("weekly");
   const [weekInterval, setWeekInterval] = useState(1);
 
@@ -178,9 +191,19 @@ export default function RoutinesRemindersPage() {
     void syncWidgetSnapshot();
   }, [activeHomeId]);
 
+  const loadTodos = useCallback(async () => {
+    if (!activeHomeId) return;
+    const [todoResponse, categoryResponse] = await Promise.all([
+      api.todos(activeHomeId),
+      api.todoCategories(activeHomeId),
+    ]);
+    setTodos(todoResponse.items);
+    setTodoCategories(categoryResponse.items);
+  }, [activeHomeId]);
+
   useEffect(() => {
-    Promise.all([loadRoutines(), loadReminders()]).catch((cause: Error) => setError(cause.message));
-  }, [loadRoutines, loadReminders]);
+    Promise.all([loadRoutines(), loadReminders(), loadTodos()]).catch((cause: Error) => setError(cause.message));
+  }, [loadRoutines, loadReminders, loadTodos]);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -207,6 +230,7 @@ export default function RoutinesRemindersPage() {
     setFormKind(null);
     setEditingRoutine(null);
     setEditingReminder(null);
+    setEditingTodo(null);
     setShowCreateMenu(false);
   }
 
@@ -228,6 +252,15 @@ export default function RoutinesRemindersPage() {
     setError("");
   }
 
+  function openNewTodo() {
+    setEditingRoutine(null);
+    setEditingReminder(null);
+    setEditingTodo(null);
+    setFormKind("todo");
+    setShowCreateMenu(false);
+    setError("");
+  }
+
   function openEditRoutine(routine: Routine) {
     setEditingRoutine(routine);
     setEditingReminder(null);
@@ -241,6 +274,14 @@ export default function RoutinesRemindersPage() {
     setEditingReminder(reminder);
     setEditingRoutine(null);
     setFormKind("reminder");
+    setError("");
+  }
+
+  function openEditTodo(todo: Todo) {
+    setEditingTodo(todo);
+    setEditingRoutine(null);
+    setEditingReminder(null);
+    setFormKind("todo");
     setError("");
   }
 
@@ -326,6 +367,43 @@ export default function RoutinesRemindersPage() {
     }
   }
 
+  async function saveTodo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const scope = (form.get("scope") as RoutineScope | null) ?? "personal";
+    const assignee = (form.get("assignee") as string) || "";
+    const payload = {
+      title: ((form.get("title") as string | null) ?? "").trim(),
+      description: (form.get("description") as string) || null,
+      scope,
+      due_date: (form.get("due_date") as string | null) ?? todayIso(),
+      category_id: (form.get("category_id") as string) || null,
+      member_ids: scope === "household" && assignee ? [assignee] : [],
+    };
+    try {
+      if (editingTodo) {
+        await api.updateTodo(activeHomeId, editingTodo.id, {
+          ...payload,
+          expected_updated_at: editingTodo.updated_at,
+        });
+        setMessage("To-do updated.");
+      } else {
+        await api.createTodo(activeHomeId, payload);
+        setMessage("To-do created.");
+      }
+      closeForms();
+      await loadTodos();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeRoutine(routine: Routine) {
     if (!activeHomeId) return;
     if (!window.confirm(`Delete "${routine.title}"? This cannot be undone.`)) return;
@@ -345,6 +423,40 @@ export default function RoutinesRemindersPage() {
     try {
       await api.deleteReminder(activeHomeId, reminder.id);
       await loadReminders();
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  }
+
+  async function removeTodo(todo: Todo) {
+    if (!activeHomeId) return;
+    if (!window.confirm(`Delete "${todo.title}"? This cannot be undone.`)) return;
+    try {
+      await api.deleteTodo(activeHomeId, todo.id);
+      await loadTodos();
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  }
+
+  async function renameTodoCategory(category: TodoCategory) {
+    if (!activeHomeId) return;
+    const name = window.prompt("Rename To-do category", category.name)?.trim();
+    if (!name || name === category.name) return;
+    try {
+      await api.updateTodoCategory(activeHomeId, category.id, name, category.updated_at);
+      await loadTodos();
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  }
+
+  async function removeTodoCategory(category: TodoCategory) {
+    if (!activeHomeId || !window.confirm(`Delete the "${category.name}" category? To-dos will be kept.`)) return;
+    try {
+      await api.deleteTodoCategory(activeHomeId, category.id);
+      if (searchQuery === category.name) setSearchQuery("");
+      await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
     }
@@ -392,9 +504,20 @@ export default function RoutinesRemindersPage() {
     }
   }
 
+  async function toggleTodo(todo: Todo) {
+    if (!activeHomeId) return;
+    try {
+      await api.completeTodo(activeHomeId, todo.id, todo.completed_at === null);
+      await loadTodos();
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  }
+
   function toggleItem(item: UiItem) {
     if (item.kind === "routine") void toggleRoutine(item.data);
-    else void toggleReminder(item.data);
+    else if (item.kind === "reminder") void toggleReminder(item.data);
+    else void toggleTodo(item.data);
   }
 
   const today = todayIso();
@@ -403,8 +526,9 @@ export default function RoutinesRemindersPage() {
     () => [
       ...routines.map((data): UiItem => ({ kind: "routine", id: `routine:${data.id}`, data })),
       ...reminders.map((data): UiItem => ({ kind: "reminder", id: `reminder:${data.id}`, data })),
+      ...todos.map((data): UiItem => ({ kind: "todo", id: `todo:${data.id}`, data })),
     ],
-    [routines, reminders],
+    [routines, reminders, todos],
   );
 
   const scopeFiltered = useMemo(
@@ -417,6 +541,7 @@ export default function RoutinesRemindersPage() {
       scopeFiltered.filter((item) => {
         if (typeTab === "routines") return item.kind === "routine";
         if (typeTab === "reminders") return item.kind === "reminder";
+        if (typeTab === "todos") return item.kind === "todo";
         return true;
       }),
     [scopeFiltered, typeTab],
@@ -442,7 +567,8 @@ export default function RoutinesRemindersPage() {
 
   function openEditItem(item: UiItem) {
     if (item.kind === "routine") openEditRoutine(item.data);
-    else openEditReminder(item.data);
+    else if (item.kind === "reminder") openEditReminder(item.data);
+    else openEditTodo(item.data);
   }
 
   // Overdue / Today / Completed — the actionable cards: a completion
@@ -450,7 +576,7 @@ export default function RoutinesRemindersPage() {
   // a compact Edit/Delete strip along the bottom of the card.
   function renderCard(item: UiItem) {
     const canManage = item.kind === "routine" ? canManageRoutines : canManageReminders;
-    const completed = item.data.completed_today;
+    const completed = item.kind === "todo" ? item.data.completed_at !== null : item.data.completed_today;
     const Icon = itemIcon(item);
     return (
       <article className="card rr-card" key={item.id}>
@@ -460,7 +586,7 @@ export default function RoutinesRemindersPage() {
             type="button"
             aria-label={`${completed ? "Completed" : "Complete"} ${item.data.title}`}
             aria-pressed={completed}
-            disabled={completed || !item.data.next_occurrence_date}
+            disabled={item.kind !== "todo" && !item.data.next_occurrence_date}
             onClick={() => toggleItem(item)}
           >
             <span className="rr-row-check-dot" aria-hidden="true" />
@@ -477,7 +603,7 @@ export default function RoutinesRemindersPage() {
             )}
             <small className="rr-card-meta">
               {kindScopeLabel(item)}
-              {!item.data.enabled ? " · Disabled" : ""}
+              {item.kind !== "todo" && !item.data.enabled ? " · Disabled" : ""}
             </small>
           </div>
         </div>
@@ -491,7 +617,11 @@ export default function RoutinesRemindersPage() {
               type="button"
               className="rr-card-action rr-card-action-delete"
               onClick={() =>
-                item.kind === "routine" ? removeRoutine(item.data) : removeReminder(item.data)
+                item.kind === "routine"
+                  ? removeRoutine(item.data)
+                  : item.kind === "reminder"
+                    ? removeReminder(item.data)
+                    : removeTodo(item.data)
               }
             >
               <Trash2 size={14} aria-hidden="true" />
@@ -521,7 +651,7 @@ export default function RoutinesRemindersPage() {
           <strong className="rr-upcoming-title">{item.data.title}</strong>
           <small className="rr-upcoming-meta">
             {kindScopeLabel(item)}
-            {!item.data.enabled ? " · Disabled" : ""}
+            {item.kind !== "todo" && !item.data.enabled ? " · Disabled" : ""}
           </small>
           {due && (
             <span className="rr-upcoming-due">
@@ -563,14 +693,26 @@ export default function RoutinesRemindersPage() {
 
   const canManageAny = canManageRoutines || canManageReminders;
   const scopeWord = scopeTab === "household" ? "household" : "personal";
-  const typeWord = typeTab === "all" ? "items" : typeTab;
+  const typeWord = typeTab === "all" ? "items" : typeTab === "todos" ? "to-dos" : typeTab;
 
   return (
-    <SettingsPage title="Routines & Reminders">
+    <SettingsPage title="Nudges">
       <div className="rr-page">
-        <p className="rr-intro">
-          Stay on top of daily rhythms and important reminders for you and your home.
-        </p>
+        <div className="rr-intro">
+          <div className="rr-intro-text">
+            <span className="eyebrow">GENTLE PROMPTS FOR EVERYDAY LIFE</span>
+            <strong>Nudges</strong>
+            <span>Keep track without keeping it all in your head.</span>
+          </div>
+          <img
+            className="rr-intro-art"
+            src="/images/checklist_routine_loop_and_bell.png"
+            alt=""
+            aria-hidden="true"
+            width={1280}
+            height={1280}
+          />
+        </div>
 
         {error && (
           <p className="notice error" role="alert">
@@ -588,10 +730,10 @@ export default function RoutinesRemindersPage() {
             <Search size={16} aria-hidden="true" />
             <input
               type="search"
-              placeholder="Search routines & reminders..."
+              placeholder="Search nudges..."
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              aria-label="Search routines and reminders"
+              aria-label="Search nudges"
             />
           </div>
           <button
@@ -608,7 +750,7 @@ export default function RoutinesRemindersPage() {
         {filtersVisible && (
           <>
             <div className="rr-segmented" role="group" aria-label="Filter by type">
-              {(["all", "routines", "reminders"] as TypeFilter[]).map((value) => (
+              {(["all", "routines", "reminders", "todos"] as TypeFilter[]).map((value) => (
                 <button
                   key={value}
                   type="button"
@@ -616,10 +758,48 @@ export default function RoutinesRemindersPage() {
                   className={`rr-segment${typeTab === value ? " rr-segment-active" : ""}`}
                   onClick={() => selectTypeTab(value)}
                 >
-                  {value === "all" ? "All" : value === "routines" ? "Routines" : "Reminders"}
+                  {value === "all" ? "All" : value === "routines" ? "Routines" : value === "reminders" ? "Reminders" : "To-dos"}
                 </button>
               ))}
             </div>
+
+            {typeTab === "todos" && (
+              <div className="rr-category-strip" aria-label="To-do categories">
+                <span className="rr-category-label">Categories</span>
+                <button type="button" className={`rr-category-chip${!searchQuery ? " rr-category-chip-active" : ""}`} onClick={() => setSearchQuery("")}>All categories</button>
+                {todoCategories.map((category) => (
+                  <span className="rr-category-chip-wrap" key={category.id}>
+                    <button
+                      type="button"
+                      className={`rr-category-chip${searchQuery === category.name ? " rr-category-chip-active" : ""}`}
+                      onClick={() => setSearchQuery(category.name)}
+                    >
+                      {category.name}
+                    </button>
+                    {canManageReminders && (
+                      <>
+                        <button type="button" className="rr-category-chip-action" aria-label={`Rename ${category.name}`} onClick={() => void renameTodoCategory(category)}>
+                          <Pencil size={12} aria-hidden="true" />
+                        </button>
+                        <button type="button" className="rr-category-chip-action rr-category-chip-action-delete" aria-label={`Delete ${category.name}`} onClick={() => void removeTodoCategory(category)}>
+                          <Trash2 size={12} aria-hidden="true" />
+                        </button>
+                      </>
+                    )}
+                  </span>
+                ))}
+                {canManageReminders && (
+                  <button type="button" className="rr-category-chip rr-category-chip-new" onClick={async () => {
+                    const name = window.prompt("New To-do category");
+                    if (!name?.trim() || !activeHomeId) return;
+                    try { await api.createTodoCategory(activeHomeId, name.trim()); await loadTodos(); }
+                    catch (cause) { setError((cause as Error).message); }
+                  }}>
+                    <Plus size={15} aria-hidden="true" /> New
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="rr-segmented" role="group" aria-label="Personal or household">
               <button
@@ -687,8 +867,7 @@ export default function RoutinesRemindersPage() {
             </span>
             <h2>Nothing here yet</h2>
             <p>
-              Create a Routine for something you do regularly, or a Reminder for something you
-              simply need to remember.
+              Create a Routine for something you do regularly, a Reminder for a timed prompt, or a To-do for a one-off action.
             </p>
           </div>
         )}
@@ -738,6 +917,11 @@ export default function RoutinesRemindersPage() {
                           onClick={openNewReminder}
                         >
                           New Reminder
+                        </button>
+                      )}
+                      {canManageReminders && (
+                        <button type="button" className="sheet-menu-item" onClick={openNewTodo}>
+                          New To-do
                         </button>
                       )}
                     </>
@@ -947,6 +1131,56 @@ export default function RoutinesRemindersPage() {
             </button>
           </div>
         </form>
+        </BottomSheet>
+      )}
+
+      {formKind === "todo" && (
+        <BottomSheet title={editingTodo ? "Edit To-do" : "New To-do"} onDismiss={closeForms}>
+          <form className="routine-form" key={editingTodo?.id ?? "new-todo"} onSubmit={saveTodo}>
+            <fieldset>
+              <legend>To-do</legend>
+              <label>
+                Title
+                <input name="title" required maxLength={160} defaultValue={editingTodo?.title ?? ""} />
+              </label>
+              <label>
+                Notes (optional)
+                <input name="description" maxLength={1000} defaultValue={editingTodo?.description ?? ""} />
+              </label>
+            </fieldset>
+            <fieldset>
+              <legend>When and who</legend>
+              <label>
+                Due date
+                <input type="date" name="due_date" required defaultValue={editingTodo?.due_date ?? today} />
+              </label>
+              <label>
+                Scope
+                <select name="scope" defaultValue={editingTodo?.scope ?? scopeTab}>
+                  <option value="personal">Personal — only you</option>
+                  <option value="household">Household</option>
+                </select>
+              </label>
+              <label>
+                Category (optional)
+                <select name="category_id" defaultValue={editingTodo?.category?.id ?? ""}>
+                  <option value="">No category</option>
+                  {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              </label>
+              <label>
+                Assign to (household only)
+                <select name="assignee" defaultValue={editingTodo?.member_ids[0] ?? ""}>
+                  <option value="">Household / everyone</option>
+                  {members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}
+                </select>
+              </label>
+            </fieldset>
+            <div className="routine-form-actions">
+              <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="secondary" onClick={closeForms}>Cancel</button>
+            </div>
+          </form>
         </BottomSheet>
       )}
     </SettingsPage>

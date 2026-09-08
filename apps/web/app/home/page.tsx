@@ -708,7 +708,7 @@ export default function HomePage() {
             <QuickActionsRow>
               <Link className="quick-action" href="/settings/routines-reminders">
                 <ClipboardList size={20} aria-hidden="true" />
-                Routines & Reminders
+                Nudges
               </Link>
               {mealsFeatureOn && (
                 <Link

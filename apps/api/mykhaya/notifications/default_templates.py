@@ -298,6 +298,31 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="daily_briefing",
         channel=NotificationChannel.in_app,
     ),
+    # --- Nudges summaries -------------------------------------------------
+    "nudges.morning_briefing": TemplateDefault(
+        subject="Your Nudges today",
+        body="You have {{routine_count}} routines, {{todo_count}} to-dos and {{reminder_count}} reminders today.\n\n{{summary}}",
+        allowed_variables=frozenset({"first_name", "routine_count", "todo_count", "reminder_count", "overdue_count", "summary", "deep_link"}),
+        description="The unified daily summary of relevant Routines, Reminders and To-dos.",
+        module="nudges",
+        channel=NotificationChannel.in_app,
+    ),
+    "nudges.evening_cleanup": TemplateDefault(
+        subject="A quick evening tidy-up",
+        body="You’ve got {{outstanding_count}} things still open today.\n\n{{summary}}",
+        allowed_variables=frozenset({"first_name", "outstanding_count", "routine_count", "todo_count", "overdue_count", "summary", "deep_link"}),
+        description="A calm summary of relevant outstanding Nudges at the end of the day.",
+        module="nudges",
+        channel=NotificationChannel.in_app,
+    ),
+    "nudges.day_complete": TemplateDefault(
+        subject="You’re all caught up 🌿",
+        body="Everything you needed to deal with today is done.",
+        allowed_variables=frozenset({"first_name", "completed_count", "deep_link"}),
+        description="A positive acknowledgement when the user's relevant Nudges are clear.",
+        module="nudges",
+        channel=NotificationChannel.in_app,
+    ),
     # --- Birthdays --------------------------------------------------------
     # notifications.birthdays sends exactly two wording variants — never a
     # third — regardless of whether the birthday belongs to an adult user or
@@ -340,6 +365,9 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
+    "nudges.morning_briefing": {"first_name": "Jamie", "routine_count": "2", "todo_count": "3", "reminder_count": "1", "overdue_count": "1", "summary": "Today\n• Take Tablet\n• Sign school trip form", "deep_link": "/settings/routines-reminders"},
+    "nudges.evening_cleanup": {"first_name": "Jamie", "outstanding_count": "2", "routine_count": "1", "todo_count": "1", "overdue_count": "1", "summary": "Overdue\n• Call plumber", "deep_link": "/settings/routines-reminders"},
+    "nudges.day_complete": {"first_name": "Jamie", "completed_count": "5", "deep_link": "/settings/routines-reminders"},
     "email_verification": {"link": "https://example.com/verify-email?token=SAMPLE-TOKEN"},
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
     "household_invitation": {

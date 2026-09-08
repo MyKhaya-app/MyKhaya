@@ -1538,6 +1538,15 @@ class NotificationPreferences(UuidTimeMixin, Base):
     empty_day_briefing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    nudges_evening_cleanup_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    nudges_evening_time: Mapped[time] = mapped_column(
+        Time, default=time(20, 30), server_default="20:30:00"
+    )
+    nudges_day_complete_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     lock_screen_preview_level: Mapped[LockScreenPreviewLevel] = mapped_column(
         Enum(LockScreenPreviewLevel, name="lock_screen_preview_level"),
         default=LockScreenPreviewLevel.title_only,
@@ -1739,6 +1748,70 @@ class ReminderCompletion(UuidTimeMixin, Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class TodoCategory(UuidTimeMixin, Base):
+    """A user-created, Home-scoped To-do category.
+
+    Categories are deliberately separate from Lists and calendar labels.  They
+    can be removed without removing the To-dos that reference them.
+    """
+
+    __tablename__ = "todo_categories"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_todo_category_name_nonempty"),
+        UniqueConstraint("group_id", "name", name="uq_todo_category_home_name"),
+        Index("ix_todo_category_group", "group_id"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(80))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class Todo(UuidTimeMixin, Base):
+    """A one-off action due on a calendar date; never a repeating Reminder."""
+
+    __tablename__ = "todos"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_todo_title_nonempty"),
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_todo_scope_owner",
+        ),
+        Index("ix_todo_group_due", "group_id", "due_date"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
+    due_date: Mapped[date] = mapped_column(Date)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class TodoMember(UuidTimeMixin, Base):
+    __tablename__ = "todo_members"
+    __table_args__ = (UniqueConstraint("todo_id", "user_id", name="uq_todo_member"),)
+    todo_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("todos.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
 
 
 class MealType(StrEnum):

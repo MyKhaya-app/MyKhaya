@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Home, Reminder, Routine } from "@mykhaya/shared-types";
+import type { Home, Reminder, Routine, Todo, TodoCategory } from "@mykhaya/shared-types";
 import RoutinesRemindersPage from "./page";
 
 const replaceMock = vi.fn();
@@ -55,6 +55,15 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       deleteReminder: vi.fn(),
       completeReminder: vi.fn(),
       uncompleteReminder: vi.fn(),
+      todos: vi.fn(),
+      createTodo: vi.fn(),
+      updateTodo: vi.fn(),
+      deleteTodo: vi.fn(),
+      completeTodo: vi.fn(),
+      todoCategories: vi.fn(),
+      createTodoCategory: vi.fn(),
+      updateTodoCategory: vi.fn(),
+      deleteTodoCategory: vi.fn(),
       members: vi.fn(),
       billingStatus: vi.fn(),
     },
@@ -122,6 +131,8 @@ beforeEach(() => {
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
   (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
     household_routines_enabled: true,
@@ -134,7 +145,40 @@ beforeEach(() => {
   (api.updateRoutine as ReturnType<typeof vi.fn>).mockResolvedValue(routine());
   (api.createReminder as ReturnType<typeof vi.fn>).mockResolvedValue(reminder());
   (api.updateReminder as ReturnType<typeof vi.fn>).mockResolvedValue(reminder());
+  (api.createTodo as ReturnType<typeof vi.fn>).mockResolvedValue(todo());
+  (api.updateTodo as ReturnType<typeof vi.fn>).mockResolvedValue(todo());
+  (api.updateTodoCategory as ReturnType<typeof vi.fn>).mockResolvedValue(todoCategory());
 });
+
+function todoCategory(overrides: Partial<TodoCategory> = {}): TodoCategory {
+  return {
+    id: "category-1",
+    name: "School",
+    created_by: "u1",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function todo(overrides: Partial<Todo> = {}): Todo {
+  return {
+    id: "todo-1",
+    title: "Sign school trip form",
+    description: null,
+    scope: "personal",
+    owner_user_id: "u1",
+    category: null,
+    due_date: today(),
+    completed_at: null,
+    completed_by: null,
+    member_ids: [],
+    overdue: false,
+    created_by: "u1",
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
 
 function mockBoth() {
   (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -482,6 +526,38 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
 
     expect(api.completeReminder).toHaveBeenCalledWith("home-1", "reminder-1", today());
   });
+
+  it("completing a To-do calls the To-do completion endpoint", async () => {
+    (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [todo({ scope: "personal" })],
+    });
+    render(<RoutinesRemindersPage />);
+    await screen.findByText("Sign school trip form");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /complete sign school trip form/i }));
+
+    expect(api.completeTodo).toHaveBeenCalledWith("home-1", "todo-1", true);
+    expect(api.completeRoutine).not.toHaveBeenCalled();
+    expect(api.completeReminder).not.toHaveBeenCalled();
+  });
+});
+
+describe("Routines & Reminders — To-do categories", () => {
+  it("filters To-dos by category and exposes category management", async () => {
+    (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [todo({ category: todoCategory() })],
+    });
+    (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [todoCategory()],
+    });
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "To-dos" }));
+    await user.click(screen.getByRole("button", { name: "School" }));
+    expect(screen.getByText("Sign school trip form")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename School" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete School" })).toBeInTheDocument();
+  });
 });
 
 describe("Routines & Reminders — edit and delete", () => {
@@ -543,7 +619,7 @@ describe("Routines & Reminders — search", () => {
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
     await user.type(
-      screen.getByLabelText(/search routines and reminders/i),
+      screen.getByLabelText(/search nudges/i),
       "dentist",
     );
 
@@ -561,7 +637,7 @@ describe("Routines & Reminders — search", () => {
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
     await user.type(
-      screen.getByLabelText(/search routines and reminders/i),
+      screen.getByLabelText(/search nudges/i),
       "nonexistent item",
     );
 

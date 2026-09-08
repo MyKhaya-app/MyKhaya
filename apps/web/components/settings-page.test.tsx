@@ -102,14 +102,14 @@ describe("More — mockup-specified rows", () => {
 });
 
 describe("More — preserved existing destinations", () => {
-  it("still reaches Profile, Notifications, Routines & Reminders, Lists, Meal Plans and Plan & Billing", async () => {
+  it("still reaches Profile, Notifications, Nudges, Lists, Meal Plans and Plan & Billing", async () => {
     render(<SettingsPage />);
     await screen.findByRole("heading", { name: "Home settings" });
 
     const expectations: [string, string][] = [
       ["Profile", "/settings/profile"],
       ["Notifications", "/settings/notifications"],
-      ["Routines & Reminders", "/settings/routines-reminders"],
+      ["Nudges", "/settings/routines-reminders"],
       ["Lists", "/lists"],
       ["Meal Plans", "/meal-plans"],
       ["Plan & Billing", "/settings/billing"],

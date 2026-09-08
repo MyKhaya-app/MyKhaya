@@ -16,6 +16,7 @@ from mykhaya.notifications.routines import scan_due_routines
 from mykhaya.notifications.standalone_reminders import (
     scan_due_reminders as scan_due_standalone_reminders,
 )
+from mykhaya.notifications.nudges import scan_due_nudges
 
 # Visibility timeout: how long a dequeued-but-not-yet-completed job is hidden
 # from re-selection. This is a lease, not completion — `processed_at` is only
@@ -41,6 +42,7 @@ async def run() -> None:
                 await scan_due_routines(db, settings)
                 await scan_due_birthdays(db, settings)
                 await scan_due_standalone_reminders(db, settings)
+                await scan_due_nudges(db, settings)
             async with SessionFactory() as db:
                 rows = (
                     await db.scalars(

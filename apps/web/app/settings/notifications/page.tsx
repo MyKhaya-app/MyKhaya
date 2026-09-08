@@ -95,6 +95,9 @@ export default function NotificationSettings() {
         briefing_time: briefingTime,
         briefing_days: form.get("briefing_days") === "weekdays" ? "weekdays" : "daily",
         empty_day_briefing_enabled: form.get("empty_day_briefing_enabled") === "on",
+        nudges_evening_cleanup_enabled: form.get("nudges_evening_cleanup_enabled") === "on",
+        nudges_evening_time: (form.get("nudges_evening_time") as string) || prefs.nudges_evening_time,
+        nudges_day_complete_enabled: form.get("nudges_day_complete_enabled") === "on",
         lock_screen_preview_level:
           (form.get("lock_screen_preview_level") as NotificationPreferences["lock_screen_preview_level"]) ??
           "title_only",
@@ -342,6 +345,20 @@ export default function NotificationSettings() {
             defaultChecked={prefs.empty_day_briefing_enabled}
           />{" "}
           Still send a briefing on days with nothing planned
+        </label>
+
+        <h2>Nudges</h2>
+        <label className="check-row">
+          <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
+          Evening Clean-up
+        </label>
+        <label>
+          Evening Clean-up time
+          <input type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />
+        </label>
+        <label className="check-row">
+          <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
+          Day Complete acknowledgement
         </label>
 
         <h2>Privacy</h2>

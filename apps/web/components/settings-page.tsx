@@ -61,7 +61,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
   {
     label: "Household tools",
     items: [
-      { name: "Routines & Reminders", detail: "Bins, medication and other things to do or remember", href: "/settings/routines-reminders", icon: Repeat, tone: "sage", gate: "all" },
+      { name: "Nudges", detail: "Routines, reminders and things to do", href: "/settings/routines-reminders", icon: Repeat, tone: "sage", gate: "all" },
       { name: "Lists", detail: "Shopping, chores and shared household lists", href: "/lists", icon: ListChecks, tone: "cream", gate: "all" },
       { name: "Meal Plans", detail: "Plan meals together and save family favourites", href: "/meal-plans", icon: UtensilsCrossed, tone: "coral", gate: "all" },
     ],

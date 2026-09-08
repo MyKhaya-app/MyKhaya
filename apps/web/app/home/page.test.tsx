@@ -239,7 +239,7 @@ describe("Home — Wishlists shortcut", () => {
 });
 
 describe("Home — Routines shortcut", () => {
-  it("always links to the combined Routines & Reminders settings screen, with no feature flag or lock", async () => {
+  it("always links to the Nudges settings screen, with no feature flag or lock", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
@@ -251,7 +251,7 @@ describe("Home — Routines shortcut", () => {
 
     render(<HomePage />);
 
-    const link = await screen.findByRole("link", { name: /routines & reminders/i });
+    const link = await screen.findByRole("link", { name: /nudges/i });
     expect(link).toHaveAttribute("href", "/settings/routines-reminders");
     expect(link.className).not.toMatch(/quick-action-locked/);
   });
@@ -300,7 +300,7 @@ describe("Home — Routines shortcut", () => {
 
     const { container } = render(<HomePage />);
 
-    await screen.findByRole("link", { name: /routines & reminders/i });
+    await screen.findByRole("link", { name: /nudges/i });
     const bottomRow = container.querySelector(".quick-actions-row-1");
     expect(bottomRow).not.toBeNull();
     expect(bottomRow?.children).toHaveLength(1);
@@ -381,7 +381,7 @@ describe("Home — hero markup contract", () => {
     ]);
 
     render(<HomePage />);
-    await screen.findByText("Routines & Reminders");
+    await screen.findByText("Nudges");
 
     const hero = document.querySelector(".home-hero");
     expect(hero).not.toBeNull();
@@ -1005,7 +1005,7 @@ describe("Home — Invite family is capability-gated, not role-gated", () => {
 
     render(<HomePage />);
 
-    await screen.findByText("Routines & Reminders");
+    await screen.findByText("Nudges");
     expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
   });
 
@@ -1029,7 +1029,7 @@ describe("Home — Invite family is capability-gated, not role-gated", () => {
 
     render(<HomePage />);
 
-    await screen.findByText("Routines & Reminders");
+    await screen.findByText("Nudges");
     expect(screen.queryByRole("link", { name: /invite family/i })).not.toBeInTheDocument();
   });
 });
@@ -1062,7 +1062,7 @@ describe("Home — a denied member roster degrades gracefully (Child parity)", (
 
     render(<HomePage />);
 
-    await screen.findByText("Routines & Reminders");
+    await screen.findByText("Nudges");
     expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
   });
 });

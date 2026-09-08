@@ -41,6 +41,11 @@ from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
 from mykhaya.notifications.lifecycle import is_home_operationally_active
 from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
+from mykhaya.notifications.nudges import (
+    _relevant_reminders,
+    _relevant_routines,
+    relevant_todos,
+)
 from mykhaya.notifications.quiet_hours import effective_timezone
 from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import event_matches_share, viewer_ids_for_event
@@ -405,16 +410,53 @@ async def deliver_daily_briefing(
     birthday_phrases = await _birthdays_for_user_today(db, user.id, local_date)
     occurrences = await _events_for_user_today(db, user.id, local_date, tz)
     meal_items = await briefing_items_for_user(db, user.id, local_date)
+    todo_items = await relevant_todos(db, user.id, local_date)
+    routine_items = await _relevant_routines(db, user.id, local_date)
+    reminder_items = await _relevant_reminders(db, user.id, local_date)
 
     if (
         not occurrences
         and not meal_items
         and not birthday_phrases
+        and not todo_items
+        and not routine_items
+        and not reminder_items
         and not prefs.empty_day_briefing_enabled
     ):
         return
 
     count = len(occurrences) + len(meal_items)
+    if todo_items or routine_items or reminder_items:
+        overdue = sum(item.due_date < local_date for item in todo_items)
+        summary_items = [
+            *(f"• {item.title}" for item in routine_items[:3]),
+            *(f"• {item.title}" for item in reminder_items[:3]),
+            *(f"• {item.title}" for item in todo_items[:3]),
+        ]
+        title, body = await render_notification(
+            db,
+            "nudges.morning_briefing",
+            {
+                "first_name": user.display_name.split(" ", 1)[0],
+                "routine_count": str(len(routine_items)),
+                "todo_count": str(len(todo_items)),
+                "reminder_count": str(len(reminder_items)),
+                "overdue_count": str(overdue),
+                "summary": "\n".join(summary_items[:5]),
+                "deep_link": "/settings/routines-reminders",
+            },
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="daily_briefing",
+            title=title,
+            body=body,
+            idempotency_key=f"briefing:{user_id}:{date_iso}",
+            deep_link=target("nudges"),
+        )
+        return
     count_phrase = f"{count} event{'s' if count != 1 else ''}"
     _subject, title_override = await render_notification(
         db, "briefing.title", {"count_phrase": count_phrase}

@@ -7628,6 +7628,126 @@ select.plan-meal-field-input {
   color: var(--colour-muted);
   margin: -0.4rem 0 0;
 }
+
+.rr-intro {
+  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem;
+}
+
+.rr-intro-text {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.rr-intro-art {
+  flex: none;
+  height: 72px;
+  object-fit: contain;
+  width: auto;
+}
+
+.rr-intro strong {
+  color: var(--ink, #102c2a);
+  font-size: clamp(2rem, 8vw, 3rem);
+  line-height: 1;
+}
+
+.rr-intro-text > span:last-child {
+  color: var(--muted, #65777b);
+  font-size: 1rem;
+}
+
+@media (max-width: 420px) {
+  .rr-intro-art {
+    height: 56px;
+  }
+}
+
+.rr-category-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.35rem 0 0.55rem;
+  scrollbar-width: none;
+}
+
+.rr-category-strip::-webkit-scrollbar { display: none; }
+
+.rr-category-label {
+  flex: 0 0 auto;
+  color: var(--muted, #65777b);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rr-category-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--border, #dfe5df);
+  border-radius: 999px;
+  background: var(--surface, #fffdf9);
+  color: var(--ink, #102c2a);
+  padding: 0.55rem 0.9rem;
+  white-space: nowrap;
+}
+
+.rr-category-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+  padding: 0.16rem;
+  border: 1px solid var(--border-subtle, #e5e3dd);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+}
+
+.rr-category-chip-wrap .rr-category-chip {
+  border: 0;
+  padding: 0.38rem 0.68rem;
+}
+
+.rr-category-chip-action {
+  display: inline-grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted, #657477);
+  background: transparent;
+  cursor: pointer;
+}
+
+.rr-category-chip-action:hover,
+.rr-category-chip-action:focus-visible {
+  color: var(--ink, #102528);
+  background: var(--surface-soft, #f4f1eb);
+}
+
+.rr-category-chip-action-delete:hover,
+.rr-category-chip-action-delete:focus-visible {
+  color: var(--danger, #b42318);
+}
+
+.rr-category-chip-active {
+  background: var(--green, #355843);
+  border-color: var(--green, #355843);
+  color: white;
+}
+
+.rr-category-chip-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-style: dashed;
+}
 .rr-search-row {
   display: flex;
   gap: 0.5rem;

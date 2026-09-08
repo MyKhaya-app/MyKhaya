@@ -29,6 +29,7 @@ from mykhaya.routers import (
     platform,
     public_config,
     reminders,
+    todos,
     users,
     wishlists,
 )
@@ -179,6 +180,7 @@ for router in (
     features.router,
     household_routines.router,
     reminders.router,
+    todos.router,
     meal_plans.router,
     lists.router,
     wishlists.router,
