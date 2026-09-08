@@ -1,5 +1,7 @@
-"""Encryption at rest for Platform-Admin-managed secrets (e.g. the SMTP password,
-Stripe secret/webhook keys).
+"""Encryption at rest for secrets that must be recoverable later, not just verified
+(e.g. the SMTP password, Stripe secret/webhook keys — originally Platform-Admin-
+managed secrets only, now also the consumer-facing Home join code, see
+routers.groups' join-code endpoints).
 
 There is no separate key-management surface: the Fernet key is derived from
 ``MYKHAYA_SECRET_KEY`` via HKDF-SHA256 with a purpose-specific info string, so rotating
@@ -21,6 +23,7 @@ from mykhaya.config import Settings
 
 _HKDF_INFO = b"mykhaya-smtp-secret-v1"
 _STRIPE_HKDF_INFO = b"mykhaya-stripe-secret-v1"
+_HOME_JOIN_CODE_HKDF_INFO = b"mykhaya-home-join-code-v1"
 _HKDF_SALT = b"mykhaya-secrets-crypto"
 
 
@@ -61,3 +64,11 @@ def encrypt_stripe_secret(settings: Settings, plaintext: str) -> str:
 
 def decrypt_stripe_secret(settings: Settings, ciphertext: str) -> str:
     return decrypt_secret(settings, ciphertext, info=_STRIPE_HKDF_INFO)
+
+
+def encrypt_home_join_code(settings: Settings, plaintext: str) -> str:
+    return encrypt_secret(settings, plaintext, info=_HOME_JOIN_CODE_HKDF_INFO)
+
+
+def decrypt_home_join_code(settings: Settings, ciphertext: str) -> str:
+    return decrypt_secret(settings, ciphertext, info=_HOME_JOIN_CODE_HKDF_INFO)

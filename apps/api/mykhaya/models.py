@@ -311,6 +311,22 @@ class Group(UuidTimeMixin, Base):
     child_login_code: Mapped[str] = mapped_column(
         String(10), unique=True, index=True, default=_default_child_login_code
     )
+    # The adult-facing "Home join code" (Part 2 of the membership/lifecycle
+    # work) — deliberately a *separate* code from child_login_code above,
+    # not a reuse of it: this one is capability-bearing (possession lets a
+    # stranger submit a join request an Admin must approve), whereas
+    # child_login_code is not a secret at all. Looked up via join_code_hash
+    # (an HMAC digest — see mykhaya.security.hash_secret, the same pattern
+    # Invitation.token_hash already uses) so the raw code is never
+    # recoverable by reading the database. join_code_encrypted holds the
+    # same raw code again, but reversibly (mykhaya.secrets_crypto, the
+    # existing PCC-secret-at-rest mechanism) — needed only so a Home Admin
+    # can re-view/re-share a code they generated earlier without forcing a
+    # regenerate every time, something a one-way hash alone can't support.
+    # NULL until a Home Admin first generates one.
+    join_code_hash: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    join_code_encrypted: Mapped[str | None] = mapped_column(Text)
+    join_code_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
 
 
@@ -649,6 +665,61 @@ class Invitation(UuidTimeMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeJoinRequestStatus(StrEnum):
+    pending = "pending"
+    approved = "approved"
+    declined = "declined"
+    cancelled = "cancelled"
+
+
+class HomeJoinRequest(UuidTimeMixin, Base):
+    """A request to join a Home via its join code (see Group.join_code_hash),
+    deliberately its own small model rather than forced into Invitation:
+    Invitation already means "an inviter picked a role and sent a token to a
+    specific email, accept is immediate" — this is the reverse shape (an
+    unknown-to-the-Admin user shows up holding a code, the Admin must review
+    and pick a relationship before anything is created), closer to
+    CalendarShare's pending_recipient/approve/decline dance than to
+    Invitation's accept(). No membership exists until an Admin approves —
+    see routers.home_join / routers.groups' join-request endpoints."""
+
+    __tablename__ = "home_join_requests"
+    __table_args__ = (
+        Index("ix_home_join_request_group_status", "group_id", "status"),
+        # Exactly one *pending* request per (Home, user) — re-requesting after
+        # a decline/cancel is allowed (a fresh row), just never two pending
+        # rows for the same pair at once.
+        Index(
+            "uq_home_join_request_pending_group_user",
+            "group_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    method: Mapped[str] = mapped_column(String(20), default="join_code", server_default="join_code")
+    status: Mapped[HomeJoinRequestStatus] = mapped_column(
+        Enum(HomeJoinRequestStatus, name="home_join_request_status"),
+        default=HomeJoinRequestStatus.pending,
+        server_default=HomeJoinRequestStatus.pending.value,
+    )
+    # Chosen by the approving Home Admin at approval time, not by the
+    # requester — see routers' approve endpoint. NULL until decided.
+    relationship: Mapped[HouseholdRelationship | None] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CalendarShare(UuidTimeMixin, Base):

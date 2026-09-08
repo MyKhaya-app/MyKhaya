@@ -919,6 +919,18 @@ textarea {
   color: var(--colour-terracotta);
   font-weight: 800;
 }
+.onboarding-choice-grid {
+  display: grid;
+  gap: 1rem;
+  margin: 1.2rem 0;
+}
+.onboarding-choice-card button {
+  margin-top: 0.2rem;
+}
+.onboarding-signout {
+  display: block;
+  margin: 1.2rem auto 0;
+}
 /* One shell at every breakpoint: header + content + bottom nav. Desktop is
    the same layout, just a wider centred column — never a separate sidebar
    design. */
@@ -5134,6 +5146,23 @@ select.icon-row-control {
   border-radius: 0.3rem;
   margin-bottom: 0.4rem;
   padding: 0.4rem 0.6rem;
+}
+
+.join-code-panel {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+.join-code-value {
+  background: #f4f7f7;
+  border-radius: 0.4rem;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  text-align: center;
 }
 
 .credential-list {

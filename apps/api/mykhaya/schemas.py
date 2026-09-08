@@ -11,6 +11,7 @@ from mykhaya.models import (
     CalendarShareStatus,
     ChildAgeBand,
     ChildTransitionStatus,
+    HomeJoinRequestStatus,
     HouseholdRelationship,
     MealSlot,
     MealType,
@@ -224,6 +225,59 @@ class InvitationTokenPreview(BaseModel):
     role: Role
     relationship: HouseholdRelationship
     expires_at: datetime
+
+
+class HomeJoinCodeResponse(BaseModel):
+    # Present only when a code has been generated. Never re-derivable from
+    # join_code_hash alone — this is decrypt_home_join_code's output, and
+    # only ever returned to a Home Admin (see routers.groups' capability
+    # check on both the GET and the regenerate endpoint).
+    code: str | None
+    generated_at: datetime | None
+
+
+class HomeJoinCodeLookupRequest(StrictModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class HomeJoinCodeLookupResponse(BaseModel):
+    group_id: uuid.UUID
+    group_name: str
+
+
+class HomeJoinRequestCreate(StrictModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class HomeJoinRequestResponse(BaseModel):
+    id: uuid.UUID
+    group_id: uuid.UUID
+    status: HomeJoinRequestStatus
+    created_at: datetime
+
+
+class HomeJoinRequestListItem(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    display_name: str
+    email: str
+    status: HomeJoinRequestStatus
+    method: str
+    created_at: datetime
+
+
+class HomeJoinRequestApprove(StrictModel):
+    relationship: HouseholdRelationship
+    # Optional: this is a routine household action, not an operator action —
+    # the Home Admin is never prompted to justify it. Matches
+    # MemberRelationshipUpdate's existing shape.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class HomeJoinRequestDecline(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
 
 
 class ChildCreate(StrictModel):

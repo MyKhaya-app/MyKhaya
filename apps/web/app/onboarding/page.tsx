@@ -1,7 +1,7 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { FamilyPricing } from "@mykhaya/shared-types";
+import type { FamilyPricing, HomeJoinCodeLookup } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
 import { Logo } from "@/components/logo";
 import { FormStatus } from "@/components/form-status";
@@ -14,6 +14,10 @@ import {
 } from "@/components/family-pricing-logic";
 import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
+import { nativeLogout } from "@/components/native-auth";
+import { isNativeShell } from "@/components/native-runtime";
+
+type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "plan";
 
 // Home creation always establishes the normal Free/free/active default
 // first (see mykhaya.entitlements.ensure_home_subscription, called from
@@ -22,15 +26,23 @@ import type { BillingIntervalChoice } from "@/components/onboarding-intent";
 // visitor who never reaches this page (an invited member joining an
 // existing Home via /invitations/accept) never sees it either — see
 // docs/architecture/commercial-entitlements.md#phase-5.
+//
+// The "choice" step below is the entry point for every genuinely Home-less
+// authenticated account (see components/app-shell.tsx's redirect) — Join an
+// existing Home (via a Home join code, see mykhaya.routers.home_join) or
+// Create a new Home (the pre-existing "home"/"plan" steps, unchanged).
+// Neither branch is forced: an account may sit Home-less indefinitely.
 export default function Onboarding() {
   const router = useRouter();
-  const [step, setStep] = useState<"home" | "plan">("home");
+  const [step, setStep] = useState<Step>("choice");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [homeId, setHomeId] = useState<string | null>(null);
   const [pricing, setPricing] = useState<FamilyPricing | null>(null);
   const [pricingError, setPricingError] = useState(false);
   const [billingInterval, setBillingInterval] = useState<BillingIntervalChoice>("month");
+  const [joinCodeInput, setJoinCodeInput] = useState("");
+  const [matchedHome, setMatchedHome] = useState<HomeJoinCodeLookup | null>(null);
 
   useEffect(() => {
     if (step !== "plan") return;
@@ -58,6 +70,48 @@ export default function Onboarding() {
     }
   }
 
+  async function findHome(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const match = await api.lookupHomeJoinCode(joinCodeInput);
+      setMatchedHome(match);
+      setStep("join-confirm");
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "That Home join code was not recognised.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestToJoin() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.requestHomeJoin(joinCodeInput);
+      setStep("join-sent");
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "We couldn’t send that request. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    if (isNativeShell()) {
+      await nativeLogout();
+    } else {
+      await api.post("/auth/logout", {});
+    }
+    router.push("/login");
+  }
+
   function continueWithFree() {
     clearOnboardingIntent();
     router.push("/home");
@@ -83,6 +137,151 @@ export default function Onboarding() {
     }
   }
 
+  if (step === "choice") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Get started</p>
+          <h1>How would you like to use MyKhaya?</h1>
+          <div className="onboarding-choice-grid">
+            <article className="card feature-card onboarding-choice-card">
+              <h3>Join an existing Home</h3>
+              <p className="muted">
+                Choose this if your partner, family member or housemate already uses MyKhaya.
+                Ask the Home Admin for their Home join code or use an invitation they have sent
+                you.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setError("");
+                  setStep("join-code");
+                }}
+              >
+                Join an existing Home
+              </button>
+            </article>
+            <article className="card feature-card onboarding-choice-card">
+              <h3>Create a new Home</h3>
+              <p className="muted">
+                Choose this if you are setting up MyKhaya for your household for the first time.
+                You&rsquo;ll become the Home Admin and can invite others afterwards.
+              </p>
+              <p className="notice" role="status">
+                If someone in your household already has a MyKhaya Home, choose &ldquo;Join an
+                existing Home&rdquo; instead. Creating a new Home will create a separate
+                household.
+              </p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setError("");
+                  setStep("home");
+                }}
+              >
+                Create a new Home
+              </button>
+            </article>
+          </div>
+          <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
+            Sign out
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-code") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>Join an existing Home</h1>
+          <p className="muted">
+            If someone in your household already uses MyKhaya, ask the Home Admin for their Home
+            join code.
+          </p>
+          <form onSubmit={findHome}>
+            <label>
+              Home join code
+              <input
+                name="code"
+                placeholder="XXXX-XXXX"
+                maxLength={20}
+                required
+                autoFocus
+                autoCapitalize="characters"
+                autoComplete="off"
+                value={joinCodeInput}
+                onChange={(event) => setJoinCodeInput(event.target.value)}
+              />
+            </label>
+            <FormStatus error={error} />
+            <button disabled={busy}>{busy ? "Looking…" : "Find Home"}</button>
+          </form>
+          <button type="button" className="tertiary" onClick={() => setStep("choice")}>
+            Back
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-confirm" && matchedHome) {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>{matchedHome.group_name}</h1>
+          <p className="muted">
+            You&rsquo;re requesting to join this Home. A Home Admin will need to approve your
+            request.
+          </p>
+          <FormStatus error={error} />
+          <button type="button" disabled={busy} onClick={requestToJoin}>
+            {busy ? "Sending…" : "Request to join"}
+          </button>
+          <button
+            type="button"
+            className="tertiary"
+            onClick={() => {
+              setMatchedHome(null);
+              setStep("join-code");
+            }}
+          >
+            Back
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-sent") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>Request sent</h1>
+          <p className="muted">
+            {matchedHome?.group_name ?? "The Home"}&rsquo;s Home Admin will review your request.
+            You&rsquo;ll get access as soon as they approve it.
+          </p>
+          <button type="button" onClick={() => router.push("/home")}>
+            Continue
+          </button>
+          <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
+            Sign out
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   if (step === "plan") {
     const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
     const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
@@ -92,7 +291,7 @@ export default function Onboarding() {
         <Logo />
         <section>
           <p className="step">Your plan</p>
-          <h1>How would you like to use MyKhaya?</h1>
+          <h1>Choose your MyKhaya plan</h1>
           <p className="muted">You can change this at any time from Settings.</p>
 
           <div className="feature-card-grid pricing-cards">
@@ -204,6 +403,9 @@ export default function Onboarding() {
             {busy ? "Creating Home…" : "Create our Home"}
           </button>
         </form>
+        <button type="button" className="tertiary" onClick={() => setStep("choice")}>
+          Back
+        </button>
       </section>
     </main>
   );

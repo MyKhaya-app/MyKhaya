@@ -46,6 +46,28 @@ def normalise_home_code(value: str) -> str:
     return value.strip().upper()
 
 
+# The adult-facing Home *join* code (Group.join_code_hash/join_code_encrypted) —
+# reuses generate_home_code's alphabet/length (same no-0/O/1/I/L, phone-typeable
+# design already proven for child_login_code) but is a distinct value on a
+# distinct column, generated and stored separately. See models.Group's
+# join_code_* docstring for why this one is capability-bearing and the other
+# isn't, and why that changes how it's stored.
+def generate_home_join_code() -> str:
+    return generate_home_code()
+
+
+def format_home_join_code(raw: str) -> str:
+    """XXXX-XXXX display formatting for an 8-character join code."""
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def normalise_home_join_code(value: str) -> str:
+    """Undo format_home_join_code plus tolerate stray spaces/case — the exact
+    normalisation a submitted code goes through before hashing for lookup, so
+    "k7p4-x2rm", "K7P4 X2RM" and "K7P4X2RM" all resolve to the same digest."""
+    return "".join(ch for ch in value.strip().upper() if ch.isalnum())
+
+
 def normalise_child_username(value: str) -> str:
     """Casefold + NFKC-normalise + strip, matching normalise_email's approach —
     keeps confusable Unicode/case variants from being treated as distinct

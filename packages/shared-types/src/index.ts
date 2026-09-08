@@ -296,6 +296,41 @@ export interface InvitationPreview {
   expires_at: string;
 }
 
+// Home join codes — see apps/api/mykhaya/routers/{groups,home_join}.py. An
+// adult-facing alternative to email invitation: a Home Admin shares a short
+// code, another authenticated user looks it up and submits a request, and a
+// Home Admin must approve it (picking the relationship) before any
+// membership is created. Distinct from Invitation and from Group's own
+// child_login_code.
+export type HomeJoinRequestStatus = "pending" | "approved" | "declined" | "cancelled";
+
+export interface HomeJoinCode {
+  code: string | null;
+  generated_at: string | null;
+}
+
+export interface HomeJoinCodeLookup {
+  group_id: string;
+  group_name: string;
+}
+
+export interface HomeJoinRequestSummary {
+  id: string;
+  group_id: string;
+  status: HomeJoinRequestStatus;
+  created_at: string;
+}
+
+export interface HomeJoinRequestListItem {
+  id: string;
+  user_id: string;
+  display_name: string;
+  email: string;
+  status: HomeJoinRequestStatus;
+  method: string;
+  created_at: string;
+}
+
 // External Calendar Sharing — see apps/api/mykhaya/routers/calendar_sharing.py.
 // A CalendarShare never creates a Membership; it's a standalone per-recipient
 // access grant to exactly one calendar, resolvable from either side (source

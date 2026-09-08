@@ -54,6 +54,11 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn().mockResolvedValue(freeBillingStatus()),
       post: vi.fn().mockResolvedValue({}),
       patch: vi.fn().mockResolvedValue({}),
+      getHomeJoinCode: vi.fn().mockResolvedValue({ code: null, generated_at: null }),
+      regenerateHomeJoinCode: vi.fn(),
+      listHomeJoinRequests: vi.fn().mockResolvedValue([]),
+      approveHomeJoinRequest: vi.fn(),
+      declineHomeJoinRequest: vi.fn(),
     },
   };
 });
@@ -169,6 +174,11 @@ beforeEach(() => {
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember()]);
   (api.listInvitations as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.getHomeJoinCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+    code: null,
+    generated_at: null,
+  });
+  (api.listHomeJoinRequests as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
 describe("Manage members page — Free plan locked states", () => {
@@ -386,5 +396,147 @@ describe("Manage members page — external sharing replaces Extended Family/Frie
       .map((option) => option.textContent);
     expect(optionLabels).not.toContain("Extended Family");
     expect(optionLabels).not.toContain("Friend");
+  });
+});
+
+describe("Manage members page — Home join codes", () => {
+  beforeEach(() => {
+    setActiveHomeForTest(familyHomeWithGrowthRoom());
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
+  });
+
+  async function openJoinCodePanel() {
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Share join code" }));
+  }
+
+  it("offers a method choice between inviting by email and sharing a join code", async () => {
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
+
+    expect(screen.getByRole("button", { name: "Invite by email" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Share join code" })).toBeInTheDocument();
+    // Email remains the default — existing behaviour is unchanged unless
+    // "Share join code" is explicitly chosen.
+    expect(screen.getByLabelText("Relationship")).toBeInTheDocument();
+  });
+
+  it("offers to generate a code when none exists yet", async () => {
+    await openJoinCodePanel();
+    await waitFor(() => expect(api.getHomeJoinCode).toHaveBeenCalledWith("home-1"));
+    expect(screen.getByRole("button", { name: "Generate a join code" })).toBeInTheDocument();
+  });
+
+  it("generating a code displays it with Copy and Generate new code actions", async () => {
+    const user = userEvent.setup();
+    (api.regenerateHomeJoinCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: "K7P4-X2RM",
+      generated_at: "2026-01-01T00:00:00Z",
+    });
+    await openJoinCodePanel();
+    await user.click(screen.getByRole("button", { name: "Generate a join code" }));
+
+    await waitFor(() => expect(api.regenerateHomeJoinCode).toHaveBeenCalledWith("home-1"));
+    expect(await screen.findByText("K7P4-X2RM")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate new code" })).toBeInTheDocument();
+  });
+
+  it("shows the existing code without needing to regenerate", async () => {
+    (api.getHomeJoinCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: "M3NP-77QW",
+      generated_at: "2026-01-01T00:00:00Z",
+    });
+    await openJoinCodePanel();
+    expect(await screen.findByText("M3NP-77QW")).toBeInTheDocument();
+    expect(api.regenerateHomeJoinCode).not.toHaveBeenCalled();
+  });
+
+  it("non-admin members do not see the Add member / join-code controls", async () => {
+    setActiveHomeForTest({
+      ...familyHomeWithGrowthRoom(),
+      capabilities: [],
+    });
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /add member/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("Manage members page — pending join requests", () => {
+  beforeEach(() => {
+    setActiveHomeForTest(familyHomeWithGrowthRoom());
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
+  });
+
+  function pendingRequest() {
+    return {
+      id: "req-1",
+      user_id: "u9",
+      display_name: "Sarah Smith",
+      email: "sarah@example.com",
+      status: "pending" as const,
+      method: "join_code",
+      created_at: "2026-01-01T00:00:00Z",
+    };
+  }
+
+  it("shows pending join requests with the requester's identity and method", async () => {
+    (api.listHomeJoinRequests as ReturnType<typeof vi.fn>).mockResolvedValue([pendingRequest()]);
+    render(<ManageMembers />);
+
+    expect(await screen.findByText("Join requests (1)")).toBeInTheDocument();
+    expect(screen.getByText("Sarah Smith")).toBeInTheDocument();
+    expect(screen.getByText(/Requested using Home code/)).toBeInTheDocument();
+  });
+
+  it("requires the Home Admin to choose a relationship before approving", async () => {
+    const user = userEvent.setup();
+    (api.listHomeJoinRequests as ReturnType<typeof vi.fn>).mockResolvedValue([pendingRequest()]);
+    (api.approveHomeJoinRequest as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    render(<ManageMembers />);
+    await screen.findByText("Sarah Smith");
+
+    await user.selectOptions(
+      screen.getByLabelText("Relationship for Sarah Smith"),
+      "adult",
+    );
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(api.approveHomeJoinRequest).toHaveBeenCalledWith("home-1", "req-1", {
+        relationship: "adult",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("declining a request does not approve or create membership", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    (api.listHomeJoinRequests as ReturnType<typeof vi.fn>).mockResolvedValue([pendingRequest()]);
+    (api.declineHomeJoinRequest as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    render(<ManageMembers />);
+    await screen.findByText("Sarah Smith");
+
+    await user.click(screen.getByRole("button", { name: "Decline" }));
+
+    await waitFor(() =>
+      expect(api.declineHomeJoinRequest).toHaveBeenCalledWith("home-1", "req-1", {
+        confirmed: true,
+      }),
+    );
+    expect(api.approveHomeJoinRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not show a Join requests section when there are none pending", async () => {
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    expect(screen.queryByText(/Join requests/)).not.toBeInTheDocument();
   });
 });

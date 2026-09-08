@@ -274,6 +274,51 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").InvitationListItem[]>(
       `/invitations/group/${encodeURIComponent(homeId)}`,
     );
+  getHomeJoinCode = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HomeJoinCode>(
+      `/groups/${encodeURIComponent(homeId)}/join-code`,
+    );
+  regenerateHomeJoinCode = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HomeJoinCode>(
+      `/groups/${encodeURIComponent(homeId)}/join-code/regenerate`,
+      { method: "POST" },
+    );
+  listHomeJoinRequests = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").HomeJoinRequestListItem[]>(
+      `/groups/${encodeURIComponent(homeId)}/join-requests`,
+    );
+  approveHomeJoinRequest = (
+    homeId: string,
+    requestId: string,
+    body: {
+      relationship: import("@mykhaya/shared-types").HouseholdRelationship;
+      reason?: string;
+      confirmed: true;
+    },
+  ) =>
+    this.request<Member>(
+      `/groups/${encodeURIComponent(homeId)}/join-requests/${encodeURIComponent(requestId)}/approve`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  declineHomeJoinRequest = (
+    homeId: string,
+    requestId: string,
+    body: { reason?: string; confirmed: true },
+  ) =>
+    this.request<void>(
+      `/groups/${encodeURIComponent(homeId)}/join-requests/${encodeURIComponent(requestId)}/decline`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  lookupHomeJoinCode = (code: string) =>
+    this.request<import("@mykhaya/shared-types").HomeJoinCodeLookup>("/home-join/lookup", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+  requestHomeJoin = (code: string) =>
+    this.request<import("@mykhaya/shared-types").HomeJoinRequestSummary>("/home-join/request", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
   createLabel = (homeId: string, body: { name: string; color: string }) =>
     this.request<import("@mykhaya/shared-types").EventLabel>(
       `/homes/${encodeURIComponent(homeId)}/event-labels`,

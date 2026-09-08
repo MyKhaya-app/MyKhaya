@@ -2,9 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { UserPlus } from "lucide-react";
+import { Copy, RefreshCw, UserPlus } from "lucide-react";
 import type {
   CalendarUsage,
+  HomeJoinCode,
+  HomeJoinRequestListItem,
   HouseholdRelationship,
   InvitationListItem,
   Member,
@@ -84,8 +86,17 @@ export default function ManageMembers() {
   const [invitations, setInvitations] = useState<InvitationListItem[]>([]);
   const [open, setOpen] = useState(false);
   const [livesInHome, setLivesInHome] = useState<boolean | null>(null);
+  const [inviteMethod, setInviteMethod] = useState<"email" | "code">("email");
   const [relationship, setRelationship] =
     useState<HouseholdRelationship>("partner");
+  const [joinCode, setJoinCode] = useState<HomeJoinCode | null>(null);
+  const [joinCodeBusy, setJoinCodeBusy] = useState(false);
+  const [joinCodeCopied, setJoinCodeCopied] = useState(false);
+  const [joinRequests, setJoinRequests] = useState<HomeJoinRequestListItem[]>([]);
+  const [joinRequestRelationship, setJoinRequestRelationship] = useState<
+    Record<string, HouseholdRelationship>
+  >({});
+  const [joinRequestBusy, setJoinRequestBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
   const [sending, setSending] = useState(false);
   const [filter, setFilter] = useState<FamilyFilter>("all");
@@ -134,11 +145,13 @@ export default function ManageMembers() {
 
   async function load() {
     if (!activeHomeId) return;
-    const [memberRows, invitationRows] = await Promise.all([
+    const [memberRows, invitationRows, joinRequestRows] = await Promise.all([
       api.members(activeHomeId),
       canInvite ? api.listInvitations(activeHomeId) : Promise.resolve([]),
+      canInvite ? api.listHomeJoinRequests(activeHomeId) : Promise.resolve([]),
     ]);
     setMembers(memberRows);
+    setJoinRequests(joinRequestRows);
     // The API already excludes accepted/revoked invitations and defensively
     // suppresses any invitation whose email already has an active membership
     // (see mykhaya.routers.invitations.list_invitations) — this is a second,
@@ -161,6 +174,84 @@ export default function ManageMembers() {
   useEffect(() => {
     load().catch((cause: Error) => setStatus({ kind: "error", message: cause.message }));
   }, [activeHomeId, canInvite]);
+
+  useEffect(() => {
+    if (!activeHomeId || !canInvite || inviteMethod !== "code") return;
+    api.getHomeJoinCode(activeHomeId).then(setJoinCode).catch(() => setJoinCode(null));
+  }, [activeHomeId, canInvite, inviteMethod]);
+
+  async function regenerateJoinCode() {
+    if (!activeHomeId || joinCodeBusy) return;
+    setJoinCodeBusy(true);
+    setStatus({ kind: "idle" });
+    try {
+      const next = await api.regenerateHomeJoinCode(activeHomeId);
+      setJoinCode(next);
+      setJoinCodeCopied(false);
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not generate a join code.",
+      });
+    } finally {
+      setJoinCodeBusy(false);
+    }
+  }
+
+  async function copyJoinCode() {
+    if (!joinCode?.code) return;
+    try {
+      await navigator.clipboard.writeText(joinCode.code);
+      setJoinCodeCopied(true);
+    } catch {
+      // Clipboard access can fail silently (permissions, insecure context) —
+      // the code is still shown on screen and selectable by hand either way.
+    }
+  }
+
+  async function approveJoinRequest(request: HomeJoinRequestListItem) {
+    if (!activeHomeId || joinRequestBusy) return;
+    const nextRelationship = joinRequestRelationship[request.id] ?? "partner";
+    setJoinRequestBusy(request.id);
+    setStatus({ kind: "idle" });
+    try {
+      await api.approveHomeJoinRequest(activeHomeId, request.id, {
+        relationship: nextRelationship,
+        confirmed: true,
+      });
+      setStatus({
+        kind: "success",
+        message: `${request.display_name} is now a member of ${activeHome?.name ?? "this Home"}.`,
+      });
+      await load();
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not approve that request.",
+      });
+    } finally {
+      setJoinRequestBusy(null);
+    }
+  }
+
+  async function declineJoinRequest(request: HomeJoinRequestListItem) {
+    if (!activeHomeId || joinRequestBusy) return;
+    if (!window.confirm(`Decline ${request.display_name}'s request to join?`)) return;
+    setJoinRequestBusy(request.id);
+    setStatus({ kind: "idle" });
+    try {
+      await api.declineHomeJoinRequest(activeHomeId, request.id, { confirmed: true });
+      setStatus({ kind: "success", message: "Request declined." });
+      await load();
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "Could not decline that request.",
+      });
+    } finally {
+      setJoinRequestBusy(null);
+    }
+  }
 
   async function invite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -383,77 +474,146 @@ export default function ManageMembers() {
             )}
 
             {livesInHome === true && (
-              <form onSubmit={invite}>
-                <label>
-                  Relationship
-                  <select
-                    value={relationship}
-                    onChange={(event) =>
-                      setRelationship(event.target.value as HouseholdRelationship)
-                    }
+              <>
+                <div className="family-filters" role="group" aria-label="How to add this person">
+                  <button
+                    type="button"
+                    className={inviteMethod === "email" ? "active" : "secondary"}
+                    aria-pressed={inviteMethod === "email"}
+                    onClick={() => setInviteMethod("email")}
                   >
-                    <option value="home_admin">Home Admin</option>
-                    <option value="partner">Partner</option>
-                    <option value="adult">Adult</option>
-                    <option value="child">Child</option>
-                  </select>
-                </label>
-                <p className="relationship-help">
-                  {
-                    relationshipHelp[
-                      relationship as Exclude<
-                        HouseholdRelationship,
-                        "review_required" | "extended_family" | "friend"
-                      >
-                    ]
-                  }
-                </p>
-                {relationship === "child" ? (
-                  <div className="child-flow-callout">
-                    <p>
-                      Children use a managed profile with an age band, explicit
-                      guardians and restrictive permissions. No adult invitation
-                      will be sent.
-                    </p>
-                    <Link
-                      className="button"
-                      href="/khaya-control-centre/children"
-                    >
-                      Open child setup
-                    </Link>
-                  </div>
-                ) : (
-                  <>
+                    Invite by email
+                  </button>
+                  <button
+                    type="button"
+                    className={inviteMethod === "code" ? "active" : "secondary"}
+                    aria-pressed={inviteMethod === "code"}
+                    onClick={() => setInviteMethod("code")}
+                  >
+                    Share join code
+                  </button>
+                </div>
+
+                {inviteMethod === "email" && (
+                  <form onSubmit={invite}>
                     <label>
-                      Email
-                      <input
-                        name="email"
-                        type="email"
-                        autoComplete="email"
-                        required
-                      />
+                      Relationship
+                      <select
+                        value={relationship}
+                        onChange={(event) =>
+                          setRelationship(event.target.value as HouseholdRelationship)
+                        }
+                      >
+                        <option value="home_admin">Home Admin</option>
+                        <option value="partner">Partner</option>
+                        <option value="adult">Adult</option>
+                        <option value="child">Child</option>
+                      </select>
                     </label>
-                    <details>
-                      <summary>Advanced permissions</summary>
-                      <p>
-                        Custom capability overrides will be available here in a
-                        later administration release. The selected relationship’s
-                        safe default profile will be used now.
-                      </p>
-                    </details>
-                    <button disabled={sending}>
-                      {sending ? "Sending…" : "Send invitation"}
+                    <p className="relationship-help">
+                      {
+                        relationshipHelp[
+                          relationship as Exclude<
+                            HouseholdRelationship,
+                            "review_required" | "extended_family" | "friend"
+                          >
+                        ]
+                      }
+                    </p>
+                    {relationship === "child" ? (
+                      <div className="child-flow-callout">
+                        <p>
+                          Children use a managed profile with an age band, explicit
+                          guardians and restrictive permissions. No adult invitation
+                          will be sent.
+                        </p>
+                        <Link
+                          className="button"
+                          href="/khaya-control-centre/children"
+                        >
+                          Open child setup
+                        </Link>
+                      </div>
+                    ) : (
+                      <>
+                        <label>
+                          Email
+                          <input
+                            name="email"
+                            type="email"
+                            autoComplete="email"
+                            required
+                          />
+                        </label>
+                        <details>
+                          <summary>Advanced permissions</summary>
+                          <p>
+                            Custom capability overrides will be available here in a
+                            later administration release. The selected relationship’s
+                            safe default profile will be used now.
+                          </p>
+                        </details>
+                        <button disabled={sending}>
+                          {sending ? "Sending…" : "Send invitation"}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="tertiary"
+                      type="button"
+                      onClick={() => setLivesInHome(null)}
+                    >
+                      Back
                     </button>
-                  </>
+                  </form>
                 )}
-                <button
-                  className="tertiary"
-                  type="button"
-                  onClick={() => setLivesInHome(null)}
-                >
-                  Back
-                </button>
-              </form>
+
+                {inviteMethod === "code" && (
+                  <div className="join-code-panel">
+                    <p>
+                      Give this code to someone you want to join {activeHome?.name ?? "your Home"}.
+                      They can enter it when setting up MyKhaya or from their account later.
+                    </p>
+                    {joinCode?.code ? (
+                      <>
+                        <p className="join-code-value" aria-label="Home join code">
+                          {joinCode.code}
+                        </p>
+                        <div className="actions compact-actions">
+                          <button type="button" className="secondary" onClick={copyJoinCode}>
+                            <Copy size={16} aria-hidden="true" />
+                            {joinCodeCopied ? "Copied" : "Copy code"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={regenerateJoinCode}
+                            disabled={joinCodeBusy}
+                          >
+                            <RefreshCw size={16} aria-hidden="true" />
+                            {joinCodeBusy ? "Generating…" : "Generate new code"}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <button type="button" onClick={regenerateJoinCode} disabled={joinCodeBusy}>
+                        {joinCodeBusy ? "Generating…" : "Generate a join code"}
+                      </button>
+                    )}
+                    <p className="muted">
+                      Anyone with this code can request to join this Home. A Home Admin must
+                      approve them before they become a member.
+                    </p>
+                    <button
+                      className="tertiary"
+                      type="button"
+                      onClick={() => setLivesInHome(null)}
+                    >
+                      Back
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </section>
         )}
@@ -486,6 +646,58 @@ export default function ManageMembers() {
                     </button>
                     <button onClick={() => revoke(invitation.id)} type="button">
                       Revoke
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {canInvite && joinRequests.length > 0 && (
+          <section className="card details">
+            <h2>Join requests ({joinRequests.length})</h2>
+            <div className="invitation-list">
+              {joinRequests.map((request) => (
+                <article key={request.id}>
+                  <div>
+                    <strong>{request.display_name}</strong>
+                    <small>
+                      {request.email} · Requested using Home code
+                    </small>
+                  </div>
+                  <div className="actions compact-actions">
+                    <label className="visually-hidden" htmlFor={`join-request-relationship-${request.id}`}>
+                      Relationship for {request.display_name}
+                    </label>
+                    <select
+                      id={`join-request-relationship-${request.id}`}
+                      value={joinRequestRelationship[request.id] ?? "partner"}
+                      onChange={(event) =>
+                        setJoinRequestRelationship((current) => ({
+                          ...current,
+                          [request.id]: event.target.value as HouseholdRelationship,
+                        }))
+                      }
+                    >
+                      <option value="home_admin">Home Admin</option>
+                      <option value="partner">Partner</option>
+                      <option value="adult">Adult</option>
+                    </select>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={joinRequestBusy === request.id}
+                      onClick={() => declineJoinRequest(request)}
+                    >
+                      Decline
+                    </button>
+                    <button
+                      type="button"
+                      disabled={joinRequestBusy === request.id}
+                      onClick={() => approveJoinRequest(request)}
+                    >
+                      {joinRequestBusy === request.id ? "Approving…" : "Approve"}
                     </button>
                   </div>
                 </article>
