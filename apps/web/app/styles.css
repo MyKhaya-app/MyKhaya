@@ -2067,10 +2067,6 @@ html.native-shell .home-section-overlap {
 .routine-form {
   display: grid;
   gap: 1rem;
-  margin-top: 1rem;
-}
-.routine-form h2 {
-  margin: 0;
 }
 .routine-form fieldset {
   border: 0;

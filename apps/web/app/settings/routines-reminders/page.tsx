@@ -750,8 +750,12 @@ export default function RoutinesRemindersPage() {
       </div>
 
       {formKind === "routine" && (
-        <form className="card details routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>
-          <h2>{editingRoutine ? "Edit routine" : "New routine"}</h2>
+        <BottomSheet
+          title={editingRoutine ? "Edit routine" : "New routine"}
+          onDismiss={closeForms}
+          fullHeight
+        >
+        <form className="routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>
           <fieldset>
             <legend>Routine</legend>
             <label>
@@ -864,11 +868,16 @@ export default function RoutinesRemindersPage() {
             </button>
           </div>
         </form>
+        </BottomSheet>
       )}
 
       {formKind === "reminder" && (
-        <form className="card details routine-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder}>
-          <h2>{editingReminder ? "Edit reminder" : "New reminder"}</h2>
+        <BottomSheet
+          title={editingReminder ? "Edit reminder" : "New reminder"}
+          onDismiss={closeForms}
+          fullHeight
+        >
+        <form className="routine-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder}>
           <fieldset>
             <legend>Reminder</legend>
             <label>
@@ -938,6 +947,7 @@ export default function RoutinesRemindersPage() {
             </button>
           </div>
         </form>
+        </BottomSheet>
       )}
     </SettingsPage>
   );

@@ -331,6 +331,119 @@ describe("Routines & Reminders — create menu", () => {
   });
 });
 
+describe("Routines & Reminders — creation uses a modal sheet, not an inline form", () => {
+  it("tapping Add and then New Routine opens the form as a dialog, not inline on the page", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+
+    // Before opening anything, no creation form is present anywhere —
+    // including inline further down the page.
+    expect(screen.queryByLabelText(/title/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Routine" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "New routine" });
+    expect(within(dialog).getByLabelText(/title/i)).toBeInTheDocument();
+    // The form is rendered inside the dialog, never as a second, inline copy.
+    expect(screen.getAllByLabelText(/title/i)).toHaveLength(1);
+  });
+
+  it("tapping Add and then New Reminder opens the form as a dialog too", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Reminder" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "New reminder" });
+    expect(within(dialog).getByLabelText(/title/i)).toBeInTheDocument();
+  });
+
+  it("Save actions remain inside the dialog's own scrollable content, not detached from it", async () => {
+    // A structural proxy for "primary actions are never left behind the
+    // fixed bottom navigation": Save/Cancel must live inside the same
+    // dialog element as the rest of the form (the BottomSheet's own
+    // fixed/safe-area-aware positioning is what keeps them reachable —
+    // see components/bottom-sheet.tsx and .sheet-content in styles.css),
+    // never rendered as a sibling of the dialog back on the page.
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Routine" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "New routine" });
+    expect(within(dialog).getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("Cancel closes the dialog and discards the draft without saving", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Routine" }));
+    await user.type(screen.getByLabelText(/title/i), "Draft that should be discarded");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.createRoutine).not.toHaveBeenCalled();
+
+    // Reopening starts from a clean form — the discarded draft never lingers.
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Routine" }));
+    expect(screen.getByLabelText(/title/i)).toHaveValue("");
+  });
+
+  it("Save closes the dialog after a successful create", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Reminder" }));
+    await user.type(screen.getByLabelText(/title/i), "Water the plants");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await screen.findByText("Reminder created.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("preserves the selected type/scope tabs across opening and cancelling the creation dialog", async () => {
+    mockBoth();
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await screen.findByText("Put bins out");
+
+    await user.click(screen.getByRole("button", { name: "Routines" }));
+    await user.click(screen.getByRole("button", { name: "Household" }));
+
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Routine" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("button", { name: "Routines", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Household", pressed: true })).toBeInTheDocument();
+  });
+
+  it("preserves the selected type/scope tabs after a successful save via the dialog", async () => {
+    mockBoth();
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await screen.findByText("Put bins out");
+
+    await user.click(screen.getByRole("button", { name: "Reminders" }));
+    await user.click(screen.getByRole("button", { name: "Household" }));
+
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Reminder" }));
+    await user.type(screen.getByLabelText(/title/i), "Take bins out");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await screen.findByText("Reminder created.");
+    expect(screen.getByRole("button", { name: "Reminders", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Household", pressed: true })).toBeInTheDocument();
+  });
+});
+
 describe("Routines & Reminders — completion dispatches to the right API", () => {
   it("completing a Routine row calls completeRoutine, not completeReminder", async () => {
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
