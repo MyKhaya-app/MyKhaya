@@ -111,9 +111,11 @@ const MORE_GROUPS: readonly MoreGroup[] = [
 
 export function SettingsPage({
   title = "More",
+  hideHeading = false,
   children,
 }: {
   title?: string;
+  hideHeading?: boolean;
   children?: React.ReactNode;
 }) {
   const [user, setUser] = useState<User | null>(null);
@@ -144,12 +146,14 @@ export function SettingsPage({
       <main className="standard-page">
         {children ? (
           <>
-            <div className="page-heading">
-              <div>
-                <p className="eyebrow">A calm place for the details</p>
-                <h1>{title}</h1>
+            {!hideHeading && (
+              <div className="page-heading">
+                <div>
+                  <p className="eyebrow">A calm place for the details</p>
+                  <h1>{title}</h1>
+                </div>
               </div>
-            </div>
+            )}
             {children}
           </>
         ) : (

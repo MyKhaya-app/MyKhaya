@@ -7644,7 +7644,7 @@ select.plan-meal-field-input {
 
 .rr-intro-art {
   flex: none;
-  height: 72px;
+  height: 88px;
   object-fit: contain;
   width: auto;
 }
@@ -7662,16 +7662,16 @@ select.plan-meal-field-input {
 
 @media (max-width: 420px) {
   .rr-intro-art {
-    height: 56px;
+    height: 70px;
   }
 }
 
 .rr-category-strip {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.3rem;
   overflow-x: auto;
-  padding: 0.35rem 0 0.55rem;
+  padding: 0.05rem 0 0.1rem;
   scrollbar-width: none;
 }
 
@@ -7680,7 +7680,7 @@ select.plan-meal-field-input {
 .rr-category-label {
   flex: 0 0 auto;
   color: var(--muted, #65777b);
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -7692,16 +7692,16 @@ select.plan-meal-field-input {
   border-radius: 999px;
   background: var(--surface, #fffdf9);
   color: var(--ink, #102c2a);
-  padding: 0.55rem 0.9rem;
+  padding: 0.28rem 0.65rem;
   white-space: nowrap;
 }
 
 .rr-category-chip-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.05rem;
   flex: 0 0 auto;
-  padding: 0.16rem;
+  padding: 0.08rem;
   border: 1px solid var(--border-subtle, #e5e3dd);
   border-radius: 999px;
   background: var(--surface, #fff);
@@ -7709,14 +7709,14 @@ select.plan-meal-field-input {
 
 .rr-category-chip-wrap .rr-category-chip {
   border: 0;
-  padding: 0.38rem 0.68rem;
+  padding: 0.24rem 0.55rem;
 }
 
 .rr-category-chip-action {
   display: inline-grid;
   place-items: center;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 1.35rem;
+  height: 1.35rem;
   padding: 0;
   border: 0;
   border-radius: 50%;

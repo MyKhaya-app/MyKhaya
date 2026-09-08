@@ -696,7 +696,7 @@ export default function RoutinesRemindersPage() {
   const typeWord = typeTab === "all" ? "items" : typeTab === "todos" ? "to-dos" : typeTab;
 
   return (
-    <SettingsPage title="Nudges">
+    <SettingsPage title="Nudges" hideHeading>
       <div className="rr-page">
         <div className="rr-intro">
           <div className="rr-intro-text">
