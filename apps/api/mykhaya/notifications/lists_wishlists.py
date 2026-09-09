@@ -14,6 +14,7 @@ from mykhaya.config import Settings
 from mykhaya.models import HouseholdList, HouseholdListItem, User, Wishlist, WishlistShare
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 
 
 async def notify_list_assignment(
@@ -27,13 +28,22 @@ async def notify_list_assignment(
 ) -> None:
     if recipient_user_id == actor.id:
         return
+    title, body = await render_notification(
+        db,
+        "list_item_assigned",
+        {
+            "actor_display_name": actor.display_name,
+            "item_name": item.text,
+            "list_name": list_row.name,
+        },
+    )
     await notify(
         db,
         settings=settings,
         recipient_user_id=recipient_user_id,
         notification_type="list_item_assigned",
-        title="List item assigned",
-        body=f'{actor.display_name} assigned "{item.text}" to you on {list_row.name}.',
+        title=title,
+        body=body,
         idempotency_key=f"list_item_assigned:{item.id}:{recipient_user_id}",
         group_id=list_row.group_id,
         related_entity_type="household_list_item",

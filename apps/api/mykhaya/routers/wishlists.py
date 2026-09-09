@@ -58,6 +58,7 @@ from mykhaya.notifications.lists_wishlists import (
     notify_wishlist_recipient,
     notify_wishlist_share,
 )
+from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import (
     DUMMY_HASH,
@@ -656,6 +657,27 @@ async def set_wishlist_home_visibility(
     ]
     row.home_visible = body.enabled
     if previous_visibility != body.enabled:
+        notification_type = "wishlist_share_created" if body.enabled else "wishlist_share_revoked"
+        if body.enabled:
+            title, notification_body = await render_notification(
+                db,
+                notification_type,
+                {
+                    "actor_display_name": auth.user.display_name,
+                    "wishlist_name": row.title,
+                    "recipient_scope": "your Home",
+                },
+            )
+        else:
+            title, notification_body = await render_notification(
+                db,
+                notification_type,
+                {
+                    "actor_display_name": auth.user.display_name,
+                    "wishlist_name": row.title,
+                    "access_scope": "your Home",
+                },
+            )
         for member_id in member_ids:
             await notify_wishlist_recipient(
                 db,
@@ -663,15 +685,9 @@ async def set_wishlist_home_visibility(
                 wishlist=row,
                 actor=auth.user,
                 recipient_user_id=member_id,
-                notification_type=(
-                    "wishlist_share_created" if body.enabled else "wishlist_share_revoked"
-                ),
-                title=("Wishlist shared with your Home" if body.enabled else "Wishlist access removed"),
-                body=(
-                    f'{auth.user.display_name} shared "{row.title}" with your Home.'
-                    if body.enabled
-                    else f'{auth.user.display_name} removed your Home access to "{row.title}".'
-                ),
+                notification_type=notification_type,
+                title=title,
+                body=notification_body,
                 idempotency_key=f"wishlist_home_visibility:{row.id}:{member_id}:{body.enabled}",
             )
     audit(
@@ -938,10 +954,19 @@ async def create_share(
         )
         db.add(share)
         await db.flush()
+        title, notification_body = await render_notification(
+            db,
+            "wishlist_share_created",
+            {
+                "actor_display_name": auth.user.display_name,
+                "wishlist_name": row.title,
+                "recipient_scope": "you",
+            },
+        )
         await notify_wishlist_share(
             db, settings=settings, wishlist=row, share=share, actor=auth.user,
-            notification_type="wishlist_share_created", title="Wishlist shared with you",
-            body=f'{auth.user.display_name} shared "{row.title}" with you.',
+            notification_type="wishlist_share_created", title=title,
+            body=notification_body,
         )
         audit(
             db, request, "wishlists.share.created", auth.user.id, home_id, "wishlist_share", share.id
@@ -1038,10 +1063,19 @@ async def revoke_share(
     # Belt and braces alongside wishlist_guest_context's live revoked_at
     # check — immediately invalidates any already-issued guest session too.
     await db.execute(delete(WishlistGuestSession).where(WishlistGuestSession.share_id == share.id))
+    title, notification_body = await render_notification(
+        db,
+        "wishlist_share_revoked",
+        {
+            "actor_display_name": auth.user.display_name,
+            "wishlist_name": row.title,
+            "access_scope": "your",
+        },
+    )
     await notify_wishlist_share(
         db, settings=settings, wishlist=row, share=share, actor=auth.user,
-        notification_type="wishlist_share_revoked", title="Wishlist access removed",
-        body=f'{auth.user.display_name} removed your access to "{row.title}".',
+        notification_type="wishlist_share_revoked", title=title,
+        body=notification_body,
     )
     audit(db, request, "wishlists.share.revoked", auth.user.id, home_id, "wishlist_share", share.id)
     await db.commit()

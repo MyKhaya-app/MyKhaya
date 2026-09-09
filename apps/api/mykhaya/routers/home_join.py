@@ -27,6 +27,7 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.deep_links import target as deep_link_target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     HomeJoinCodeLookupRequest,
@@ -128,14 +129,19 @@ async def create_home_join_request(
             )
         )
     ).scalars().all()
+    notification_title, notification_body = await render_notification(
+        db,
+        "home_join_request",
+        {"requester_display_name": auth.user.display_name, "home_name": group.name},
+    )
     for admin_id in admins:
         await notify(
             db,
             settings=settings,
             recipient_user_id=admin_id,
             notification_type="home_join_request",
-            title="New Home join request",
-            body=f"{auth.user.display_name} wants to join {group.name} using your Home join code.",
+            title=notification_title,
+            body=notification_body,
             idempotency_key=f"home_join_request:{row.id}",
             group_id=group.id,
             related_entity_type="home_join_request",

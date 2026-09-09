@@ -383,6 +383,103 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="birthdays",
         channel=NotificationChannel.in_app,
     ),
+    # --- Lists ----------------------------------------------------------------
+    "list_item_assigned": TemplateDefault(
+        subject="List item assigned",
+        body='{{actor_display_name}} assigned "{{item_name}}" to you on {{list_name}}.',
+        allowed_variables=frozenset({"actor_display_name", "item_name", "list_name"}),
+        description="Sent to a household member newly assigned a shared list item.",
+        module="lists",
+        channel=NotificationChannel.in_app,
+    ),
+    # --- Wishlists --------------------------------------------------------
+    # {{recipient_scope}}/{{access_scope}} are pre-formatted by MyKhaya, not
+    # independently editable here — a wishlist can be shared with a single
+    # named recipient ("you") or with an entire Home ("your Home"), and the
+    # wording needs to read naturally either way. Both call shapes use the
+    # same notification_type/template, so this is one canonical template
+    # covering both contexts rather than two near-duplicate keys.
+    "wishlist_share_created": TemplateDefault(
+        subject="Wishlist shared with {{recipient_scope}}",
+        body='{{actor_display_name}} shared "{{wishlist_name}}" with {{recipient_scope}}.',
+        allowed_variables=frozenset(
+            {"actor_display_name", "wishlist_name", "recipient_scope"}
+        ),
+        description=(
+            "Sent when a wishlist is shared with a specific person or made visible to "
+            "a whole Home."
+        ),
+        module="wishlists",
+        channel=NotificationChannel.in_app,
+    ),
+    "wishlist_share_revoked": TemplateDefault(
+        subject="Wishlist access removed",
+        body='{{actor_display_name}} removed {{access_scope}} access to "{{wishlist_name}}".',
+        allowed_variables=frozenset({"actor_display_name", "wishlist_name", "access_scope"}),
+        description=(
+            "Sent when a wishlist share is revoked, or Home-wide visibility is turned off."
+        ),
+        module="wishlists",
+        channel=NotificationChannel.in_app,
+    ),
+    # --- Meal plans -------------------------------------------------------
+    # Deliberately NOT fully decomposed, matching the same principle as
+    # Daily Briefing's briefing.title/briefing.intro: date-relativity
+    # ("today" vs. a weekday name), capitalisation and the optional cook
+    # attribution line are computed by mykhaya.notifications.meal_plans, not
+    # copy — {{meal_date}}/{{meal_day}}/{{meal_slot_lower}}/{{meal_time}}/
+    # {{cook_line}} are pre-formatted, not independently editable here.
+    # meal_plan_removed's {{removal_reason}} covers two genuinely different
+    # sentence shapes under one notification_type (the whole entry was
+    # deleted, vs. you personally were unassigned from a still-existing
+    # entry) — kept as one pre-composed phrase rather than forcing both into
+    # an artificial shared sentence structure.
+    "meal_plan_created": TemplateDefault(
+        subject="{{meal_slot}} planned for {{meal_date}}",
+        body="{{meal_name}}{{meal_time}}{{cook_line}}",
+        allowed_variables=frozenset(
+            {"meal_slot", "meal_date", "meal_name", "meal_time", "cook_line"}
+        ),
+        description="Sent to a meal plan entry's participants and cook when it is added.",
+        module="meal_plans",
+        channel=NotificationChannel.in_app,
+    ),
+    "meal_plan_updated": TemplateDefault(
+        subject="{{meal_day}}'s {{meal_slot_lower}} changed",
+        body="{{meal_name}}{{meal_time}}{{cook_line}}",
+        allowed_variables=frozenset(
+            {"meal_day", "meal_slot_lower", "meal_name", "meal_time", "cook_line"}
+        ),
+        description=(
+            "Sent to a meal plan entry's participants and cook when its details change."
+        ),
+        module="meal_plans",
+        channel=NotificationChannel.in_app,
+    ),
+    "meal_plan_removed": TemplateDefault(
+        subject="{{removal_reason}}",
+        body="{{meal_name}}{{meal_time}}{{cook_line}}",
+        allowed_variables=frozenset({"removal_reason", "meal_name", "meal_time", "cook_line"}),
+        description=(
+            "Sent when a meal plan entry is deleted, or when a participant is removed "
+            "from one that still exists for others."
+        ),
+        module="meal_plans",
+        channel=NotificationChannel.in_app,
+    ),
+    # --- Home join requests -------------------------------------------------
+    # Best-effort, not mandatory: a Home Admin who never sees this in-app is
+    # still not locked out of the flow — the request stays fully visible from
+    # Members/pending-requests regardless (see routers.home_join). Ordinary
+    # disableable notification, not a MANDATORY_EMAIL_TYPES-style workflow.
+    "home_join_request": TemplateDefault(
+        subject="New Home join request",
+        body="{{requester_display_name}} wants to join {{home_name}} using your Home join code.",
+        allowed_variables=frozenset({"requester_display_name", "home_name"}),
+        description="Sent to a Home Admin when someone requests to join using a join code.",
+        module="households",
+        channel=NotificationChannel.in_app,
+    ),
 }
 
 for _template_type, _default in TEMPLATES.items():
@@ -478,4 +575,43 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
     "briefing.intro": {},
     "birthday.reminder.self": {},
     "birthday.reminder.other": {"display_name": "Megan"},
+    "list_item_assigned": {
+        "actor_display_name": "Megan",
+        "item_name": "Milk",
+        "list_name": "Weekly shop",
+    },
+    "wishlist_share_created": {
+        "actor_display_name": "Megan",
+        "wishlist_name": "Birthday ideas",
+        "recipient_scope": "you",
+    },
+    "wishlist_share_revoked": {
+        "actor_display_name": "Megan",
+        "wishlist_name": "Birthday ideas",
+        "access_scope": "your",
+    },
+    "meal_plan_created": {
+        "meal_slot": "Dinner",
+        "meal_date": "Friday",
+        "meal_name": "Lasagne",
+        "meal_time": " at 18:30",
+        "cook_line": "\nMegan is cooking",
+    },
+    "meal_plan_updated": {
+        "meal_day": "Friday",
+        "meal_slot_lower": "dinner",
+        "meal_name": "Lasagne",
+        "meal_time": " at 18:30",
+        "cook_line": "\nMegan is cooking",
+    },
+    "meal_plan_removed": {
+        "removal_reason": "Friday's dinner was removed",
+        "meal_name": "Lasagne",
+        "meal_time": " at 18:30",
+        "cook_line": "",
+    },
+    "home_join_request": {
+        "requester_display_name": "Megan",
+        "home_name": "The Example Family",
+    },
 }

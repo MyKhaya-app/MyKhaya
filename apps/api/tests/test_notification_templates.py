@@ -170,6 +170,13 @@ def test_registry_matches_migration_version() -> None:
         "nudges.day_complete",
         "birthday.reminder.self",
         "birthday.reminder.other",
+        "list_item_assigned",
+        "wishlist_share_created",
+        "wishlist_share_revoked",
+        "meal_plan_created",
+        "meal_plan_updated",
+        "meal_plan_removed",
+        "home_join_request",
     }
 
 

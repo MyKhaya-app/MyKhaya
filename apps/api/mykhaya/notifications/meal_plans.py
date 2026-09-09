@@ -28,6 +28,7 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
 
 
 def _safe_text(value: str, fallback: str = "Meal") -> str:
@@ -144,13 +145,36 @@ def recipients(entry: MealPlanEntry, participant_ids_: set[uuid.UUID]) -> set[uu
     return participant_ids_ | ({entry.cook_member_id} if entry.cook_member_id else set())
 
 
-async def _with_cook(db: AsyncSession, entry: MealPlanEntry, body: str) -> str:
+async def _cook_line(db: AsyncSession, entry: MealPlanEntry) -> str:
+    """The optional "\\nX is cooking" suffix appended to a meal plan
+    notification's body — "" when there is no cook, matching created_copy/
+    updated_copy/removed_copy's un-suffixed output exactly."""
     if entry.cook_member_id is None:
-        return body
+        return ""
     cook = await db.get(User, entry.cook_member_id)
     if cook is None:
-        return body
-    return f"{body}\n{_safe_text(cook.display_name, 'A household member')} is cooking"
+        return ""
+    return f"\n{_safe_text(cook.display_name, 'A household member')} is cooking"
+
+
+async def _render_meal_plan(
+    db: AsyncSession,
+    entry: MealPlanEntry,
+    meal: Meal | None,
+    template_type: str,
+    variables: dict[str, str],
+) -> tuple[str, str]:
+    cook_line = await _cook_line(db, entry)
+    return await render_notification(
+        db,
+        template_type,
+        {
+            **variables,
+            "meal_name": meal_name(entry, meal),
+            "meal_time": _time_label(entry.time),
+            "cook_line": cook_line,
+        },
+    )
 
 
 async def notify_created(
@@ -160,8 +184,10 @@ async def notify_created(
     meal: Meal | None,
     actor_id: uuid.UUID,
 ) -> None:
-    title, body = created_copy(entry, meal)
-    body = await _with_cook(db, entry, body)
+    title, body = await _render_meal_plan(
+        db, entry, meal, "meal_plan_created",
+        {"meal_slot": _slot(entry), "meal_date": _date_label(entry.date)},
+    )
     await _notify_recipients(
         db, settings, entry, meal, recipients(entry, await participant_ids(db, entry.id)), actor_id,
         "meal_plan_created", title, body, str(entry.updated_at)
@@ -181,8 +207,15 @@ async def notify_updated(
     after_participants = await participant_ids(db, entry.id)
     before = before_participants | ({before_cook} if before_cook else set())
     after = recipients(entry, after_participants)
-    title, body = updated_copy(entry, meal)
-    body = await _with_cook(db, entry, body)
+    # The exact wording notify_updated has always used for its own "changed"
+    # notification (updated_copy's title, lower-cased) — computed once here
+    # so the "no longer included" branch below can quote it, matching prior
+    # behaviour exactly.
+    changed_title_lower = updated_copy(entry, meal)[0].lower()
+    title, body = await _render_meal_plan(
+        db, entry, meal, "meal_plan_updated",
+        {"meal_day": _date_label(entry.date).capitalize(), "meal_slot_lower": _slot(entry).lower()},
+    )
     version_key = str(entry.updated_at)
     if material_change:
         await _notify_recipients(db, settings, entry, meal, after - before, actor_id,
@@ -190,7 +223,10 @@ async def notify_updated(
         await _notify_recipients(db, settings, entry, meal, after & before, actor_id,
                                  "meal_plan_updated", title, body, version_key)
     removed = before - after
-    removed_title, removed_body = f"You're no longer included in {title.lower()}", body
+    removed_title, removed_body = await _render_meal_plan(
+        db, entry, meal, "meal_plan_removed",
+        {"removal_reason": f"You're no longer included in {changed_title_lower}"},
+    )
     await _notify_recipients(db, settings, entry, meal, removed, actor_id,
                              "meal_plan_removed", removed_title, removed_body, version_key)
 
@@ -199,8 +235,10 @@ async def notify_removed(
     db: AsyncSession, settings: Settings, entry: MealPlanEntry, meal: Meal | None,
     actor_id: uuid.UUID, prior_participants: set[uuid.UUID], prior_cook: uuid.UUID | None,
 ) -> None:
-    title, body = removed_copy(entry, meal)
-    body = await _with_cook(db, entry, body)
+    removal_reason = f"{_date_label(entry.date).capitalize()}'s {_slot(entry).lower()} was removed"
+    title, body = await _render_meal_plan(
+        db, entry, meal, "meal_plan_removed", {"removal_reason": removal_reason}
+    )
     await _notify_recipients(
         db, settings, entry, meal,
         prior_participants | ({prior_cook} if prior_cook else set()), actor_id,
