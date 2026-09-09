@@ -680,6 +680,16 @@ async def update_meal_plan_entry(
     audit(
         db, request, "meals.plan_entry.updated", auth.user.id, home_id, "meal_plan_entry", entry.id
     )
+    # _set_participants's delete/insert autoflushes the pending UPDATE on
+    # `entry` — since `updated_at` has a server-side onupdate=func.now(),
+    # SQLAlchemy expires it (the new value isn't known locally) rather than
+    # eagerly re-fetching it. notify_updated() reads entry.updated_at
+    # synchronously for its idempotency version_key; without this refresh,
+    # that access triggers a lazy reload outside a valid greenlet context
+    # (sqlalchemy.exc.MissingGreenlet). Refreshing here — after the flush,
+    # before anything reads the row — restores the real value in an
+    # async-safe way.
+    await db.refresh(entry)
     await notify_updated(
         db,
         settings,

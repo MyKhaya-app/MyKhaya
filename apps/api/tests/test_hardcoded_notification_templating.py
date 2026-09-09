@@ -25,7 +25,6 @@ from mykhaya.models import (
     FeatureKey,
     FeatureOverride,
     HouseholdRelationship,
-    MealPlanEntry,
     Membership,
     Notification,
     NotificationChannel,
@@ -37,7 +36,6 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.engine import get_or_create_preferences
-from mykhaya.notifications.meal_plans import notify_updated
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -390,7 +388,7 @@ async def test_meal_plan_created_updated_removed_render_through_the_registry(
     wording now comes from the registry while confirming delivery still
     happens exactly as before (same recipients, same three notification
     types, no opt-out)."""
-    owner_id = await create_verified_user(client, unique_email("mealowner"), "Mealowner")
+    await create_verified_user(client, unique_email("mealowner"), "Mealowner")
     home_id = await create_home(client, "Meal Plan Templating Home")
     partner_id = await add_partner(client, home_id, unique_email("mealpartner"), "Mealpartner")
 
@@ -415,26 +413,19 @@ async def test_meal_plan_created_updated_removed_render_through_the_registry(
     assert created_notification.title == f"Dinner planned for {weekday}"
     assert created_notification.body == "Lasagne\nMealpartner is cooking"
 
-    # notify_updated() is exercised directly rather than through the PATCH
-    # endpoint: mykhaya.routers.meal_plans.update_meal_plan_entry has a
-    # pre-existing, unrelated bug (confirmed independently of this task —
-    # test_meal_plans.py::test_entry_update_and_soft_delete already fails
-    # identically on an unmodified checkout) where entry.updated_at is
-    # accessed after its attributes have been expired outside a greenlet
-    # context. That is a router/ORM issue, not a templating one — out of
-    # scope here — so this test reaches the same notify_updated() code the
-    # HTTP path would call, without going through the broken endpoint.
-    async with SessionFactory() as db:
-        row = await db.get(MealPlanEntry, uuid.UUID(entry["id"]))
-        assert row is not None
-        row.quick_meal_name = "Roast chicken"
-        await db.flush()
-        await db.refresh(row)
-        await notify_updated(
-            db, get_settings(), row, None, owner_id,
-            before_participants=set(), before_cook=partner_id, material_change=True,
-        )
-        await db.commit()
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/meal-plan/entries/{entry['id']}",
+        json={
+            "quick_meal_name": "Roast chicken",
+            "date": date.today().isoformat(),
+            "meal_slot": "dinner",
+            "cook_member_id": str(partner_id),
+            "expected_updated_at": entry["updated_at"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
 
     updated_notification = await last_notification(partner_id)
     assert updated_notification is not None
