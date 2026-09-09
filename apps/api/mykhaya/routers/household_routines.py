@@ -23,6 +23,7 @@ from mykhaya.models import (
     HouseholdRoutineMember,
     Membership,
     RoutineScope,
+    TodoCategory,
     User,
 )
 from mykhaya.notifications.quiet_hours import home_timezone
@@ -33,12 +34,14 @@ from mykhaya.notifications.routine_occurrences import (
     select_home_occurrence,
 )
 from mykhaya.notifications.visibility import active_membership
+from mykhaya.nudge_categories import category_for_home
 from mykhaya.schemas import (
     RoutineCompletionRequest,
     RoutineCreate,
     RoutineListResponse,
     RoutineResponse,
     RoutineUpdate,
+    TodoCategoryResponse,
 )
 
 
@@ -82,6 +85,18 @@ def _is_visible(routine: HouseholdRoutine, user_id: uuid.UUID) -> bool:
     return True
 
 
+def _category_response(category: TodoCategory | None) -> TodoCategoryResponse | None:
+    if category is None:
+        return None
+    return TodoCategoryResponse(
+        id=category.id,
+        name=category.name,
+        created_by=category.created_by,
+        created_at=category.created_at,
+        updated_at=category.updated_at,
+    )
+
+
 async def _to_response(
     db: AsyncSession,
     routine: HouseholdRoutine,
@@ -112,6 +127,9 @@ async def _to_response(
         enabled=routine.enabled,
         start_date=routine.start_date,
         end_date=routine.end_date,
+        category=_category_response(
+            await db.get(TodoCategory, routine.category_id) if routine.category_id else None
+        ),
         member_ids=await _member_ids(db, routine.id),
         next_occurrence_date=next_occurrence_date(routine, today),
         completed_today=completed is not None and is_occurrence_date(routine, today),
@@ -286,6 +304,7 @@ async def create_routine(
         await require_within_limit(db, home_id, "routines.personal.max_active", current_count)
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
+    await category_for_home(db, home_id, body.category_id)
 
     # owner_user_id is never accepted from client input (RoutineCreate has no such
     # field) — a personal routine's owner is always the authenticated actor. There is
@@ -305,6 +324,7 @@ async def create_routine(
         pinned=body.pinned,
         start_date=body.start_date,
         end_date=body.end_date,
+        category_id=body.category_id,
         created_by=auth.user.id,
     )
     db.add(routine)
@@ -375,6 +395,7 @@ async def update_routine(
         await require_within_limit(db, home_id, "routines.personal.max_active", current_count)
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
+    await category_for_home(db, home_id, body.category_id)
     await db.execute(
         delete(HouseholdRoutineMember).where(HouseholdRoutineMember.routine_id == routine.id)
     )
@@ -400,6 +421,7 @@ async def update_routine(
     routine.enabled = body.enabled
     routine.start_date = body.start_date
     routine.end_date = body.end_date
+    routine.category_id = body.category_id
 
     audit(db, request, "household_routine.updated", auth.user.id, home_id, "routine", routine.id)
     await db.commit()

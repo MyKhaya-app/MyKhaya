@@ -174,6 +174,26 @@ textarea {
   padding: 0.75rem 0.85rem;
   width: 100%;
 }
+
+/* Shared native date/time controls. WebKit gives these inputs a larger
+   intrinsic line box than ordinary selects, especially inside bottom sheets.
+   Keep the native picker and indicator, but give the control the same box
+   model, height, padding and text scale as the rest of consumer forms. */
+.consumer-date-time-control {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  font-size: 16px;
+  height: 47px;
+  line-height: 1.2;
+  min-height: 47px;
+  padding-block: 0.65rem;
+}
+.consumer-date-time-control::-webkit-calendar-picker-indicator {
+  margin-left: 0.35rem;
+  opacity: 0.65;
+  width: 1rem;
+}
 textarea {
   min-height: 110px;
   resize: vertical;
@@ -367,52 +387,34 @@ textarea {
   position: relative;
 }
 .mk-hero-phone {
-  background: linear-gradient(160deg, var(--colour-forest), var(--colour-forest-dark));
+  background: var(--colour-forest-dark);
   border-radius: var(--radius-shell);
   box-shadow: var(--shadow-hero);
+  overflow: hidden;
   position: absolute;
 }
-.mk-hero-phone.one {
-  align-items: center;
-  display: flex;
-  height: 380px;
-  justify-content: center;
-  left: 22%;
-  top: 5%;
-  width: 210px;
+.mk-hero-phone img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  width: 100%;
 }
-.mk-hero-phone.one .brand-mark {
-  height: 108px;
-  width: 108px;
+/* Meal Plans sits behind and to the left; Home is the larger, prominent
+   phone in front — the same "one real screen leads, a second peeks out
+   behind it" composition the approved reference uses. */
+.mk-hero-phone.meal {
+  height: 360px;
+  left: 4%;
+  top: 14%;
+  width: 200px;
 }
-.mk-hero-phone.two {
-  display: grid;
-  gap: 0.6rem;
-  height: 340px;
-  left: -4%;
-  padding: 1.25rem 1rem;
-  top: 22%;
-  width: 190px;
+.mk-hero-phone.home {
+  height: 440px;
+  right: -4%;
+  top: 0;
+  width: 230px;
   z-index: 2;
-}
-.mk-hero-phone.three {
-  height: 300px;
-  padding: 1.25rem 1rem;
-  right: -2%;
-  top: 44%;
-  width: 190px;
-}
-.mk-art-card {
-  background: var(--colour-white);
-  border-radius: 0.85rem;
-  box-shadow: var(--shadow-card);
-  font-weight: 700;
-  line-height: 1.5;
-  padding: 0.85rem;
-}
-.mk-art-card small {
-  color: var(--colour-muted);
-  font-weight: 400;
 }
 
 /* --- Shared section rhythm -------------------------------------------------- */
@@ -799,12 +801,14 @@ textarea {
     width: 100% !important;
     height: auto !important;
   }
-  .mk-hero-phone.two,
-  .mk-hero-phone.three {
+  .mk-hero-phone.meal {
     display: none;
   }
-  .mk-hero-phone.one {
-    height: 220px !important;
+  .mk-hero-phone.home {
+    height: 320px !important;
+  }
+  .mk-hero-phone.home img {
+    height: 320px;
   }
   .mk-section {
     padding: 3.5rem 1.25rem;
@@ -818,7 +822,6 @@ textarea {
   .mk-lifestyle-panel {
     padding: 2.5rem 1.5rem;
   }
-  .mk-features-grid,
   .mk-how-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -4025,6 +4028,10 @@ select.icon-row-control {
   .event-form select {
     min-height: 43px;
     padding-block: 0.55rem;
+  }
+  .consumer-date-time-control {
+    height: 43px;
+    min-height: 43px;
   }
   .event-form textarea {
     min-height: 88px;

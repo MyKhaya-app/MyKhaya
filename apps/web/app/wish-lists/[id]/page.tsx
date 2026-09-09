@@ -652,7 +652,7 @@ function EditWishlistSheet({
           </label>
           <label>
             Date (optional)
-            <input type="date" value={occasionDate} onChange={(event) => setOccasionDate(event.target.value)} />
+            <input className="consumer-date-time-control" type="date" value={occasionDate} onChange={(event) => setOccasionDate(event.target.value)} />
           </label>
         </div>
         <label>

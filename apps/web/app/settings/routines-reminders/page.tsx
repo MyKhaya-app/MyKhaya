@@ -116,7 +116,7 @@ function kindScopeLabel(item: UiItem): string {
   const parts = [kind, scopeLabel];
   if (item.kind === "routine") parts.push(routineFrequencyLabel(item.data));
   if (item.kind === "reminder") parts.push(item.data.due_time.slice(0, 5));
-  if (item.kind === "todo" && item.data.category) parts.splice(1, 0, item.data.category.name);
+  if (item.data.category) parts.splice(1, 0, item.data.category.name);
   return parts.join(" · ");
 }
 
@@ -141,12 +141,12 @@ function matchesSearch(item: UiItem, query: string): boolean {
   return (
     item.data.title.toLowerCase().includes(needle) ||
     (item.data.description?.toLowerCase().includes(needle) ?? false) ||
-    (item.kind === "todo" && (item.data.category?.name.toLowerCase().includes(needle) ?? false))
+    (item.data.category?.name.toLowerCase().includes(needle) ?? false)
   );
 }
 
 function categoryLabel(item: UiItem): string {
-  return item.kind === "todo" ? item.data.category?.name ?? "Uncategorised" : "Uncategorised";
+  return item.data.category?.name ?? "Uncategorised";
 }
 
 function categoryGroups(items: UiItem[]): Array<[string, UiItem[]]> {
@@ -333,6 +333,7 @@ export default function RoutinesRemindersPage() {
       pinned: form.get("pinned") === "on",
       start_date: (form.get("start_date") as string | null) ?? todayIso(),
       end_date: (form.get("end_date") as string) || null,
+      category_id: (form.get("category_id") as string) || null,
       member_ids: [],
     };
     try {
@@ -373,6 +374,7 @@ export default function RoutinesRemindersPage() {
       due_time: ((form.get("due_time") as string | null) || "09:00") + ":00",
       repeat: (form.get("repeat") as ReminderRepeat | null) ?? "never",
       cadence: (form.get("cadence") as ReminderCadence | null) ?? "once",
+      category_id: (form.get("category_id") as string) || null,
       member_ids: scope === "household" && assignee ? [assignee] : [],
     };
     try {
@@ -599,7 +601,7 @@ export default function RoutinesRemindersPage() {
   const categoryFiltered = useMemo(
     () =>
       selectedCategoryId
-        ? typeFiltered.filter((item) => item.kind === "todo" && item.data.category?.id === selectedCategoryId)
+        ? typeFiltered.filter((item) => item.data.category?.id === selectedCategoryId)
         : typeFiltered,
     [selectedCategoryId, typeFiltered],
   );
@@ -1108,6 +1110,13 @@ export default function RoutinesRemindersPage() {
                 <option value="personal">{SCOPE_LABELS.personal}</option>
               </select>
             </label>
+            <label>
+              Category (optional)
+              <select name="category_id" defaultValue={editingRoutine?.category?.id ?? ""}>
+                <option value="">No category</option>
+                {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            </label>
             {!householdRoutinesEnabled && (
               <FamilyUpsell
                 title="Household routines"
@@ -1145,7 +1154,7 @@ export default function RoutinesRemindersPage() {
             )}
             <label>
               {repeatUnit === "daily" ? "Start date" : "Anchor date"}
-              <input type="date" name="week_anchor_date" required defaultValue={editingRoutine?.week_anchor_date ?? todayIso()} />
+              <input className="consumer-date-time-control" type="date" name="week_anchor_date" required defaultValue={editingRoutine?.week_anchor_date ?? todayIso()} />
               <small>{repeatUnit === "daily" ? "Repeats every day from this date." : "Choose a date when this routine occurs."}</small>
             </label>
             <label>
@@ -1159,11 +1168,11 @@ export default function RoutinesRemindersPage() {
             <div className="routine-date-grid">
               <label>
                 Starts
-                <input type="date" name="start_date" required defaultValue={editingRoutine?.start_date ?? todayIso()} />
+                <input className="consumer-date-time-control" type="date" name="start_date" required defaultValue={editingRoutine?.start_date ?? todayIso()} />
               </label>
               <label>
                 Ends (optional)
-                <input type="date" name="end_date" defaultValue={editingRoutine?.end_date ?? ""} />
+                <input className="consumer-date-time-control" type="date" name="end_date" defaultValue={editingRoutine?.end_date ?? ""} />
               </label>
             </div>
           </fieldset>
@@ -1232,17 +1241,24 @@ export default function RoutinesRemindersPage() {
                 ))}
               </select>
             </label>
+            <label>
+              Category (optional)
+              <select name="category_id" defaultValue={editingReminder?.category?.id ?? ""}>
+                <option value="">No category</option>
+                {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            </label>
           </fieldset>
           <fieldset>
             <legend>When</legend>
             <div className="routine-date-grid">
               <label>
                 Due date
-                <input type="date" name="due_date" required defaultValue={editingReminder?.due_date ?? today} />
+                <input className="consumer-date-time-control" type="date" name="due_date" required defaultValue={editingReminder?.due_date ?? today} />
               </label>
               <label>
                 Due time
-                <input type="time" name="due_time" required defaultValue={editingReminder?.due_time.slice(0, 5) ?? "09:00"} />
+                <input className="consumer-date-time-control" type="time" name="due_time" required defaultValue={editingReminder?.due_time.slice(0, 5) ?? "09:00"} />
               </label>
             </div>
             <label>
@@ -1291,7 +1307,7 @@ export default function RoutinesRemindersPage() {
               <legend>When and who</legend>
               <label>
                 Due date
-                <input type="date" name="due_date" required defaultValue={editingTodo?.due_date ?? today} />
+                <input className="consumer-date-time-control" type="date" name="due_date" required defaultValue={editingTodo?.due_date ?? today} />
               </label>
               <label>
                 Scope

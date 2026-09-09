@@ -855,6 +855,14 @@ class HomeSummaryResponse(BaseModel):
     next_event: EventOccurrence | None
 
 
+class TodoCategoryResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
 class RoutineCreate(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
@@ -867,6 +875,7 @@ class RoutineCreate(StrictModel):
     pinned: bool = False
     start_date: date
     end_date: date | None = None
+    category_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
 
     @model_validator(mode="after")
@@ -894,6 +903,7 @@ class RoutineUpdate(StrictModel):
     enabled: bool = True
     start_date: date
     end_date: date | None = None
+    category_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     expected_updated_at: datetime
 
@@ -921,6 +931,7 @@ class RoutineResponse(BaseModel):
     enabled: bool
     start_date: date
     end_date: date | None
+    category: TodoCategoryResponse | None = None
     member_ids: list[uuid.UUID]
     next_occurrence_date: date | None
     completed_today: bool
@@ -948,6 +959,7 @@ class ReminderCreate(StrictModel):
     due_time: clock_time
     repeat: ReminderRepeat = ReminderRepeat.never
     cadence: ReminderCadence = ReminderCadence.once
+    category_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
 
     @model_validator(mode="after")
@@ -965,6 +977,7 @@ class ReminderUpdate(StrictModel):
     due_time: clock_time
     repeat: ReminderRepeat = ReminderRepeat.never
     cadence: ReminderCadence = ReminderCadence.once
+    category_id: uuid.UUID | None = None
     enabled: bool = True
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     expected_updated_at: datetime
@@ -986,6 +999,7 @@ class ReminderResponse(BaseModel):
     due_time: clock_time
     repeat: ReminderRepeat
     cadence: ReminderCadence
+    category: TodoCategoryResponse | None = None
     enabled: bool
     member_ids: list[uuid.UUID]
     next_occurrence_date: date | None
@@ -1013,14 +1027,6 @@ class TodoCategoryCreate(StrictModel):
 class TodoCategoryUpdate(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     expected_updated_at: datetime
-
-
-class TodoCategoryResponse(BaseModel):
-    id: uuid.UUID
-    name: str
-    created_by: uuid.UUID
-    created_at: datetime
-    updated_at: datetime
 
 
 class TodoCategoryListResponse(BaseModel):

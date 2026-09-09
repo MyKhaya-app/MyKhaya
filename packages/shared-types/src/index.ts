@@ -513,6 +513,7 @@ export interface Routine {
   enabled: boolean;
   start_date: string;
   end_date: string | null;
+  category?: TodoCategory | null;
   member_ids: string[];
   next_occurrence_date: string | null;
   completed_today: boolean;
@@ -536,6 +537,7 @@ export interface RoutinePayload {
   pinned: boolean;
   start_date: string;
   end_date?: string | null;
+  category_id?: string | null;
   member_ids: string[];
 }
 
@@ -565,6 +567,7 @@ export interface Reminder {
   due_time: string;
   repeat: ReminderRepeat;
   cadence: ReminderCadence;
+  category?: TodoCategory | null;
   enabled: boolean;
   member_ids: string[];
   next_occurrence_date: string | null;
@@ -585,6 +588,7 @@ export interface ReminderPayload {
   due_time: string;
   repeat: ReminderRepeat;
   cadence: ReminderCadence;
+  category_id?: string | null;
   member_ids: string[];
 }
 

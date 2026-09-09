@@ -1593,6 +1593,9 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(1000))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
     scope: Mapped[RoutineScope] = mapped_column(
         Enum(RoutineScope, name="routine_scope"),
         default=RoutineScope.household,
@@ -1702,6 +1705,9 @@ class Reminder(UuidTimeMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(1000))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
     scope: Mapped[RoutineScope] = mapped_column(
         Enum(RoutineScope, name="routine_scope", create_type=False),
         default=RoutineScope.household,

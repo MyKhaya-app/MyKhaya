@@ -515,6 +515,52 @@ async def test_home_admin_can_create_and_list_routine(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
+async def test_routine_category_is_home_scoped_and_editable(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("routine-category"), "Category Owner")
+    home_id = await create_home_with_notifications(client)
+    other_home_id = await create_home_with_notifications(client)
+    anchor = datetime.now(UTC).date().isoformat()
+    category = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/todo-categories",
+        json={"name": "Home"},
+    )
+    foreign = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{other_home_id}/todo-categories",
+        json={"name": "Private"},
+    )
+    assert category.status_code == 201 and foreign.status_code == 201
+    body = {
+        "title": "Bins out",
+        "interval_weeks": 1,
+        "week_anchor_date": anchor,
+        "start_date": anchor,
+        "category_id": category.json()["id"],
+    }
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/routines", json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()["category"]["name"] == "Home"
+    removed = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/routines/{created.json()['id']}",
+        json={**body, "category_id": None, "expected_updated_at": created.json()["updated_at"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["category"] is None
+    rejected = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json={**body, "category_id": foreign.json()["id"]},
+    )
+    assert rejected.status_code == 422, rejected.text
+
+
+@pytest.mark.asyncio
 async def test_daily_routine_round_trips_and_can_be_updated(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("daily"), "Daily Owner")
     home_id = await create_home_with_notifications(client)

@@ -22,6 +22,7 @@ from mykhaya.models import (
     ReminderCompletion,
     ReminderMember,
     RoutineScope,
+    TodoCategory,
     User,
 )
 from mykhaya.notifications.quiet_hours import home_timezone
@@ -32,12 +33,14 @@ from mykhaya.notifications.reminder_occurrences import (
     select_home_occurrence,
 )
 from mykhaya.notifications.visibility import active_membership
+from mykhaya.nudge_categories import category_for_home
 from mykhaya.schemas import (
     ReminderCompletionRequest,
     ReminderCreate,
     ReminderListResponse,
     ReminderResponse,
     ReminderUpdate,
+    TodoCategoryResponse,
 )
 
 
@@ -79,6 +82,18 @@ def _is_visible(reminder: Reminder, user_id: uuid.UUID) -> bool:
     return True
 
 
+def _category_response(category: TodoCategory | None) -> TodoCategoryResponse | None:
+    if category is None:
+        return None
+    return TodoCategoryResponse(
+        id=category.id,
+        name=category.name,
+        created_by=category.created_by,
+        created_at=category.created_at,
+        updated_at=category.updated_at,
+    )
+
+
 async def _to_response(
     db: AsyncSession,
     reminder: Reminder,
@@ -104,6 +119,9 @@ async def _to_response(
         due_time=reminder.due_time,
         repeat=reminder.repeat,
         cadence=reminder.cadence,
+        category=_category_response(
+            await db.get(TodoCategory, reminder.category_id) if reminder.category_id else None
+        ),
         enabled=reminder.enabled,
         member_ids=await _member_ids(db, reminder.id),
         next_occurrence_date=next_occurrence_date(reminder, today),
@@ -234,6 +252,7 @@ async def create_reminder(
 ) -> ReminderResponse:
     await require_capability(home_id, Capability.household_manage_reminders, auth, db)
     member_ids = await _validate_members(db, home_id, body.member_ids)
+    await category_for_home(db, home_id, body.category_id)
 
     # owner_user_id is never accepted from client input (ReminderCreate has no such
     # field) — a personal reminder's owner is always the authenticated actor,
@@ -248,6 +267,7 @@ async def create_reminder(
         due_time=body.due_time,
         repeat=body.repeat,
         cadence=body.cadence,
+        category_id=body.category_id,
         created_by=auth.user.id,
     )
     db.add(reminder)
@@ -284,6 +304,7 @@ async def update_reminder(
         )
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
+    await category_for_home(db, home_id, body.category_id)
     await db.execute(delete(ReminderMember).where(ReminderMember.reminder_id == reminder.id))
     for user_id in member_ids:
         db.add(ReminderMember(reminder_id=reminder.id, user_id=user_id))
@@ -302,6 +323,7 @@ async def update_reminder(
     reminder.due_time = body.due_time
     reminder.repeat = body.repeat
     reminder.cadence = body.cadence
+    reminder.category_id = body.category_id
     reminder.enabled = body.enabled
 
     audit(db, request, "reminder.updated", auth.user.id, home_id, "reminder", reminder.id)

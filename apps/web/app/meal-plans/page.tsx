@@ -1029,6 +1029,7 @@ function MealEntrySheet({
         <label className="form-wide">
           Date
           <input
+            className="consumer-date-time-control"
             type="date"
             value={date}
             onChange={(event) => setDate(event.target.value)}
@@ -1052,6 +1053,7 @@ function MealEntrySheet({
           <label>
             Time (optional)
             <input
+              className="consumer-date-time-control"
               type="time"
               value={time}
               onChange={(event) => setTime(event.target.value)}
@@ -2350,7 +2352,7 @@ function PlanFromMealSheet({
                   aria-hidden="true"
                 />
                 <input
-                  className="plan-meal-field-input"
+                  className="plan-meal-field-input consumer-date-time-control"
                   type="date"
                   value={date}
                   onChange={(event) => setDate(event.target.value)}

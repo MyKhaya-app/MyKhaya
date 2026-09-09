@@ -173,6 +173,52 @@ async def test_create_personal_reminder(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reminder_category_is_home_scoped_and_editable(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("reminder-category"), "Category Owner")
+    home_id = await create_home_with_notifications(client)
+    other_home_id = await create_home_with_notifications(client)
+    today = datetime.now(UTC).date().isoformat()
+    category = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/todo-categories",
+        json={"name": "Work"},
+    )
+    foreign = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{other_home_id}/todo-categories",
+        json={"name": "Private"},
+    )
+    assert category.status_code == 201 and foreign.status_code == 201
+    body = {
+        "title": "Call supplier",
+        "due_date": today,
+        "due_time": "09:00:00",
+        "scope": "personal",
+        "category_id": category.json()["id"],
+    }
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/reminders", json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()["category"]["name"] == "Work"
+    removed = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/reminders/{created.json()['id']}",
+        json={**body, "category_id": None, "expected_updated_at": created.json()["updated_at"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["category"] is None
+    rejected = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/reminders",
+        json={**body, "category_id": foreign.json()["id"]},
+    )
+    assert rejected.status_code == 422, rejected.text
+
+
+@pytest.mark.asyncio
 async def test_create_household_reminder_with_assignee(client: AsyncClient) -> None:
     creator_id = await create_verified_user(client, unique_email("hh"), "HH Owner")
     home_id = await create_home_with_notifications(client)
