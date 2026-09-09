@@ -39,6 +39,8 @@ export default function NotificationSettings() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [devices, setDevices] = useState<PushSubscriptionSummary[]>([]);
   const [briefingPreset, setBriefingPreset] = useState<string>("custom");
+  const [nudgeSummaryEnabled, setNudgeSummaryEnabled] = useState(true);
+  const [nudgeSummaryPreset, setNudgeSummaryPreset] = useState<string>("custom");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -55,6 +57,9 @@ export default function NotificationSettings() {
     setDevices(subscriptions);
     const preset = BRIEFING_PRESETS.find(([time]) => time === preferences.briefing_time);
     setBriefingPreset(preset ? preset[0] : "custom");
+    setNudgeSummaryEnabled(preferences.daily_nudge_summary_enabled);
+    const nudgePreset = BRIEFING_PRESETS.find(([time]) => time === preferences.daily_nudge_summary_time);
+    setNudgeSummaryPreset(nudgePreset ? nudgePreset[0] : "custom");
   }, []);
 
   useEffect(() => {
@@ -80,6 +85,15 @@ export default function NotificationSettings() {
       briefingPreset === "custom"
         ? (form.get("briefing_time_custom") as string | null) ?? prefs.briefing_time
         : briefingPreset;
+    // The delivery-time selector is disabled (and so absent from FormData)
+    // whenever the toggle above it is off — read from React state instead
+    // of the form in that case, which is exactly what keeps the previously
+    // chosen time intact for when the user re-enables it later.
+    const nudgeSummaryTime = !nudgeSummaryEnabled
+      ? prefs.daily_nudge_summary_time
+      : nudgeSummaryPreset === "custom"
+        ? (form.get("daily_nudge_summary_time_custom") as string | null) ?? prefs.daily_nudge_summary_time
+        : nudgeSummaryPreset;
     try {
       const updated = await api.updateNotificationPreferences({
         push_enabled: form.get("push_enabled") === "on",
@@ -95,6 +109,8 @@ export default function NotificationSettings() {
         briefing_time: briefingTime,
         briefing_days: form.get("briefing_days") === "weekdays" ? "weekdays" : "daily",
         empty_day_briefing_enabled: form.get("empty_day_briefing_enabled") === "on",
+        daily_nudge_summary_enabled: nudgeSummaryEnabled,
+        daily_nudge_summary_time: nudgeSummaryTime,
         nudges_evening_cleanup_enabled: form.get("nudges_evening_cleanup_enabled") === "on",
         nudges_evening_time: (form.get("nudges_evening_time") as string) || prefs.nudges_evening_time,
         nudges_day_complete_enabled: form.get("nudges_day_complete_enabled") === "on",
@@ -305,6 +321,55 @@ export default function NotificationSettings() {
           /> Wishlist sharing
         </label>
 
+        <h2>Nudges</h2>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={nudgeSummaryEnabled}
+            onChange={(event) => setNudgeSummaryEnabled(event.target.checked)}
+          />{" "}
+          Send me a daily Nudge summary
+        </label>
+        <p className="muted">One notification with today&rsquo;s routines, reminders and assigned to-dos.</p>
+        <label>
+          Delivery time
+          <select
+            value={nudgeSummaryPreset}
+            disabled={!nudgeSummaryEnabled}
+            onChange={(event) => setNudgeSummaryPreset(event.target.value)}
+          >
+            {BRIEFING_PRESETS.map(([time, label]) => (
+              <option key={time} value={time}>
+                {label} ({time})
+              </option>
+            ))}
+            <option value="custom">Custom time</option>
+          </select>
+        </label>
+        {nudgeSummaryPreset === "custom" && (
+          <label>
+            Custom time
+            <input
+              type="time"
+              name="daily_nudge_summary_time_custom"
+              defaultValue={prefs.daily_nudge_summary_time}
+              disabled={!nudgeSummaryEnabled}
+            />
+          </label>
+        )}
+        <label className="check-row">
+          <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
+          Evening Clean-up
+        </label>
+        <label>
+          Evening Clean-up time
+          <input type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />
+        </label>
+        <label className="check-row">
+          <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
+          Day Complete acknowledgement
+        </label>
+
         <h2>Daily briefing</h2>
         <label className="check-row">
           <input
@@ -345,20 +410,6 @@ export default function NotificationSettings() {
             defaultChecked={prefs.empty_day_briefing_enabled}
           />{" "}
           Still send a briefing on days with nothing planned
-        </label>
-
-        <h2>Nudges</h2>
-        <label className="check-row">
-          <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
-          Evening Clean-up
-        </label>
-        <label>
-          Evening Clean-up time
-          <input type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />
-        </label>
-        <label className="check-row">
-          <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
-          Day Complete acknowledgement
         </label>
 
         <h2>Privacy</h2>

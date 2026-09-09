@@ -473,6 +473,8 @@ export interface NotificationPreferences {
   briefing_time: string;
   briefing_days: BriefingDays;
   empty_day_briefing_enabled: boolean;
+  daily_nudge_summary_enabled: boolean;
+  daily_nudge_summary_time: string;
   nudges_evening_cleanup_enabled: boolean;
   nudges_evening_time: string;
   nudges_day_complete_enabled: boolean;

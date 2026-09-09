@@ -125,6 +125,8 @@ async def get_preferences(
         briefing_time=_time_str(prefs.briefing_time) or "07:30",
         briefing_days=prefs.briefing_days.value,
         empty_day_briefing_enabled=prefs.empty_day_briefing_enabled,
+        daily_nudge_summary_enabled=prefs.daily_nudge_summary_enabled,
+        daily_nudge_summary_time=_time_str(prefs.daily_nudge_summary_time) or "07:30",
         nudges_evening_cleanup_enabled=prefs.nudges_evening_cleanup_enabled,
         nudges_evening_time=_time_str(prefs.nudges_evening_time) or "20:30",
         nudges_day_complete_enabled=prefs.nudges_day_complete_enabled,
@@ -155,6 +157,8 @@ async def update_preferences(
     prefs.briefing_time = time.fromisoformat(body.briefing_time)
     prefs.briefing_days = BriefingDays(body.briefing_days)
     prefs.empty_day_briefing_enabled = body.empty_day_briefing_enabled
+    prefs.daily_nudge_summary_enabled = body.daily_nudge_summary_enabled
+    prefs.daily_nudge_summary_time = time.fromisoformat(body.daily_nudge_summary_time)
     prefs.nudges_evening_cleanup_enabled = body.nudges_evening_cleanup_enabled
     prefs.nudges_evening_time = time.fromisoformat(body.nudges_evening_time)
     prefs.nudges_day_complete_enabled = body.nudges_day_complete_enabled

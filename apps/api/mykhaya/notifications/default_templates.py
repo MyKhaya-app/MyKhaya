@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from mykhaya.models import NotificationChannel
 
-DEFAULT_TEMPLATE_VERSION = 2
+DEFAULT_TEMPLATE_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -299,11 +299,38 @@ TEMPLATES: dict[str, TemplateDefault] = {
         channel=NotificationChannel.in_app,
     ),
     # --- Nudges summaries -------------------------------------------------
+    # Daily Nudge Summary — see mykhaya.notifications.nudges.
+    # deliver_daily_nudge_summary(). A user-configurable *morning* digest
+    # ("what do I need to do today?"), entirely distinct from Daily Briefing
+    # ("what's happening today?", briefing.title/briefing.intro above) and
+    # from the *evening* nudges.evening_cleanup/nudges.day_complete below.
+    # {{count_summary}} is a pre-formatted, correctly-pluralised phrase
+    # (e.g. "1 routine, 2 to-dos and 0 reminders") computed in the
+    # notification service — this template engine only does plain
+    # {{variable}} substitution with no conditional/plural support, so
+    # raw counts are never interpolated directly into prose here.
     "nudges.morning_briefing": TemplateDefault(
         subject="Your Nudges today",
-        body="You have {{routine_count}} routines, {{todo_count}} to-dos and {{reminder_count}} reminders today.\n\n{{summary}}",
-        allowed_variables=frozenset({"first_name", "routine_count", "todo_count", "reminder_count", "overdue_count", "summary", "deep_link"}),
-        description="The unified daily summary of relevant Routines, Reminders and To-dos.",
+        body="You have {{count_summary}} today.\n\n{{item_summary}}",
+        allowed_variables=frozenset(
+            {
+                "user_display_name",
+                "routine_count",
+                "todo_count",
+                "reminder_count",
+                "total_count",
+                "count_summary",
+                "item_summary",
+                "delivery_date",
+                "deep_link",
+            }
+        ),
+        description=(
+            "Daily Nudge Summary: a morning digest of the recipient's outstanding "
+            "Routines, Reminders and assigned To-dos for today, sent at their own "
+            "configured Daily Nudge Summary time. Never sent on a day with nothing "
+            "outstanding."
+        ),
         module="nudges",
         channel=NotificationChannel.in_app,
     ),
@@ -365,7 +392,17 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
-    "nudges.morning_briefing": {"first_name": "Jamie", "routine_count": "2", "todo_count": "3", "reminder_count": "1", "overdue_count": "1", "summary": "Today\n• Take Tablet\n• Sign school trip form", "deep_link": "/settings/routines-reminders"},
+    "nudges.morning_briefing": {
+        "user_display_name": "Jamie",
+        "routine_count": "2",
+        "todo_count": "3",
+        "reminder_count": "1",
+        "total_count": "6",
+        "count_summary": "2 routines, 3 to-dos and 1 reminder",
+        "item_summary": "• Take Tablet\n• Sign school trip form",
+        "delivery_date": "2026-01-01",
+        "deep_link": "/settings/routines-reminders",
+    },
     "nudges.evening_cleanup": {"first_name": "Jamie", "outstanding_count": "2", "routine_count": "1", "todo_count": "1", "overdue_count": "1", "summary": "Overdue\n• Call plumber", "deep_link": "/settings/routines-reminders"},
     "nudges.day_complete": {"first_name": "Jamie", "completed_count": "5", "deep_link": "/settings/routines-reminders"},
     "email_verification": {"link": "https://example.com/verify-email?token=SAMPLE-TOKEN"},

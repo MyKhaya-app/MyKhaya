@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,10 +29,13 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.nudges import is_covered_by_daily_nudge_summary
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.routine_occurrences import is_occurrence_date
 from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import active_membership
+
+log = structlog.get_logger()
 
 LOOKAHEAD = timedelta(minutes=2)
 ROUTINE_TOPIC = "notification.household_routine"
@@ -154,9 +158,37 @@ async def deliver_routine_reminder(
         _subject, body = await render_notification(
             db, "routine.due", {"routine_title": routine.title}
         )
+
+    # Dedup against Daily Nudge Summary: only a "same_day" send can ever be
+    # covered by a summary (which only ever covers *today*) — "evening_before"
+    # is about *tomorrow's* occurrence and can never collide. Only computed
+    # once per routine, not per recipient, since it depends only on the
+    # routine's own fixed send time.
+    item_scheduled_utc: datetime | None = None
+    if timing == "same_day":
+        home_tz = await home_timezone(db, routine.group_id, settings.default_timezone)
+        item_scheduled_utc = datetime.combine(
+            occurrence_date, SAME_DAY_TIME, tzinfo=home_tz
+        ).astimezone(UTC)
+
     for recipient_id in await _recipients_for(db, routine):
         if await active_membership(db, routine.group_id, recipient_id) is None:
             continue  # membership removed since this reminder was scanned
+        if item_scheduled_utc is not None and await is_covered_by_daily_nudge_summary(
+            db,
+            settings,
+            recipient_id=recipient_id,
+            item_scheduled_utc=item_scheduled_utc,
+            kind="routine",
+            item_id=routine.id,
+        ):
+            await log.ainfo(
+                "household_routine_reminder_suppressed_by_daily_nudge_summary",
+                routine_id=routine_id,
+                recipient_id=str(recipient_id),
+                occurrence_date=occurrence_date_iso,
+            )
+            continue
         await notify(
             db,
             settings=settings,

@@ -23,6 +23,7 @@ NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "wishlist_share_created": "Wishlist shared",
     "wishlist_share_revoked": "Wishlist access removed",
     "daily_briefing": "Morning briefing",
+    "daily_nudge_summary": "Daily Nudge Summary",
     "test_push": "Test push",
 }
 

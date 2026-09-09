@@ -1538,6 +1538,18 @@ class NotificationPreferences(UuidTimeMixin, Base):
     empty_day_briefing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Daily Nudge Summary — a separate, user-configurable *morning* digest of
+    # today's outstanding Routines/Reminders/To-dos. Distinct from
+    # daily_briefing_enabled/briefing_time above (which is unrelated to
+    # Nudges) and from the nudges_evening_* fields below (which cover the
+    # end of the day, not the morning). Default ON at 07:30, per product
+    # decision — see migration 0058_daily_nudge_summary.
+    daily_nudge_summary_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    daily_nudge_summary_time: Mapped[time] = mapped_column(
+        Time, default=time(7, 30), server_default="07:30:00"
+    )
     nudges_evening_cleanup_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

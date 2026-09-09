@@ -29,6 +29,7 @@ from mykhaya.notifications.lifecycle import (
     is_home_operationally_active,
     is_user_operationally_active,
 )
+from mykhaya.notifications.nudges import deliver_daily_nudge_summary, deliver_nudge_summary
 from mykhaya.notifications.push import (
     ApnsPermanentError,
     is_subscription_gone,
@@ -40,7 +41,6 @@ from mykhaya.notifications.push import (
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
 from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
-from mykhaya.notifications.nudges import deliver_nudge_summary
 
 log = structlog.get_logger()
 
@@ -307,6 +307,10 @@ async def process(event_id: uuid.UUID) -> None:
             elif event.topic == "notification.nudges.day_complete":
                 await deliver_nudge_summary(
                     db, settings, event.payload["user_id"], event.payload["date"], day_complete=True
+                )
+            elif event.topic == "notification.daily_nudge_summary":
+                await deliver_daily_nudge_summary(
+                    db, settings, event.payload["user_id"], event.payload["date"]
                 )
 
             job.status = "completed"

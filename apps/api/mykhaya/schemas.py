@@ -1393,6 +1393,8 @@ class NotificationPreferencesResponse(BaseModel):
     briefing_time: str
     briefing_days: str
     empty_day_briefing_enabled: bool
+    daily_nudge_summary_enabled: bool = True
+    daily_nudge_summary_time: str = "07:30"
     nudges_evening_cleanup_enabled: bool
     nudges_evening_time: str
     nudges_day_complete_enabled: bool
@@ -1416,6 +1418,10 @@ class NotificationPreferencesUpdate(StrictModel):
     briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
     briefing_days: Literal["daily", "weekdays"]
     empty_day_briefing_enabled: bool
+    daily_nudge_summary_enabled: bool = True
+    daily_nudge_summary_time: str = Field(
+        default="07:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
     nudges_evening_cleanup_enabled: bool = True
     nudges_evening_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
     nudges_day_complete_enabled: bool = True

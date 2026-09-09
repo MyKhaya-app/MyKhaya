@@ -11,12 +11,12 @@ from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent
 from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
+from mykhaya.notifications.nudges import scan_due_daily_nudge_summary, scan_due_nudges
 from mykhaya.notifications.reminders import scan_due_reminders
 from mykhaya.notifications.routines import scan_due_routines
 from mykhaya.notifications.standalone_reminders import (
     scan_due_reminders as scan_due_standalone_reminders,
 )
-from mykhaya.notifications.nudges import scan_due_nudges
 
 # Visibility timeout: how long a dequeued-but-not-yet-completed job is hidden
 # from re-selection. This is a lease, not completion — `processed_at` is only
@@ -43,6 +43,7 @@ async def run() -> None:
                 await scan_due_birthdays(db, settings)
                 await scan_due_standalone_reminders(db, settings)
                 await scan_due_nudges(db, settings)
+                await scan_due_daily_nudge_summary(db, settings)
             async with SessionFactory() as db:
                 rows = (
                     await db.scalars(
