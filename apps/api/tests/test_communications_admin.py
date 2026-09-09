@@ -99,7 +99,7 @@ async def make_user() -> User:
 
 
 def test_notification_type_label_falls_back_to_titlecase() -> None:
-    assert notification_type_label("daily_briefing") == "Morning briefing"
+    assert notification_type_label("daily_briefing") == "Daily Briefing"
     assert notification_type_label("some_new_type") == "Some new type"
 
 

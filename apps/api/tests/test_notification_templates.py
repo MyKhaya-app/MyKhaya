@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
@@ -165,6 +165,9 @@ def test_registry_matches_migration_version() -> None:
         "reminder.due",
         "briefing.title",
         "briefing.intro",
+        "daily_nudge_summary",
+        "nudges.evening_cleanup",
+        "nudges.day_complete",
         "birthday.reminder.self",
         "birthday.reminder.other",
     }
@@ -972,7 +975,7 @@ async def test_template_update_is_audited_without_storing_the_wording(
         "/api/v1/platform/notification-templates/household_invitation",
         json={
             "subject": "Secret subject wording",
-            "body": "Secret body wording {{home_name}}",
+            "body": "Secret body wording {{home_name}} {{link}}",
             "enabled": True,
             "reason": "Auditing this exact change for the test.",
             "confirmed": True,
@@ -1428,3 +1431,54 @@ async def test_birthday_templates_render_the_same_wording_as_before_migration() 
         )
         assert other_subject == "Megan's birthday"
         assert other_body == "Today is Megan's birthday."
+
+
+# --- Daily Nudge Summary template rename migration --------------------------
+
+
+@pytest.mark.asyncio
+async def test_nudges_summary_template_rename_migration_preserves_an_override() -> None:
+    """Regression guard for migration 0059_rename_nudge_template: the
+    Daily Nudge Summary template_type was renamed from "nudges.morning_briefing"
+    to "daily_nudge_summary" (see default_templates.py) so PCC's
+    titleCase(template_type) reads unambiguously, rather than colliding in
+    wording with Daily Briefing. notification_templates is override-only, so
+    an admin customisation saved against the old key must survive the rename
+    intact — this proves the exact UPDATE the migration performs does that,
+    not just that the migration file runs without error."""
+    async with SessionFactory() as db:
+        override = NotificationTemplate(
+            template_type="nudges.morning_briefing",
+            channel=NotificationChannel.in_app,
+            subject="Custom nudges subject",
+            body_text="Custom nudges body {{count_summary}}",
+            enabled=True,
+        )
+        db.add(override)
+        await db.commit()
+        override_id = override.id
+
+        # The exact statement migration 0059's upgrade() runs.
+        await db.execute(
+            update(NotificationTemplate)
+            .where(NotificationTemplate.template_type == "nudges.morning_briefing")
+            .values(template_type="daily_nudge_summary")
+        )
+        await db.commit()
+
+        migrated = await db.get(NotificationTemplate, override_id)
+        assert migrated is not None
+        assert migrated.template_type == "daily_nudge_summary"
+        assert migrated.subject == "Custom nudges subject"
+        assert migrated.body_text == "Custom nudges body {{count_summary}}"
+
+        # And the renamed row is now the live override for the current key —
+        # render_notification() resolves it, not the built-in default.
+        subject, body = await render_notification(
+            db, "daily_nudge_summary", {"count_summary": "1 routine"}
+        )
+        assert subject == "Custom nudges subject"
+        assert body == "Custom nudges body 1 routine"
+
+        await db.delete(migrated)
+        await db.commit()

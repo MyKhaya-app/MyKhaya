@@ -1,6 +1,6 @@
 """Human-readable labels for notification_type/channel/status values — shared by the
 Platform Admin Communications Timeline and Diagnostics pages so "what happened" reads
-as a short story ("Morning briefing · Delivered") rather than raw enum values.
+as a short story ("Daily Briefing · Delivered") rather than raw enum values.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "list_item_assigned": "List item assigned",
     "wishlist_share_created": "Wishlist shared",
     "wishlist_share_revoked": "Wishlist access removed",
-    "daily_briefing": "Morning briefing",
+    "daily_briefing": "Daily Briefing",
     "daily_nudge_summary": "Daily Nudge Summary",
     "test_push": "Test push",
 }
