@@ -18,8 +18,8 @@ function PublicWelcome() {
     <main className="mk-page">
       <PublicHeader />
       <PublicHero />
-      <PublicBenefits />
       <PublicFeatures />
+      <PublicBenefits />
       <PublicHowItWorks />
       <PublicPricing />
       <PublicFinalCta />

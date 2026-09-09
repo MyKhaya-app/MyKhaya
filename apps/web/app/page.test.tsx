@@ -70,13 +70,13 @@ describe("Welcome (public marketing homepage)", () => {
 
     const headings = await screen.findAllByRole("heading", { level: 2 });
     const headingText = headings.map((node) => node.textContent);
-    // Order matters — Header, Hero, Benefits, Feature showcase, How it
-    // works, Pricing, Final CTA, Footer, per the agreed page structure.
-    const benefitsIndex = headingText.findIndex((text) =>
-      text?.includes("Why families"),
-    );
+    // Order matters — Header, Hero, Features, Lifestyle, How it works,
+    // Pricing, Final CTA, Footer, per the agreed page structure.
     const featuresIndex = headingText.findIndex((text) =>
       text?.includes("Made for how families"),
+    );
+    const lifestyleIndex = headingText.findIndex((text) =>
+      text?.includes("Less organising"),
     );
     const howIndex = headingText.findIndex((text) =>
       text?.includes("Up and running"),
@@ -87,9 +87,9 @@ describe("Welcome (public marketing homepage)", () => {
     const finalCtaIndex = headingText.findIndex((text) =>
       text?.includes("Ready to bring"),
     );
-    expect(benefitsIndex).toBeGreaterThanOrEqual(0);
-    expect(featuresIndex).toBeGreaterThan(benefitsIndex);
-    expect(howIndex).toBeGreaterThan(featuresIndex);
+    expect(featuresIndex).toBeGreaterThanOrEqual(0);
+    expect(lifestyleIndex).toBeGreaterThan(featuresIndex);
+    expect(howIndex).toBeGreaterThan(lifestyleIndex);
     expect(pricingIndex).toBeGreaterThan(howIndex);
     expect(finalCtaIndex).toBeGreaterThan(pricingIndex);
   });
@@ -100,12 +100,12 @@ describe("Welcome (public marketing homepage)", () => {
     expect(
       screen.getByRole("heading", {
         level: 1,
-        name: /your family\. one place\. everything organised\./i,
+        name: /bring your family together\./i,
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        /calendars, routines, lists, chores and the everyday things/i,
+        /shared calendars, meals, lists and nudges — all in one place/i,
       ),
     ).toBeInTheDocument();
     // No jargon a visitor would have to understand before signing up.
@@ -145,9 +145,13 @@ describe("Welcome (public marketing homepage)", () => {
 
     const footer = screen.getByRole("contentinfo");
     for (const link of footer.querySelectorAll("a")) {
-      expect(["/login", "/register", "/service-status", "/"]).toContain(
-        link.getAttribute("href"),
-      );
+      expect([
+        "/login",
+        "/register",
+        "/help-support",
+        "https://status.dev.mykhaya.app/",
+        "/",
+      ]).toContain(link.getAttribute("href"));
     }
   });
 

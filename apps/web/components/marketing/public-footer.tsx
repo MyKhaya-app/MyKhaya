@@ -13,6 +13,7 @@ export function PublicFooter() {
         <Link href="/login">Sign in</Link>
         <Link href="/register">Create an account</Link>
         <Link href="https://status.dev.mykhaya.app/">Status</Link>
+        <Link href="/help-support">Support</Link>
       </nav>
       <p className="mk-footer-copyright">
         © {year} MyKhaya. All rights reserved.

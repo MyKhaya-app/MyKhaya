@@ -286,13 +286,34 @@ textarea {
 .mk-header nav {
   align-items: center;
   display: flex;
+  gap: 1.5rem;
   justify-content: space-between;
   margin: auto;
   max-width: 1200px;
 }
+.mk-header-links {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  gap: 2rem;
+  justify-content: center;
+}
+.mk-header-links a {
+  color: var(--colour-slate);
+  font-weight: 600;
+}
+.mk-header-links a:hover {
+  color: var(--colour-forest);
+}
 .mk-header-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 0.7rem;
+}
+@media (max-width: 860px) {
+  .mk-header-links {
+    display: none;
+  }
 }
 
 /* --- Hero ------------------------------------------------------------------ */
@@ -325,48 +346,73 @@ textarea {
   gap: 1rem;
   margin-top: 2.25rem;
 }
+.mk-hero-reassurance {
+  color: var(--colour-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  font-weight: 600;
+  gap: 0.4rem 1.5rem;
+  list-style: none;
+  margin: 1.75rem 0 0;
+  padding: 0;
+}
+.mk-hero-reassurance li::before {
+  color: var(--colour-forest);
+  content: "✓";
+  margin-right: 0.4rem;
+}
 .mk-hero-art {
-  background: linear-gradient(145deg, var(--colour-sage), var(--colour-forest));
-  border-radius: 42% 42% 30% 30%;
-  box-shadow: var(--shadow-hero);
   height: 460px;
   position: relative;
 }
-.mk-hero-art > .brand {
-  left: 50%;
+.mk-hero-phone {
+  background: linear-gradient(160deg, var(--colour-forest), var(--colour-forest-dark));
+  border-radius: var(--radius-shell);
+  box-shadow: var(--shadow-hero);
   position: absolute;
-  top: 16%;
-  transform: translateX(-50%);
 }
-.mk-hero-art .brand-mark {
+.mk-hero-phone.one {
+  align-items: center;
+  display: flex;
+  height: 380px;
+  justify-content: center;
+  left: 22%;
+  top: 5%;
+  width: 210px;
+}
+.mk-hero-phone.one .brand-mark {
   height: 108px;
   width: 108px;
 }
+.mk-hero-phone.two {
+  display: grid;
+  gap: 0.6rem;
+  height: 340px;
+  left: -4%;
+  padding: 1.25rem 1rem;
+  top: 22%;
+  width: 190px;
+  z-index: 2;
+}
+.mk-hero-phone.three {
+  height: 300px;
+  padding: 1.25rem 1rem;
+  right: -2%;
+  top: 44%;
+  width: 190px;
+}
 .mk-art-card {
   background: var(--colour-white);
-  border-radius: 1rem;
+  border-radius: 0.85rem;
   box-shadow: var(--shadow-card);
   font-weight: 700;
   line-height: 1.5;
-  padding: 1rem;
-  position: absolute;
-  width: 188px;
+  padding: 0.85rem;
 }
 .mk-art-card small {
   color: var(--colour-muted);
   font-weight: 400;
-}
-.mk-art-card.one {
-  right: -7%;
-  top: 28%;
-}
-.mk-art-card.two {
-  bottom: 23%;
-  left: -9%;
-}
-.mk-art-card.three {
-  bottom: 4%;
-  right: 6%;
 }
 
 /* --- Shared section rhythm -------------------------------------------------- */
@@ -385,36 +431,53 @@ textarea {
   margin: 0.5rem 0 0;
 }
 
-/* --- Benefits --------------------------------------------------------------- */
-.mk-benefits-grid {
-  display: grid;
-  gap: 2.5rem 2rem;
-  grid-template-columns: repeat(3, 1fr);
-  text-align: center;
+/* --- Lifestyle/emotional section --------------------------------------------- */
+.mk-lifestyle {
+  max-width: none;
+  padding: 0 5vw 5.5rem;
+  width: 100%;
 }
-.mk-benefit {
-  display: grid;
-  gap: 0.6rem;
-  justify-items: center;
+.mk-lifestyle-panel {
+  background: linear-gradient(120deg, var(--colour-forest), var(--colour-forest-dark));
+  border-radius: var(--radius-shell);
+  color: var(--colour-cream-light);
+  margin: 0 auto;
+  max-width: 1160px;
+  padding: 4rem 5vw;
 }
-.mk-benefit-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 999px;
-  color: var(--colour-forest);
-  display: flex;
-  height: 52px;
-  justify-content: center;
-  width: 52px;
+.mk-lifestyle-panel h2 {
+  font-size: clamp(1.8rem, 3.4vw, 2.5rem);
+  margin: 0 0 1rem;
 }
-.mk-benefit h3 {
+.mk-lifestyle-panel > p {
+  color: rgb(250 247 241 / 80%);
   font-size: 1.05rem;
-  margin: 0;
+  line-height: 1.7;
+  max-width: 480px;
 }
-.mk-benefit p {
-  color: var(--colour-muted);
-  line-height: 1.6;
-  margin: 0;
+.mk-lifestyle-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem 2.5rem;
+  list-style: none;
+  margin: 2.5rem 0 0;
+  padding: 0;
+}
+.mk-lifestyle-points li {
+  align-items: center;
+  display: flex;
+  font-weight: 700;
+  gap: 0.6rem;
+}
+.mk-lifestyle-icon {
+  align-items: center;
+  background: rgb(255 255 255 / 12%);
+  border-radius: 999px;
+  color: var(--colour-cream-light);
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
 }
 
 /* --- Feature showcase -------------------------------------------------------- */
@@ -433,7 +496,17 @@ textarea {
 .mk-features-grid {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 960px) {
+  .mk-features-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .mk-features-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .mk-feature-card {
   background: var(--colour-white);
@@ -721,18 +794,17 @@ textarea {
     height: 300px;
     margin: 3.5rem 1rem 0;
   }
-  .mk-art-card {
-    font-size: 0.75rem;
-    width: 148px;
+  .mk-hero-phone {
+    position: static;
+    width: 100% !important;
+    height: auto !important;
   }
-  .mk-art-card.one {
-    right: 0;
+  .mk-hero-phone.two,
+  .mk-hero-phone.three {
+    display: none;
   }
-  .mk-art-card.two {
-    left: 0;
-  }
-  .mk-art-card.three {
-    right: 0;
+  .mk-hero-phone.one {
+    height: 220px !important;
   }
   .mk-section {
     padding: 3.5rem 1.25rem;
@@ -740,7 +812,12 @@ textarea {
   .mk-features {
     padding: 3.5rem 1.25rem;
   }
-  .mk-benefits-grid,
+  .mk-lifestyle {
+    padding: 0 1.25rem 3.5rem;
+  }
+  .mk-lifestyle-panel {
+    padding: 2.5rem 1.5rem;
+  }
   .mk-features-grid,
   .mk-how-grid {
     grid-template-columns: minmax(0, 1fr);

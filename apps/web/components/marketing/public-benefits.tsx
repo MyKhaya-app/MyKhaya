@@ -1,45 +1,38 @@
-import { Home, Repeat, ShieldCheck } from "lucide-react";
+import { Heart, Sun, Users } from "lucide-react";
 
 const BENEFITS = [
-  {
-    icon: Home,
-    title: "Everything in one place",
-    description:
-      "Your family's calendar, routines and lists together — no more juggling five different apps.",
-  },
-  {
-    icon: Repeat,
-    title: "Built around real routines",
-    description:
-      "Bins, medication, chores and the everyday things that actually keep a home running.",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Private to your household",
-    description:
-      "What you add stays with your family. Nothing you share is ever public.",
-  },
+  { icon: Heart, label: "Stronger family connections" },
+  { icon: Users, label: "Less stress, more calm" },
+  { icon: Sun, label: "More time for the moments that matter" },
 ] as const;
 
 export function PublicBenefits() {
   return (
     <section
-      className="mk-section mk-benefits"
-      aria-labelledby="benefits-heading"
+      id="lifestyle"
+      className="mk-section mk-lifestyle"
+      aria-labelledby="lifestyle-heading"
     >
-      <h2 id="benefits-heading" className="sr-only">
-        Why families use MyKhaya
-      </h2>
-      <div className="mk-benefits-grid">
-        {BENEFITS.map(({ icon: Icon, title, description }) => (
-          <div className="mk-benefit" key={title}>
-            <span className="mk-benefit-icon" aria-hidden="true">
-              <Icon size={22} strokeWidth={2} />
-            </span>
-            <h3>{title}</h3>
-            <p>{description}</p>
-          </div>
-        ))}
+      <div className="mk-lifestyle-panel">
+        <h2 id="lifestyle-heading">
+          Less organising.
+          <br />
+          More being together.
+        </h2>
+        <p>
+          MyKhaya helps families share the load, stay organised and make more
+          time for what really matters.
+        </p>
+        <ul className="mk-lifestyle-points">
+          {BENEFITS.map(({ icon: Icon, label }) => (
+            <li key={label}>
+              <span className="mk-lifestyle-icon" aria-hidden="true">
+                <Icon size={20} strokeWidth={2} />
+              </span>
+              {label}
+            </li>
+          ))}
+        </ul>
       </div>
     </section>
   );

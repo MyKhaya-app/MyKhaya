@@ -1,38 +1,41 @@
-import { CalendarDays, ListChecks, Users } from "lucide-react";
+import { Bell, CalendarDays, ListChecks, UtensilsCrossed } from "lucide-react";
 
-// Deliberately only the three modules that are actually live in the
-// product today (see mykhaya.module_registry — Calendar and household
-// members are ReleaseState.released/core; nothing here promises a module
-// that isn't shipped yet).
+// Deliberately only the modules that are actually live in the product today
+// (see mykhaya.module_registry — Calendar, Lists and Meal Plans are all
+// ReleaseState.released; Nudges is the shipped Routines + Reminders + To-dos
+// experience, see app/settings/routines-reminders). Nothing here promises a
+// module that isn't shipped yet.
 const FEATURES = [
   {
     icon: CalendarDays,
-    title: "One calendar, everyone on it",
-    description:
-      "Every event, appointment and birthday your household needs — colour-coded, easy to scan, never double-booked.",
+    title: "Calendar",
+    description: "Keep everyone in sync with shared family calendars.",
+  },
+  {
+    icon: UtensilsCrossed,
+    title: "Meals",
+    description: "Plan meals together and take the guesswork out of dinner.",
   },
   {
     icon: ListChecks,
-    title: "Routines that actually stick",
-    description:
-      "Bins, medication, homework — the small recurring things that are easy to forget, kept visible for the whole family.",
+    title: "Lists",
+    description: "Shared shopping, to-dos and more — so nothing gets forgotten.",
   },
   {
-    icon: Users,
-    title: "A place for everyone in your home",
-    description:
-      "Add the people who share your home, from partners to kids, each with their own view of what matters to them.",
+    icon: Bell,
+    title: "Nudges",
+    description: "Gentle reminders to help everyone stay on track.",
   },
 ] as const;
 
 export function PublicFeatures() {
   return (
     <section
+      id="features"
       className="mk-section mk-features"
       aria-labelledby="features-heading"
     >
       <div className="mk-section-heading">
-        <p className="eyebrow">See it in action</p>
         <h2 id="features-heading">Made for how families actually run</h2>
       </div>
       <div className="mk-features-grid">

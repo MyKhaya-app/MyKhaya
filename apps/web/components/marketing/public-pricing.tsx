@@ -98,6 +98,7 @@ export function PublicPricing() {
 
   return (
     <section
+      id="pricing"
       className="mk-section mk-pricing"
       aria-labelledby="pricing-heading"
     >
