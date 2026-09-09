@@ -314,7 +314,7 @@ textarea {
 
 /* --- Header --------------------------------------------------------------- */
 .mk-header {
-  background: rgb(250 247 241 / 88%);
+  background: rgb(250 247 241 / 92%);
   backdrop-filter: blur(10px);
   /* This is the public marketing homepage's header — a sticky element
      pinned to `top: 0`, which puts it directly under the iOS status bar/
@@ -323,7 +323,7 @@ textarea {
      .auth-page/.platform-login/the authenticated .app-header, never this
      page). Same shared-variable approach, applied here for the first time —
      a no-op in an ordinary browser tab. */
-  padding: max(1.5rem, var(--safe-top)) max(5vw, var(--safe-right)) 1.5rem max(5vw, var(--safe-left));
+  padding: max(1rem, var(--safe-top)) max(4vw, var(--safe-right)) 1rem max(4vw, var(--safe-left));
   position: sticky;
   top: 0;
   z-index: 20;
@@ -334,7 +334,15 @@ textarea {
   gap: 1.5rem;
   justify-content: space-between;
   margin: auto;
-  max-width: 1320px;
+  max-width: 1500px;
+}
+.mk-header-logo .brand {
+  font-size: 1.45rem;
+  gap: 0.65rem;
+}
+.mk-header-logo .brand-mark {
+  height: 2.65rem;
+  width: 2.55rem;
 }
 .mk-header-links {
   align-items: center;
@@ -365,25 +373,39 @@ textarea {
 /* --- Hero ------------------------------------------------------------------ */
 .mk-hero {
   align-items: center;
-  background: radial-gradient(circle at 80% 20%, #ede3d3, transparent 40%);
+  background:
+    radial-gradient(circle at 76% 42%, rgb(227 216 195 / 72%), transparent 33%),
+    radial-gradient(circle at 98% 4%, rgb(245 236 218 / 88%), transparent 34%);
   display: grid;
-  gap: 4vw;
-  grid-template-columns: 1fr 1.15fr;
+  gap: 2vw;
+  grid-template-columns: minmax(410px, 0.88fr) minmax(690px, 1.32fr);
   margin: 0 auto;
-  max-width: 1320px;
-  padding: 5vh 5vw 8vh;
+  max-width: 1500px;
+  min-height: 690px;
+  padding: 4.5rem 4vw 4rem;
+}
+.mk-hero-copy {
+  position: relative;
+  z-index: 3;
+}
+.mk-hero-copy .eyebrow {
+  color: var(--colour-forest);
+  font-size: 0.78rem;
+  letter-spacing: 0.2em;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
 }
 .mk-hero h1 {
-  font-size: clamp(2.6rem, 5vw, 4.25rem);
+  font-size: clamp(3.25rem, 5.2vw, 5.5rem);
   letter-spacing: -0.03em;
-  line-height: 1.03;
-  margin: 0 0 1.5rem;
+  line-height: 0.98;
+  margin: 0 0 1.35rem;
 }
 .mk-hero-lead {
   color: var(--colour-muted);
-  font-size: 1.2rem;
-  line-height: 1.7;
-  max-width: 560px;
+  font-size: clamp(1.08rem, 1.45vw, 1.32rem);
+  line-height: 1.55;
+  max-width: 600px;
 }
 .mk-hero-actions {
   align-items: center;
@@ -409,7 +431,8 @@ textarea {
   margin-right: 0.4rem;
 }
 .mk-hero-art {
-  height: 620px;
+  height: 680px;
+  min-width: 0;
   position: relative;
 }
 .mk-hero-phone {
@@ -431,25 +454,27 @@ textarea {
    half, matching the approved reference: Meal Plans behind on the left,
    Calendar behind on the right, Home the largest and frontmost. */
 .mk-hero-phone.meal {
-  height: 460px;
-  left: 0;
-  top: 16%;
-  width: 240px;
+  height: 540px;
+  left: 2%;
+  top: 13%;
+  transform: rotate(-7deg);
+  width: 270px;
   z-index: 1;
 }
 .mk-hero-phone.calendar {
-  height: 460px;
-  right: 0;
-  top: 22%;
-  width: 240px;
+  height: 540px;
+  right: 1%;
+  top: 17%;
+  transform: rotate(7deg);
+  width: 270px;
   z-index: 1;
 }
 .mk-hero-phone.home {
-  height: 590px;
+  height: 670px;
   left: 50%;
   top: 0;
   transform: translateX(-50%);
-  width: 280px;
+  width: 335px;
   z-index: 2;
 }
 
@@ -457,7 +482,7 @@ textarea {
 .mk-section {
   margin: 0 auto;
   max-width: 1320px;
-  padding: 5.5rem 5vw;
+  padding: 4.25rem 4vw;
 }
 .mk-section-heading {
   margin: 0 auto 2.75rem;
@@ -472,7 +497,7 @@ textarea {
 /* --- Lifestyle/emotional section --------------------------------------------- */
 .mk-lifestyle {
   max-width: none;
-  padding: 0 5vw 5.5rem;
+  padding: 0 4vw 4.25rem;
   width: 100%;
 }
 .mk-lifestyle-panel {
@@ -480,9 +505,30 @@ textarea {
   border-radius: var(--radius-shell);
   color: var(--colour-cream-light);
   margin: 0 auto;
-  max-width: 1320px;
-  min-height: 340px;
-  padding: 4.5rem 5vw;
+  max-width: 1500px;
+  min-height: 360px;
+  overflow: hidden;
+  padding: 4.5rem clamp(2rem, 7vw, 7rem);
+  position: relative;
+}
+.mk-lifestyle-panel::before,
+.mk-lifestyle-panel::after {
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 50%;
+  content: "";
+  height: 250px;
+  position: absolute;
+  width: 250px;
+}
+.mk-lifestyle-panel::before {
+  right: -70px;
+  top: -90px;
+  transform: rotate(28deg);
+}
+.mk-lifestyle-panel::after {
+  bottom: -130px;
+  left: -55px;
+  transform: rotate(-25deg);
 }
 .mk-lifestyle-panel h2 {
   font-size: clamp(2rem, 3.8vw, 2.75rem);
@@ -495,9 +541,9 @@ textarea {
   max-width: 520px;
 }
 .mk-lifestyle-points {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 1.25rem 2.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   list-style: none;
   margin: 2.5rem 0 0;
   padding: 0;
@@ -524,7 +570,7 @@ textarea {
   background: var(--colour-cream);
   margin: 0;
   max-width: none;
-  padding: 5.5rem 5vw;
+  padding: 3.25rem 4vw 4.25rem;
   width: 100%;
 }
 .mk-features .mk-section-heading,
@@ -534,8 +580,9 @@ textarea {
 }
 .mk-features-grid {
   display: grid;
-  gap: 1.75rem;
+  gap: 1.25rem;
   grid-template-columns: repeat(4, 1fr);
+  max-width: 1500px;
 }
 @media (max-width: 960px) {
   .mk-features-grid {
@@ -552,18 +599,28 @@ textarea {
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   display: grid;
-  gap: 0.85rem;
-  padding: 2.25rem 2rem;
+  gap: 0.7rem;
+  min-height: 220px;
+  padding: 1.45rem 1.4rem 1.3rem;
 }
 .mk-feature-icon {
   align-items: center;
-  background: var(--colour-cream);
+  background: var(--colour-sage-soft);
   border-radius: 0.85rem;
   color: var(--colour-terracotta);
   display: flex;
   height: 56px;
   justify-content: center;
   width: 56px;
+}
+.mk-feature-card:nth-child(2) .mk-feature-icon,
+.mk-feature-card:nth-child(4) .mk-feature-icon {
+  background: var(--colour-cream);
+  color: var(--colour-terracotta);
+}
+.mk-feature-card:nth-child(3) .mk-feature-icon {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest);
 }
 .mk-feature-card h3 {
   font-size: 1.15rem;
@@ -623,8 +680,10 @@ textarea {
 .mk-pricing-grid {
   align-items: start;
   display: grid;
-  gap: 1.75rem;
+  gap: 1rem;
   grid-template-columns: 1fr 1.15fr;
+  margin: 0 auto;
+  max-width: 980px;
 }
 .mk-plan {
   border-radius: var(--radius-hero);
@@ -641,18 +700,16 @@ textarea {
 }
 .mk-plan-family {
   align-content: start;
-  background: linear-gradient(
-    165deg,
-    var(--colour-forest),
-    var(--colour-forest-dark)
-  );
+  background: var(--colour-white);
+  border: 2px solid var(--colour-forest);
   box-shadow: var(--shadow-hero);
-  color: white;
+  color: var(--colour-slate);
+  transform: translateY(-0.75rem);
 }
 .mk-plan-badge {
-  background: var(--colour-mustard);
+  background: var(--colour-forest);
   border-radius: 999px;
-  color: #4a3306;
+  color: white;
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -671,7 +728,7 @@ textarea {
   margin: 0.3rem 0 0;
 }
 .mk-plan-family .mk-plan-tagline {
-  color: rgb(255 255 255 / 78%);
+  color: var(--colour-muted);
 }
 .mk-plan-price {
   font-size: 2.5rem;
@@ -686,16 +743,14 @@ textarea {
 .mk-plan-free .mk-plan-price span {
   color: var(--colour-muted);
 }
-.mk-plan-family .mk-plan-price span {
-  color: rgb(255 255 255 / 78%);
-}
+.mk-plan-family .mk-plan-price span { color: var(--colour-muted); }
 .mk-plan-hint {
-  color: rgb(255 255 255 / 78%);
+  color: var(--colour-muted);
   font-size: 0.85rem;
   margin: -0.75rem 0 0;
 }
 .mk-plan-loading {
-  color: rgb(255 255 255 / 78%);
+  color: var(--colour-muted);
 }
 .mk-plan-toggle {
   display: flex;
@@ -707,9 +762,9 @@ textarea {
   padding: 0.55rem 0.75rem;
 }
 .mk-plan-toggle .secondary {
-  background: rgb(255 255 255 / 12%);
-  border-color: rgb(255 255 255 / 25%);
-  color: white;
+  background: var(--colour-cream-light);
+  border-color: var(--colour-sage);
+  color: var(--colour-slate);
 }
 .mk-plan-toggle .toggle-active {
   background: white;
@@ -724,7 +779,7 @@ textarea {
   list-style: none;
 }
 .mk-plan-family .mk-plan-list {
-  color: rgb(255 255 255 / 92%);
+  color: var(--colour-muted);
 }
 .mk-plan-list li {
   padding-left: 1.6rem;
@@ -740,7 +795,7 @@ textarea {
   color: var(--colour-sage-dark);
 }
 .mk-plan-family .mk-plan-list li::before {
-  color: var(--colour-mustard);
+  color: var(--colour-forest);
 }
 .mk-plan-cta {
   margin-top: 0.25rem;
@@ -748,21 +803,18 @@ textarea {
   width: 100%;
 }
 .mk-plan-cta-family {
-  background: white;
-  color: var(--colour-forest-dark);
+  background: var(--colour-forest);
+  color: white;
 }
 .mk-plan-cta-family:hover {
   background: var(--colour-cream);
+  color: var(--colour-forest-dark);
 }
 
 /* --- Final CTA ------------------------------------------------------------------ */
 .mk-final-cta {
-  background: linear-gradient(
-    165deg,
-    var(--colour-forest),
-    var(--colour-forest-dark)
-  );
-  color: white;
+  background: var(--colour-sage-soft);
+  color: var(--colour-slate);
   margin: 0;
   max-width: none;
   padding: 5.5rem 5vw;
@@ -775,27 +827,30 @@ textarea {
   max-width: 620px;
 }
 .mk-final-cta p {
-  color: rgb(255 255 255 / 82%);
+  color: var(--colour-muted);
   margin: 0 auto 2rem;
 }
 .mk-final-cta-button {
-  background: white;
-  color: var(--colour-forest-dark);
+  background: var(--colour-forest);
+  color: white;
 }
 .mk-final-cta-button:hover {
   background: var(--colour-cream);
+  color: var(--colour-forest-dark);
 }
 
 /* --- Footer ------------------------------------------------------------------ */
 .mk-footer {
   border-top: 1px solid #ece5d6;
   margin: 0 auto;
-  max-width: 1160px;
-  padding: 3rem 5vw 3.5rem;
+  max-width: 1500px;
+  padding: 2.5rem 4vw 3rem;
+  text-align: center;
 }
 .mk-footer-brand {
   display: grid;
   gap: 0.5rem;
+  justify-items: center;
 }
 .mk-footer-brand p {
   color: var(--colour-muted);
@@ -805,7 +860,8 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 1.25rem;
-  margin: 1.75rem 0;
+  justify-content: center;
+  margin: 1.4rem 0;
 }
 .mk-footer-links a {
   color: var(--colour-slate);
@@ -821,8 +877,31 @@ textarea {
   .mk-pricing-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+  .mk-plan-family {
+    transform: none;
+  }
   .mk-plan-badge {
     right: 1.5rem;
+  }
+}
+@media (max-width: 1100px) and (min-width: 801px) {
+  .mk-hero {
+    gap: 1rem;
+    grid-template-columns: minmax(300px, 0.8fr) minmax(500px, 1.2fr);
+    min-height: 600px;
+    padding-inline: 3vw;
+  }
+  .mk-hero-art {
+    height: 590px;
+  }
+  .mk-hero-phone.meal,
+  .mk-hero-phone.calendar {
+    height: 450px;
+    width: 225px;
+  }
+  .mk-hero-phone.home {
+    height: 570px;
+    width: 285px;
   }
 }
 @media (max-width: 800px) {
@@ -835,6 +914,7 @@ textarea {
   }
   .mk-hero {
     display: block;
+    min-height: 0;
     padding: 3vh 1.25rem 4rem;
   }
   .mk-hero-art {
@@ -856,6 +936,9 @@ textarea {
   }
   .mk-hero-phone.home img {
     height: 320px;
+  }
+  .mk-lifestyle-points {
+    grid-template-columns: minmax(0, 1fr);
   }
   .mk-section {
     padding: 3.5rem 1.25rem;
