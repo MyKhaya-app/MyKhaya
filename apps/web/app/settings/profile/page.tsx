@@ -8,7 +8,8 @@ import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
-import { normalizeAvatarFile } from "@/components/avatar-upload";
+import { normalizeAvatarFile, isImageFormatRejection } from "@/components/avatar-upload";
+import { isNativeShell } from "@/components/native-runtime";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -83,6 +84,11 @@ export default function Profile() {
     const file = event.target.files?.[0];
     // Reset so choosing the same file again (e.g. after fixing it) still fires onChange.
     event.target.value = "";
+    // No file: either the user cancelled the native picker (Photo Library or
+    // Take Photo) or, for the camera specifically, iOS denied/never granted
+    // camera permission — both surface identically here (no change event
+    // fires, or files is empty), and both should silently return rather than
+    // show an error, per the existing "cancel is not a failure" behaviour.
     if (!file) return;
 
     setAvatarError("");
@@ -93,15 +99,32 @@ export default function Profile() {
 
     setAvatarBusy(true);
     try {
-      const updated = await api.uploadAvatar(await normalizeAvatarFile(file));
+      const normalized = await normalizeAvatarFile(file);
+      const updated = await api.uploadAvatar(normalized);
       setUser(updated);
       emitUserUpdated(updated);
     } catch (cause) {
-      setAvatarError(
-        cause instanceof ApiError
-          ? cause.message
-          : "Could not upload that photo. Please try again.",
-      );
+      // TEMPORARY diagnostic for the iOS HEIC investigation — see
+      // components/avatar-upload.ts's logAvatarDiagnostic.
+      console.debug("[avatar-upload] upload-rejected", {
+        native: isNativeShell(),
+        status: cause instanceof ApiError ? cause.status : undefined,
+        message: cause instanceof ApiError ? cause.message : String(cause),
+      });
+      if (cause instanceof ApiError && isImageFormatRejection(cause)) {
+        // IMAGE PROCESSING FAILURE — the backend's own wording ("...JPEG,
+        // PNG or WebP") is meant for troubleshooting, not an ordinary iPhone
+        // photo owner who doesn't know (and shouldn't need to know) what
+        // HEIC is.
+        setAvatarError("We couldn't process that photo. Please try another image.");
+      } else if (cause instanceof ApiError) {
+        // UPLOAD FAILURE with a specific, already user-appropriate reason
+        // (rate limit, auth, etc.) — existing behaviour, unchanged.
+        setAvatarError(cause.message);
+      } else {
+        // UPLOAD FAILURE with no specific reason available (network error).
+        setAvatarError("Could not upload that photo. Please try again.");
+      }
     } finally {
       setAvatarBusy(false);
     }
@@ -162,7 +185,22 @@ export default function Profile() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            // Deliberately does NOT list image/heic or image/heif here. On iOS,
+            // WKWebView/Safari auto-transcodes a HEIC Photos-library asset to
+            // JPEG before handing it to the page ONLY when the input's accept
+            // list doesn't itself claim to accept HEIC/HEIF — declaring those
+            // types (as the previous version of this input did) tells iOS the
+            // page wants the original bytes, which suppresses that built-in
+            // conversion and is why real iPhone photos were arriving as raw
+            // HEIC and being rejected. Photos are not filtered out of the
+            // picker by this narrower list; iOS matches by broad image
+            // conformance and still offers HEIC-source photos, it just
+            // converts them for us on the way out. normalizeAvatarFile()
+            // below remains a client-side fallback for the rare case a raw
+            // HEIC/HEIF file still arrives (Files app, older iOS, non-Apple
+            // devices), and the server's pillow-heif decode is the final,
+            // authoritative fallback either way.
+            accept="image/jpeg,image/png,image/webp"
             style={{ display: "none" }}
             onChange={handleAvatarSelected}
           />
