@@ -1,11 +1,15 @@
 "use client";
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { Member, User } from "@mykhaya/shared-types";
 import type { ColourKey } from "@mykhaya/design-tokens";
 import { api, ApiError } from "@mykhaya/api-client";
+import { Bell, Camera, ChevronRight, Shield, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { BottomSheet } from "@/components/bottom-sheet";
 import { SettingsPage } from "@/components/settings-page";
+import { Toast } from "@/components/toast";
 import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
 import { normalizeAvatarFile, isImageFormatRejection } from "@/components/avatar-upload";
@@ -18,6 +22,18 @@ const MONTHS = [
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
+function roleLabel(relationship?: Member["relationship"]) {
+  switch (relationship) {
+    case "home_admin": return "Home admin";
+    case "partner": return "Partner";
+    case "child": return "Child";
+    case "extended_family": return "Extended family";
+    case "friend": return "Friend";
+    case "adult": return "Adult";
+    default: return undefined;
+  }
+}
+
 export default function Profile() {
   const { activeHomeId, activeHome } = useActiveHome();
   const [user, setUser] = useState<User | null>(null);
@@ -29,7 +45,9 @@ export default function Profile() {
   const [membership, setMembership] = useState<Member | null>(null);
   const [colourBusy, setColourBusy] = useState(false);
   const [colourError, setColourError] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
+  const libraryInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.me().then(setUser);
@@ -49,6 +67,7 @@ export default function Profile() {
     try {
       const updated = await api.updateMemberColour(activeHomeId, user.id, colour);
       setMembership(updated);
+      setMessage("Your colour was updated.");
     } catch (cause) {
       setColourError(
         cause instanceof ApiError ? cause.message : "Could not update your colour.",
@@ -72,7 +91,7 @@ export default function Profile() {
         birth_day: day ? Number(day) : null,
       });
       setUser(updated);
-      setMessage("Birthday saved.");
+      setMessage("Your birthday was saved.");
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -92,6 +111,7 @@ export default function Profile() {
     if (!file) return;
 
     setAvatarError("");
+    setPhotoSheetOpen(false);
     if (file.size > MAX_AVATAR_BYTES) {
       setAvatarError("That photo is too large. Please choose one under 5 MB.");
       return;
@@ -103,6 +123,7 @@ export default function Profile() {
       const updated = await api.uploadAvatar(normalized);
       setUser(updated);
       emitUserUpdated(updated);
+      setMessage("Your photo was updated.");
     } catch (cause) {
       // TEMPORARY diagnostic for the iOS HEIC investigation — see
       // components/avatar-upload.ts's logAvatarDiagnostic.
@@ -137,6 +158,8 @@ export default function Profile() {
       const updated = await api.removeAvatar();
       setUser(updated);
       emitUserUpdated(updated);
+      setPhotoSheetOpen(false);
+      setMessage("Your photo was removed.");
     } catch (cause) {
       setAvatarError(
         cause instanceof ApiError
@@ -148,12 +171,14 @@ export default function Profile() {
     }
   }
 
+  const dismissMessage = useCallback(() => setMessage(""), []);
+
   return (
-    <SettingsPage title="Your profile">
+    <SettingsPage title="Your profile" className="profile-page">
+      <p className="profile-supporting-line">Keep your details up to date</p>
       {user && (
-        <section className="card details avatar-editor">
-          <h2>Your photo</h2>
-          <div className="avatar-editor-row">
+        <section className="card profile-identity-card">
+          <div className="profile-identity-main">
             <Avatar
               id={user.id}
               name={user.display_name}
@@ -161,11 +186,19 @@ export default function Profile() {
               avatarVersion={user.avatar_version}
               size="xl"
             />
-            <div className="avatar-editor-actions">
+            <div className="profile-identity-copy">
+              <h2>{user.display_name}</h2>
+              <p>{activeHome?.name ?? "Your Home"}</p>
+              {membership && roleLabel(membership.relationship) && (
+                <span className="profile-role-pill">{roleLabel(membership.relationship)}</span>
+              )}
+            </div>
+          </div>
+          <div className="profile-photo-actions">
               <button
                 type="button"
                 className="secondary"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setPhotoSheetOpen(true)}
                 disabled={avatarBusy}
               >
                 {avatarBusy ? "Working…" : "Change photo"}
@@ -180,10 +213,9 @@ export default function Profile() {
                   Remove photo
                 </button>
               )}
-            </div>
           </div>
           <input
-            ref={fileInputRef}
+            ref={libraryInputRef}
             type="file"
             // Deliberately does NOT list image/heic or image/heif here. On iOS,
             // WKWebView/Safari auto-transcodes a HEIC Photos-library asset to
@@ -204,6 +236,14 @@ export default function Profile() {
             style={{ display: "none" }}
             onChange={handleAvatarSelected}
           />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            capture="environment"
+            style={{ display: "none" }}
+            onChange={handleAvatarSelected}
+          />
           {avatarError && (
             <p className="notice error" role="alert">
               {avatarError}
@@ -213,7 +253,7 @@ export default function Profile() {
       )}
 
       {user && membership && (
-        <section className="card details">
+        <section className="card profile-colour-card">
           <h2>Your colour</h2>
           <p className="muted">
             Used for your avatar and anywhere you show up as yourself in{" "}
@@ -234,7 +274,7 @@ export default function Profile() {
         </section>
       )}
 
-      <section className="card details">
+      <section className="card profile-info-card">
         <h2>Account details</h2>
         <dl>
           <div>
@@ -249,7 +289,26 @@ export default function Profile() {
             <dt>Email status</dt>
             <dd>{user?.email_verified ? "Verified" : "Verification needed"}</dd>
           </div>
+          {membership && roleLabel(membership.relationship) && (
+            <div>
+              <dt>Role</dt>
+              <dd>{roleLabel(membership.relationship)}</dd>
+            </div>
+          )}
         </dl>
+      </section>
+
+      <section className="profile-settings-links" aria-label="Profile settings">
+        <Link className="card profile-settings-row" href="/settings/security">
+          <span className="profile-settings-icon"><Shield size={19} aria-hidden="true" /></span>
+          <span><strong>Security</strong><small>Password and account protection</small></span>
+          <ChevronRight size={19} aria-hidden="true" />
+        </Link>
+        <Link className="card profile-settings-row" href="/settings/notifications">
+          <span className="profile-settings-icon"><Bell size={19} aria-hidden="true" /></span>
+          <span><strong>Notifications</strong><small>Choose how MyKhaya keeps you informed</small></span>
+          <ChevronRight size={19} aria-hidden="true" />
+        </Link>
       </section>
 
       {error && (
@@ -257,14 +316,8 @@ export default function Profile() {
           {error}
         </p>
       )}
-      {message && (
-        <p className="notice" role="status">
-          {message}
-        </p>
-      )}
-
       {user && (
-        <form className="card details" onSubmit={saveBirthday}>
+        <form className="card profile-birthday-card" onSubmit={saveBirthday}>
           <h2>Your birthday</h2>
           <p>
             Shared with your household so they can wish you well and MyKhaya can remind
@@ -294,6 +347,30 @@ export default function Profile() {
           <button disabled={saving}>{saving ? "Saving…" : "Save birthday"}</button>
         </form>
       )}
+
+      {photoSheetOpen && user && (
+        <BottomSheet title="Change your photo" onDismiss={() => setPhotoSheetOpen(false)}>
+          <div className="profile-photo-sheet">
+            <p className="muted">Choose a clear photo for your MyKhaya profile.</p>
+            <button type="button" className="secondary" onClick={() => cameraInputRef.current?.click()}>
+              <Camera size={18} aria-hidden="true" /> Take photo
+            </button>
+            <button type="button" className="secondary" onClick={() => libraryInputRef.current?.click()}>
+              Choose from library
+            </button>
+            {user.avatar_version && (
+              <button type="button" className="tertiary" onClick={handleRemoveAvatar} disabled={avatarBusy}>
+                <Trash2 size={18} aria-hidden="true" /> Remove photo
+              </button>
+            )}
+            <button type="button" className="tertiary" onClick={() => setPhotoSheetOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </BottomSheet>
+      )}
+
+      <Toast message={message} onDismiss={dismissMessage} />
     </SettingsPage>
   );
 }

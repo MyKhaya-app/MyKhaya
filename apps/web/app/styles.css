@@ -8765,3 +8765,122 @@ a.family-feed-row {
   font-size: var(--font-small);
   font-weight: 600;
 }
+
+.profile-page {
+  display: grid;
+  gap: 1rem;
+}
+.profile-supporting-line {
+  color: var(--colour-muted);
+  margin: -0.65rem 0 0;
+}
+.profile-identity-card,
+.profile-colour-card,
+.profile-info-card,
+.profile-birthday-card {
+  padding: 1.25rem;
+}
+.profile-identity-card {
+  display: grid;
+  gap: 1rem;
+}
+.profile-identity-main {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+}
+.profile-identity-copy {
+  min-width: 0;
+}
+.profile-identity-copy h2,
+.profile-colour-card h2,
+.profile-info-card h2,
+.profile-birthday-card h2 {
+  margin-top: 0;
+}
+.profile-identity-copy h2 {
+  margin-bottom: 0;
+}
+.profile-identity-copy p {
+  color: var(--colour-muted);
+  margin: 0.25rem 0 0.45rem;
+}
+.profile-role-pill {
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-sage-dark);
+  display: inline-block;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  padding: 0.25rem 0.6rem;
+}
+.profile-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.profile-photo-actions button,
+.profile-photo-sheet button {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+.profile-colour-card > p {
+  color: var(--colour-muted);
+  margin: 0.25rem 0 1rem;
+}
+.profile-settings-links {
+  display: grid;
+  gap: 0.65rem;
+}
+.profile-settings-row {
+  align-items: center;
+  color: inherit;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 1rem;
+  text-decoration: none;
+}
+.profile-settings-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 0.7rem;
+  color: var(--colour-forest);
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.profile-settings-row strong,
+.profile-settings-row small {
+  display: block;
+}
+.profile-settings-row small {
+  color: var(--colour-muted);
+  margin-top: 0.2rem;
+}
+.profile-birthday-card {
+  display: grid;
+  gap: 0.75rem;
+}
+.profile-birthday-card h2,
+.profile-birthday-card p {
+  margin-bottom: 0;
+}
+.profile-birthday-card > label {
+  display: grid;
+  gap: 0.35rem;
+}
+.profile-photo-sheet {
+  display: grid;
+  gap: 0.65rem;
+}
+.profile-photo-sheet p {
+  margin-top: 0;
+}
+.profile-photo-sheet button {
+  justify-content: center;
+  min-height: 44px;
+  width: 100%;
+}
