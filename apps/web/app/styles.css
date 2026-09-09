@@ -1686,6 +1686,12 @@ html.native-shell .home-section-overlap {
   padding-bottom: 8px;
   padding-top: 12px;
 }
+/* Tighter header-to-first-row gap than the shared .home-summary-card rule —
+   scoped to this card only, since Today/Coming up's own spacing is unrelated
+   and must not move. */
+.home-todo-section .section-heading {
+  margin-bottom: 0.35rem;
+}
 .home-routine-list {
   display: grid;
 }
@@ -1707,7 +1713,7 @@ html.native-shell .home-section-overlap {
   gap: 0.7rem;
   grid-template-columns: 40px minmax(0, 1fr);
   min-height: 42px;
-  padding: 0.3rem 0.1rem;
+  padding: 0.35rem 0.1rem;
 }
 .home-routine-row:last-child {
   border-bottom: 0;
@@ -1763,13 +1769,23 @@ html.native-shell .home-section-overlap {
   color: var(--colour-muted);
   font-size: 0.625rem;
 }
-/* A subtle, text-only Routine/Reminder distinction on the combined Home To-do
-   list — deliberately not a coloured badge/pill, which would be visual noise
-   at this size next to the due-date/scope text it sits beside. */
+/* The due-date/day line — secondary to the title, but the strongest of the
+   two small lines, so "Today · Wednesday" reads before the quieter
+   scope/type line beneath it. */
+.home-nudge-date {
+  color: var(--colour-slate);
+  font-size: 0.7rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+/* A subtle, text-only Personal/Household · Routine/Reminder/To-do
+   distinction on the combined Home Nudges list — deliberately not a
+   coloured badge/pill, which would be visual noise at this size, and
+   deliberately natural title case (never upper-cased) to read as words,
+   not a label chip. The most subdued line in the row. */
 .home-todo-kind {
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  opacity: 0.75;
+  letter-spacing: 0.01em;
+  opacity: 0.65;
 }
 /* Completed rows recede — smaller/muted text on top of the already-smaller
    completed dot above, so an outstanding item is always the visual anchor. */

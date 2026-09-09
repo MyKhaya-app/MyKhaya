@@ -753,8 +753,11 @@ describe("Home — household routines", () => {
     render(<HomePage />);
 
     expect(await screen.findByText("Put green bin out")).toBeInTheDocument();
-    expect(document.querySelector('img[src="/images/home-to-do.svg"]')).toBeInTheDocument();
-    expect(screen.getByText(/Tomorrow · Household/)).toBeInTheDocument();
+    expect(document.querySelector('img[src="/images/home-nudges.png"]')).toBeInTheDocument();
+    // Weekday-agnostic: the test's own "tomorrow" is a real relative date,
+    // so its actual weekday name varies with when the suite runs.
+    expect(screen.getByText(/^Tomorrow · \w+day$/)).toBeInTheDocument();
+    expect(screen.getByText("Household · Routine")).toBeInTheDocument();
     screen.getByRole("button", { name: /complete put green bin out/i }).click();
     expect(await screen.findByText(/Done by Megan/)).toBeInTheDocument();
     expect(api.completeRoutine).toHaveBeenCalledWith("home-1", "routine-1", tomorrow);
@@ -900,8 +903,9 @@ describe("Home — reminders on the combined To-do list", () => {
     const rows = document.querySelectorAll(".home-routine-row");
     expect(rows).toHaveLength(2);
     expect(document.querySelectorAll(".home-todo-kind")).toHaveLength(2);
-    expect(screen.getByText("Routine")).toBeInTheDocument();
-    expect(screen.getByText("Reminder")).toBeInTheDocument();
+    // Natural title case, never upper-cased ("ROUTINE").
+    expect(screen.getByText("Household · Routine")).toBeInTheDocument();
+    expect(screen.getByText("Personal · Reminder")).toBeInTheDocument();
   });
 
   it("completes a reminder from Home without affecting an unrelated routine", async () => {

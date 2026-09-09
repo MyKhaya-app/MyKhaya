@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { localIsoDate, routineDueLabel } from "./routine-utils";
+import { localIsoDate, nudgeCardDateLabel, routineDueLabel } from "./routine-utils";
 
 // Regression coverage for the Home "To do" card's due-date label. It used to
 // compute "today" via `new Date().toISOString().slice(0, 10)` — an ISO
@@ -33,6 +33,39 @@ describe("routineDueLabel — pure label logic", () => {
 
   it("handles a month/year boundary when computing 'tomorrow'", () => {
     expect(routineDueLabel("2027-01-01", "2026-12-31")).toBe("Tomorrow");
+  });
+});
+
+describe("nudgeCardDateLabel — Home Nudges card's weekday-aware due-date line", () => {
+  it("returns 'Scheduled' when there is no occurrence date", () => {
+    expect(nudgeCardDateLabel(null, "2026-08-21")).toBe("Scheduled");
+    expect(nudgeCardDateLabel(undefined, "2026-08-21")).toBe("Scheduled");
+  });
+
+  it("names today's actual weekday", () => {
+    // 2026-08-21 is a Friday.
+    expect(nudgeCardDateLabel("2026-08-21", "2026-08-21")).toBe("Today · Friday");
+  });
+
+  it("names tomorrow's actual weekday", () => {
+    // 2026-08-22 is a Saturday.
+    expect(nudgeCardDateLabel("2026-08-22", "2026-08-21")).toBe("Tomorrow · Saturday");
+  });
+
+  it("shows weekday and day/month for anything further than tomorrow, never a raw ISO date", () => {
+    // 2026-08-25 is a Tuesday.
+    expect(nudgeCardDateLabel("2026-08-25", "2026-08-21")).toBe("Tuesday · 25 Aug");
+    expect(nudgeCardDateLabel("2026-08-25", "2026-08-21")).not.toContain("2026-08-25");
+  });
+
+  it("prefixes an overdue date with 'Overdue' and still names its actual weekday", () => {
+    // 2026-08-20 is a Thursday.
+    expect(nudgeCardDateLabel("2026-08-20", "2026-08-21")).toBe("Overdue · Thursday · 20 Aug");
+  });
+
+  it("handles a month/year boundary when computing 'tomorrow'", () => {
+    // 2027-01-01 is a Friday.
+    expect(nudgeCardDateLabel("2027-01-01", "2026-12-31")).toBe("Tomorrow · Friday");
   });
 });
 

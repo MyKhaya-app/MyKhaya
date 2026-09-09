@@ -39,7 +39,7 @@ import {
   upcomingBirthdayIcon,
   upcomingBirthdayLabel,
 } from "./birthday-utils";
-import { routineDueLabel } from "./routine-utils";
+import { nudgeCardDateLabel } from "./routine-utils";
 import {
   FALLBACK_TIMEZONE,
   calendarDateAfter,
@@ -575,8 +575,8 @@ export default function HomePage() {
         {todoItems.length > 0 && (
           <section className="card home-section home-summary-card home-todo-section">
             <div className="section-heading">
-              <img className="home-card-image" src="/images/home-to-do.svg" alt="" aria-hidden="true" />
-              <h2>To do</h2>
+              <img className="home-card-image" src="/images/home-nudges.png" alt="" aria-hidden="true" />
+              <h2>Nudges</h2>
               <Link className="tertiary home-card-action" href="/settings/routines-reminders">
                 See all
                 <ChevronRight size={20} aria-hidden="true" />
@@ -590,6 +590,8 @@ export default function HomePage() {
                   item.kind === "routine"
                     ? "/settings/routines-reminders?type=routines"
                     : "/settings/routines-reminders?type=reminders";
+                const scopeLabel = data.scope === "household" ? "Household" : "Personal";
+                const kindLabel = item.kind === "routine" ? "Routine" : "Reminder";
                 return (
                   <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={item.id}>
                     <button
@@ -608,17 +610,22 @@ export default function HomePage() {
                     </button>
                     <Link className="home-routine-copy" href={href}>
                       <strong>{data.title}</strong>
-                      <small>
-                        {completed
-                          ? data.scope === "household" && data.home_completed_by_display_name
+                      {completed ? (
+                        <small>
+                          {data.scope === "household" && data.home_completed_by_display_name
                             ? `Done by ${data.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`
-                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`
-                          : `${routineDueLabel(data.home_occurrence_date)} · ${data.scope === "household" ? "Household" : "Personal"}`}
-                        {" · "}
-                        <span className="home-todo-kind">
-                          {item.kind === "routine" ? "Routine" : "Reminder"}
-                        </span>
-                      </small>
+                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`}
+                        </small>
+                      ) : (
+                        <>
+                          <small className="home-nudge-date">
+                            {nudgeCardDateLabel(data.home_occurrence_date)}
+                          </small>
+                          <small className="home-todo-kind">
+                            {scopeLabel} · {kindLabel}
+                          </small>
+                        </>
+                      )}
                     </Link>
                   </div>
                 );
