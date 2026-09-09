@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Copy, RefreshCw, UserPlus } from "lucide-react";
+import { Camera, Copy, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import type {
   CalendarUsage,
   HomeJoinCode,
@@ -15,6 +15,7 @@ import type { ColourKey } from "@mykhaya/design-tokens";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
+import { isImageFormatRejection, normalizeAvatarFile } from "@/components/avatar-upload";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
@@ -105,6 +106,7 @@ export default function ManageMembers() {
   const [colourBusy, setColourBusy] = useState(false);
   const [memberUsage, setMemberUsage] = useState<CalendarUsage | null>(null);
   const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState<string | null>(null);
 
   useEffect(() => {
     api.me().then((user) => setCurrentUserId(user.id));
@@ -338,6 +340,56 @@ export default function ManageMembers() {
       });
     } finally {
       setColourBusy(false);
+    }
+  }
+
+  async function changeChildAvatar(member: Member, file: File) {
+    if (!activeHomeId || avatarBusy) return;
+    setAvatarBusy(member.user_id);
+    setStatus({ kind: "idle" });
+    try {
+      const updated = await api.uploadMemberAvatar(
+        activeHomeId,
+        member.user_id,
+        await normalizeAvatarFile(file),
+      );
+      setMembers((current) =>
+        current.map((item) => (item.user_id === updated.user_id ? updated : item)),
+      );
+      setStatus({ kind: "success", message: `${member.display_name}'s photo was updated.` });
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message:
+          cause instanceof ApiError && isImageFormatRejection(cause)
+            ? "Choose a JPEG, PNG or WebP photo."
+            : cause instanceof ApiError
+              ? cause.message
+              : "That photo could not be updated.",
+      });
+    } finally {
+      setAvatarBusy(null);
+    }
+  }
+
+  async function removeChildAvatar(member: Member) {
+    if (!activeHomeId || avatarBusy || !window.confirm(`Remove ${member.display_name}'s photo?`))
+      return;
+    setAvatarBusy(member.user_id);
+    setStatus({ kind: "idle" });
+    try {
+      const updated = await api.removeMemberAvatar(activeHomeId, member.user_id);
+      setMembers((current) =>
+        current.map((item) => (item.user_id === updated.user_id ? updated : item)),
+      );
+      setStatus({ kind: "success", message: `${member.display_name}'s photo was removed.` });
+    } catch (cause) {
+      setStatus({
+        kind: "error",
+        message: cause instanceof ApiError ? cause.message : "That photo could not be removed.",
+      });
+    } finally {
+      setAvatarBusy(null);
     }
   }
 
@@ -741,13 +793,47 @@ export default function ManageMembers() {
               .filter((member) => filter === "all" || filterGroup(member.relationship) === filter)
               .map((member) => (
                 <article className="card family-member" key={member.user_id}>
-                  <Avatar
-                    id={member.user_id}
-                    name={member.display_name}
-                    colour={member.colour}
-                    avatarVersion={member.avatar_version}
-                    size="lg"
-                  />
+                  <div className="family-member-avatar">
+                    <Avatar
+                      id={member.user_id}
+                      name={member.display_name}
+                      colour={member.colour}
+                      avatarVersion={member.avatar_version}
+                      size="lg"
+                    />
+                    {canManage && member.relationship === "child" && (
+                      <>
+                        <label className="family-member-avatar-action">
+                          <Camera size={15} aria-hidden="true" />
+                          <span className="visually-hidden">
+                            {member.avatar_version ? "Replace" : "Add"} {member.display_name}'s photo
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                            className="visually-hidden"
+                            disabled={avatarBusy === member.user_id}
+                            onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              event.currentTarget.value = "";
+                              if (file) void changeChildAvatar(member, file);
+                            }}
+                          />
+                        </label>
+                        {member.avatar_version && (
+                          <button
+                            type="button"
+                            className="family-member-avatar-remove"
+                            aria-label={`Remove ${member.display_name}'s photo`}
+                            disabled={avatarBusy === member.user_id}
+                            onClick={() => void removeChildAvatar(member)}
+                          >
+                            <Trash2 size={13} aria-hidden="true" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                   <div className="family-member-body">
                     <div className="family-member-name">
                       <strong>{member.display_name}</strong>

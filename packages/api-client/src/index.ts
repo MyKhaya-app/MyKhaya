@@ -136,6 +136,19 @@ export class MyKhayaClient {
     return this.request<User>("/users/me/avatar", { method: "POST", body });
   };
   removeAvatar = () => this.request<User>("/users/me/avatar", { method: "DELETE" });
+  uploadMemberAvatar = (homeId: string, userId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return this.request<Member>(
+      `/groups/${encodeURIComponent(homeId)}/members/${encodeURIComponent(userId)}/avatar`,
+      { method: "POST", body },
+    );
+  };
+  removeMemberAvatar = (homeId: string, userId: string) =>
+    this.request<Member>(
+      `/groups/${encodeURIComponent(homeId)}/members/${encodeURIComponent(userId)}/avatar`,
+      { method: "DELETE" },
+    );
   homes = () => this.request<Home[]>("/groups");
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);

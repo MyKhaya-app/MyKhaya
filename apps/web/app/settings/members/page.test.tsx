@@ -54,6 +54,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn().mockResolvedValue(freeBillingStatus()),
       post: vi.fn().mockResolvedValue({}),
       patch: vi.fn().mockResolvedValue({}),
+      uploadMemberAvatar: vi.fn(),
+      removeMemberAvatar: vi.fn(),
       getHomeJoinCode: vi.fn().mockResolvedValue({ code: null, generated_at: null }),
       regenerateHomeJoinCode: vi.fn(),
       listHomeJoinRequests: vi.fn().mockResolvedValue([]),
@@ -346,6 +348,31 @@ describe("Manage members page — Adult relationship", () => {
 
     const childrenButton = screen.getByRole("button", { name: /^children \d+$/i });
     expect(within(childrenButton).getByText("1")).toBeInTheDocument();
+  });
+
+  it("offers managed-child photo actions and updates the member avatar from the canonical response", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([ownerMember(), childMember()]);
+    (api.uploadMemberAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...childMember(),
+      avatar_version: "child-photo.webp",
+    });
+
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Young Person")).toBeInTheDocument());
+
+    const picker = screen.getByLabelText(/add young person's photo/i);
+    fireEvent.change(picker, {
+      target: { files: [new File(["photo"], "child.jpg", { type: "image/jpeg" })] },
+    });
+
+    await waitFor(() =>
+      expect(api.uploadMemberAvatar).toHaveBeenCalledWith(
+        "home-1",
+        "u3",
+        expect.any(File),
+      ),
+    );
+    expect(await screen.findByRole("button", { name: /remove young person's photo/i })).toBeInTheDocument();
   });
 });
 

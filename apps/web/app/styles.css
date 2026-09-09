@@ -2128,6 +2128,37 @@ html.native-shell .home-section-overlap {
   gap: 1rem;
   padding: 1.1rem;
 }
+.family-member-avatar {
+  flex: 0 0 auto;
+  position: relative;
+}
+.family-member-avatar-action,
+.family-member-avatar-remove {
+  align-items: center;
+  background: var(--colour-surface);
+  border: 1px solid var(--colour-border);
+  border-radius: 999px;
+  bottom: -0.1rem;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: -0.15rem;
+  width: 28px;
+}
+.family-member-avatar-remove {
+  bottom: -0.1rem;
+  right: 1.45rem;
+  color: var(--colour-danger);
+}
+.family-member-avatar-action input {
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
 .family-member-body {
   display: grid;
   gap: 0.3rem;

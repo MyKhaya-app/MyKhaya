@@ -14,6 +14,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from sqlalchemy import select
+from test_child_login import (
+    _child_login,
+    _configure_login,
+    _make_home_with_child,
+    new_client,
+    unique,
+)
 
 from mykhaya.avatars.processing import (
     AVATAR_SIZE,
@@ -445,3 +452,65 @@ async def test_remove_avatar_resets_to_initials_and_deletes_file(client: AsyncCl
     removed_again = await unsafe(client, "DELETE", "/api/v1/users/me/avatar")
     assert removed_again.status_code == 200
     assert removed_again.json()["avatar_version"] is None
+
+
+# --- API: authorised adult management of a managed child's avatar ------------
+
+
+@pytest.mark.asyncio
+async def test_home_admin_can_upload_replace_and_remove_child_avatar(client: AsyncClient) -> None:
+    group_id, membership_id, _ = await _make_home_with_child(client, unique("childavatar"))
+    async with SessionFactory() as db:
+        membership = await db.get(Membership, uuid.UUID(membership_id))
+        assert membership is not None
+        child_user_id = membership.user_id
+
+    first = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+        files={"file": ("child.jpg", make_jpeg(), "image/jpeg")},
+    )
+    assert first.status_code == 200, first.text
+    first_version = first.json()["avatar_version"]
+    assert first.json()["relationship"] == "child"
+
+    second = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+        files={"file": ("child-new.png", make_png(), "image/png")},
+    )
+    assert second.status_code == 200
+    assert second.json()["avatar_version"] != first_version
+
+    removed = await unsafe(
+        client, "DELETE", f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar"
+    )
+    assert removed.status_code == 200
+    assert removed.json()["avatar_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_child_session_cannot_manage_a_child_avatar(client: AsyncClient) -> None:
+    group_id, membership_id, home_code = await _make_home_with_child(client, unique("childdeny"))
+    await _configure_login(
+        client, group_id, membership_id, enabled=True, username="kid", pin="4242"
+    )
+    child_client = await new_client()
+    try:
+        login = await _child_login(child_client, home_code, "kid", "4242")
+        assert login.status_code == 200
+        async with SessionFactory() as db:
+            membership = await db.get(Membership, uuid.UUID(membership_id))
+            assert membership is not None
+            child_user_id = membership.user_id
+        response = await unsafe(
+            child_client,
+            "POST",
+            f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+            files={"file": ("child.jpg", make_jpeg(), "image/jpeg")},
+        )
+        assert response.status_code == 403
+    finally:
+        await child_client.aclose()

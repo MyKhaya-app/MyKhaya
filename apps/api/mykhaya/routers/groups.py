@@ -1,11 +1,13 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.avatars.processing import UnsupportedImageError, process_avatar_upload
+from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import Settings, get_settings
@@ -24,6 +26,7 @@ from mykhaya.household_permissions import (
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     CalendarEventLabel,
+    ChildProfile,
     Group,
     HomeCalendar,
     HomeJoinRequest,
@@ -68,6 +71,10 @@ DEFAULT_LABELS = [
     ("Activity", ColourToken.blue),
     ("Other", ColourToken.slate),
 ]
+
+
+def _avatar_filename() -> str:
+    return f"{uuid.uuid4()}.webp"
 
 
 async def group_response(db: AsyncSession, group: Group, membership: Membership) -> GroupResponse:
@@ -231,6 +238,145 @@ async def members(
         )
         for membership, user in rows
     ]
+
+
+@router.post("/{group_id}/members/{user_id}/avatar", response_model=MemberResponse)
+async def upload_child_member_avatar(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MemberResponse:
+    """Replace a managed child's avatar from an authorised adult member flow.
+
+    This deliberately uses member-management authority rather than the child's
+    optional ``photo_upload`` setting: the setting controls child self-service,
+    while this route is an adult managing a child profile.
+    """
+    require_adult_session(auth)
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    target = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == group_id,
+            Membership.user_id == user_id,
+            Membership.relationship == HouseholdRelationship.child,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if target is None or await db.scalar(
+        select(ChildProfile.id).where(ChildProfile.membership_id == target.id)
+    ) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That managed child could not be found.")
+    user = await db.get(User, user_id)
+    assert user is not None
+    await enforce_rate_limit(request, settings, "child-avatar-upload", 20, 3600)
+    raw = await file.read(settings.avatar_max_upload_bytes + 1)
+    if len(raw) > settings.avatar_max_upload_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large. Please choose one under "
+            f"{settings.avatar_max_upload_bytes // (1024 * 1024)} MB.",
+        )
+    if not raw:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file was uploaded.")
+    try:
+        processed = process_avatar_upload(raw)
+    except UnsupportedImageError as cause:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
+
+    storage = get_avatar_storage(settings)
+    new_key = _avatar_filename()
+    await storage.save(new_key, processed)
+    previous_key = user.avatar_key
+    user.avatar_key = new_key
+    user.avatar_updated_at = datetime.now(UTC)
+    db.add(user)
+    audit(
+        db,
+        request,
+        "child.avatar_replaced" if previous_key else "child.avatar_uploaded",
+        auth.user.id,
+        group_id,
+        "membership",
+        target.id,
+        {"target_user_id": str(user_id)},
+    )
+    await db.commit()
+    if previous_key:
+        try:
+            await storage.delete(previous_key)
+        except OSError:
+            pass
+    return MemberResponse(
+        membership_id=target.id,
+        user_id=user.id,
+        display_name=user.display_name,
+        email=None,
+        role=target.role,
+        relationship=target.relationship,
+        permission_profile=target.permission_profile,
+        permission_overrides=target.permission_overrides,
+        shared_resources=target.shared_resources,
+        colour=target.colour,
+        avatar_version=user.avatar_key,
+    )
+
+
+@router.delete("/{group_id}/members/{user_id}/avatar", response_model=MemberResponse)
+async def remove_child_member_avatar(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MemberResponse:
+    require_adult_session(auth)
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    target = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == group_id,
+            Membership.user_id == user_id,
+            Membership.relationship == HouseholdRelationship.child,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if target is None or await db.scalar(
+        select(ChildProfile.id).where(ChildProfile.membership_id == target.id)
+    ) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That managed child could not be found.")
+    user = await db.get(User, user_id)
+    assert user is not None
+    previous_key = user.avatar_key
+    if previous_key:
+        user.avatar_key = None
+        user.avatar_updated_at = None
+        db.add(user)
+        audit(
+            db, request, "child.avatar_removed", auth.user.id, group_id,
+            "membership", target.id, {"target_user_id": str(user_id)},
+        )
+        await db.commit()
+        try:
+            await get_avatar_storage(settings).delete(previous_key)
+        except OSError:
+            pass
+    return MemberResponse(
+        membership_id=target.id,
+        user_id=user.id,
+        display_name=user.display_name,
+        email=None,
+        role=target.role,
+        relationship=target.relationship,
+        permission_profile=target.permission_profile,
+        permission_overrides=target.permission_overrides,
+        shared_resources=target.shared_resources,
+        colour=target.colour,
+        avatar_version=user.avatar_key,
+    )
 
 
 @router.patch("/{group_id}/members/{user_id}", response_model=MemberResponse)
