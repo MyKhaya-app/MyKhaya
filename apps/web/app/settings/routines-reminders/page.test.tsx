@@ -543,9 +543,9 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
 });
 
 describe("Routines & Reminders — To-do categories", () => {
-  it("filters To-dos by category and exposes category management", async () => {
+  it("filters To-dos by category and groups uncategorised items", async () => {
     (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
-      items: [todo({ category: todoCategory() })],
+      items: [todo({ category: todoCategory() }), todo({ id: "todo-2", title: "Buy stamps" })],
     });
     (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [todoCategory()],
@@ -553,10 +553,36 @@ describe("Routines & Reminders — To-do categories", () => {
     render(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "To-dos" }));
-    await user.click(screen.getByRole("button", { name: "School" }));
     expect(screen.getByText("Sign school trip form")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Rename School" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete School" })).toBeInTheDocument();
+    expect(screen.getByText("School")).toBeInTheDocument();
+    expect(screen.getByText("Uncategorised")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Category: All categories/i }));
+    await user.click(screen.getByRole("button", { name: "School" }));
+    expect(screen.queryByText("Buy stamps")).not.toBeInTheDocument();
+  });
+
+  it("opens category management and keeps create, rename, and delete actions", async () => {
+    (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [todoCategory()],
+    });
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Manage categories" }));
+    const input = screen.getByPlaceholderText("Category name");
+    await user.type(input, "Home");
+    await user.click(screen.getByRole("button", { name: "Add category" }));
+    expect(api.createTodoCategory).toHaveBeenCalledWith("home-1", "Home");
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const renameInput = screen.getByRole("textbox", { name: "Rename School" });
+    await user.clear(renameInput);
+    await user.type(renameInput, "Study");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.updateTodoCategory).toHaveBeenCalledWith("home-1", "category-1", "Study", expect.any(String));
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.deleteTodoCategory).toHaveBeenCalledWith("home-1", "category-1");
   });
 });
 

@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarCheck2,
   ClipboardCheck,
+  ChevronDown,
   ChevronRight,
   Clock,
   Home as HomeIcon,
@@ -13,6 +14,7 @@ import {
   Repeat,
   Search,
   SlidersHorizontal,
+  Tag,
   Trash2,
   User as UserIcon,
 } from "lucide-react";
@@ -143,6 +145,21 @@ function matchesSearch(item: UiItem, query: string): boolean {
   );
 }
 
+function categoryLabel(item: UiItem): string {
+  return item.kind === "todo" ? item.data.category?.name ?? "Uncategorised" : "Uncategorised";
+}
+
+function categoryGroups(items: UiItem[]): Array<[string, UiItem[]]> {
+  const groups = new Map<string, UiItem[]>();
+  for (const item of items) {
+    const label = categoryLabel(item);
+    const group = groups.get(label) ?? [];
+    group.push(item);
+    groups.set(label, group);
+  }
+  return [...groups.entries()];
+}
+
 export default function RoutinesRemindersPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -157,6 +174,7 @@ export default function RoutinesRemindersPage() {
   const [scopeTab, setScopeTab] = useState<RoutineScope>("personal");
   const [searchQuery, setSearchQuery] = useState("");
   const [filtersVisible, setFiltersVisible] = useState(true);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -176,6 +194,11 @@ export default function RoutinesRemindersPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [categoryDraft, setCategoryDraft] = useState("");
 
   const loadRoutines = useCallback(async () => {
     if (!activeHomeId) return;
@@ -216,6 +239,12 @@ export default function RoutinesRemindersPage() {
   useEffect(() => {
     if (activeHomeId) api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
   }, [activeHomeId]);
+
+  useEffect(() => {
+    if (selectedCategoryId && !todoCategories.some((category) => category.id === selectedCategoryId)) {
+      setSelectedCategoryId(null);
+    }
+  }, [selectedCategoryId, todoCategories]);
 
   function selectTypeTab(next: TypeFilter) {
     setTypeTab(next);
@@ -439,15 +468,35 @@ export default function RoutinesRemindersPage() {
     }
   }
 
-  async function renameTodoCategory(category: TodoCategory) {
-    if (!activeHomeId) return;
-    const name = window.prompt("Rename To-do category", category.name)?.trim();
-    if (!name || name === category.name) return;
+  async function createTodoCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId || !categoryDraft.trim()) return;
+    setCategoryBusy(true);
+    setError("");
     try {
-      await api.updateTodoCategory(activeHomeId, category.id, name, category.updated_at);
+      await api.createTodoCategory(activeHomeId, categoryDraft.trim());
+      setCategoryDraft("");
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
+    } finally {
+      setCategoryBusy(false);
+    }
+  }
+
+  async function renameTodoCategory(category: TodoCategory) {
+    if (!activeHomeId || !categoryDraft.trim() || categoryDraft.trim() === category.name) return;
+    setCategoryBusy(true);
+    setError("");
+    try {
+      await api.updateTodoCategory(activeHomeId, category.id, categoryDraft.trim(), category.updated_at);
+      setEditingCategoryId(null);
+      setCategoryDraft("");
+      await loadTodos();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setCategoryBusy(false);
     }
   }
 
@@ -455,7 +504,7 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId || !window.confirm(`Delete the "${category.name}" category? To-dos will be kept.`)) return;
     try {
       await api.deleteTodoCategory(activeHomeId, category.id);
-      if (searchQuery === category.name) setSearchQuery("");
+      if (selectedCategoryId === category.id) setSelectedCategoryId(null);
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
@@ -547,12 +596,20 @@ export default function RoutinesRemindersPage() {
     [scopeFiltered, typeTab],
   );
 
+  const categoryFiltered = useMemo(
+    () =>
+      selectedCategoryId
+        ? typeFiltered.filter((item) => item.kind === "todo" && item.data.category?.id === selectedCategoryId)
+        : typeFiltered,
+    [selectedCategoryId, typeFiltered],
+  );
+
   // Client-side only, on top of the type/scope filters above — the data is
   // already loaded in full for this Home, so there's no need for a backend
   // search endpoint here.
   const searchFiltered = useMemo(
-    () => typeFiltered.filter((item) => matchesSearch(item, searchQuery)),
-    [typeFiltered, searchQuery],
+    () => categoryFiltered.filter((item) => matchesSearch(item, searchQuery)),
+    [categoryFiltered, searchQuery],
   );
 
   const sections = useMemo(() => {
@@ -691,6 +748,25 @@ export default function RoutinesRemindersPage() {
     completed: "Completed",
   };
 
+  function renderGroupedItems(items: UiItem[], renderItem: (item: UiItem) => ReactNode) {
+    if (selectedCategoryId) return <div className="rr-card-list">{items.map(renderItem)}</div>;
+    return (
+      <div className="rr-category-groups">
+        {categoryGroups(items).map(([name, group]) => (
+          <div className="rr-category-group" key={name}>
+            <div className="rr-category-heading">
+              <Tag size={17} aria-hidden="true" />
+              <strong>{name}</strong>
+              <span className="rr-category-heading-line" aria-hidden="true" />
+              <span className="rr-category-heading-count">{group.length} {group.length === 1 ? "item" : "items"}</span>
+            </div>
+            <div className="rr-card-list">{group.sort(compareItems).map(renderItem)}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const canManageAny = canManageRoutines || canManageReminders;
   const scopeWord = scopeTab === "household" ? "household" : "personal";
   const typeWord = typeTab === "all" ? "items" : typeTab === "todos" ? "to-dos" : typeTab;
@@ -763,43 +839,29 @@ export default function RoutinesRemindersPage() {
               ))}
             </div>
 
-            {typeTab === "todos" && (
-              <div className="rr-category-strip" aria-label="To-do categories">
-                <span className="rr-category-label">Categories</span>
-                <button type="button" className={`rr-category-chip${!searchQuery ? " rr-category-chip-active" : ""}`} onClick={() => setSearchQuery("")}>All categories</button>
-                {todoCategories.map((category) => (
-                  <span className="rr-category-chip-wrap" key={category.id}>
-                    <button
-                      type="button"
-                      className={`rr-category-chip${searchQuery === category.name ? " rr-category-chip-active" : ""}`}
-                      onClick={() => setSearchQuery(category.name)}
-                    >
-                      {category.name}
-                    </button>
-                    {canManageReminders && (
-                      <>
-                        <button type="button" className="rr-category-chip-action" aria-label={`Rename ${category.name}`} onClick={() => void renameTodoCategory(category)}>
-                          <Pencil size={12} aria-hidden="true" />
-                        </button>
-                        <button type="button" className="rr-category-chip-action rr-category-chip-action-delete" aria-label={`Delete ${category.name}`} onClick={() => void removeTodoCategory(category)}>
-                          <Trash2 size={12} aria-hidden="true" />
-                        </button>
-                      </>
-                    )}
-                  </span>
-                ))}
-                {canManageReminders && (
-                  <button type="button" className="rr-category-chip rr-category-chip-new" onClick={async () => {
-                    const name = window.prompt("New To-do category");
-                    if (!name?.trim() || !activeHomeId) return;
-                    try { await api.createTodoCategory(activeHomeId, name.trim()); await loadTodos(); }
-                    catch (cause) { setError((cause as Error).message); }
-                  }}>
-                    <Plus size={15} aria-hidden="true" /> New
-                  </button>
-                )}
-              </div>
-            )}
+            <div className="rr-category-control-row" aria-label="To-do category filter">
+              <button
+                type="button"
+                className="rr-category-filter-control"
+                aria-haspopup="dialog"
+                aria-expanded={showCategoryPicker}
+                onClick={() => setShowCategoryPicker(true)}
+              >
+                <span>Category:</span>
+                <strong>{todoCategories.find((category) => category.id === selectedCategoryId)?.name ?? "All categories"}</strong>
+                <ChevronDown size={16} aria-hidden="true" />
+              </button>
+              {canManageReminders && (
+                <button
+                  type="button"
+                  className="icon-button secondary rr-category-manage"
+                  aria-label="Manage categories"
+                  onClick={() => { setShowCategoryManager(true); setEditingCategoryId(null); setCategoryDraft(""); }}
+                >
+                  <Tag size={18} aria-hidden="true" />
+                </button>
+              )}
+            </div>
 
             <div className="rr-segmented" role="group" aria-label="Personal or household">
               <button
@@ -828,7 +890,7 @@ export default function RoutinesRemindersPage() {
           sections[section].length > 0 ? (
             <section key={section}>
               <h2 className="rr-section-heading">{sectionTitles[section]}</h2>
-              <div className="rr-card-list">{sections[section].map(renderCard)}</div>
+              {renderGroupedItems(sections[section], renderCard)}
             </section>
           ) : null,
         )}
@@ -836,14 +898,14 @@ export default function RoutinesRemindersPage() {
         {sections.upcoming.length > 0 && (
           <section>
             <h2 className="rr-section-heading">{sectionTitles.upcoming}</h2>
-            <div className="rr-card-list">{sections.upcoming.map(renderUpcomingCard)}</div>
+            {renderGroupedItems(sections.upcoming, renderUpcomingCard)}
           </section>
         )}
 
         {sections.completed.length > 0 && (
           <section>
             <h2 className="rr-section-heading">{sectionTitles.completed}</h2>
-            <div className="rr-card-list">{sections.completed.map(renderCard)}</div>
+            {renderGroupedItems(sections.completed, renderCard)}
           </section>
         )}
 
@@ -932,6 +994,83 @@ export default function RoutinesRemindersPage() {
           </>
         )}
       </div>
+
+      {showCategoryPicker && (
+        <BottomSheet title="Choose category" onDismiss={() => setShowCategoryPicker(false)}>
+          <div className="rr-category-picker" role="group" aria-label="Choose category">
+            <button
+              type="button"
+              className={`rr-category-option${selectedCategoryId === null ? " rr-category-option-active" : ""}`}
+              onClick={() => { setSelectedCategoryId(null); setShowCategoryPicker(false); }}
+            >
+              All categories
+            </button>
+            {todoCategories.map((category) => (
+              <button
+                type="button"
+                className={`rr-category-option${selectedCategoryId === category.id ? " rr-category-option-active" : ""}`}
+                key={category.id}
+                onClick={() => { setSelectedCategoryId(category.id); setShowCategoryPicker(false); }}
+              >
+                {category.name}
+              </button>
+            ))}
+          </div>
+        </BottomSheet>
+      )}
+
+      {showCategoryManager && (
+        <BottomSheet title="Manage categories" onDismiss={() => setShowCategoryManager(false)}>
+          <div className="rr-category-manager">
+            <form className="rr-category-create" onSubmit={createTodoCategory}>
+              <label>
+                New category
+                <input
+                  value={editingCategoryId ? "" : categoryDraft}
+                  disabled={Boolean(editingCategoryId) || categoryBusy}
+                  onChange={(event) => setCategoryDraft(event.target.value)}
+                  placeholder="Category name"
+                  maxLength={80}
+                />
+              </label>
+              <button type="submit" disabled={Boolean(editingCategoryId) || categoryBusy || !categoryDraft.trim()}>
+                Add category
+              </button>
+            </form>
+            <div className="rr-category-manager-list" aria-label="Existing categories">
+              {todoCategories.map((category) => (
+                <div className="rr-category-manager-row" key={category.id}>
+                  {editingCategoryId === category.id ? (
+                    <input
+                      aria-label={`Rename ${category.name}`}
+                      value={categoryDraft}
+                      disabled={categoryBusy}
+                      onChange={(event) => setCategoryDraft(event.target.value)}
+                      maxLength={80}
+                    />
+                  ) : (
+                    <strong>{category.name}</strong>
+                  )}
+                  <div className="rr-category-manager-actions">
+                    {editingCategoryId === category.id ? (
+                      <>
+                        <button type="button" disabled={categoryBusy || !categoryDraft.trim()} onClick={() => void renameTodoCategory(category)}>Save</button>
+                        <button type="button" className="secondary" disabled={categoryBusy} onClick={() => { setEditingCategoryId(null); setCategoryDraft(""); }}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" className="secondary" onClick={() => { setEditingCategoryId(category.id); setCategoryDraft(category.name); }}>Rename</button>
+                        <button type="button" className="secondary" onClick={() => void removeTodoCategory(category)}>Delete</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {todoCategories.length === 0 && <p className="muted">No categories yet.</p>}
+            </div>
+          </div>
+        </BottomSheet>
+      )}
 
       {formKind === "routine" && (
         <BottomSheet
