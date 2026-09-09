@@ -161,7 +161,7 @@ describe("PublicPricing — Family price always comes from the live pricing API"
     expect(screen.queryByText(/loading pricing/i)).not.toBeInTheDocument();
   });
 
-  it("switches to the annual price and shows the best-value badge only when the API says so", async () => {
+  it("switches to the annual price and shows the API's saving hint", async () => {
     (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
       pricingResponse(),
     );
@@ -169,12 +169,20 @@ describe("PublicPricing — Family price always comes from the live pricing API"
     render(<PublicPricing />);
     await screen.findByText("£9.99");
 
-    expect(screen.queryByText(/best value/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /annual/i }));
 
     expect(await screen.findByText("£99.99")).toBeInTheDocument();
-    expect(screen.getByText(/best value/i)).toBeInTheDocument();
     expect(screen.getByText(/save £19\.89 per year/i)).toBeInTheDocument();
+  });
+
+  it("always shows the Family plan as the permanent, unconditional 'Most popular' choice", async () => {
+    (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
+      pricingResponse(),
+    );
+    render(<PublicPricing />);
+    await screen.findByText("£9.99");
+
+    expect(screen.getByText(/most popular/i)).toBeInTheDocument();
   });
 
   it("degrades gracefully, keeping Free available, when pricing fails to load", async () => {

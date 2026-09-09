@@ -70,27 +70,23 @@ describe("Welcome (public marketing homepage)", () => {
 
     const headings = await screen.findAllByRole("heading", { level: 2 });
     const headingText = headings.map((node) => node.textContent);
-    // Order matters — Header, Hero, Features, Lifestyle, How it works,
-    // Pricing, Final CTA, Footer, per the agreed page structure.
+    // Order matters — Header, Hero, Features, Lifestyle, Pricing, Final CTA,
+    // Footer, per the approved mockup's section order.
     const featuresIndex = headingText.findIndex((text) =>
       text?.includes("Made for how families"),
     );
     const lifestyleIndex = headingText.findIndex((text) =>
       text?.includes("Less organising"),
     );
-    const howIndex = headingText.findIndex((text) =>
-      text?.includes("Up and running"),
-    );
     const pricingIndex = headingText.findIndex((text) =>
-      text?.includes("Free, or the complete"),
+      text?.includes("A plan for every family"),
     );
     const finalCtaIndex = headingText.findIndex((text) =>
       text?.includes("Ready to bring"),
     );
     expect(featuresIndex).toBeGreaterThanOrEqual(0);
     expect(lifestyleIndex).toBeGreaterThan(featuresIndex);
-    expect(howIndex).toBeGreaterThan(lifestyleIndex);
-    expect(pricingIndex).toBeGreaterThan(howIndex);
+    expect(pricingIndex).toBeGreaterThan(lifestyleIndex);
     expect(finalCtaIndex).toBeGreaterThan(pricingIndex);
   });
 

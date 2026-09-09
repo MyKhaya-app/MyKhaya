@@ -20,7 +20,6 @@ import { api } from "@mykhaya/api-client";
 import { intervalSuffix } from "../billing-logic";
 import {
   canStartFamilyCheckout,
-  isBestValueInterval,
   pricingOptionFor,
   savingLabelFor,
 } from "../family-pricing-logic";
@@ -92,9 +91,6 @@ export function PublicPricing() {
 
   const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
   const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
-  const bestValue = pricing
-    ? isBestValueInterval(pricing, billingInterval)
-    : false;
 
   return (
     <section
@@ -104,7 +100,7 @@ export function PublicPricing() {
     >
       <div className="mk-section-heading">
         <p className="eyebrow">Simple pricing</p>
-        <h2 id="pricing-heading">Free, or the complete Family experience</h2>
+        <h2 id="pricing-heading">A plan for every family</h2>
       </div>
 
       <div className="mk-pricing-grid">
@@ -132,7 +128,7 @@ export function PublicPricing() {
         </article>
 
         <article className="mk-plan mk-plan-family">
-          {bestValue && <span className="mk-plan-badge">Best value</span>}
+          <span className="mk-plan-badge">Most popular</span>
           <div className="mk-plan-header">
             <h3>Family</h3>
             <p className="mk-plan-tagline">For the whole household</p>

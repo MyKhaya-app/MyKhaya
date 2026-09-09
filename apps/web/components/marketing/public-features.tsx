@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Bell, CalendarDays, ListChecks, UtensilsCrossed } from "lucide-react";
 
 // Deliberately only the modules that are actually live in the product today
@@ -46,6 +47,9 @@ export function PublicFeatures() {
             </span>
             <h3>{title}</h3>
             <p>{description}</p>
+            <Link className="mk-feature-link" href="/register">
+              Learn more <span aria-hidden="true">→</span>
+            </Link>
           </article>
         ))}
       </div>

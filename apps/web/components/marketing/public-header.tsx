@@ -16,7 +16,6 @@ export function PublicHeader() {
         <div className="mk-header-links">
           <a href="#features">Features</a>
           <a href="#pricing">Pricing</a>
-          <a href="#how-it-works">How it works</a>
         </div>
         <div className="mk-header-actions">
           <Link className="button secondary" href="/login">

@@ -8,7 +8,6 @@ import { PublicFinalCta } from "@/components/marketing/public-final-cta";
 import { PublicFooter } from "@/components/marketing/public-footer";
 import { PublicHeader } from "@/components/marketing/public-header";
 import { PublicHero } from "@/components/marketing/public-hero";
-import { PublicHowItWorks } from "@/components/marketing/public-how-it-works";
 import { PublicPricing } from "@/components/marketing/public-pricing";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
@@ -20,7 +19,6 @@ function PublicWelcome() {
       <PublicHero />
       <PublicFeatures />
       <PublicBenefits />
-      <PublicHowItWorks />
       <PublicPricing />
       <PublicFinalCta />
       <PublicFooter />

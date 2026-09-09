@@ -45,6 +45,13 @@ export function PublicHero() {
             loading="eager"
           />
         </div>
+        <div className="mk-hero-phone calendar">
+          <img
+            src="/images/marketing/mykhaya-calendar.png"
+            alt="The MyKhaya Calendar screen, showing a month of shared family events"
+            loading="eager"
+          />
+        </div>
       </div>
     </section>
   );
