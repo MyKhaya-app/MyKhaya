@@ -109,8 +109,8 @@ def render_html(
              style="width:480px;max-width:100%;background:{_WHITE};border-radius:12px;">
         <tr>
           <td align="center" style="padding:32px 32px 8px;">
-            <img src="{safe_logo}" width="56" height="58" alt="MyKhaya"
-                 style="display:block;width:56px;height:58px;">
+            <img src="{safe_logo}" width="56" height="56" alt="MyKhaya"
+                 style="display:block;width:56px;height:56px;">
           </td>
         </tr>
         <tr>

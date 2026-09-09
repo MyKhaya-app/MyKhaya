@@ -131,7 +131,10 @@ textarea:focus-visible {
   letter-spacing: -0.04em;
 }
 .brand-mark {
+  border-radius: 22%;
+  display: block;
   height: 43px;
+  object-fit: contain;
   width: 43px;
 }
 .muted {

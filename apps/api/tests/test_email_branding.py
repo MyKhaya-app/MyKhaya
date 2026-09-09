@@ -76,7 +76,7 @@ def test_logo_img_tag_is_absolute_https_with_correct_alt_and_explicit_size() -> 
     html = render_html(_settings(), subject="Subject", body_text="Body.")
     assert '<img src="https://mykhaya.app/mykhaya-email-logo.png"' in html
     assert 'alt="MyKhaya"' in html
-    assert 'width="56" height="58"' in html
+    assert 'width="56" height="56"' in html
     assert "display:block" in html
 
 
