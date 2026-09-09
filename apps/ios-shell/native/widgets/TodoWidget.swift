@@ -19,13 +19,16 @@ private struct TodoWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        switch family {
-        case .systemMedium:
-            TodoMediumView(snapshot: entry.snapshot)
-        case .systemLarge:
-            TodoLargeView(snapshot: entry.snapshot)
-        default:
-            TodoSmallView(snapshot: entry.snapshot)
+        Group {
+            switch family {
+            case .systemMedium:
+                TodoMediumView(snapshot: entry.snapshot)
+            case .systemLarge:
+                TodoLargeView(snapshot: entry.snapshot)
+            default:
+                TodoSmallView(snapshot: entry.snapshot)
+            }
         }
+        .mykhayaWidgetContainerBackground()
     }
 }

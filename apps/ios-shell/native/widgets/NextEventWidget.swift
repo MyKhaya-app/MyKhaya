@@ -19,11 +19,14 @@ private struct NextEventWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        switch family {
-        case .systemMedium:
-            NextEventMediumView(snapshot: entry.snapshot)
-        default:
-            NextEventSmallView(snapshot: entry.snapshot)
+        Group {
+            switch family {
+            case .systemMedium:
+                NextEventMediumView(snapshot: entry.snapshot)
+            default:
+                NextEventSmallView(snapshot: entry.snapshot)
+            }
         }
+        .mykhayaWidgetContainerBackground()
     }
 }

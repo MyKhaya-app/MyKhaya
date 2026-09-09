@@ -20,3 +20,19 @@ extension Color {
         self = Color(red: r, green: g, blue: b)
     }
 }
+
+/// WidgetKit requires every widget entry view to declare its outer container
+/// background on iOS 17 and later. Keep the iOS 16 fallback transparent so
+/// the existing widget rendering remains unchanged on older supported systems.
+extension View {
+    @ViewBuilder
+    func mykhayaWidgetContainerBackground() -> some View {
+        if #available(iOS 17.0, *) {
+            containerBackground(for: .widget) {
+                Color.clear
+            }
+        } else {
+            background(Color.clear)
+        }
+    }
+}

@@ -19,11 +19,14 @@ private struct CalendarWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        switch family {
-        case .systemLarge:
-            CalendarMonthView(snapshot: entry.snapshot)
-        default:
-            CalendarWeekView(snapshot: entry.snapshot)
+        Group {
+            switch family {
+            case .systemLarge:
+                CalendarMonthView(snapshot: entry.snapshot)
+            default:
+                CalendarWeekView(snapshot: entry.snapshot)
+            }
         }
+        .mykhayaWidgetContainerBackground()
     }
 }
