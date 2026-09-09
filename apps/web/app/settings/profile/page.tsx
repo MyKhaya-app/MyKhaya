@@ -3,7 +3,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import type { Member, User } from "@mykhaya/shared-types";
 import type { ColourKey } from "@mykhaya/design-tokens";
 import { api, ApiError } from "@mykhaya/api-client";
-import { Bell, Camera, ChevronRight, Shield, Trash2 } from "lucide-react";
+import { Bell, Camera, ChevronRight, Home, Shield, Trash2, UserRound } from "lucide-react";
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
@@ -174,23 +174,25 @@ export default function Profile() {
   const dismissMessage = useCallback(() => setMessage(""), []);
 
   return (
-    <SettingsPage title="Your profile" className="profile-page">
+    <SettingsPage title="Your profile" className="profile-page module-page">
       <p className="profile-supporting-line">Keep your details up to date</p>
       {user && (
         <section className="card profile-identity-card">
           <div className="profile-identity-main">
-            <Avatar
-              id={user.id}
-              name={user.display_name}
-              colour={membership?.colour}
-              avatarVersion={user.avatar_version}
-              size="xl"
-            />
+            <span className="profile-avatar-wrap">
+              <Avatar
+                id={user.id}
+                name={user.display_name}
+                colour={membership?.colour}
+                avatarVersion={user.avatar_version}
+                size="xl"
+              />
+            </span>
             <div className="profile-identity-copy">
               <h2>{user.display_name}</h2>
-              <p>{activeHome?.name ?? "Your Home"}</p>
+              <p className="profile-home-line"><Home size={16} aria-hidden="true" /> {activeHome?.name ?? "Your Home"}</p>
               {membership && roleLabel(membership.relationship) && (
-                <span className="profile-role-pill">{roleLabel(membership.relationship)}</span>
+                <span className="profile-role-pill"><UserRound size={14} aria-hidden="true" /> {roleLabel(membership.relationship)}</span>
               )}
             </div>
           </div>
@@ -201,6 +203,7 @@ export default function Profile() {
                 onClick={() => setPhotoSheetOpen(true)}
                 disabled={avatarBusy}
               >
+                <Camera size={17} aria-hidden="true" />
                 {avatarBusy ? "Working…" : "Change photo"}
               </button>
               {user.avatar_version && (
@@ -210,6 +213,7 @@ export default function Profile() {
                   onClick={handleRemoveAvatar}
                   disabled={avatarBusy}
                 >
+                  <Trash2 size={17} aria-hidden="true" />
                   Remove photo
                 </button>
               )}
@@ -256,9 +260,7 @@ export default function Profile() {
         <section className="card profile-colour-card">
           <h2>Your colour</h2>
           <p className="muted">
-            Used for your avatar and anywhere you show up as yourself in{" "}
-            {activeHome?.name ?? "your Home"} — not your calendar events, which take
-            their colour from their Calendar Tag (or the calendar itself, if untagged).
+            Used for your avatar and anywhere you show up in {activeHome?.name ?? "your Home"}.
           </p>
           <ColourSwatchPicker
             value={membership.colour}
@@ -296,15 +298,40 @@ export default function Profile() {
             </div>
           )}
         </dl>
+        {user && (
+          <form className="profile-birthday-inline" onSubmit={saveBirthday}>
+            <div className="profile-inline-heading">
+              <h3>Birthday</h3>
+              <span className="muted">Optional</span>
+            </div>
+            <p className="muted">Shared with your household so they can wish you well.</p>
+            <div className="profile-birthday-fields">
+              <label>
+                Month
+                <select name="birth_month" defaultValue={user.birth_month ?? ""}>
+                  <option value="">Not set</option>
+                  {MONTHS.map((name, index) => (
+                    <option key={name} value={index + 1}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Day
+                <input type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />
+              </label>
+            </div>
+            <button disabled={saving}>{saving ? "Saving…" : "Save birthday"}</button>
+          </form>
+        )}
       </section>
 
-      <section className="profile-settings-links" aria-label="Profile settings">
-        <Link className="card profile-settings-row" href="/settings/security">
+      <section className="card profile-settings-links" aria-label="Profile settings">
+        <Link className="profile-settings-row" href="/settings/security">
           <span className="profile-settings-icon"><Shield size={19} aria-hidden="true" /></span>
           <span><strong>Security</strong><small>Password and account protection</small></span>
           <ChevronRight size={19} aria-hidden="true" />
         </Link>
-        <Link className="card profile-settings-row" href="/settings/notifications">
+        <Link className="profile-settings-row" href="/settings/notifications">
           <span className="profile-settings-icon"><Bell size={19} aria-hidden="true" /></span>
           <span><strong>Notifications</strong><small>Choose how MyKhaya keeps you informed</small></span>
           <ChevronRight size={19} aria-hidden="true" />
@@ -316,38 +343,13 @@ export default function Profile() {
           {error}
         </p>
       )}
-      {user && (
-        <form className="card profile-birthday-card" onSubmit={saveBirthday}>
-          <h2>Your birthday</h2>
-          <p>
-            Shared with your household so they can wish you well and MyKhaya can remind
-            everyone. We never calculate or show your age from this.
-          </p>
-          <label>
-            Month
-            <select name="birth_month" defaultValue={user.birth_month ?? ""}>
-              <option value="">Not set</option>
-              {MONTHS.map((name, index) => (
-                <option key={name} value={index + 1}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Day
-            <input
-              type="number"
-              name="birth_day"
-              min={1}
-              max={31}
-              defaultValue={user.birth_day ?? ""}
-            />
-          </label>
+      {/* Birthday editing is rendered inside Account details above. */}
+      {/*
           <button disabled={saving}>{saving ? "Saving…" : "Save birthday"}</button>
         </form>
       )}
 
+      */}
       {photoSheetOpen && user && (
         <BottomSheet title="Change your photo" onDismiss={() => setPhotoSheetOpen(false)}>
           <div className="profile-photo-sheet">

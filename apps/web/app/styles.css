@@ -8768,26 +8768,43 @@ a.family-feed-row {
 
 .profile-page {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 .profile-supporting-line {
   color: var(--colour-muted);
-  margin: -0.65rem 0 0;
+  margin: -0.25rem 0 0.15rem;
+}
+.profile-page .page-heading {
+  margin-bottom: 0.35rem;
+}
+.profile-page .page-heading h1 {
+  font-size: 2rem;
+  margin: 0.15rem 0;
+}
+.profile-page .eyebrow {
+  letter-spacing: 0.18em;
+  margin-bottom: 0.15rem;
 }
 .profile-identity-card,
 .profile-colour-card,
 .profile-info-card,
 .profile-birthday-card {
-  padding: 1.25rem;
+  padding: 1rem;
 }
 .profile-identity-card {
   display: grid;
-  gap: 1rem;
+  gap: 0.8rem;
 }
 .profile-identity-main {
   align-items: center;
-  display: flex;
-  gap: 1rem;
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+.profile-avatar-wrap {
+  display: inline-flex;
+  transform: scale(1.16);
+  transform-origin: center;
 }
 .profile-identity-copy {
   min-width: 0;
@@ -8803,7 +8820,12 @@ a.family-feed-row {
 }
 .profile-identity-copy p {
   color: var(--colour-muted);
-  margin: 0.25rem 0 0.45rem;
+  margin: 0.2rem 0 0.4rem;
+}
+.profile-home-line {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
 }
 .profile-role-pill {
   background: var(--colour-sage-soft);
@@ -8812,12 +8834,16 @@ a.family-feed-row {
   display: inline-block;
   font-size: var(--font-micro);
   font-weight: 700;
-  padding: 0.25rem 0.6rem;
+  padding: 0.23rem 0.55rem;
+}
+.profile-role-pill {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.3rem;
 }
 .profile-photo-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.6rem;
 }
 .profile-photo-actions button,
 .profile-photo-sheet button {
@@ -8825,13 +8851,31 @@ a.family-feed-row {
   display: inline-flex;
   gap: 0.4rem;
 }
+.profile-photo-actions button {
+  border-radius: 0.8rem;
+  flex: 1 1 0;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0.55rem 0.65rem;
+}
+.profile-photo-actions .secondary {
+  background: var(--colour-sage-soft);
+  border-color: transparent;
+  color: var(--colour-forest-dark);
+}
+.profile-photo-actions .tertiary {
+  border: 1px solid rgb(218 112 104 / 45%);
+  color: var(--colour-danger, #c94d45);
+}
 .profile-colour-card > p {
   color: var(--colour-muted);
-  margin: 0.25rem 0 1rem;
+  margin: 0.2rem 0 0.75rem;
 }
 .profile-settings-links {
   display: grid;
-  gap: 0.65rem;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
 }
 .profile-settings-row {
   align-items: center;
@@ -8839,8 +8883,12 @@ a.family-feed-row {
   display: grid;
   gap: 0.75rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 1rem;
+  min-height: 62px;
+  padding: 0.75rem 1rem;
   text-decoration: none;
+}
+.profile-settings-row + .profile-settings-row {
+  border-top: 1px solid var(--colour-border);
 }
 .profile-settings-icon {
   align-items: center;
@@ -8864,6 +8912,37 @@ a.family-feed-row {
   display: grid;
   gap: 0.75rem;
 }
+.profile-birthday-inline {
+  border-top: 1px solid var(--colour-border);
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+.profile-inline-heading {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+}
+.profile-inline-heading h3 {
+  font-size: var(--font-small);
+  margin: 0;
+}
+.profile-birthday-inline p {
+  margin: 0;
+}
+.profile-birthday-fields {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 1fr 0.7fr;
+}
+.profile-birthday-fields label {
+  display: grid;
+  gap: 0.3rem;
+}
+.legacy-birthday-card {
+  display: none;
+}
 .profile-birthday-card h2,
 .profile-birthday-card p {
   margin-bottom: 0;
@@ -8883,4 +8962,20 @@ a.family-feed-row {
   justify-content: center;
   min-height: 44px;
   width: 100%;
+}
+@media (max-width: 380px) {
+  .profile-identity-main {
+    gap: 0.65rem;
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+  .profile-avatar-wrap {
+    transform: scale(1.08);
+  }
+  .profile-photo-actions {
+    gap: 0.4rem;
+  }
+  .profile-photo-actions button {
+    font-size: var(--font-small);
+    padding-inline: 0.45rem;
+  }
 }
