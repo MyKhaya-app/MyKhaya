@@ -10,6 +10,7 @@ export function BottomSheet({
   children,
   fullHeight = false,
   headerAction,
+  footer,
 }: {
   title: string;
   onDismiss: () => void;
@@ -19,6 +20,8 @@ export function BottomSheet({
    *  e.g. the "Edit" action on a read-only event detail sheet. Kept generic
    *  (not calendar-specific) so any sheet can use it. */
   headerAction?: React.ReactNode;
+  /** Actions rendered outside the scrollable body, attached to the sheet footer. */
+  footer?: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -134,6 +137,7 @@ export function BottomSheet({
           </div>
         </header>
         <div className="sheet-content">{children}</div>
+        {footer ? <div className="sheet-footer">{footer}</div> : null}
       </div>
     </div>
   );

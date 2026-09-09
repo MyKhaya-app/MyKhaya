@@ -1075,12 +1075,23 @@ export default function RoutinesRemindersPage() {
       )}
 
       {formKind === "routine" && (
+        (() => {
+          const formId = `routine-form-${editingRoutine?.id ?? "new"}`;
+          return (
         <BottomSheet
           title={editingRoutine ? "Edit routine" : "New routine"}
           onDismiss={closeForms}
           fullHeight
+          footer={
+            <div className="routine-form-actions">
+              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="secondary" onClick={closeForms}>
+                Cancel
+              </button>
+            </div>
+          }
         >
-        <form className="routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>
+        <form id={formId} className="routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>
           <fieldset>
             <legend>Routine</legend>
             <label>
@@ -1193,23 +1204,30 @@ export default function RoutinesRemindersPage() {
               </span>
             </label>
           </fieldset>
-          <div className="routine-form-actions">
-            <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-            <button type="button" className="secondary" onClick={closeForms}>
-              Cancel
-            </button>
-          </div>
         </form>
         </BottomSheet>
+          );
+        })()
       )}
 
       {formKind === "reminder" && (
+        (() => {
+          const formId = `reminder-form-${editingReminder?.id ?? "new"}`;
+          return (
         <BottomSheet
           title={editingReminder ? "Edit reminder" : "New reminder"}
           onDismiss={closeForms}
           fullHeight
+          footer={
+            <div className="routine-form-actions">
+              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="secondary" onClick={closeForms}>
+                Cancel
+              </button>
+            </div>
+          }
         >
-        <form className="routine-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder}>
+        <form id={formId} className="routine-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder}>
           <fieldset>
             <legend>Reminder</legend>
             <label>
@@ -1279,19 +1297,27 @@ export default function RoutinesRemindersPage() {
               </select>
             </label>
           </fieldset>
-          <div className="routine-form-actions">
-            <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-            <button type="button" className="secondary" onClick={closeForms}>
-              Cancel
-            </button>
-          </div>
         </form>
         </BottomSheet>
+          );
+        })()
       )}
 
       {formKind === "todo" && (
-        <BottomSheet title={editingTodo ? "Edit To-do" : "New To-do"} onDismiss={closeForms}>
-          <form className="routine-form" key={editingTodo?.id ?? "new-todo"} onSubmit={saveTodo}>
+        (() => {
+          const formId = `todo-form-${editingTodo?.id ?? "new"}`;
+          return (
+        <BottomSheet
+          title={editingTodo ? "Edit To-do" : "New To-do"}
+          onDismiss={closeForms}
+          footer={
+            <div className="routine-form-actions">
+              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="secondary" onClick={closeForms}>Cancel</button>
+            </div>
+          }
+        >
+          <form id={formId} className="routine-form" key={editingTodo?.id ?? "new-todo"} onSubmit={saveTodo}>
             <fieldset>
               <legend>To-do</legend>
               <label>
@@ -1331,12 +1357,10 @@ export default function RoutinesRemindersPage() {
                 </select>
               </label>
             </fieldset>
-            <div className="routine-form-actions">
-              <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-              <button type="button" className="secondary" onClick={closeForms}>Cancel</button>
-            </div>
           </form>
         </BottomSheet>
+          );
+        })()
       )}
     </SettingsPage>
   );

@@ -421,6 +421,25 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
+  it("keeps Reminder actions in the sheet footer outside the scrollable form", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "New Reminder" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "New reminder" });
+    const footer = dialog.querySelector(".sheet-footer");
+    const content = dialog.querySelector(".sheet-content");
+    const form = within(dialog).getByRole("textbox", { name: /title/i }).closest("form");
+    const save = within(dialog).getByRole("button", { name: /^save$/i });
+
+    expect(footer).toBeInTheDocument();
+    expect(content).toContainElement(form);
+    expect(footer).toContainElement(save);
+    expect(footer).not.toContainElement(form);
+    expect(save).toHaveAttribute("form", expect.stringMatching(/^reminder-form-/));
+  });
+
   it("Cancel closes the dialog and discards the draft without saving", async () => {
     render(<RoutinesRemindersPage />);
     const user = userEvent.setup();

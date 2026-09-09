@@ -224,6 +224,7 @@ function isRecurringOwnEvent(event: EventOccurrence): boolean {
 }
 
 function EventForm({
+  formId,
   labels,
   homeCalendars,
   members,
@@ -233,13 +234,12 @@ function EventForm({
   personalCalendarId,
   writableShares = [],
   busy,
-  submitLabel,
   sharedEventsEnabled,
   onSubmit,
   onSubmitShared,
-  onCancel,
   onDelete,
 }: {
+  formId: string;
   /** Calendar Tags (CalendarEventLabel) — a colour/category tag, entirely
    *  independent of which calendar contains the event. */
   labels: EventLabel[];
@@ -268,13 +268,11 @@ function EventForm({
    *  undefined). Empty for the edit flow and whenever the user has none. */
   writableShares?: CalendarShare[];
   busy: boolean;
-  submitLabel: string;
   sharedEventsEnabled: boolean;
   onSubmit: (payload: EventPayload) => Promise<void>;
   /** Called instead of onSubmit when the user picked a shared calendar as
    *  the target for a *new* event — only relevant during creation. */
   onSubmitShared?: (shareId: string, payload: SharedEventPayload) => Promise<void>;
-  onCancel: () => void;
   onDelete?: () => Promise<void>;
 }) {
   const eventTimeZone = initial?.timezone || timeZone;
@@ -511,7 +509,7 @@ function EventForm({
   }
 
   return (
-    <form className="event-form" onSubmit={submit} ref={formRef} tabIndex={-1}>
+    <form id={formId} className="event-form" onSubmit={submit} ref={formRef} tabIndex={-1}>
       <label className="form-wide">
         Title
         <input
@@ -918,12 +916,6 @@ function EventForm({
           </label>
         </div>
       </details>
-      <div className="sheet-actions form-wide">
-        <button disabled={busy}>{busy ? "Saving…" : submitLabel}</button>
-        <button className="secondary" type="button" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
       {onDelete && (
         <button className="danger-link" type="button" disabled={busy} onClick={onDelete}>
           <Trash2 size={16} aria-hidden="true" />
@@ -2132,8 +2124,19 @@ export default function CalendarPage() {
             title="Add event"
             onDismiss={() => setEditorDay(null)}
             fullHeight
+            footer={
+              <div className="sheet-actions">
+                <button form="calendar-new-event-form" disabled={busy}>
+                  {busy ? "Saving…" : "Save event"}
+                </button>
+                <button className="secondary" type="button" onClick={() => setEditorDay(null)}>
+                  Cancel
+                </button>
+              </div>
+            }
           >
             <EventForm
+              formId="calendar-new-event-form"
               labels={labels}
               homeCalendars={homeCalendars}
               members={members}
@@ -2142,11 +2145,9 @@ export default function CalendarPage() {
               personalCalendarId={personalCalendarId}
               writableShares={writableShares}
               busy={busy}
-              submitLabel="Save event"
               sharedEventsEnabled={sharedEventsEnabled}
               onSubmit={create}
               onSubmitShared={createShared}
-              onCancel={() => setEditorDay(null)}
             />
           </BottomSheet>
         )}
@@ -2179,9 +2180,20 @@ export default function CalendarPage() {
                 ) : undefined
               }
               fullHeight
+              footer={
+                <div className="sheet-actions">
+                  <button form="calendar-edit-event-form" disabled={busy}>
+                    {busy ? "Saving…" : "Save changes"}
+                  </button>
+                  <button className="secondary" type="button" onClick={() => setEditingSelected(false)}>
+                    Cancel
+                  </button>
+                </div>
+              }
             >
               {editingSelected ? (
                 <EventForm
+                  formId="calendar-edit-event-form"
                   labels={labels}
                   homeCalendars={homeCalendars}
                   members={members}
@@ -2190,10 +2202,8 @@ export default function CalendarPage() {
                   timeZone={calendarTimezone}
                   personalCalendarId={personalCalendarId}
                   busy={busy}
-                  submitLabel="Save changes"
                   sharedEventsEnabled={sharedEventsEnabled}
                   onSubmit={update}
-                  onCancel={() => setEditingSelected(false)}
                   onDelete={canDelete ? remove : undefined}
                 />
               ) : (
