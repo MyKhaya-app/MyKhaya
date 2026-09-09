@@ -1,6 +1,17 @@
 # Mobile Standards
 
-> MyKhaya ships as a single responsive PWA (`apps/web`), not a separate native app — see [ADR 0011](../architecture/adr/0011-single-pwa-retire-mobile-app.md). These standards govern the mobile experience of that one codebase, not a distinct mobile client.
+> MyKhaya has one shared frontend (`apps/web`) consumed by the browser/PWA and
+> by the live Capacitor shell in `apps/ios-shell` — see [ADR 0012](../architecture/adr/0012-capacitor-ios-shell.md)
+> and [ADR 0013](../architecture/adr/0013-hybrid-web-and-native-presentation.md).
+> These standards govern the protected mobile/native presentation of that one
+> codebase, not a duplicated feature frontend.
+
+## Protected architecture
+
+The current mobile/native UI is the protected baseline. The Capacitor shell
+loads the deployed frontend inside WKWebView; ordinary feature work remains in
+`apps/web`. Desktop or tablet work must not bleed into the native shell, and
+mobile work must not force the browser experience to remain phone-width.
 
 ## Physical-device review is mandatory
 
@@ -13,6 +24,18 @@ Screenshots taken via automated tooling (Playwright, etc.) are useful for catchi
 - Request browser permissions (notifications, etc.) only when a feature needs them, with clear just-in-time explanation.
 - Design for intermittent connectivity and PWA offline support via the service worker.
 - Keep bottom navigation purpose-built for touch rather than a shrunk desktop layout.
+- Preserve the current warm header, fixed safe-area-aware bottom navigation,
+  compact content width, spacing, FAB clearance, sticky/fixed behaviour,
+  bottom-sheet/full-height-sheet behaviour and keyboard handling unless a task
+  explicitly requests a mobile/native change.
+- Mobile/native must not develop horizontal scrolling, zoomed-out pages,
+  desktop sidebars or canvases, fixed-header overlap, bottom-nav overlap,
+  safe-area clipping, hidden content or desktop breakpoint leakage into WKWebView.
+- Use `isNativeShell()` and `nativePlatform()` from
+  `apps/web/components/native-runtime.ts` for native-specific behaviour. Do not
+  scatter direct Capacitor checks or user-agent detection.
+- Persistent login, biometrics, native push and secure native session handling
+  must not regress because of responsive or layout work.
 - Design and verify the signed-in web app at 320, 375, 390 and 430 CSS pixels before widening it for 768, 1024 and 1440. Pages must not require horizontal scrolling.
 - Use a fixed, safe-area-aware bottom navigation on phones, limited to exactly four primary destinations (Home, Calendar, Family, More). Less-frequent destinations (e.g. the Khaya Control Centre for Home Admins) live under More/Settings rather than crowding the bar.
 - Interactive controls must be at least 44 by 44 CSS pixels, keyboard reachable and visibly focused. Bottom sheets trap focus, close with Escape, restore focus and leave room for the on-screen keyboard and device safe areas.
@@ -20,3 +43,9 @@ Screenshots taken via automated tooling (Playwright, etc.) are useful for catchi
 - Prefer stacked cards and disclosure panels to wide tables. Text, names and event metadata must wrap without breaking the viewport.
 - Respect `prefers-reduced-motion`; never make animation necessary to understand state.
 - Follow OWASP Mobile Top 10 2024 as an awareness baseline alongside the main security standards.
+
+Desktop/tablet enhancements must be additive and scoped. Verify the phone
+baseline at 320, 375, 390 and 430px before widening to 768, 1024 and 1440px.
+Physical iPhone review is mandatory before release for changes capable of
+affecting the native shell; browser emulation and screenshots do not replace
+that review.

@@ -11,6 +11,25 @@
 - Do not use broad CSP exceptions to fix implementation problems.
 - Test critical journeys with Playwright.
 
+## Hybrid presentation contract
+
+MyKhaya has one shared frontend with separate presentation families. Mobile and
+native are fixed, app-like and touch-first. Browser/tablet/desktop is adaptive,
+spacious and must use available width intentionally. Desktop must not remain a
+phone-width centred column, and mobile must not inherit desktop geometry.
+
+Use mobile/base CSS as the protected baseline, then add scoped `min-width`
+enhancements for wider screens. Keep business logic, API access, authentication,
+permissions, entitlements, domain state and mutations shared. Presentation-
+specific wrappers, grids, dialogs and panels are acceptable when they do not
+duplicate business logic.
+
+Use `isNativeShell()` and `nativePlatform()` from
+`components/native-runtime.ts` for genuinely native behaviour. Use viewport and
+media queries for layout. Both modes must be verified, including phone,
+tablet and desktop widths; physical iPhone review remains required where the
+native shell can be affected. PCC remains separate and desktop-first.
+
 ## Shared module controls
 
 Reuse established MyKhaya interaction patterns across modules. Segmented
