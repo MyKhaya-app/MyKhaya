@@ -805,7 +805,7 @@ export default function RoutinesRemindersPage() {
               <button
                 type="button"
                 aria-pressed={scopeTab === "personal"}
-                className={`rr-segment${scopeTab === "personal" ? " rr-segment-soft-active" : ""}`}
+                className={`rr-segment${scopeTab === "personal" ? " rr-segment-active" : ""}`}
                 onClick={() => setScopeTab("personal")}
               >
                 <UserIcon size={16} aria-hidden="true" />
@@ -814,7 +814,7 @@ export default function RoutinesRemindersPage() {
               <button
                 type="button"
                 aria-pressed={scopeTab === "household"}
-                className={`rr-segment${scopeTab === "household" ? " rr-segment-soft-active" : ""}`}
+                className={`rr-segment${scopeTab === "household" ? " rr-segment-active" : ""}`}
                 onClick={() => setScopeTab("household")}
               >
                 <HomeIcon size={16} aria-hidden="true" />
