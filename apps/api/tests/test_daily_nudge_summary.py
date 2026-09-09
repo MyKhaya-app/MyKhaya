@@ -558,6 +558,66 @@ async def test_routine_not_suppressed_when_summary_time_differs(client: AsyncCli
 
 
 @pytest.mark.asyncio
+async def test_routine_not_suppressed_when_summary_is_one_minute_before(
+    client: AsyncClient,
+) -> None:
+    """A near-miss must not be treated as the same occurrence: the summary
+    and the routine's fixed 07:30 same-day send are each exact,
+    minute-precision configured times, not a "now" vs. scan-cursor
+    comparison — so there is no tolerance window, and even one minute's
+    difference means a different occurrence that must still be delivered
+    individually."""
+    user_id = await create_verified_user(client, unique_email("dedupbefore"), "Dedup Before Owner")
+    home_id = await create_home_with_notifications(client, family=True)
+    await set_user_timezone(user_id)
+    await configure_summary(user_id, summary_time=time(7, 29))
+    today = datetime.now(UTC).astimezone(TZ).date()
+
+    async with SessionFactory() as db:
+        routine = make_routine(group_id=home_id, created_by=user_id, week_anchor_date=today)
+        db.add(routine)
+        await db.commit()
+        await db.refresh(routine)
+        routine_id = str(routine.id)
+
+        await deliver_routine_reminder(
+            db, get_settings(), routine_id, today.isoformat(), "same_day"
+        )
+        await db.commit()
+        notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == user_id)
+        )
+        assert notification is not None
+
+
+@pytest.mark.asyncio
+async def test_routine_not_suppressed_when_summary_is_one_minute_after(
+    client: AsyncClient,
+) -> None:
+    user_id = await create_verified_user(client, unique_email("dedupafter"), "Dedup After Owner")
+    home_id = await create_home_with_notifications(client, family=True)
+    await set_user_timezone(user_id)
+    await configure_summary(user_id, summary_time=time(7, 31))
+    today = datetime.now(UTC).astimezone(TZ).date()
+
+    async with SessionFactory() as db:
+        routine = make_routine(group_id=home_id, created_by=user_id, week_anchor_date=today)
+        db.add(routine)
+        await db.commit()
+        await db.refresh(routine)
+        routine_id = str(routine.id)
+
+        await deliver_routine_reminder(
+            db, get_settings(), routine_id, today.isoformat(), "same_day"
+        )
+        await db.commit()
+        notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == user_id)
+        )
+        assert notification is not None
+
+
+@pytest.mark.asyncio
 async def test_reminder_slot0_suppressed_but_later_escalation_slot_still_delivered(
     client: AsyncClient,
 ) -> None:

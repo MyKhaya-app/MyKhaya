@@ -381,7 +381,7 @@ async def deliver_daily_nudge_summary(
     )
     title, body = await render_notification(
         db,
-        "nudges.morning_briefing",
+        "daily_nudge_summary",
         {
             "user_display_name": user.display_name,
             "routine_count": str(routine_count),
@@ -426,17 +426,26 @@ async def is_covered_by_daily_nudge_summary(
     item_id: uuid.UUID,
 ) -> bool:
     """True if `recipient_id` has an enabled Daily Nudge Summary scheduled for
-    the same local occurrence window as `item_scheduled_utc`, AND the given
-    routine/reminder is one of the items that summary would include right
-    now — i.e. sending the individual notification for this specific
+    the same canonical local occurrence as `item_scheduled_utc`, AND the
+    given routine/reminder is one of the items that summary would include
+    right now — i.e. sending the individual notification for this specific
     occurrence would be pure duplicate noise on top of the summary.
 
-    Deliberately identifier/window-based, never title/body string matching:
+    Deliberately identifier-based, never title/body string matching:
     `kind`+`item_id` are checked against the same canonical
     `_relevant_routines`/`_relevant_reminders` queries the summary itself
-    uses, and the time comparison is against the *same LOOKAHEAD-resolution
-    scheduling window* every scan in this package uses — not a raw
-    second-level timestamp equality.
+    uses. The occurrence match itself is an exact same-minute comparison
+    between the item's configured local time and the recipient's configured
+    `daily_nudge_summary_time` — both are minute-precision stored settings
+    (a routine's fixed same-day time, a reminder's due_time, the summary's
+    delivery time), not "now" vs. a moving scan cursor, so there is no
+    tolerance window here. LOOKAHEAD elsewhere in this package is a
+    *scanner* polling-resolution constant (how far ahead a scan cycle looks
+    for what just became due) and is deliberately NOT reused for this
+    comparison — a scheduler implementation detail must not silently become
+    a several-minute-wide product suppression window. An item scheduled a
+    few minutes either side of the summary time is a different occurrence
+    and must not be suppressed.
 
     Callers are expected to only consult this for an item's *first* send of
     the day (routines have only one same-day slot; standalone reminders
@@ -452,8 +461,9 @@ async def is_covered_by_daily_nudge_summary(
         return False
     tz = effective_timezone(user.timezone, settings.default_timezone)
     item_local = item_scheduled_utc.astimezone(tz)
-    summary_local = datetime.combine(item_local.date(), prefs.daily_nudge_summary_time, tzinfo=tz)
-    if abs((item_local - summary_local).total_seconds()) > LOOKAHEAD.total_seconds():
+    item_minute = item_local.time().replace(second=0, microsecond=0)
+    summary_minute = prefs.daily_nudge_summary_time.replace(second=0, microsecond=0)
+    if item_minute != summary_minute:
         return False
 
     local_date = item_local.date()

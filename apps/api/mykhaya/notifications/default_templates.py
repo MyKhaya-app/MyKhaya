@@ -304,12 +304,17 @@ TEMPLATES: dict[str, TemplateDefault] = {
     # ("what do I need to do today?"), entirely distinct from Daily Briefing
     # ("what's happening today?", briefing.title/briefing.intro above) and
     # from the *evening* nudges.evening_cleanup/nudges.day_complete below.
+    # Keyed to match its notification_type ("daily_nudge_summary") exactly,
+    # not namespaced under "nudges.", so PCC's titleCase(template_type)
+    # display reads unambiguously as "Daily Nudge Summary" rather than
+    # colliding in wording with Daily Briefing — see migration
+    # 0059_rename_nudges_summary_template for the key's prior name.
     # {{count_summary}} is a pre-formatted, correctly-pluralised phrase
     # (e.g. "1 routine, 2 to-dos and 0 reminders") computed in the
     # notification service — this template engine only does plain
     # {{variable}} substitution with no conditional/plural support, so
     # raw counts are never interpolated directly into prose here.
-    "nudges.morning_briefing": TemplateDefault(
+    "daily_nudge_summary": TemplateDefault(
         subject="Your Nudges today",
         body="You have {{count_summary}} today.\n\n{{item_summary}}",
         allowed_variables=frozenset(
@@ -392,7 +397,7 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
-    "nudges.morning_briefing": {
+    "daily_nudge_summary": {
         "user_display_name": "Jamie",
         "routine_count": "2",
         "todo_count": "3",
