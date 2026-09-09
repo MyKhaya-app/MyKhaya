@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Logo } from "@/components/logo";
 
 const REASSURANCE_POINTS = [
   "Free to start",
@@ -32,27 +31,19 @@ export function PublicHero() {
         </ul>
       </div>
       <div className="mk-hero-art" aria-hidden="true">
-        <div className="mk-hero-phone one">
-          <Logo compact />
+        <div className="mk-hero-phone meal">
+          <img
+            src="/images/marketing/mykhaya-meal-plans.png"
+            alt="The MyKhaya Meal Plans screen, showing today's breakfast, lunch and dinner"
+            loading="eager"
+          />
         </div>
-        <div className="mk-hero-phone two">
-          <span className="mk-art-card">
-            Family dinner
-            <br />
-            <small>Tonight · 18:00</small>
-          </span>
-          <span className="mk-art-card">
-            ✓ Take the bins out
-            <br />
-            <small>Today · Routine</small>
-          </span>
-        </div>
-        <div className="mk-hero-phone three">
-          <span className="mk-art-card">
-            School pickup
-            <br />
-            <small>15:00</small>
-          </span>
+        <div className="mk-hero-phone home">
+          <img
+            src="/images/marketing/mykhaya-home.png"
+            alt="The MyKhaya Home screen, showing today's to-dos and household members"
+            loading="eager"
+          />
         </div>
       </div>
     </section>
