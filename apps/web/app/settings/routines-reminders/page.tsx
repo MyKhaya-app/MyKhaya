@@ -37,6 +37,7 @@ import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { routineDueLabel } from "@/app/home/routine-utils";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
+import { Toast } from "@/components/toast";
 
 // Routines and Reminders stay separate backend domains (separate models,
 // APIs, completion semantics — see docs/architecture/notification-engine.md)
@@ -199,6 +200,8 @@ export default function RoutinesRemindersPage() {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [categoryDraft, setCategoryDraft] = useState("");
+
+  const dismissMessage = useCallback(() => setMessage(""), []);
 
   const loadRoutines = useCallback(async () => {
     if (!activeHomeId) return;
@@ -439,8 +442,10 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId) return;
     if (!window.confirm(`Delete "${routine.title}"? This cannot be undone.`)) return;
     setError("");
+    setMessage("");
     try {
       await api.deleteRoutine(activeHomeId, routine.id);
+      setMessage("Routine deleted.");
       await loadRoutines();
     } catch (cause) {
       setError((cause as Error).message);
@@ -451,8 +456,10 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId) return;
     if (!window.confirm(`Delete "${reminder.title}"? This cannot be undone.`)) return;
     setError("");
+    setMessage("");
     try {
       await api.deleteReminder(activeHomeId, reminder.id);
+      setMessage("Reminder deleted.");
       await loadReminders();
     } catch (cause) {
       setError((cause as Error).message);
@@ -462,8 +469,10 @@ export default function RoutinesRemindersPage() {
   async function removeTodo(todo: Todo) {
     if (!activeHomeId) return;
     if (!window.confirm(`Delete "${todo.title}"? This cannot be undone.`)) return;
+    setMessage("");
     try {
       await api.deleteTodo(activeHomeId, todo.id);
+      setMessage("To-do deleted.");
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
@@ -475,9 +484,11 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId || !categoryDraft.trim()) return;
     setCategoryBusy(true);
     setError("");
+    setMessage("");
     try {
       await api.createTodoCategory(activeHomeId, categoryDraft.trim());
       setCategoryDraft("");
+      setMessage("Category created.");
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
@@ -490,10 +501,12 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId || !categoryDraft.trim() || categoryDraft.trim() === category.name) return;
     setCategoryBusy(true);
     setError("");
+    setMessage("");
     try {
       await api.updateTodoCategory(activeHomeId, category.id, categoryDraft.trim(), category.updated_at);
       setEditingCategoryId(null);
       setCategoryDraft("");
+      setMessage("Category updated.");
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
@@ -504,9 +517,11 @@ export default function RoutinesRemindersPage() {
 
   async function removeTodoCategory(category: TodoCategory) {
     if (!activeHomeId || !window.confirm(`Delete the "${category.name}" category? To-dos will be kept.`)) return;
+    setMessage("");
     try {
       await api.deleteTodoCategory(activeHomeId, category.id);
       if (selectedCategoryId === category.id) setSelectedCategoryId(null);
+      setMessage("Category deleted.");
       await loadTodos();
     } catch (cause) {
       setError((cause as Error).message);
@@ -797,11 +812,7 @@ export default function RoutinesRemindersPage() {
             {error}
           </p>
         )}
-        {message && (
-          <p className="notice" role="status">
-            {message}
-          </p>
-        )}
+        <Toast message={message} onDismiss={dismissMessage} />
 
         <div className="rr-search-row">
           <div className="calendar-search">

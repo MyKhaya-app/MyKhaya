@@ -212,6 +212,31 @@ textarea {
   background: var(--colour-sage-soft);
   color: #354f38;
 }
+.consumer-toast-region {
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 5.25rem);
+  display: flex;
+  justify-content: center;
+  left: 1rem;
+  pointer-events: none;
+  position: fixed;
+  right: 1rem;
+  z-index: 40;
+}
+.consumer-toast {
+  align-items: center;
+  background: var(--colour-forest);
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgb(31 41 51 / 18%);
+  color: white;
+  display: flex;
+  font-size: 0.88rem;
+  font-weight: 600;
+  gap: 0.5rem;
+  max-width: min(100%, 28rem);
+  padding: 0.7rem 1rem;
+  pointer-events: auto;
+}
 .hint {
   color: var(--colour-muted);
   font-size: 0.85rem;
