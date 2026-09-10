@@ -34,11 +34,27 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      featureMatrix: vi.fn(),
+      billingStatus: vi.fn(),
     },
   };
 });
 
 const { api } = await import("@mykhaya/api-client");
+
+// Family Home, Wishlists module released and entitled — the "everything
+// normal" default so every pre-existing test (none of which care about
+// Wishlists specifically) sees it exactly as any other always-on row,
+// same as Nudges/Lists/Meal Plans already behave for them.
+function mockModuleState(overrides: { wishlistsFeatureOn?: boolean; wishlistsEntitled?: boolean } = {}) {
+  const { wishlistsFeatureOn = true, wishlistsEntitled = true } = overrides;
+  (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+    features: [{ feature: "wish_lists", enabled: wishlistsFeatureOn }],
+  });
+  (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+    wishlists_enabled: wishlistsEntitled,
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,12 +64,17 @@ beforeEach(() => {
     display_name: "Megan",
     principal_type: "adult",
   });
+  mockModuleState();
   global.fetch = vi.fn().mockRejectedValue(new Error("no build info in tests"));
 });
 
 // name -> [subtitle, href] for every row the approved mockup specifies —
 // asserted verbatim so a future edit can't silently drift the copy.
 const MOCKUP_ROWS: Record<string, [string, string]> = {
+  Wishlists: [
+    "Gift ideas for birthdays and Christmas, shared without spoiling the surprise",
+    "/wish-lists",
+  ],
   "Home settings": ["Name, details, region and ownership", "/settings/home"],
   "Members and roles": ["Relationships, invitations and access", "/settings/members"],
   "Child permissions": ["Guardians, age bands and privacy", "/khaya-control-centre/children"],
@@ -112,6 +133,7 @@ describe("More — preserved existing destinations", () => {
       ["Nudges", "/settings/routines-reminders"],
       ["Lists", "/lists"],
       ["Meal Plans", "/meal-plans"],
+      ["Wishlists", "/wish-lists"],
       ["Plan & Billing", "/settings/billing"],
     ];
     for (const [name, href] of expectations) {
@@ -223,5 +245,80 @@ describe("More — green hero header", () => {
     const hero = container.querySelector(".more-hero") as HTMLElement;
     expect(hero.querySelector(".more-hero-icon")).toBeNull();
     expect(within(hero).queryByLabelText("MyKhaya")).not.toBeInTheDocument();
+  });
+});
+
+// Product-consistency follow-up: Wishlists is a released optional Home
+// module (see docs/architecture/commercial-entitlements.md) and must appear
+// in More using the same featureMatrix/billingStatus-aware pattern the Home
+// dashboard's quick actions already use for it (app/home/page.tsx) — never
+// a hardcoded always-active link, and never fully hidden just because it's
+// not entitled on the current plan.
+describe("More — Wishlists module state", () => {
+  it("appears in More as a normal, actionable row when the module is released and this Home's plan includes it", async () => {
+    mockModuleState({ wishlistsFeatureOn: true, wishlistsEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Wishlists" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/wish-lists");
+    expect(row.className).not.toContain("more-row-locked");
+    expect(within(row).queryByText("Included with MyKhaya Family")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Gift ideas for birthdays and Christmas, shared without spoiling the surprise"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Wishlists as locked/Family-only on Free, without presenting it as normally usable", async () => {
+    mockModuleState({ wishlistsFeatureOn: true, wishlistsEntitled: false });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Wishlists" });
+    const row = heading.closest("a")!;
+    // Still visible and still a normal link to the canonical route — the
+    // destination page's own FamilyUpsell gate handles the actual upgrade
+    // experience, matching the Home dashboard quick action's convention.
+    expect(row).toHaveAttribute("href", "/wish-lists");
+    expect(row.className).toContain("more-row-locked");
+    expect(within(row).getByText("Included with MyKhaya Family")).toBeInTheDocument();
+    // The normal subtitle is replaced, not merely appended alongside a
+    // "fully usable" presentation.
+    expect(
+      within(row).queryByText(
+        "Gift ideas for birthdays and Christmas, shared without spoiling the surprise",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not show Wishlists at all when the Home Admin has disabled the module for this Family Home", async () => {
+    mockModuleState({ wishlistsFeatureOn: false, wishlistsEntitled: true });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Wishlists" })).not.toBeInTheDocument();
+  });
+
+  it("does not show Wishlists at all when the platform flag is off", async () => {
+    mockModuleState({ wishlistsFeatureOn: false, wishlistsEntitled: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Wishlists" })).not.toBeInTheDocument();
+  });
+
+  it("leaves every other More row unaffected by the module-state fetch", async () => {
+    mockModuleState({ wishlistsFeatureOn: false, wishlistsEntitled: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    for (const name of ["Profile", "Notifications", "Nudges", "Lists", "Meal Plans", "Plan & Billing"]) {
+      expect(screen.getByRole("heading", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("still does not show Notifications, External sharing, Tasks or Plans as ordinary modules", async () => {
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    // Notifications legitimately has its own settings row — this checks it
+    // never grows a *second*, module-styled entry alongside it.
+    expect(screen.getAllByRole("heading", { name: "Notifications" })).toHaveLength(1);
+    for (const nonModule of ["External sharing", "External Sharing", "Tasks", "Plans"]) {
+      expect(screen.queryByRole("heading", { name: nonModule })).not.toBeInTheDocument();
+    }
   });
 });

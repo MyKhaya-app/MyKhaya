@@ -8406,7 +8406,10 @@ select.plan-meal-field-input {
   min-width: 0;
 }
 .more-row-text h2 {
+  align-items: center;
+  display: flex;
   font-size: var(--font-body);
+  gap: 0.35rem;
   margin: 0;
 }
 .more-row-text p {
@@ -8418,6 +8421,23 @@ select.plan-meal-field-input {
   color: var(--colour-muted);
   flex: none;
   font-size: 1.2rem;
+}
+/* Visible-but-locked module row — same reduced-emphasis treatment as
+   .quick-action-locked (Home dashboard quick actions), adapted to the row
+   layout: muted icon tile/text plus a small inline Lock icon next to the
+   name, rather than a new visual language. Still a normal link to the
+   destination page's own upgrade experience — this never disables or
+   removes the row. */
+.more-row-locked .more-icon-tile {
+  background: #f1ede4;
+  color: var(--colour-muted);
+}
+.more-row-locked .more-row-text h2 {
+  color: var(--colour-muted);
+}
+.more-row-lock {
+  color: var(--colour-muted);
+  flex: none;
 }
 .more-icon-tile {
   align-items: center;

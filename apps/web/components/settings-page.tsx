@@ -9,9 +9,11 @@ import {
   CircleUserRound,
   CreditCard,
   ExternalLink,
+  Gift,
   Home,
   HelpCircle,
   ListChecks,
+  Lock,
   Puzzle,
   Repeat,
   Shield,
@@ -21,7 +23,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import type { User } from "@mykhaya/shared-types";
+import type { BillingStatus, FeatureMatrix, User } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { AppShellContent } from "./app-shell";
 import { HeroFlower } from "./hero-flower";
@@ -43,6 +45,22 @@ interface MoreItem {
   icon: LucideIcon;
   tone: TileTone;
   gate: MoreGate;
+  // Optional module-awareness — same featureMatrix/billingStatus source of
+  // truth the Home dashboard's quick actions already use (see
+  // app/home/page.tsx). When set: the row is hidden entirely if the
+  // platform/Home module state resolves it unavailable (never a dead link
+  // for something genuinely switched off upstream, matching the quick
+  // actions' own `{featureOn && (...)}` pattern) — never disabled-but-
+  // visible, since nothing in this codebase currently uses that
+  // treatment. When the module IS available but this Home's plan doesn't
+  // include it, the row stays visible with the same locked treatment
+  // (muted + a small Lock icon) quick actions already use, still a normal
+  // link to the destination page's own upgrade experience. Only Wishlists
+  // uses this today — Nudges/Lists/Meal Plans remain on the coarser
+  // `gate: "all"` unchanged, a deliberately narrow follow-up rather than a
+  // full More-menu redesign.
+  featureKey?: string;
+  entitlementKey?: keyof BillingStatus;
 }
 
 interface MoreGroup {
@@ -64,6 +82,16 @@ const MORE_GROUPS: readonly MoreGroup[] = [
       { name: "Nudges", detail: "Routines, reminders and things to do", href: "/settings/routines-reminders", icon: Repeat, tone: "sage", gate: "all" },
       { name: "Lists", detail: "Shopping, chores and shared household lists", href: "/lists", icon: ListChecks, tone: "cream", gate: "all" },
       { name: "Meal Plans", detail: "Plan meals together and save family favourites", href: "/meal-plans", icon: UtensilsCrossed, tone: "coral", gate: "all" },
+      {
+        name: "Wishlists",
+        detail: "Gift ideas for birthdays and Christmas, shared without spoiling the surprise",
+        href: "/wish-lists",
+        icon: Gift,
+        tone: "blue",
+        gate: "all",
+        featureKey: "wish_lists",
+        entitlementKey: "wishlists_enabled",
+      },
     ],
   },
   {
@@ -121,17 +149,45 @@ export function SettingsPage({
   children?: React.ReactNode;
 }) {
   const [user, setUser] = useState<User | null>(null);
-  const { activeHome } = useActiveHome();
+  const { activeHome, activeHomeId } = useActiveHome();
+  const [featureMatrix, setFeatureMatrix] = useState<FeatureMatrix | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   useEffect(() => {
     api.me().then(setUser).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .featureMatrix(activeHomeId)
+      .then(setFeatureMatrix)
+      .catch(() => setFeatureMatrix(null));
+    api
+      .billingStatus(activeHomeId)
+      .then(setBillingStatus)
+      .catch(() => setBillingStatus(null));
+  }, [activeHomeId]);
   const isAdult = user?.principal_type !== "managed_child";
   const isHomeAdmin = activeHome?.relationship === "home_admin";
 
-  function visible(gate: MoreGate): boolean {
-    if (gate === "homeAdmin") return isAdult && isHomeAdmin;
-    if (gate === "adult") return isAdult;
-    return true;
+  function visible(item: MoreItem): boolean {
+    if (item.gate === "homeAdmin" && !(isAdult && isHomeAdmin)) return false;
+    if (item.gate === "adult" && !isAdult) return false;
+    // No featureKey: unaffected, matching every row's current behaviour
+    // exactly (Nudges/Lists/Meal Plans and everything else).
+    if (!item.featureKey) return true;
+    // Platform/Home module state not yet loaded, or genuinely unavailable
+    // — hidden, never a dead link, matching the Home dashboard quick
+    // actions' own `{featureOn && (...)}` treatment for the same modules.
+    return Boolean(
+      featureMatrix?.features.some(
+        (feature) => feature.feature === item.featureKey && feature.enabled,
+      ),
+    );
+  }
+
+  function locked(item: MoreItem): boolean {
+    if (!item.entitlementKey) return false;
+    return !billingStatus?.[item.entitlementKey];
   }
 
   return (
@@ -161,26 +217,38 @@ export function SettingsPage({
         ) : (
           <div className="more-groups">
             {MORE_GROUPS.map((group) => {
-              const items = group.items.filter((item) => visible(item.gate));
+              const items = group.items.filter(visible);
               if (items.length === 0) return null;
               return (
                 <section className="card more-group" key={group.label}>
                   <p className="more-group-label">{group.label}</p>
                   <div className="more-group-rows">
-                    {items.map((item) => (
-                      <Link className="more-row" href={item.href} key={item.href}>
-                        <span className={`more-icon-tile ${item.tone}`} aria-hidden="true">
-                          <item.icon size={20} strokeWidth={1.75} />
-                        </span>
-                        <span className="more-row-text">
-                          <h2>{item.name}</h2>
-                          <p>{item.detail}</p>
-                        </span>
-                        <span className="more-row-chevron" aria-hidden="true">
-                          ›
-                        </span>
-                      </Link>
-                    ))}
+                    {items.map((item) => {
+                      const itemLocked = locked(item);
+                      return (
+                        <Link
+                          className={`more-row${itemLocked ? " more-row-locked" : ""}`}
+                          href={item.href}
+                          key={item.href}
+                        >
+                          <span className={`more-icon-tile ${item.tone}`} aria-hidden="true">
+                            <item.icon size={20} strokeWidth={1.75} />
+                          </span>
+                          <span className="more-row-text">
+                            <h2>
+                              {item.name}
+                              {itemLocked && (
+                                <Lock className="more-row-lock" aria-hidden="true" size={12} />
+                              )}
+                            </h2>
+                            <p>{itemLocked ? "Included with MyKhaya Family" : item.detail}</p>
+                          </span>
+                          <span className="more-row-chevron" aria-hidden="true">
+                            ›
+                          </span>
+                        </Link>
+                      );
+                    })}
                   </div>
                 </section>
               );
