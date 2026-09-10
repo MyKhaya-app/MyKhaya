@@ -151,6 +151,15 @@ async def navigation_modules(
             definition.id in required and required[definition.id] not in capabilities
         ):
             continue
+        # Phase 3A: this is a *consumer* navigation listing — Notifications
+        # (core platform delivery infrastructure) and External sharing (a
+        # Calendar capability, not a standalone destination) must never
+        # appear here as if they were navigable modules in their own right,
+        # exactly like the Home Admin Module Management listing above
+        # already excludes them. household_modules() already excludes
+        # hidden modules (Tasks/Plans) on its own.
+        if not definition.home_admin_manageable:
+            continue
         _platform_ok, entitled, enabled, _blocked_by = await _module_state(db, group_id, definition)
         if not enabled:
             continue

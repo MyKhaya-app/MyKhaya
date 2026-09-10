@@ -575,20 +575,23 @@ Both checks live in `routers/household_routines.py`, reusing `require_entitlemen
 
 ### Deferred enforcement (defined as data, not yet live)
 
-Four keys exist in `PLAN_DEFINITIONS` as commercial data only, with **no** live enforcement, matching the precedent Phase 1 already established for `lists.enabled`/`chores.enabled`/`wishlists.enabled` (all still `hidden` modules, unchanged by this task):
+Two keys exist in `PLAN_DEFINITIONS` as commercial data only, with **no** live enforcement:
 
-- **`events.shared.enabled`** — "Shared family events" is not enforced. Investigation found ordinary multi-member events (`CalendarEventMember`) already work unrestricted on Free today; naively gating "any event with more than one participant" would be a breaking behaviour change to existing Free functionality with no clear product definition of what "shared" actually restricts. **Follow-up required**: a focused design task must define precisely what this differentiates (e.g. inviting members outside the Home? a dedicated "family event" type?) before any enforcement is added.
-- **`members.external_invites.enabled`** — "Invite external members" has no backend capability behind it at all (`FeatureKey.external_sharing` is `hidden`, unimplemented scaffolding). Nothing to enforce yet.
 - **`family_plans.enabled`** — "Family Plans" has no corresponding domain concept anywhere in the codebase. Declared as data only, per the existing "ready for whenever this exists" pattern — no placeholder module, route, or UI was created for it.
 - **`support.priority.enabled`** — "Priority Support" is a support-policy property, not a software feature; MyKhaya has no support-ticket system to make this operationally real yet. Declared as data only.
 
-None of these four appear in `GET /billing/plans` (public/household pricing comparison) — only in the Platform Control Centre's internal capability viewer, marked with a "Planned" badge, so an operator can see the intended model without it ever being advertised to a customer as something that works today.
+Neither appears in `GET /billing/plans` (public/household pricing comparison) — only in the Platform Control Centre's internal capability viewer, marked with a "Contract only" badge, so an operator can see the intended model without it ever being advertised to a customer as something that works today.
+
+`events.shared.enabled` and `members.external_invites.enabled` were deferred here when this section was first written; both are now live, enforced entitlements (not commercial data only) and no longer belong in this list:
+
+- **`events.shared.enabled`** — enforced in `routers/calendar.py`'s `create_event`/`update_event`: assigning an event to more than one member (a genuinely shared event) requires it; an ordinary single-member event is unaffected.
+- **`members.external_invites.enabled`** — enforced in `routers/calendar_sharing.py` for creating an external Calendar Share, alongside the `FeatureKey.external_sharing` platform Beta flag and `FeatureKey.calendar` (both required too — External Sharing is a Calendar capability, not a standalone module, gated as `home_admin_manageable=False` in `mykhaya.module_registry`).
 
 ### Platform Control Centre: plan capabilities vs current usage
 
 The subscription detail page's entitlement viewer was split into two tables:
 
-- **Plan capabilities** — every key from the agreed matrix above, in a fixed, curated order (never raw `Object.entries()` iteration over the API response), human-readable values ("Included"/"Not included"/"Unlimited"/"Up to 3"/"1 person"/"Whole household" — never `true`/`false`/`null`), with a "Planned" badge on the four deferred-enforcement keys.
+- **Plan capabilities** — every key from the agreed matrix above, in a fixed, curated order (never raw `Object.entries()` iteration over the API response), human-readable values ("Included"/"Not included"/"Unlimited"/"Up to 3"/"1 person"/"Whole household" — never `true`/`false`/`null`), with a "Contract only" badge on the two deferred-enforcement keys (see "Deferred enforcement" above).
 - **Current usage** — household members, event categories (both with an "Over plan limit" badge when applicable, from the shared `member_usage`/`calendar_usage` helpers), and total personal routines in use across the Home (informational only — the limit itself is per person, so this aggregate is never compared against the limit directly, avoiding a misleading precision it can't actually deliver).
 
 Both `member_usage` and `calendar_usage` reuse the same `CalendarUsageResponse` (`count`/`limit`/`over_limit`) shape rather than declaring a near-identical class per resource — the class name is a Phase 6 leftover, documented as intentionally generic rather than renamed, to avoid unnecessary churn across both backend and frontend call sites for a purely cosmetic improvement.

@@ -5272,6 +5272,19 @@ async def update_module(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    # Phase 3A: a hidden module (Tasks, Plans — retired/not-yet-built) must
+    # stay unavailable unless deliberately promoted through code/release
+    # governance, never through this lifecycle control — see
+    # module_registry.feature_modules' matching read-side exclusion from
+    # PCC's global catalogue. This is enforced against the module's static
+    # registry release_state, never the FeatureFlag row's own stored one
+    # (which an earlier write could already have drifted) — the registry is
+    # the actual authority is_feature_enabled consults for the hidden check.
+    if module_definition(key.value).release_state == ReleaseState.hidden:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{key.value} is not a released module and cannot be managed here.",
+        )
     row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == key).with_for_update())
     previous = row.enabled if row else False
     previous_state = (

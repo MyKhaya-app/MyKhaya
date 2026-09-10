@@ -16,9 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
-    FeatureKey,
     Group,
     HouseholdRoutine,
     HouseholdRoutineMember,
@@ -29,7 +27,10 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.nudges import is_covered_by_daily_nudge_summary
+from mykhaya.notifications.nudges import (
+    is_covered_by_daily_nudge_summary,
+    is_nudges_notification_eligible,
+)
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.routine_occurrences import is_occurrence_date
 from mykhaya.notifications.templates import render_notification
@@ -70,7 +71,12 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
         )
     ).all()
     for routine in routines:
-        if not await is_feature_enabled(db, FeatureKey.notifications, routine.group_id):
+        # Phase 3A: household routine reminders are a Nudges-owned scheduled
+        # notification — see is_nudges_notification_eligible. A Home whose
+        # Nudges module/entitlement (not just Notifications) is currently
+        # blocked never even gets an OutboxEvent enqueued; the routine data
+        # itself is untouched either way.
+        if not await is_nudges_notification_eligible(db, routine.group_id):
             continue
         tz = await home_timezone(db, routine.group_id, settings.default_timezone)
         now_local = now_utc.astimezone(tz)
@@ -138,6 +144,11 @@ async def deliver_routine_reminder(
     routine = await db.get(HouseholdRoutine, uuid.UUID(routine_id))
     if routine is None or not routine.enabled:
         return  # disabled or deleted since it was scanned
+    # Re-validate fresh, same reasoning as the occurrence/timing checks
+    # below: Nudges could have been disabled or lost its entitlement in the
+    # gap between scan and this worker actually running.
+    if not await is_nudges_notification_eligible(db, routine.group_id):
+        return
 
     occurrence_date = date.fromisoformat(occurrence_date_iso)
     # Re-validate fresh: an edit to the schedule or reminder_timing since this was

@@ -51,12 +51,15 @@ DAY_COMPLETE_TOPIC = "notification.nudges.day_complete"
 DAILY_SUMMARY_TOPIC = "notification.daily_nudge_summary"
 
 
-async def _nudges_eligible_group_ids(
-    db: AsyncSession, group_ids: list[uuid.UUID]
-) -> list[uuid.UUID]:
-    """Filters a user's Home ids down to the ones eligible to contribute to
-    a Nudges-specific scheduled notification (evening cleanup, day-complete,
-    Daily Nudge Summary) — three independent conditions, all required:
+async def is_nudges_notification_eligible(db: AsyncSession, group_id: uuid.UUID) -> bool:
+    """Whether ONE Home is currently eligible to receive a Nudges-owned
+    scheduled notification — household routine reminders
+    (mykhaya.notifications.routines), standalone reminders
+    (mykhaya.notifications.standalone_reminders), and this module's own
+    evening-cleanup/day-complete/Daily Nudge Summary sends all share this
+    single check, so a module/entitlement change is honoured identically
+    everywhere rather than three separately-maintained resolvers (Phase 3A).
+    Three independent conditions, all required:
 
     1. FeatureKey.nudges is enabled (platform/Home module gating, see
        mykhaya.features.is_feature_enabled) — the same check
@@ -72,14 +75,29 @@ async def _nudges_eligible_group_ids(
        never gets *notified* about it — this never affects whether the
        Nudges API itself is reachable, and never affects unrelated
        notification types (briefings, events, meal plans), which are
-       entirely unaffected by this module."""
+       entirely unaffected by this module.
+
+    Preserved data is never touched by this check either way — a routine,
+    reminder or to-do that already exists keeps existing regardless of
+    whether it's currently eligible to be notified about; re-enabling the
+    module/entitlement simply lets future occurrences notify again."""
+    return (
+        await is_feature_enabled(db, FeatureKey.nudges, group_id)
+        and await has_entitlement(db, group_id, "nudges.enabled")
+        and await is_feature_enabled(db, FeatureKey.notifications, group_id)
+    )
+
+
+async def _nudges_eligible_group_ids(
+    db: AsyncSession, group_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """Filters a user's Home ids down to the ones eligible to contribute to
+    a Nudges-specific scheduled notification — see
+    is_nudges_notification_eligible for the three conditions this applies
+    per Home."""
     eligible: list[uuid.UUID] = []
     for group_id in group_ids:
-        if (
-            await is_feature_enabled(db, FeatureKey.nudges, group_id)
-            and await has_entitlement(db, group_id, "nudges.enabled")
-            and await is_feature_enabled(db, FeatureKey.notifications, group_id)
-        ):
+        if await is_nudges_notification_eligible(db, group_id):
             eligible.append(group_id)
     return eligible
 

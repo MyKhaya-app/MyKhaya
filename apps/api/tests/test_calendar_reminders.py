@@ -171,6 +171,98 @@ async def test_scan_enqueues_a_due_reminder_and_is_idempotent(client: AsyncClien
 
 
 @pytest.mark.asyncio
+async def test_scan_respects_calendar_module_disabled(client: AsyncClient) -> None:
+    """Phase 3A: calendar event reminders are a Calendar-owned scheduled
+    notification — disabling the Calendar module (independent of
+    Notifications, which stays on) must stop them from firing. The event
+    itself is created before Calendar is disabled, matching "data preserved,
+    notified-about state re-evaluated"."""
+    await create_verified_user(client, unique_email("caloff"), "Calendar Off Owner")
+    home_id = await create_home_with_calendar(client)
+    start_at = datetime.now(UTC) + timedelta(minutes=5, seconds=30)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Should not remind",
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "reminder_minutes": 5,
+        },
+    )
+    assert created.status_code == 201
+    event_id = created.json()["event_id"]
+
+    async with SessionFactory() as db:
+        override = await db.scalar(
+            select(FeatureOverride).where(
+                FeatureOverride.group_id == home_id,
+                FeatureOverride.feature_key == FeatureKey.calendar,
+            )
+        )
+        assert override is not None
+        override.enabled = False
+        await db.commit()
+
+        await scan_due_reminders(db, get_settings())
+        assert await reminder_rows_for_event(db, event_id) == []
+        # The event itself is untouched — preserved data, not deleted.
+        assert await db.get(CalendarEvent, uuid.UUID(event_id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_reminder_still_fires_for_an_event_on_a_downgrade_restricted_calendar(
+    client: AsyncClient,
+) -> None:
+    """Phase 3A: a read_only_due_to_plan calendar (an excess shared calendar
+    preserved after a Family-to-Free downgrade — see
+    mykhaya.routers.calendar._calendar_access) still has real, existing,
+    upcoming events on it. Restriction blocks new writes, never awareness of
+    an appointment that already exists — the reminder must still fire."""
+    await create_verified_user(client, unique_email("restrictedcal"), "Restricted Cal Owner")
+    home_id = await create_home_with_calendar(client)
+    secondary = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/calendars", json={"name": "Secondary"}
+    )
+    assert secondary.status_code == 201, secondary.text
+    secondary_id = secondary.json()["id"]
+
+    start_at = datetime.now(UTC) + timedelta(minutes=5, seconds=30)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Still real",
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "reminder_minutes": 5,
+            "calendar_id": secondary_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["event_id"]
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+
+        listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+        secondary_after = next(
+            item for item in listing.json()["items"] if item["id"] == secondary_id
+        )
+        assert secondary_after["commercial_access"] == "read_only_due_to_plan"
+
+        await scan_due_reminders(db, get_settings())
+        assert len(await reminder_rows_for_event(db, event_id)) == 1
+
+
+@pytest.mark.asyncio
 async def test_scan_does_not_enqueue_when_not_yet_due_or_already_passed(
     client: AsyncClient,
 ) -> None:

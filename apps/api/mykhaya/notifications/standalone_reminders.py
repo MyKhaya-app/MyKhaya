@@ -25,9 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
-    FeatureKey,
     Group,
     Membership,
     OutboxEvent,
@@ -39,7 +37,10 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.nudges import is_covered_by_daily_nudge_summary
+from mykhaya.notifications.nudges import (
+    is_covered_by_daily_nudge_summary,
+    is_nudges_notification_eligible,
+)
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.reminder_occurrences import (
     is_occurrence_date,
@@ -91,7 +92,9 @@ async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
         )
     ).all()
     for reminder in reminders:
-        if not await is_feature_enabled(db, FeatureKey.notifications, reminder.group_id):
+        # Phase 3A: standalone reminders are a Nudges-owned scheduled
+        # notification — see is_nudges_notification_eligible.
+        if not await is_nudges_notification_eligible(db, reminder.group_id):
             continue
         tz = await home_timezone(db, reminder.group_id, settings.default_timezone)
         today_local = now_utc.astimezone(tz).date()
@@ -158,6 +161,10 @@ async def deliver_standalone_reminder(
     reminder = await db.get(Reminder, uuid.UUID(reminder_id))
     if reminder is None or not reminder.enabled:
         return  # disabled or deleted since it was scanned
+    # Re-validate fresh — Nudges could have been disabled or lost its
+    # entitlement in the gap between scan and this worker actually running.
+    if not await is_nudges_notification_eligible(db, reminder.group_id):
+        return
 
     occurrence_date = date.fromisoformat(occurrence_date_iso)
     # Re-validate fresh: an edit to due_date/repeat/cadence, or a completion that

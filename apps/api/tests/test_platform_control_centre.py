@@ -14,6 +14,8 @@ from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
     AdministrativeNote,
+    FeatureFlag,
+    FeatureKey,
     Group,
     OutboxEvent,
     PlatformAdministrator,
@@ -356,14 +358,63 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
 ) -> None:
+    # Capture Calendar's real FeatureFlag state before this test mutates it,
+    # so it can be restored exactly afterwards — including the "no row
+    # exists at all" case, not just hardcoding a guessed default. See
+    # migration 0063_feature_flag_backfill for what the row's actual
+    # steady-state should be; this test must never assume or leave a
+    # different one, or it leaks state into whatever Calendar test runs
+    # next in the same session (see mykhaya.features.platform_feature_
+    # enabled/is_feature_enabled, which reads this row directly).
+    async with SessionFactory() as db:
+        original = await db.scalar(
+            select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar)
+        )
+        original_existed = original is not None
+        original_enabled = original.enabled if original else None
+        original_release_state = original.release_state if original else None
+
+    try:
+        await _run_calendar_module_lifecycle(admin_client, admin_factory)
+    finally:
+        async with SessionFactory() as db:
+            row = await db.scalar(
+                select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar)
+            )
+            if original_existed:
+                assert original_enabled is not None
+                if row is None:
+                    db.add(
+                        FeatureFlag(
+                            key=FeatureKey.calendar,
+                            enabled=original_enabled,
+                            release_state=original_release_state,
+                        )
+                    )
+                else:
+                    row.enabled = original_enabled
+                    row.release_state = original_release_state
+            elif row is not None:
+                await db.delete(row)
+            await db.commit()
+
+
+async def _run_calendar_module_lifecycle(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
     readonly = await admin_factory(PlatformRole.readonly)
     await login(admin_client, readonly)
     listed = await admin_client.get("/api/v1/platform/modules")
     assert listed.status_code == 200
-    assert {item["key"] for item in listed.json()} >= {"calendar", "tasks"}
-    assert (
-        next(item for item in listed.json() if item["key"] == "tasks")["release_state"] == "hidden"
-    )
+    # Phase 3A: hidden modules (Tasks, Plans) are structurally excluded from
+    # PCC's global live catalogue — see mykhaya.module_registry.
+    # feature_modules(). Only operationally controllable modules/capability
+    # flags appear here.
+    keys = {item["key"] for item in listed.json()}
+    assert "calendar" in keys
+    assert "tasks" not in keys
+    assert "plans" not in keys
     denied = await unsafe(
         admin_client,
         "PUT",
@@ -416,6 +467,11 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
         assert event is not None
         assert event.reason == "Enable the Calendar pilot safely."
 
+    # Exercises the disable transition itself (coverage this test already
+    # wanted) — this is no longer what restores Calendar's real global
+    # state afterwards; the caller's try/finally does that from the
+    # snapshot taken before this function ran, regardless of what state
+    # this leaves things in or whether an assertion above already failed.
     disabled = await unsafe(
         admin_client,
         "PUT",
@@ -423,11 +479,82 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
         json={
             "enabled": False,
             "release_state": "released",
-            "reason": "Restore the default after this test.",
+            "reason": "Exercise the disable transition.",
             "confirmed": True,
         },
     )
     assert disabled.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_global_module_catalogue_shows_real_operational_entries_only(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """Phase 3A. The current approved module/capability set: Calendar,
+    Lists, Meal Plans, Wishlists and Nudges (Home-Admin-toggleable
+    modules), plus Notifications and External sharing (infrastructure/Beta
+    capability flags PCC still legitimately controls at the platform level,
+    even though neither is a Home-Admin-toggleable module — see
+    module_registry.ModuleDefinition.home_admin_manageable). Hidden modules
+    (Tasks, Plans) must never appear as live editable entries."""
+    admin = await admin_factory(PlatformRole.readonly)
+    await login(admin_client, admin)
+    listed = await admin_client.get("/api/v1/platform/modules")
+    assert listed.status_code == 200
+    keys = {item["key"] for item in listed.json()}
+    expected_keys = (
+        "nudges",
+        "calendar",
+        "shopping",
+        "meals",
+        "wish_lists",
+        "notifications",
+        "external_sharing",
+    )
+    for expected in expected_keys:
+        assert expected in keys, f"{expected} should still be in PCC's global catalogue"
+    for hidden in ("tasks", "plans"):
+        assert hidden not in keys, f"{hidden} is hidden and must not be an editable catalogue entry"
+
+
+@pytest.mark.asyncio
+async def test_hidden_module_write_is_rejected_even_with_a_stale_feature_flag_row(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """A hidden module must remain fail-closed and unavailable unless
+    deliberately promoted through code/release governance — never through
+    this lifecycle control, and never merely because a stale database row
+    claims otherwise (see routers.platform.update_module's guard, checked
+    against the static registry, never the FeatureFlag row's own value)."""
+    async with SessionFactory() as db:
+        row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.tasks))
+        if row is None:
+            db.add(FeatureFlag(key=FeatureKey.tasks, enabled=True, release_state="released"))
+        else:
+            row.enabled = True
+            row.release_state = "released"
+        await db.commit()
+
+    owner = await admin_factory(PlatformRole.owner)
+    await login(admin_client, owner)
+    rejected = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/modules/tasks",
+        json={
+            "enabled": True,
+            "release_state": "released",
+            "reason": "Attempting to promote a hidden module.",
+            "confirmed": True,
+        },
+    )
+    assert rejected.status_code == 409
+
+    # Still absent from the global catalogue despite the stale row above.
+    listed = await admin_client.get("/api/v1/platform/modules")
+    assert "tasks" not in {item["key"] for item in listed.json()}
 
 
 @pytest.mark.asyncio

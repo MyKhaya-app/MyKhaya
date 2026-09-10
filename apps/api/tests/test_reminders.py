@@ -770,6 +770,55 @@ async def test_scan_respects_notifications_feature_flag(client: AsyncClient) -> 
 
 
 @pytest.mark.asyncio
+async def test_scan_respects_nudges_module_disabled(client: AsyncClient) -> None:
+    """Phase 3A: standalone reminders are a Nudges-owned scheduled
+    notification — disabling the Nudges module (independent of
+    Notifications, which stays on) must stop them from firing, without
+    deleting the reminder itself."""
+    creator_id = await create_verified_user(client, unique_email("nudgesoff"), "Owner")
+    home_id = await create_home_with_notifications(client)
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.nudges, group_id=home_id, enabled=False))
+        await db.commit()
+
+    today = datetime.now(UTC).date()
+    async with SessionFactory() as db:
+        reminder = make_reminder(group_id=home_id, created_by=creator_id, due_date=today)
+        db.add(reminder)
+        await db.commit()
+        reminder_id = str(reminder.id)
+
+        await scan_due_reminders(db, get_settings())
+        assert await reminder_rows(db, reminder_id) == []
+        assert await db.get(Reminder, reminder.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_respects_nudges_entitlement_on_free_plan(client: AsyncClient) -> None:
+    """Free has no Nudges entitlement (nudges.enabled=False) — a standalone
+    reminder must not fire even with Notifications and the Nudges module
+    itself both enabled."""
+    creator_id = await create_verified_user(client, unique_email("nudgesfree"), "Owner")
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Free Nudges Home"})
+    home_id = uuid.UUID(group.json()["id"])
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
+        )
+        await db.commit()
+
+    today = datetime.now(UTC).date()
+    async with SessionFactory() as db:
+        reminder = make_reminder(group_id=home_id, created_by=creator_id, due_date=today)
+        db.add(reminder)
+        await db.commit()
+        reminder_id = str(reminder.id)
+
+        await scan_due_reminders(db, get_settings())
+        assert await reminder_rows(db, reminder_id) == []
+
+
+@pytest.mark.asyncio
 async def test_overdue_reminder_is_the_scanned_occurrence_not_todays(client: AsyncClient) -> None:
     """A reminder due 3 days ago and never completed stays "the" overdue occurrence
     — the scan must find that missed date, not silently roll forward to today."""

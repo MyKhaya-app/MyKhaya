@@ -35,6 +35,27 @@ MAX_REMINDER_OFFSET_MINUTES = 1440
 REMINDER_TOPIC = "notification.event_reminder"
 
 
+async def _calendar_notification_eligible(db: AsyncSession, group_id: uuid.UUID) -> bool:
+    """Whether a Home is currently eligible to receive a Calendar-owned
+    scheduled notification (Phase 3A) — checked both at scan time (so a
+    platform/Home-disabled Calendar never gets an OutboxEvent enqueued) and
+    again at delivery (so a module change in the gap between scan and
+    delivery is still caught, matching this file's existing "re-validate
+    fresh" pattern for occurrence/edit races).
+
+    Calendar carries no boolean commercial entitlement of its own (see
+    mykhaya.entitlements.PLAN_DEFINITIONS — Free vs Family only differ in
+    per-resource numeric limits, enforced at mutation time in
+    routers.calendar, never at reminder delivery time), so this never checks
+    one: a reminder for an existing, preserved event must still fire even if
+    that event's calendar is currently read_only_due_to_plan after a
+    downgrade — restriction blocks new writes, never awareness of a real,
+    already-existing appointment."""
+    return await is_feature_enabled(
+        db, FeatureKey.calendar, group_id
+    ) and await is_feature_enabled(db, FeatureKey.notifications, group_id)
+
+
 def _reminder_when_and_location(
     event: CalendarEvent,
     occurrence_start: datetime,
@@ -88,7 +109,7 @@ async def scan_due_reminders(db: AsyncSession, settings: Settings) -> None:
     for event in events:
         if event.reminder_minutes is None:
             continue  # narrows for mypy; the query above already filters this
-        if not await is_feature_enabled(db, FeatureKey.notifications, event.group_id):
+        if not await _calendar_notification_eligible(db, event.group_id):
             continue
         offset = timedelta(minutes=event.reminder_minutes)
         search_end = window_end + offset
@@ -151,6 +172,8 @@ async def deliver_event_reminder(
     event = await db.get(CalendarEvent, uuid.UUID(event_id))
     if event is None or event.deleted_at is not None:
         return  # deleted since it was scanned — nothing to deliver
+    if not await _calendar_notification_eligible(db, event.group_id):
+        return  # Calendar module/platform state changed since this was scanned
 
     occurrence_start = datetime.fromisoformat(occurrence_start_iso)
     # Re-expand fresh, keyed on the CANONICAL occurrence_start scan_due_

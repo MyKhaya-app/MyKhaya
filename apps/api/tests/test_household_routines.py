@@ -1032,6 +1032,70 @@ async def test_scan_respects_notifications_feature_flag(client: AsyncClient) -> 
 
 
 @pytest.mark.asyncio
+async def test_scan_respects_nudges_module_disabled(client: AsyncClient) -> None:
+    """Phase 3A: household routine reminders are a Nudges-owned scheduled
+    notification — disabling the Nudges module (independent of
+    Notifications, which stays on) must stop them from firing, without
+    deleting the routine itself."""
+    creator_id = await create_verified_user(client, unique_email("nudgesoff"), "Nudges Off Owner")
+    home_id = await create_home_with_notifications(client)
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.nudges, group_id=home_id, enabled=False))
+        await db.commit()
+
+    today = datetime.now(UTC).date()
+    async with SessionFactory() as db:
+        routine = make_routine(
+            group_id=home_id,
+            created_by=creator_id,
+            week_anchor_date=today,
+            reminder_timing=RoutineReminderTiming.same_day,
+        )
+        db.add(routine)
+        await db.commit()
+        await db.refresh(routine)
+        routine_id = str(routine.id)
+
+        await scan_due_routines(db, get_settings())
+        assert await routine_rows(db, routine_id) == []
+        # The routine row itself is untouched — preserved data, not deleted.
+        assert await db.get(HouseholdRoutine, routine.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_respects_nudges_entitlement_on_free_plan(client: AsyncClient) -> None:
+    """Free has no Nudges entitlement (nudges.enabled=False) — a routine
+    reminder must not fire even with Notifications and the Nudges module
+    itself both enabled."""
+    creator_id = await create_verified_user(client, unique_email("nudgesfree"), "Free Nudges Owner")
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Free Nudges Home"})
+    home_id = uuid.UUID(group.json()["id"])
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
+        )
+        await db.commit()
+        # A fresh Home is Free by default — no plan mutation needed, unlike
+        # create_home_with_notifications' explicit Family upgrade.
+
+    today = datetime.now(UTC).date()
+    async with SessionFactory() as db:
+        routine = make_routine(
+            group_id=home_id,
+            created_by=creator_id,
+            week_anchor_date=today,
+            reminder_timing=RoutineReminderTiming.same_day,
+        )
+        db.add(routine)
+        await db.commit()
+        await db.refresh(routine)
+        routine_id = str(routine.id)
+
+        await scan_due_routines(db, get_settings())
+        assert await routine_rows(db, routine_id) == []
+
+
+@pytest.mark.asyncio
 async def test_deliver_notifies_explicit_members_only(client: AsyncClient) -> None:
     creator_id = await create_verified_user(client, unique_email("explicit"), "Explicit Owner")
     home_id = await create_home_with_notifications(client)

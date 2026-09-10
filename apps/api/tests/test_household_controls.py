@@ -88,6 +88,23 @@ async def test_home_admin_features_relationships_and_managed_child(
     # authorization/precedence coverage.
     assert "nudges" in module_ids
 
+    # Phase 3A: /modules/navigation is a *consumer* navigation listing — it
+    # must never emit Notifications or External sharing as if they were
+    # navigable modules in their own right, and (via household_modules'
+    # own exclusion) never Tasks/Plans either. See routers.features.
+    # navigation_modules.
+    navigation = await client.get(f"/api/v1/features/{home_id}/modules/navigation")
+    assert navigation.status_code == 200
+    nav_ids = {row["id"] for row in navigation.json()}
+    assert "notifications" not in nav_ids
+    assert "external_sharing" not in nav_ids
+    assert "tasks" not in nav_ids
+    assert "plans" not in nav_ids
+    # Calendar is enabled (globally released) and the caller holds
+    # calendar_view — it's a real, currently-usable consumer module.
+    assert "calendar" in nav_ids
+    assert all(row["enabled"] is True for row in navigation.json())
+
     hidden_update = await unsafe(
         client,
         "PUT",

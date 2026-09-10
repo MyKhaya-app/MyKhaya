@@ -19,11 +19,32 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import CalendarEvent, CalendarShare, CalendarShareStatus
+from mykhaya.entitlements import has_entitlement
+from mykhaya.features import is_feature_enabled
+from mykhaya.models import CalendarEvent, CalendarShare, CalendarShareStatus, FeatureKey
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import event_matches_share
+
+
+async def _external_sharing_notification_eligible(db: AsyncSession, group_id: uuid.UUID) -> bool:
+    """Whether a Home is currently eligible to receive an External Sharing
+    notification (Phase 3A) — checked independently here even though every
+    caller (routers.calendar/routers.calendar_sharing) has already required
+    Calendar + External Sharing + members.external_invites.enabled moments
+    earlier for the mutation that triggered it. Four independent
+    conditions, all required: Calendar itself enabled, External Sharing's
+    platform Beta flag enabled, the Family-only members.external_invites.
+    enabled entitlement, and Notifications delivery infrastructure —
+    matching the "External Sharing notification" example in this
+    workstream's own rule."""
+    return (
+        await is_feature_enabled(db, FeatureKey.calendar, group_id)
+        and await is_feature_enabled(db, FeatureKey.external_sharing, group_id)
+        and await has_entitlement(db, group_id, "members.external_invites.enabled")
+        and await is_feature_enabled(db, FeatureKey.notifications, group_id)
+    )
 
 # Template registry key per action — "updated"/"cancelled" reuse the exact
 # same wording (and so the same PCC template) as routers.calendar's own
@@ -82,6 +103,8 @@ async def notify_calendar_share_recipients(
     "important" suppresses only the low-signal "created" notice) — on top of
     (not instead of) their normal event_invitation/event_updated/
     event_cancelled category toggles, which `notify()` still applies."""
+    if not await _external_sharing_notification_eligible(db, event.group_id):
+        return
     when = _format_event_when(event)
     variables = {"actor_name": actor_name, "event_title": event.title, "event_when": when}
     title, body = await render_notification(db, _TEMPLATE_KEYS[action], variables)

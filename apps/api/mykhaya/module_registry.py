@@ -212,4 +212,26 @@ def household_modules() -> tuple[ModuleDefinition, ...]:
 
 
 def feature_modules() -> tuple[ModuleDefinition, ...]:
-    return tuple(module for module in MODULES if module.id in {key.value for key in FeatureKey})
+    """Every FeatureKey-backed module Platform Control Centre's *global*
+    catalogue may operate on — Notifications and External sharing are
+    deliberately included here even though `home_admin_manageable=False`
+    keeps them off the Home Admin screen (see that flag's own docstring):
+    PCC's global rollout controls are a different, higher-authority surface
+    than a Home Admin's per-Home module toggle.
+
+    Hidden modules (Tasks, Plans — retired/not-yet-built, see ReleaseState)
+    are deliberately EXCLUDED (Phase 3A): a hidden module already fails
+    closed everywhere a customer could reach it (`is_feature_enabled`
+    checks `release_state == hidden` first, before even consulting the
+    platform FeatureFlag), so exposing it here as an ordinary editable
+    catalogue entry could never actually enable it for a customer — it
+    would only invite an operator to mistake a no-op toggle for a real
+    release control. See `routers.platform.update_module`'s matching
+    write-side guard, and household_modules()'s identical hidden exclusion
+    for the Home Admin/consumer side of the registry."""
+    return tuple(
+        module
+        for module in MODULES
+        if module.id in {key.value for key in FeatureKey}
+        and module.release_state != ReleaseState.hidden
+    )
