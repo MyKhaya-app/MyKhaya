@@ -55,10 +55,10 @@ interface MoreItem {
   // treatment. When the module IS available but this Home's plan doesn't
   // include it, the row stays visible with the same locked treatment
   // (muted + a small Lock icon) quick actions already use, still a normal
-  // link to the destination page's own upgrade experience. Only Wishlists
-  // uses this today — Nudges/Lists/Meal Plans remain on the coarser
-  // `gate: "all"` unchanged, a deliberately narrow follow-up rather than a
-  // full More-menu redesign.
+  // link to the destination page's own upgrade experience. Used by every
+  // optional Household-tools module (Nudges, Lists, Meal Plans, Wishlists);
+  // everything else stays on the coarser `gate: "all"`/`"adult"`/`"homeAdmin"`
+  // role gates, unaffected.
   featureKey?: string;
   entitlementKey?: keyof BillingStatus;
 }
@@ -79,9 +79,40 @@ const MORE_GROUPS: readonly MoreGroup[] = [
   {
     label: "Household tools",
     items: [
-      { name: "Nudges", detail: "Routines, reminders and things to do", href: "/settings/routines-reminders", icon: Repeat, tone: "sage", gate: "all" },
-      { name: "Lists", detail: "Shopping, chores and shared household lists", href: "/lists", icon: ListChecks, tone: "cream", gate: "all" },
-      { name: "Meal Plans", detail: "Plan meals together and save family favourites", href: "/meal-plans", icon: UtensilsCrossed, tone: "coral", gate: "all" },
+      {
+        name: "Nudges",
+        detail: "Routines, reminders and things to do",
+        href: "/settings/routines-reminders",
+        icon: Repeat,
+        tone: "sage",
+        gate: "all",
+        featureKey: "nudges",
+        entitlementKey: "nudges_enabled",
+      },
+      {
+        name: "Lists",
+        detail: "Shopping, chores and shared household lists",
+        href: "/lists",
+        icon: ListChecks,
+        tone: "cream",
+        gate: "all",
+        featureKey: "shopping",
+        // Lists is entitled on both plans (Free's 2-list cap is enforced
+        // inside the Lists experience, not here) — set only so the row
+        // still hides correctly when the module itself is off; `locked()`
+        // never engages since billingStatus.lists_enabled is always true.
+        entitlementKey: "lists_enabled",
+      },
+      {
+        name: "Meal Plans",
+        detail: "Plan meals together and save family favourites",
+        href: "/meal-plans",
+        icon: UtensilsCrossed,
+        tone: "coral",
+        gate: "all",
+        featureKey: "meals",
+        entitlementKey: "meals_enabled",
+      },
       {
         name: "Wishlists",
         detail: "Gift ideas for birthdays and Christmas, shared without spoiling the surprise",

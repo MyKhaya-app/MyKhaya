@@ -42,17 +42,45 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 
 const { api } = await import("@mykhaya/api-client");
 
-// Family Home, Wishlists module released and entitled — the "everything
-// normal" default so every pre-existing test (none of which care about
-// Wishlists specifically) sees it exactly as any other always-on row,
-// same as Nudges/Lists/Meal Plans already behave for them.
-function mockModuleState(overrides: { wishlistsFeatureOn?: boolean; wishlistsEntitled?: boolean } = {}) {
-  const { wishlistsFeatureOn = true, wishlistsEntitled = true } = overrides;
+// Family Home, every optional module released and entitled — the
+// "everything normal" default so every pre-existing test (none of which
+// care about module state specifically) sees Nudges/Lists/Meal
+// Plans/Wishlists exactly as any other always-on row.
+function mockModuleState(
+  overrides: {
+    wishlistsFeatureOn?: boolean;
+    wishlistsEntitled?: boolean;
+    nudgesFeatureOn?: boolean;
+    nudgesEntitled?: boolean;
+    listsFeatureOn?: boolean;
+    listsEntitled?: boolean;
+    mealsFeatureOn?: boolean;
+    mealsEntitled?: boolean;
+  } = {},
+) {
+  const {
+    wishlistsFeatureOn = true,
+    wishlistsEntitled = true,
+    nudgesFeatureOn = true,
+    nudgesEntitled = true,
+    listsFeatureOn = true,
+    listsEntitled = true,
+    mealsFeatureOn = true,
+    mealsEntitled = true,
+  } = overrides;
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
-    features: [{ feature: "wish_lists", enabled: wishlistsFeatureOn }],
+    features: [
+      { feature: "wish_lists", enabled: wishlistsFeatureOn },
+      { feature: "nudges", enabled: nudgesFeatureOn },
+      { feature: "shopping", enabled: listsFeatureOn },
+      { feature: "meals", enabled: mealsFeatureOn },
+    ],
   });
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
     wishlists_enabled: wishlistsEntitled,
+    nudges_enabled: nudgesEntitled,
+    lists_enabled: listsEntitled,
+    meals_enabled: mealsEntitled,
   });
 }
 
@@ -321,4 +349,123 @@ describe("More — Wishlists module state", () => {
       expect(screen.queryByRole("heading", { name: nonModule })).not.toBeInTheDocument();
     }
   });
+});
+
+// Bringing Nudges, Lists and Meal Plans into the same module-state model
+// already proven for Wishlists above — Lists differs in that it's entitled
+// on both plans (Free's 2-list cap is enforced inside the Lists experience,
+// not at the navigation level), so it must never show the locked treatment.
+describe("More — Nudges module state", () => {
+  it("shows Nudges as locked/Family-only on Free, without presenting it as normally usable", async () => {
+    mockModuleState({ nudgesFeatureOn: true, nudgesEntitled: false });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Nudges" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/settings/routines-reminders");
+    expect(row.className).toContain("more-row-locked");
+    expect(within(row).getByText("Included with MyKhaya Family")).toBeInTheDocument();
+  });
+
+  it("appears as a normal, actionable row for a Family Home with the module enabled", async () => {
+    mockModuleState({ nudgesFeatureOn: true, nudgesEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Nudges" });
+    const row = heading.closest("a")!;
+    expect(row.className).not.toContain("more-row-locked");
+    expect(within(row).queryByText("Included with MyKhaya Family")).not.toBeInTheDocument();
+    expect(screen.getByText("Routines, reminders and things to do")).toBeInTheDocument();
+  });
+
+  it("is hidden when the Home Admin has disabled the module for this Home", async () => {
+    mockModuleState({ nudgesFeatureOn: false, nudgesEntitled: true });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Nudges" })).not.toBeInTheDocument();
+  });
+
+  it("is hidden when the platform flag is off", async () => {
+    mockModuleState({ nudgesFeatureOn: false, nudgesEntitled: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Nudges" })).not.toBeInTheDocument();
+  });
+});
+
+describe("More — Meal Plans module state", () => {
+  it("shows Meal Plans as locked/Family-only on Free, without presenting it as normally usable", async () => {
+    mockModuleState({ mealsFeatureOn: true, mealsEntitled: false });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Meal Plans" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/meal-plans");
+    expect(row.className).toContain("more-row-locked");
+    expect(within(row).getByText("Included with MyKhaya Family")).toBeInTheDocument();
+  });
+
+  it("appears as a normal, actionable row for a Family Home with the module enabled", async () => {
+    mockModuleState({ mealsFeatureOn: true, mealsEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Meal Plans" });
+    const row = heading.closest("a")!;
+    expect(row.className).not.toContain("more-row-locked");
+    expect(within(row).queryByText("Included with MyKhaya Family")).not.toBeInTheDocument();
+    expect(screen.getByText("Plan meals together and save family favourites")).toBeInTheDocument();
+  });
+
+  it("is hidden when the Home Admin has disabled the module for this Home", async () => {
+    mockModuleState({ mealsFeatureOn: false, mealsEntitled: true });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Meal Plans" })).not.toBeInTheDocument();
+  });
+
+  it("is hidden when the platform flag is off", async () => {
+    mockModuleState({ mealsFeatureOn: false, mealsEntitled: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Meal Plans" })).not.toBeInTheDocument();
+  });
+});
+
+describe("More — Lists module state", () => {
+  it("appears as a normal, actionable row on Free — never locked, since Lists is included on both plans", async () => {
+    // billing.lists_enabled is always true on Free too (Lists is not
+    // Family-only); this asserts the row stays unlocked under that
+    // real-world guarantee, not merely because the test forced it.
+    mockModuleState({ listsFeatureOn: true, listsEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Lists" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/lists");
+    expect(row.className).not.toContain("more-row-locked");
+    expect(within(row).queryByText("Included with MyKhaya Family")).not.toBeInTheDocument();
+    expect(screen.getByText("Shopping, chores and shared household lists")).toBeInTheDocument();
+  });
+
+  it("appears as a normal, actionable row on Family", async () => {
+    mockModuleState({ listsFeatureOn: true, listsEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Lists" });
+    const row = heading.closest("a")!;
+    expect(row.className).not.toContain("more-row-locked");
+  });
+
+  it("is hidden when the Home Admin has disabled the module for this Home", async () => {
+    mockModuleState({ listsFeatureOn: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Lists" })).not.toBeInTheDocument();
+  });
+
+  it("is hidden when the platform flag is off", async () => {
+    mockModuleState({ listsFeatureOn: false, listsEntitled: false });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Lists" })).not.toBeInTheDocument();
+  });
+
+  // The Free plan's 2-list cap is a Lists-experience concern, not a
+  // navigation one — More has no notion of list count at all, so there is
+  // nothing here to assert beyond "the row never keys off it," which the
+  // two tests above already establish by never varying with list count.
 });
