@@ -92,6 +92,7 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
     PermissionProfile.standard_partner: frozenset(
         {
             Capability.members_view,
+            Capability.members_invite,
             Capability.calendar_view,
             Capability.calendar_view_all,
             Capability.calendar_create,
@@ -127,6 +128,21 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
     PermissionProfile.explicit_sharing: frozenset(),
     PermissionProfile.review_required: frozenset({Capability.members_view}),
 }
+
+
+def ensure_can_assign_relationship(
+    actor: Membership, relationship: HouseholdRelationship
+) -> None:
+    """Keep Home Admin assignment under Home Admin control."""
+    if (
+        relationship == HouseholdRelationship.home_admin
+        and actor.relationship != HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only a Home Admin can assign Home Admin permissions.",
+        )
+
 
 CHILD_PERMISSION_CAPABILITIES = {
     "calendar_view": Capability.calendar_view,

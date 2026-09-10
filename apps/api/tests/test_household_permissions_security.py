@@ -1,11 +1,15 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from pydantic import ValidationError
 
 from mykhaya.config import Settings
-from mykhaya.household_permissions import Capability, capabilities_for
+from mykhaya.household_permissions import (
+    Capability,
+    capabilities_for,
+    ensure_can_assign_relationship,
+)
 from mykhaya.main import security_and_limits
 from mykhaya.models import HouseholdRelationship, Membership, PermissionProfile
 
@@ -56,6 +60,47 @@ async def test_legacy_home_admin_profile_on_partner_is_fail_closed() -> None:
     assert Capability.household_manage not in capabilities
     assert Capability.members_manage_relationships not in capabilities
     assert Capability.calendar_view in capabilities
+
+
+@pytest.mark.asyncio
+async def test_only_trusted_adult_profiles_can_invite_members() -> None:
+    for relationship in (HouseholdRelationship.partner, HouseholdRelationship.adult):
+        membership = Membership(
+            relationship=relationship,
+            permission_profile=PermissionProfile.standard_partner,
+            permission_overrides={},
+            shared_resources=[],
+        )
+        assert Capability.members_invite in await capabilities_for(AsyncMock(), membership)
+
+    for relationship, profile in (
+        (HouseholdRelationship.child, PermissionProfile.child_restricted),
+        (HouseholdRelationship.extended_family, PermissionProfile.explicit_sharing),
+        (HouseholdRelationship.friend, PermissionProfile.explicit_sharing),
+    ):
+        membership = Membership(
+            relationship=relationship,
+            permission_profile=profile,
+            permission_overrides={},
+            shared_resources=[],
+        )
+        assert Capability.members_invite not in await capabilities_for(AsyncMock(), membership)
+
+
+def test_non_admin_cannot_assign_home_admin_relationship() -> None:
+    partner = Membership(
+        relationship=HouseholdRelationship.partner,
+        permission_profile=PermissionProfile.standard_partner,
+    )
+    with pytest.raises(HTTPException) as error:
+        ensure_can_assign_relationship(partner, HouseholdRelationship.home_admin)
+    assert error.value.status_code == 403
+
+    admin = Membership(
+        relationship=HouseholdRelationship.home_admin,
+        permission_profile=PermissionProfile.home_admin,
+    )
+    ensure_can_assign_relationship(admin, HouseholdRelationship.home_admin)
 
 
 def test_shared_development_cannot_disable_cookie_or_pcc_mfa() -> None:

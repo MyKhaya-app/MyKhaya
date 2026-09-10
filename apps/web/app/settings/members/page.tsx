@@ -130,6 +130,7 @@ export default function ManageMembers() {
     activeHome?.capabilities.includes("members.invite") ?? false;
   const canManage =
     activeHome?.capabilities.includes("members.manage_relationships") ?? false;
+  const canAssignHomeAdmin = activeHome?.relationship === "home_admin";
   // Fails closed while loading/unknown — "Add member" only ever appears once
   // the plan's actual member limit is confirmed, never optimistically.
   const canGrowMembership = memberUsage ? canAddMember(memberUsage) : false;
@@ -556,7 +557,7 @@ export default function ManageMembers() {
                           setRelationship(event.target.value as HouseholdRelationship)
                         }
                       >
-                        <option value="home_admin">Home Admin</option>
+                        {canAssignHomeAdmin && <option value="home_admin">Home Admin</option>}
                         <option value="partner">Partner</option>
                         <option value="adult">Adult</option>
                         <option value="child">Child</option>
@@ -732,7 +733,7 @@ export default function ManageMembers() {
                         }))
                       }
                     >
-                      <option value="home_admin">Home Admin</option>
+                      {canAssignHomeAdmin && <option value="home_admin">Home Admin</option>}
                       <option value="partner">Partner</option>
                       <option value="adult">Adult</option>
                     </select>

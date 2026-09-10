@@ -16,6 +16,7 @@ from mykhaya.entitlements import require_within_limit
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
+    ensure_can_assign_relationship,
     legacy_role,
     require_capability,
 )
@@ -48,7 +49,8 @@ async def invite(
     settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
     require_adult_session(auth)
-    await require_capability(body.group_id, Capability.members_invite, auth, db)
+    inviter = await require_capability(body.group_id, Capability.members_invite, auth, db)
+    ensure_can_assign_relationship(inviter, body.relationship)
     await enforce_rate_limit(request, settings, "household-invitation", 20, 3600)
     if body.relationship == HouseholdRelationship.child:
         raise HTTPException(

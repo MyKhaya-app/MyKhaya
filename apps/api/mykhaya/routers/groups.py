@@ -19,6 +19,7 @@ from mykhaya.household_permissions import (
     Capability,
     capabilities_for,
     default_profile,
+    ensure_can_assign_relationship,
     home_admin_count,
     legacy_role,
     require_capability,
@@ -700,7 +701,8 @@ async def approve_join_request(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    await require_capability(group_id, Capability.members_invite, auth, db)
+    approver = await require_capability(group_id, Capability.members_invite, auth, db)
+    ensure_can_assign_relationship(approver, body.relationship)
     if body.relationship not in _ALLOWED_JOIN_APPROVAL_RELATIONSHIPS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

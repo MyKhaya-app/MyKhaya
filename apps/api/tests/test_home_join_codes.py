@@ -93,10 +93,16 @@ async def test_non_admin_cannot_manage_join_code() -> None:
         )
         assert approve.status_code == 200
 
-        # The now-member (an Adult, not a Home Admin) must not be able to
-        # manage the join code — members.invite is Home-Admin-only.
-        forbidden = await member.get(f"/api/v1/groups/{home_id}/join-code")
-        assert forbidden.status_code == 403
+        # The now-member (an Adult, not a Home Admin) can manage the join code
+        # because it is governed by the shared members.invite capability.
+        allowed = await member.get(f"/api/v1/groups/{home_id}/join-code")
+        assert allowed.status_code == 200
+        assert allowed.json()["code"] == code
+        regenerated = await unsafe(
+            member, "POST", f"/api/v1/groups/{home_id}/join-code/regenerate"
+        )
+        assert regenerated.status_code == 200
+        assert regenerated.json()["code"] != code
 
 
 @pytest.mark.asyncio

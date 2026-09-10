@@ -250,6 +250,57 @@ async def test_inviting_an_adult_follows_the_normal_adult_flow_not_child_setup(
 
 
 @pytest.mark.asyncio
+async def test_partner_and_adult_can_invite_but_cannot_grant_home_admin(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("trusted-owner"), "Home Owner")
+    home_id = await _make_family_home(client, "Trusted Adult Invite Home")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        partner_email = unique_email("trusted-partner")
+        await create_verified_user(partner_client, partner_email, "Trusted Partner")
+        async with SessionFactory() as db:
+            partner = await db.scalar(select(User).where(User.email == partner_email))
+            assert partner is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=partner.id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+
+        invited = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/invitations",
+            json={
+                "group_id": home_id,
+                "email": unique_email("partner-invitee"),
+                "relationship": "adult",
+            },
+        )
+        assert invited.status_code == 201, invited.text
+
+        escalation = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/invitations",
+            json={
+                "group_id": home_id,
+                "email": unique_email("partner-admin-invitee"),
+                "relationship": "home_admin",
+            },
+        )
+        assert escalation.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_adult_relationship_is_rejected_by_the_child_only_setup_endpoint(
     client: AsyncClient,
 ) -> None:
