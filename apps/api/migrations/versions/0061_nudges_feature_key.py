@@ -29,7 +29,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE feature_key ADD VALUE IF NOT EXISTS 'nudges'")
+    # Alembic's outer migration transaction must be committed before 0062 can
+    # use the newly added enum value.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE feature_key ADD VALUE IF NOT EXISTS 'nudges'")
 
 
 def downgrade() -> None:
