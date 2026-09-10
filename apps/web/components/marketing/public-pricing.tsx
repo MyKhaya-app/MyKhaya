@@ -38,6 +38,12 @@ const FREE_POINTS = [
   "1 person",
 ];
 
+// Every point here must correspond to a real, released capability — see
+// docs/architecture/commercial-entitlements.md#plan-definitions. "Chores"
+// and "Family Plans" were removed: neither has any implementation anywhere
+// in the codebase (family_plans.enabled is "contract only" data; chores has
+// no module, router or entitlement key at all), so advertising them as a
+// reason to pay for Family was inaccurate.
 const FAMILY_POINTS = [
   "Everything in Free",
   "Whole household",
@@ -46,9 +52,7 @@ const FAMILY_POINTS = [
   "Household routines",
   "Shared family events",
   "Lists",
-  "Chores",
   "Gift wishlists",
-  "Family Plans",
   "Invite household members",
   "Invite external family/friends",
 ];

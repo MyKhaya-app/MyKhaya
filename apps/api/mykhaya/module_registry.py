@@ -26,6 +26,16 @@ class ModuleDefinition:
     dependencies: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     route: str | None = None
+    # False for a module that is real, released infrastructure but is not a
+    # Home-Admin-toggleable "module" in product terms — Notifications
+    # (platform delivery infrastructure, never user-disableable) and External
+    # sharing (a Calendar capability, not a standalone Home module). Their
+    # FeatureFlag/FeatureOverride rows and is_feature_enabled() evaluation are
+    # completely unaffected by this flag — it only controls whether the Home
+    # Admin Module Management screen offers them as a toggle. Platform
+    # Control Centre's global module/feature-flag controls are unaffected
+    # (mykhaya.module_registry.feature_modules() is not filtered by this).
+    home_admin_manageable: bool = True
 
     @property
     def household_toggleable(self) -> bool:
@@ -153,6 +163,11 @@ MODULES: tuple[ModuleDefinition, ...] = (
         True,
         "0.1.0",
         route="/notifications",
+        # Core platform delivery infrastructure, not a user-disableable
+        # module — see docs/architecture/feature-flags.md. Home Admins
+        # manage notification preferences at /settings/notifications
+        # instead of toggling this off wholesale.
+        home_admin_manageable=False,
     ),
     ModuleDefinition(
         FeatureKey.external_sharing.value,
@@ -166,6 +181,11 @@ MODULES: tuple[ModuleDefinition, ...] = (
         dependencies=("household_members", "calendar"),
         permissions=("sharing.external",),
         route="/calendar/calendars",
+        # A Calendar capability, not a standalone Home module — reached via
+        # Home calendars (/calendar/calendars), not a Module Management
+        # toggle. Platform Control Centre's Beta rollout control is
+        # unaffected (feature_modules() below).
+        home_admin_manageable=False,
     ),
 )
 

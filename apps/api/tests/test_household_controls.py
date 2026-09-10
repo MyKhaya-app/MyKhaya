@@ -74,6 +74,15 @@ async def test_home_admin_features_relationships_and_managed_child(
     # "shopping" is now the released Lists module (mykhaya.routers.lists) —
     # see docs/architecture/meal-plans.md "Lists integration".
     assert "shopping" in module_ids
+    # Notifications is core platform delivery infrastructure, never a
+    # user-disableable Home module; External sharing is a Calendar
+    # capability, not a standalone module. Neither is offered as a Module
+    # Management toggle, even though both remain real, released features
+    # with their own FeatureFlag/FeatureOverride rows evaluated normally
+    # everywhere else (mykhaya.module_registry.ModuleDefinition
+    # .home_admin_manageable).
+    assert "notifications" not in module_ids
+    assert "external_sharing" not in module_ids
 
     hidden_update = await unsafe(
         client,

@@ -5,12 +5,14 @@ delivered by exactly one worker handler (notification.email), never a module cal
 mykhaya.mailer.send_email directly. See docs/architecture/notification-engine.md.
 """
 
+import hashlib
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
@@ -198,6 +200,32 @@ async def test_forgot_password_enqueues_reset_email(client: AsyncClient) -> None
     assert len(rows) == 1
     assert rows[0].payload["subject"] == "Reset your MyKhaya password"
     assert "/reset-password?token=" in rows[0].payload["body"]
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_is_rate_limited_by_client_ip() -> None:
+    peer = "127.0.0.1"
+    identity = hashlib.sha256(peer.encode()).hexdigest()[:24]
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        await redis.delete(f"rate:forgot-password:{identity}")
+    finally:
+        await redis.aclose()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=(peer, 44210)),
+        base_url=ORIGIN,
+        headers={"Origin": ORIGIN},
+    ) as client:
+        responses = [
+            await client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": unique_email("recovery-limit")},
+            )
+            for _ in range(6)
+        ]
+    assert [response.status_code for response in responses[:5]] == [202] * 5
+    assert responses[5].status_code == 429
 
 
 @pytest.mark.asyncio

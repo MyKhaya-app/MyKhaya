@@ -62,6 +62,8 @@ async def feature_management(
     await require_capability(group_id, Capability.control_centre_access, auth, db)
     rows: list[HouseholdModuleResponse] = []
     for definition in household_modules():
+        if not definition.home_admin_manageable:
+            continue
         enabled = (
             True
             if definition.release_state == ReleaseState.core

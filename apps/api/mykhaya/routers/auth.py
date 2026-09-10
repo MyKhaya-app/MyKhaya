@@ -1018,6 +1018,10 @@ async def forgot(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
+    # Password-recovery requests are deliberately generic, but still need an
+    # abuse limit so an attacker cannot repeatedly trigger reset-email delivery
+    # for a known address (or consume mail/worker capacity with arbitrary ones).
+    await enforce_rate_limit(request, settings, "forgot-password", 5, 300)
     user = await db.scalar(
         select(User).where(User.email == normalise_email(str(body.email)), User.is_active.is_(True))
     )

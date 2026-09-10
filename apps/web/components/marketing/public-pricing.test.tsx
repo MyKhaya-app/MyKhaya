@@ -116,9 +116,7 @@ describe("PublicPricing — two plans, no manufactured third tier", () => {
       "Household routines",
       "Shared family events",
       "Lists",
-      "Chores",
       "Gift wishlists",
-      "Family Plans",
       "Invite household members",
       "Invite external family/friends",
     ]) {
@@ -127,6 +125,17 @@ describe("PublicPricing — two plans, no manufactured third tier", () => {
     expect(
       screen.getByRole("button", { name: /^start family/i }),
     ).toBeInTheDocument();
+  });
+
+  it("never advertises Chores or Family Plans — neither is a real, released capability", async () => {
+    (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
+      pricingResponse(),
+    );
+    render(<PublicPricing />);
+    await screen.findByText("£9.99");
+
+    expect(screen.queryByText("Chores")).not.toBeInTheDocument();
+    expect(screen.queryByText("Family Plans")).not.toBeInTheDocument();
   });
 });
 

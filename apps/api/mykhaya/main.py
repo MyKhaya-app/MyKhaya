@@ -39,11 +39,19 @@ from mykhaya.routers import (
 
 settings = get_settings()
 log = structlog.get_logger()
+
+
+def api_documentation_urls(environment: str) -> dict[str, str | None]:
+    """Keep interactive/API schema documentation out of production."""
+    if environment == "production":
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {"docs_url": "/docs", "redoc_url": None, "openapi_url": "/openapi.json"}
+
+
 app = FastAPI(
     title="MyKhaya API",
     version=settings.version,
-    docs_url=None if settings.environment == "production" else "/docs",
-    redoc_url=None,
+    **api_documentation_urls(settings.environment),
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 app.add_middleware(
