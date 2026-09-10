@@ -12,8 +12,12 @@ import { SettingsPage } from "@/components/settings-page";
 import { Toast } from "@/components/toast";
 import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
-import { normalizeAvatarFile, isImageFormatRejection } from "@/components/avatar-upload";
-import { isNativeShell } from "@/components/native-runtime";
+import {
+  AvatarProcessingError,
+  isImageFormatRejection,
+  logAvatarDiagnostic,
+  normalizeAvatarFile,
+} from "@/components/avatar-upload";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -110,6 +114,17 @@ export default function Profile() {
     // show an error, per the existing "cancel is not a failure" behaviour.
     if (!file) return;
 
+    logAvatarDiagnostic("picker-returned-to-profile", {
+      selectedAssetAvailable: true,
+      sourceType: "browser-file",
+      uriScheme: "(not exposed by HTML file input)",
+      constructor: file.constructor?.name || "unknown",
+      name: file.name,
+      extension: file.name.match(/\.([^.]+)$/)?.[1]?.toLowerCase() || "(none)",
+      type: file.type || "(empty)",
+      size: file.size,
+    });
+
     setAvatarError("");
     setPhotoSheetOpen(false);
     if (file.size > MAX_AVATAR_BYTES) {
@@ -120,19 +135,33 @@ export default function Profile() {
     setAvatarBusy(true);
     try {
       const normalized = await normalizeAvatarFile(file);
+      logAvatarDiagnostic("upload-request-prepared", {
+        name: normalized.name,
+        type: normalized.type || "(empty)",
+        size: normalized.size,
+      });
       const updated = await api.uploadAvatar(normalized);
       setUser(updated);
       emitUserUpdated(updated);
       setMessage("Your photo was updated.");
     } catch (cause) {
-      // TEMPORARY diagnostic for the iOS HEIC investigation — see
-      // components/avatar-upload.ts's logAvatarDiagnostic.
-      console.debug("[avatar-upload] upload-rejected", {
-        native: isNativeShell(),
+      logAvatarDiagnostic("upload-failed", {
+        category: cause instanceof AvatarProcessingError ? cause.category : "upload",
+        errorName: cause instanceof Error ? cause.name : "UnknownError",
         status: cause instanceof ApiError ? cause.status : undefined,
-        message: cause instanceof ApiError ? cause.message : String(cause),
+        message: cause instanceof Error ? cause.message : String(cause),
       });
-      if (cause instanceof ApiError && isImageFormatRejection(cause)) {
+      if (cause instanceof AvatarProcessingError) {
+        setAvatarError(
+          cause.category === "unsupported"
+            ? "This image format isn’t supported. Please choose a JPEG, PNG or another supported photo."
+            : cause.category === "read"
+              ? "We couldn’t read that photo from your device. Please try selecting it again."
+              : "We couldn’t prepare that photo for upload. Please try another image.",
+        );
+      } else if (cause instanceof ApiError && cause.status === 413) {
+        setAvatarError("This photo is too large to upload. Please choose a smaller image.");
+      } else if (cause instanceof ApiError && isImageFormatRejection(cause)) {
         // IMAGE PROCESSING FAILURE — the backend's own wording ("...JPEG,
         // PNG or WebP") is meant for troubleshooting, not an ordinary iPhone
         // photo owner who doesn't know (and shouldn't need to know) what
@@ -141,10 +170,13 @@ export default function Profile() {
       } else if (cause instanceof ApiError) {
         // UPLOAD FAILURE with a specific, already user-appropriate reason
         // (rate limit, auth, etc.) — existing behaviour, unchanged.
-        setAvatarError(cause.message);
+        setAvatarError(
+          cause.status >= 500
+            ? "Your photo couldn’t be saved right now. Please try again shortly."
+            : cause.message,
+        );
       } else {
-        // UPLOAD FAILURE with no specific reason available (network error).
-        setAvatarError("Could not upload that photo. Please try again.");
+        setAvatarError("We couldn’t upload your photo. Please check your connection and try again.");
       }
     } finally {
       setAvatarBusy(false);
@@ -354,10 +386,16 @@ export default function Profile() {
         <BottomSheet title="Change your photo" onDismiss={() => setPhotoSheetOpen(false)}>
           <div className="profile-photo-sheet">
             <p className="muted">Choose a clear photo for your MyKhaya profile.</p>
-            <button type="button" className="secondary" onClick={() => cameraInputRef.current?.click()}>
+            <button type="button" className="secondary" onClick={() => {
+              logAvatarDiagnostic("picker-opened", { source: "camera" });
+              cameraInputRef.current?.click();
+            }}>
               <Camera size={18} aria-hidden="true" /> Take photo
             </button>
-            <button type="button" className="secondary" onClick={() => libraryInputRef.current?.click()}>
+            <button type="button" className="secondary" onClick={() => {
+              logAvatarDiagnostic("picker-opened", { source: "photo-library" });
+              libraryInputRef.current?.click();
+            }}>
               Choose from library
             </button>
             {user.avatar_version && (

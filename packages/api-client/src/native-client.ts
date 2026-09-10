@@ -2,6 +2,13 @@ import type { User } from "@mykhaya/shared-types";
 import { ApiError, parseApiResponse } from "./errors";
 import type { NativeSessionStore } from "./native-session-store";
 
+function isFormDataBody(body: BodyInit | null | undefined): boolean {
+  // `instanceof FormData` is not reliable when a File/FormData comes from a
+  // different WebView realm. The fetch implementation still understands the
+  // standard brand and must be allowed to add the multipart boundary.
+  return Boolean(body && Object.prototype.toString.call(body) === "[object FormData]");
+}
+
 /**
  * The native (bearer-transport, ADR 0010) counterpart to `MyKhayaClient`.
  * Deliberately a separate class in the same package, not a mode flag on
@@ -360,8 +367,15 @@ export class NativeMyKhayaClient {
     if (init.headers) {
       new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     }
-    if (init.body && !(init.body instanceof FormData)) {
+    if (init.body && !isFormDataBody(init.body)) {
       headers.set("Content-Type", "application/json");
+    }
+    if (path.endsWith("/avatar") && init.method === "POST") {
+      console.debug("[avatar-upload] upload-request-starting", {
+        platform: this.options.clientHeaders?.platform ?? "unknown",
+        bodyType: Object.prototype.toString.call(init.body),
+        multipartBody: isFormDataBody(init.body),
+      });
     }
     headers.set("Authorization", `Bearer ${current.token}`);
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -369,6 +383,9 @@ export class NativeMyKhayaClient {
       headers,
       cache: "no-store",
     });
+    if (path.endsWith("/avatar") && init.method === "POST") {
+      console.debug("[avatar-upload] upload-response", { status: response.status });
+    }
     if (response.status === 401) {
       // Compare-and-clear (ADR 0010): only clear the store if this exact
       // token is still the one currently held. A concurrent rotate() may

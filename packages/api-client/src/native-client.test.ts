@@ -187,6 +187,23 @@ describe("NativeMyKhayaClient — DEV diagnostic probe", () => {
 });
 
 describe("NativeMyKhayaClient — authenticated requests", () => {
+  it("preserves a multipart FormData avatar body across the native transport", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { id: "u1" }));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "stored-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+    const file = new File(["jpeg"], "photo.jpg", { type: "image/jpeg" });
+    const body = new FormData();
+    body.append("file", file);
+
+    await client.request("/users/me/avatar", { method: "POST", body });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(body);
+    expect(new Headers(init.headers).get("Content-Type")).toBeNull();
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer stored-token");
+  });
+
   it("attaches Authorization: Bearer using the currently stored token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [] }));
     const store = new InMemoryNativeSessionStore();

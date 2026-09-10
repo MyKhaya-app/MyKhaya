@@ -7,7 +7,11 @@ vi.mock("@capacitor/core", () => ({
   },
 }));
 
-import { isImageFormatRejection, normalizeAvatarFile } from "./avatar-upload";
+import {
+  AvatarProcessingError,
+  isImageFormatRejection,
+  normalizeAvatarFile,
+} from "./avatar-upload";
 
 describe("normalizeAvatarFile", () => {
   afterEach(() => {
@@ -36,21 +40,27 @@ describe("normalizeAvatarFile", () => {
 
   it("recognises HEIC by filename when iOS omits the MIME type", async () => {
     const file = new File(["heic"], "IMG_1234.HEIC", { type: "" });
-    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+    await expect(normalizeAvatarFile(file)).rejects.toMatchObject({
+      name: "AvatarProcessingError",
+      category: "read",
+    });
   });
 
-  it("falls back to the original HEIF bytes when the browser cannot decode them (no createImageBitmap, no Image.decode)", async () => {
+  it("reports an unreadable HEIF source when the browser cannot decode it", async () => {
     const file = new File(["heif"], "photo.heif", { type: "image/heif" });
-    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+    await expect(normalizeAvatarFile(file)).rejects.toMatchObject({
+      name: "AvatarProcessingError",
+      category: "read",
+    });
   });
 
-  it("falls back to the original bytes when decoding throws (e.g. WKWebView can't decode this HEIC variant)", async () => {
+  it("reports a processing failure when decoding throws", async () => {
     vi.stubGlobal(
       "createImageBitmap",
       vi.fn().mockRejectedValue(new Error("source could not be decoded")),
     );
     const file = new File(["heic"], "IMG_9999.HEIC", { type: "image/heic" });
-    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+    await expect(normalizeAvatarFile(file)).rejects.toBeInstanceOf(AvatarProcessingError);
   });
 
   function stubDecodableCanvas() {

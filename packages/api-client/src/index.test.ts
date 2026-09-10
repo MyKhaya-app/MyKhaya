@@ -68,6 +68,15 @@ describe("MyKhayaClient — browser transport", () => {
     const headers = new Headers(init.headers);
     expect(headers.has("Authorization")).toBe(false);
   });
+
+  it("keeps browser avatar uploads multipart", async () => {
+    const client = new MyKhayaClient();
+    await client.uploadAvatar(new File(["jpeg"], "photo.jpg", { type: "image/jpeg" }));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(new Headers(init.headers).get("Content-Type")).toBeNull();
+  });
 });
 
 describe("MyKhayaClient — native transport bridge", () => {

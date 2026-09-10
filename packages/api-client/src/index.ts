@@ -2,6 +2,10 @@ import type { Home, Member, User } from "@mykhaya/shared-types";
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
+function isFormDataBody(body: BodyInit | null | undefined): boolean {
+  return Boolean(body && Object.prototype.toString.call(body) === "[object FormData]");
+}
+
 export class MyKhayaClient {
   constructor(private readonly baseUrl = "/api/v1") {}
 
@@ -41,7 +45,7 @@ export class MyKhayaClient {
     headers.set("Accept", "application/json");
     // Leave FormData bodies alone — the browser sets Content-Type itself, including
     // the multipart boundary, which we can't reproduce by hand.
-    if (init.body && !(init.body instanceof FormData)) {
+    if (init.body && !isFormDataBody(init.body)) {
       headers.set("Content-Type", "application/json");
     }
     if (csrf && !["GET", "HEAD", "OPTIONS"].includes(init.method ?? "GET"))
@@ -133,6 +137,11 @@ export class MyKhayaClient {
   uploadAvatar = (file: File) => {
     const body = new FormData();
     body.append("file", file);
+    console.debug("[avatar-upload] formdata-created", {
+      field: "file",
+      fileType: file.type || "(empty)",
+      fileSize: file.size,
+    });
     return this.request<User>("/users/me/avatar", { method: "POST", body });
   };
   removeAvatar = () => this.request<User>("/users/me/avatar", { method: "DELETE" });
