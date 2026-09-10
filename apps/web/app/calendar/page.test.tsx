@@ -503,6 +503,148 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
   });
 });
 
+// Phase 2D: the Calendar picker must never offer a calendar the backend has
+// already marked read_only_due_to_plan (preserved past a Family-to-Free
+// downgrade — see mykhaya.routers.calendar._calendar_access/
+// _personal_calendar_access) as a *new* destination, matching the same
+// "locked, disabled option" pattern this file already covers for a
+// view-only externally shared calendar. An event already assigned to a
+// now-restricted calendar must still show that assignment — the Calendar
+// field is disabled entirely on edit (see "the Calendar field is fixed"
+// above), so the value is preserved without offering a mutation.
+describe("Calendar — Add/Edit Event: plan-restricted calendars are not offered", () => {
+  const primaryCalendar = {
+    id: "cal-1",
+    name: "Home Calendar",
+    timezone: "UTC",
+    is_primary: true,
+    owner_user_id: null,
+    color: "teal",
+    commercial_access: "normal" as const,
+  };
+  const secondaryCalendar = {
+    id: "cal-2",
+    name: "GFOAT",
+    timezone: "UTC",
+    is_primary: false,
+    owner_user_id: null,
+    color: "coral",
+    commercial_access: "normal" as const,
+  };
+  const personalCalendar = {
+    id: "cal-personal",
+    name: "Personal calendar",
+    timezone: "UTC",
+    is_primary: false,
+    owner_user_id: "u1",
+    color: "sage",
+    commercial_access: "normal" as const,
+  };
+
+  beforeEach(() => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-anthony", display_name: "Anthony", colour: null, avatar_version: null },
+    ]);
+  });
+
+  async function openAddEventSheet() {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    return screen.findByRole("dialog", { name: "Add event" });
+  }
+
+  it("a read-only (plan-restricted) Personal Calendar cannot be selected", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar],
+      personal_calendar: { ...personalCalendar, commercial_access: "read_only_due_to_plan" },
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    const option = within(calendarSelect).getByText(/Personal calendar/).closest("option")!;
+    expect(option).toBeDisabled();
+    expect(option.textContent).toContain("(Family)");
+  });
+
+  it("a read-only (plan-restricted) Home calendar cannot be selected", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar, { ...secondaryCalendar, commercial_access: "read_only_due_to_plan" }],
+      personal_calendar: personalCalendar,
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    const option = within(calendarSelect).getByText(/GFOAT/).closest("option")!;
+    expect(option).toBeDisabled();
+    expect(option.textContent).toContain("(Family)");
+  });
+
+  it("a writable Personal Calendar and writable Home calendar both stay selectable (Family/unrestricted behaviour unchanged)", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar, secondaryCalendar],
+      personal_calendar: personalCalendar,
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText("Calendar");
+    expect(within(calendarSelect).getByText("Home calendar").closest("option")).not.toBeDisabled();
+    expect(within(calendarSelect).getByText("GFOAT").closest("option")).not.toBeDisabled();
+    expect(
+      within(calendarSelect).getByText(/Personal calendar/).closest("option"),
+    ).not.toBeDisabled();
+  });
+
+  it("defaults a new event to the Personal Calendar when the primary Home calendar is read-only due to plan (Free retained-member behaviour)", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{ ...primaryCalendar, commercial_access: "read_only_due_to_plan" }],
+      personal_calendar: personalCalendar,
+    });
+    const dialog = await openAddEventSheet();
+    const calendarSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar");
+    expect(calendarSelect.value).toBe("__personal__");
+  });
+
+  it("editing an existing event on a now-read-only calendar still shows it as the current selection, without allowing a new invalid target", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar, { ...secondaryCalendar, commercial_access: "read_only_due_to_plan" }],
+      personal_calendar: personalCalendar,
+    });
+    const restrictedEvent = {
+      occurrence_id: "occ-1",
+      event_id: "event-1",
+      calendar_id: secondaryCalendar.id,
+      title: "Football",
+      start_at: new Date().toISOString(),
+      end_at: new Date(Date.now() + 3_600_000).toISOString(),
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: secondaryCalendar.color,
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-08-01T00:00:00Z",
+    };
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [restrictedEvent] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(await screen.findByText("Football"));
+    const viewDialog = await screen.findByRole("dialog", { name: "Football" });
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit event" });
+
+    const calendarSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar");
+    // Still shown as the event's current calendar — never silently moved —
+    // and the whole field stays disabled on edit (its own dedicated test
+    // above), so there is no path to re-submit it against a new, invalid
+    // target either.
+    expect(calendarSelect.value).toBe(secondaryCalendar.id);
+    expect(calendarSelect).toBeDisabled();
+  });
+});
+
 // Coverage for the recurring-event edit/delete scope chooser: an occurrence
 // belonging to a recurring series must offer "This occurrence only / This
 // and future occurrences / Entire series" (edit) or the matching delete

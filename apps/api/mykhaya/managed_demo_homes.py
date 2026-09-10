@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, time, timedelta
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select, update
@@ -60,8 +61,11 @@ class ManagedDemoService:
 
     @staticmethod
     async def get(db: AsyncSession, fixture_key: str) -> ManagedDemoHome | None:
-        return await db.scalar(
-            select(ManagedDemoHome).where(ManagedDemoHome.fixture_key == fixture_key)
+        return cast(
+            ManagedDemoHome | None,
+            await db.scalar(
+                select(ManagedDemoHome).where(ManagedDemoHome.fixture_key == fixture_key)
+            ),
         )
 
     @staticmethod
@@ -73,7 +77,7 @@ class ManagedDemoService:
         fixture_type: ManagedDemoType,
         email: str,
         password: str,
-        created_by: uuid.UUID,
+        created_by: uuid.UUID | None,
         expires_at: datetime | None = None,
         enabled: bool = True,
         home_code: str | None = None,
@@ -145,6 +149,12 @@ class ManagedDemoService:
         if owner is None or calendar is None:
             raise ManagedDemoError("Managed Home is missing its owner or primary calendar")
         today = datetime.now(FIXTURE_TIMEZONE).date()
+        member_specs: tuple[tuple[str, str, bool], ...]
+        events: tuple[tuple[str, int, int, int, int], ...]
+        routines: tuple[tuple[str, str], ...]
+        reminders: tuple[tuple[str, int], ...]
+        meals: tuple[str, ...]
+        lists: tuple[tuple[str, tuple[str, ...]], ...]
         if row.fixture_type == ManagedDemoType.apple_review:
             member_specs = (
                 ("Jamie Review", "jamie-review@mykhaya.app", False),
@@ -229,17 +239,18 @@ class ManagedDemoService:
                 )
                 db.add(profile)
                 await db.flush()
+                guardian_membership = await db.scalar(
+                    select(Membership).where(
+                        Membership.group_id == row.home_id,
+                        Membership.user_id == owner.id,
+                    )
+                )
+                if guardian_membership is None:
+                    raise ManagedDemoError("Managed Home owner membership is missing")
                 db.add(
                     GuardianAssignment(
                         child_profile_id=profile.id,
-                        guardian_membership_id=(
-                            await db.scalar(
-                                select(Membership).where(
-                                    Membership.group_id == row.home_id,
-                                    Membership.user_id == owner.id,
-                                )
-                            )
-                        ).id,
+                        guardian_membership_id=guardian_membership.id,
                         assigned_by_user_id=owner.id,
                     )
                 )

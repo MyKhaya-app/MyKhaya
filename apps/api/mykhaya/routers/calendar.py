@@ -33,6 +33,7 @@ from mykhaya.entitlements import (
     get_limit,
     require_entitlement,
     require_within_limit,
+    retained_member_id,
 )
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
@@ -80,7 +81,16 @@ from mykhaya.schemas import (
 # separate calendar (both Free and Family always include the Calendar
 # itself; the limit is on how many categories/groupings of events a Home
 # can have). See docs/architecture/commercial-entitlements.md#event-categories.
+# Governs CalendarEventLabel ("event category") count only — see
+# _label_access. Unaffected by Phase 2C.
 CALENDAR_LIMIT_KEY = "calendar.max_categories"
+
+# Phase 2C: reintroduces the *name* "calendar.max_calendars" the comment
+# above describes as deliberately abandoned, but with a materially
+# different, combined-resource-type meaning — see its docstring in
+# mykhaya.entitlements.PLAN_DEFINITIONS. Governs how many HomeCalendar rows
+# (shared *and* Personal, combined) are usable — see _calendar_access.
+CALENDARS_LIMIT_KEY = "calendar.max_calendars"
 
 
 async def require_calendar_feature(
@@ -189,11 +199,19 @@ async def _ensure_home_calendar(db: AsyncSession, group_id: uuid.UUID) -> HomeCa
 
 
 async def _ordered_calendars(db: AsyncSession, group_id: uuid.UUID) -> list[HomeCalendar]:
-    """Deterministic priority order for commercial classification: the
-    primary calendar always sorts first (it can never be deleted — see
-    delete_calendar — so it's always the retained Free calendar), then the
-    rest oldest-first. Never randomly ordered. See "Choosing the retained
-    Free calendar" in docs/architecture/commercial-entitlements.md.
+    """Deterministic priority order for *shared* calendars only: the primary
+    calendar always sorts first, then the rest oldest-first. Never randomly
+    ordered. Since Phase 2C this list no longer determines the retained Free
+    calendar on its own — see _calendar_access, which puts the retained
+    member's Personal Calendar ahead of this entire list. On Free the
+    primary calendar is therefore *not* the retained calendar; it is the
+    first-restricted shared calendar, same as the rest of this list.
+
+    Note: prior to Phase 2C the primary calendar could never be deleted (see
+    delete_calendar) specifically because it was always the retained Free
+    calendar under the old calendar.max_categories (shared-only) design —
+    that invariant no longer holds, and delete_calendar's rule has been
+    updated accordingly.
 
     Personal Calendars (owner_user_id IS NOT NULL) are deliberately excluded
     — they are not a Home-administered, entitlement-gated resource, so they
@@ -234,18 +252,75 @@ def _personal_calendar_visibility_filter(
     )
 
 
+async def _retained_personal_calendar_id(db: AsyncSession, group_id: uuid.UUID) -> uuid.UUID | None:
+    """The retained Free member's own Personal Calendar id (see
+    mykhaya.entitlements.retained_member_id) — provisioned on demand if it
+    doesn't exist yet (the retained member may simply never have opened
+    Calendar themselves), via the same idempotent
+    calendar_provisioning.ensure_personal_calendar every other membership-
+    creation path already uses. This is what makes the retained member's
+    calendar deterministic and always present, rather than "whichever
+    member happened to visit Calendar first got the usable one"."""
+    retained = await retained_member_id(db, group_id)
+    if retained is None:
+        return None
+    row = await ensure_personal_calendar(db, group_id, retained)
+    return row.id
+
+
 async def _calendar_access(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, bool]:
-    """True = normal (within the Home's current calendar.max_categories
-    entitlement), False = read_only_due_to_plan. Computed fresh from current
-    usage + entitlement on every call — never a persisted flag, so it can
-    never drift when the Home's plan changes (upgrade/downgrade/re-upgrade
-    all just change what this function returns next time, with no migration
-    or backfill needed). One query for the calendars, one for the limit —
-    safe to call once per request and reuse, never once per calendar (see
-    "Avoid N+1 entitlement resolution" in the architecture doc)."""
-    calendars = await _ordered_calendars(db, group_id)
-    limit = await get_limit(db, group_id, CALENDAR_LIMIT_KEY)
-    return classify_ordered_resources([calendar.id for calendar in calendars], limit)
+    """True = normal (within the Home's current calendar.max_calendars
+    entitlement), False = read_only_due_to_plan — for every *shared*
+    HomeCalendar (owner_user_id IS NULL) in this Home. Computed fresh from
+    current usage + entitlement on every call — never a persisted flag, so
+    it can never drift when the Home's plan changes (upgrade/downgrade/
+    re-upgrade all just change what this function returns next time, with
+    no migration or backfill needed).
+
+    Phase 2C: the retained Free member's own Personal Calendar (if one
+    exists) is prepended to the counting list *ahead of* the shared
+    calendars in their existing primary-first-then-oldest order — never
+    "oldest calendar overall", which could pick a shared/Family calendar
+    instead of a Personal one — so it correctly occupies the Home's one
+    calendar.max_calendars=1 slot on Free, pushing every shared calendar
+    (including the primary "Home Calendar") to read_only_due_to_plan. See
+    mykhaya.entitlements.PLAN_DEFINITIONS' calendar.max_calendars comment.
+
+    The returned map is deliberately filtered down to shared-calendar ids
+    only — it is NEVER a safe source of truth for a Personal Calendar's own
+    access (a non-retained member's Personal Calendar simply isn't in the
+    counting list, which would make a naive `.get(id, False)` read it as
+    restricted even on Family, where there is no limit at all). Use
+    _personal_calendar_access for a Personal Calendar instead."""
+    shared = await _ordered_calendars(db, group_id)
+    personal_id = await _retained_personal_calendar_id(db, group_id)
+    ordered_ids = ([personal_id] if personal_id is not None else []) + [
+        calendar.id for calendar in shared
+    ]
+    limit = await get_limit(db, group_id, CALENDARS_LIMIT_KEY)
+    full_map = classify_ordered_resources(ordered_ids, limit)
+    return {calendar.id: full_map[calendar.id] for calendar in shared}
+
+
+async def _personal_calendar_access(
+    db: AsyncSession, group_id: uuid.UUID, owner_user_id: uuid.UUID
+) -> bool:
+    """True = normal, False = read_only_due_to_plan, for one member's own
+    Personal Calendar. Unlike _calendar_access this never depends on list
+    membership/ordering: on Family (limit=None) every Personal Calendar is
+    always normal, unchanged from before Phase 2C; on Free (limit=1) only
+    the retained member's own Personal Calendar is normal — see
+    mykhaya.entitlements.retained_member_id. A non-retained member's
+    Personal Calendar (only possible after a Family-to-Free downgrade that
+    preserved multiple members) is read_only_due_to_plan: preserved and
+    still viewable by its owner, but not writable, matching every other
+    over-limit resource — see "Downgrade with multiple members" in
+    docs/architecture/commercial-entitlements.md."""
+    limit = await get_limit(db, group_id, CALENDARS_LIMIT_KEY)
+    if limit is None:
+        return True
+    retained = await retained_member_id(db, group_id)
+    return owner_user_id == retained
 
 
 def _require_calendar_writable(access: dict[uuid.UUID, bool], calendar_id: uuid.UUID) -> None:
@@ -253,7 +328,18 @@ def _require_calendar_writable(access: dict[uuid.UUID, bool], calendar_id: uuid.
         raise commercial_restriction_error(
             CommercialRestrictionCode.resource_restricted_by_plan,
             "This calendar is included with MyKhaya Family. Upgrade to add or edit events here.",
-            entitlement=CALENDAR_LIMIT_KEY,
+            entitlement=CALENDARS_LIMIT_KEY,
+        )
+
+
+async def _require_personal_calendar_writable(
+    db: AsyncSession, group_id: uuid.UUID, owner_user_id: uuid.UUID
+) -> None:
+    if not await _personal_calendar_access(db, group_id, owner_user_id):
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.resource_restricted_by_plan,
+            "This calendar is included with MyKhaya Family. Upgrade to add or edit events here.",
+            entitlement=CALENDARS_LIMIT_KEY,
         )
 
 
@@ -312,8 +398,8 @@ async def list_calendars(
     membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     await _ensure_home_calendar(db, home_id)
     calendars = await _ordered_calendars(db, home_id)
-    limit = await get_limit(db, home_id, CALENDAR_LIMIT_KEY)
-    access = classify_ordered_resources([calendar.id for calendar in calendars], limit)
+    access = await _calendar_access(db, home_id)
+    limit = await get_limit(db, home_id, CALENDARS_LIMIT_KEY)
 
     personal_calendar = None
     # Managed children are deliberately not provisioned one here — see
@@ -328,7 +414,17 @@ async def list_calendars(
             is_primary=False,
             color=personal_row.color,
             owner_user_id=personal_row.owner_user_id,
-            commercial_access="normal",
+            # Phase 2C: normal only for the retained Free member's own
+            # Personal Calendar (or unconditionally on Family) — see
+            # _personal_calendar_access. A non-retained member viewing
+            # their own, now-restricted Personal Calendar still sees it
+            # (never hidden), just not writable — matches "preserve data,
+            # deny collaboration" for every other over-limit resource.
+            commercial_access=(
+                "normal"
+                if await _personal_calendar_access(db, home_id, auth.user.id)
+                else "read_only_due_to_plan"
+            ),
             created_at=personal_row.created_at,
         )
 
@@ -340,7 +436,9 @@ async def list_calendars(
                 timezone=calendar.timezone,
                 is_primary=calendar.is_primary,
                 color=calendar.color,
-                commercial_access="normal" if access[calendar.id] else "read_only_due_to_plan",
+                commercial_access=(
+                    "normal" if access.get(calendar.id, False) else "read_only_due_to_plan"
+                ),
                 created_at=calendar.created_at,
             )
             for calendar in calendars
@@ -374,6 +472,14 @@ async def create_calendar(
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"calendar:{home_id}"}
     )
+    # Unchanged since before Phase 2C: creating a new *shared* calendar is
+    # still governed by calendar.max_categories (shared calendars only) —
+    # see CALENDAR_LIMIT_KEY's own docstring/history. On Free this was
+    # already unreachable before Phase 2C (the seeded primary "Home
+    # Calendar" alone already fills the limit=1 allowance) and still is;
+    # Phase 2C's calendar.max_calendars (CALENDARS_LIMIT_KEY) governs a
+    # different question — which *existing* calendar (shared or Personal)
+    # is currently writable — see _calendar_access, not this create path.
     current_count = await db.scalar(
         select(func.count())
         .select_from(HomeCalendar)
@@ -423,9 +529,11 @@ async def update_calendar(
     # calendar_edit_all — same reasoning as delete_calendar.
     if calendar is None or calendar.group_id != home_id or calendar.owner_user_id is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
-    # The primary/"Home calendar" is always the retained Free calendar (see
-    # _ordered_calendars) so this never actually blocks it — but a secondary
-    # shared calendar preserved read-only after a downgrade follows the same
+    # Since Phase 2C the primary/"Home calendar" is the retained Free
+    # calendar's opposite — on Free it is always read_only_due_to_plan (the
+    # retained member's Personal Calendar takes the one usable slot instead;
+    # see _calendar_access), so this blocks editing it there too. Any shared
+    # calendar preserved read-only after a downgrade follows the same
     # "can't edit paid-resource content" rule its events already do.
     access = await _calendar_access(db, home_id)
     _require_calendar_writable(access, calendar.id)
@@ -464,7 +572,21 @@ async def delete_calendar(
     # Calendar simply isn't a "calendar" in this API's sense.
     if calendar is None or calendar.group_id != home_id or calendar.owner_user_id is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
-    if calendar.is_primary:
+    # The primary calendar is a structural anchor — every Home needs at
+    # least one shared calendar container to resume full Family collaboration
+    # on upgrade — so it stays undeletable while it's the Home's *normal*
+    # (in-entitlement) shared calendar, which is always true on Family (see
+    # _calendar_access: limit=None) and can also be true for a Free Home that
+    # has no retained Personal Calendar of its own yet. Since Phase 2C the
+    # primary calendar is read_only_due_to_plan on an ordinary Free Home
+    # (the retained member's Personal Calendar takes the one usable slot
+    # instead), and in that state it's just another excess shared calendar —
+    # deletable the same way, for the same reason: a customer's own way to
+    # tidy up. _ensure_home_calendar lazily recreates a fresh primary
+    # calendar the next time one is needed, so the "always one primary"
+    # invariant is preserved across the delete, not violated by it.
+    access = await _calendar_access(db, home_id)
+    if calendar.is_primary and access.get(calendar.id, False):
         raise HTTPException(status.HTTP_409_CONFLICT, "The primary calendar can't be deleted.")
     # Deliberate, customer-initiated action only — never automatic. Deletes
     # this calendar's own events too (CalendarEvent.calendar_id cascades),
@@ -1219,21 +1341,40 @@ async def create_event(
         body.is_all_day,
     )
 
-    calendar_row = await _ensure_home_calendar(db, home_id)
+    home_calendar = await _ensure_home_calendar(db, home_id)
+    calendar_row = home_calendar
     if body.calendar_id is not None and body.calendar_id != calendar_row.id:
         target_calendar = await db.get(HomeCalendar, body.calendar_id)
         if target_calendar is None or target_calendar.group_id != home_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
         calendar_row = target_calendar
+    elif body.calendar_id is None:
+        # Phase 2C: on a Free Home the shared "Home Calendar" is always
+        # read_only_due_to_plan (see _calendar_access — the retained
+        # member's own Personal Calendar takes the one usable slot
+        # instead), so defaulting an unqualified create-event there would
+        # silently 403 every ordinary personal-organiser use of Calendar
+        # on Free. Default instead to the caller's own Personal Calendar —
+        # exactly the "automatically provisioned personal calendar is
+        # usable" experience Free is meant to have. Family is unaffected:
+        # the shared calendar is always normal there (limit=None), so this
+        # branch never triggers and existing default-to-shared behaviour
+        # is unchanged.
+        access = await _calendar_access(db, home_id)
+        if not access.get(home_calendar.id, False):
+            calendar_row = await ensure_personal_calendar(db, home_id, auth.user.id)
 
     if calendar_row.owner_user_id is not None:
         # Personal Calendar: only its owner may create events on it. 404,
         # not 403 — this endpoint must behave as if another member's
         # Personal Calendar doesn't exist, not merely that it's off-limits.
-        # Never entitlement-gated (see _ordered_calendars/_calendar_access,
-        # which never see Personal Calendars in the first place).
         if calendar_row.owner_user_id != auth.user.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+        # Phase 2C: a Personal Calendar is entitlement-gated too, via the
+        # retained-member check — see _personal_calendar_access. Always
+        # normal on Family; on Free this only ever blocks a non-retained
+        # member's own Personal Calendar preserved from a downgrade.
+        await _require_personal_calendar_writable(db, home_id, calendar_row.owner_user_id)
     else:
         access = await _calendar_access(db, home_id)
         _require_calendar_writable(access, calendar_row.id)
@@ -1791,8 +1932,9 @@ async def update_event(
     if body.scope == "series" and event.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event changed. Reload and try again.")
     if is_personal_calendar:
-        # Never entitlement-gated — same reasoning as create_event.
-        pass
+        # Phase 2C: entitlement-gated — same reasoning as create_event.
+        assert event_calendar is not None and event_calendar.owner_user_id is not None
+        await _require_personal_calendar_writable(db, home_id, event_calendar.owner_user_id)
     else:
         access = await _calendar_access(db, home_id)
         _require_calendar_writable(access, event.calendar_id)

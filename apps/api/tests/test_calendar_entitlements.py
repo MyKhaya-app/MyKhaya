@@ -17,7 +17,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import PLAN_DEFINITIONS, get_home_subscription
@@ -131,9 +130,10 @@ async def _add_member(home_id: str, user_id: uuid.UUID, profile: PermissionProfi
 async def _calendar_rows(home_id: str) -> list[HomeCalendar]:
     # Shared/Home calendars only — the resource this test file's
     # calendar.max_categories assertions are about. Every Home now also
-    # carries its creating owner's Personal Calendar (owner_user_id set),
-    # which is a separate, never-entitlement-gated resource — see
-    # test_personal_calendar.py for that behaviour.
+    # carries its creating owner's Personal Calendar (owner_user_id set) —
+    # since Phase 2C that is also entitlement-gated, but by the separate
+    # calendar.max_calendars limit (see _calendar_access), not this one —
+    # see test_personal_calendars.py for that behaviour.
     async with SessionFactory() as db:
         return list(
             (
@@ -170,6 +170,13 @@ def _event_body(**overrides: object) -> dict:
 async def test_free_home_has_exactly_one_calendar_and_it_is_fully_usable(
     client: AsyncClient,
 ) -> None:
+    """Phase 2C: on Free, the one fully-usable calendar is the retained
+    member's own Personal Calendar, not the shared "Home Calendar" — see
+    mykhaya.entitlements.PLAN_DEFINITIONS' calendar.max_calendars comment
+    and routers.calendar._calendar_access. The shared calendar is preserved
+    but read_only_due_to_plan; an unqualified create-event (no calendar_id)
+    lands on the Personal Calendar instead — see create_event's Phase 2C
+    default-calendar fallback."""
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"free-{suffix}@example.com", "Free Owner")
     home_id = await _home_with_calendar(client, "Free Home")
@@ -177,13 +184,28 @@ async def test_free_home_has_exactly_one_calendar_and_it_is_fully_usable(
     listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
     assert listing.status_code == 200
     body = listing.json()
+    # calendar.max_categories (shared calendars only) is unaffected: still
+    # exactly one shared calendar, still the limit that blocks creating a
+    # second one — see test_free_home_second_calendar_is_blocked_with_a_
+    # structured_error.
     assert body["limit"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["is_primary"] is True
-    assert body["items"][0]["commercial_access"] == "normal"
+    assert body["items"][0]["commercial_access"] == "read_only_due_to_plan"
+    assert body["personal_calendar"]["commercial_access"] == "normal"
 
     event = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body())
     assert event.status_code == 201
+    assert event.json()["calendar_id"] == body["personal_calendar"]["id"]
+
+    blocked = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=_event_body(calendar_id=body["items"][0]["id"]),
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "resource_restricted_by_plan"
 
 
 @pytest.mark.asyncio
@@ -211,13 +233,15 @@ async def test_free_home_second_calendar_is_blocked_with_a_structured_error(
 
 
 @pytest.mark.asyncio
-async def test_free_home_owner_can_recolour_the_home_calendar_without_touching_entitlement(
+async def test_free_home_shared_calendar_cannot_be_recoloured_but_the_limit_is_untouched(
     client: AsyncClient,
 ) -> None:
-    """Recolouring the existing (only) Home calendar is a mutation on that
-    one row, not the creation of a new calendar/category — it must succeed
-    on Free and must never be mistaken for consuming
-    calendar.max_categories. See routers.calendar.update_calendar."""
+    """Phase 2C: the shared "Home Calendar" is read_only_due_to_plan on
+    Free (see _calendar_access), so recolouring it — a mutation, same rule
+    as adding/editing an event there — is now blocked, unlike before Phase
+    2C when it was the Home's one entitled calendar. calendar.max_categories
+    (which still separately governs *creating* a second shared calendar) is
+    untouched by this — see routers.calendar.update_calendar/create_calendar."""
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"freecolour-{suffix}@example.com", "Free Colour Owner")
     home_id = await _home_with_calendar(client, "Free Colour Home")
@@ -227,28 +251,26 @@ async def test_free_home_owner_can_recolour_the_home_calendar_without_touching_e
     assert before.json()["limit"] == 1
     assert len(before.json()["items"]) == 1
     primary = before.json()["items"][0]
-    assert primary["commercial_access"] == "normal"
+    assert primary["commercial_access"] == "read_only_due_to_plan"
 
-    recoloured = await unsafe(
+    blocked_recolour = await unsafe(
         client,
         "PATCH",
         f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
         json={"color": "amber"},
     )
-    assert recoloured.status_code == 200, recoloured.text
-    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.amber]
-    assert recoloured.json()["commercial_access"] == "normal"
+    assert blocked_recolour.status_code == 403
+    assert blocked_recolour.json()["detail"]["code"] == "resource_restricted_by_plan"
 
-    # Still exactly one calendar, same limit — a colour change never creates
-    # a new calendar/category or otherwise moves the entitlement count.
+    # Still exactly one shared calendar, same limit — nothing about the
+    # blocked recolour attempt moved calendar.max_categories' own count.
     after = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
     assert after.status_code == 200
     assert after.json()["limit"] == 1
     assert len(after.json()["items"]) == 1
     assert after.json()["items"][0]["id"] == primary["id"]
-    assert after.json()["items"][0]["color"] == PALETTE_HEX[ColourToken.amber]
 
-    # The Free one-calendar limit is still enforced exactly as before.
+    # The Free one-shared-calendar limit is still enforced exactly as before.
     blocked = await unsafe(
         client,
         "POST",
@@ -322,20 +344,36 @@ async def test_downgrade_preserves_all_calendars_and_restricts_the_excess_ones(
     listing = (await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")).json()
     access = {item["id"]: item["commercial_access"] for item in listing["items"]}
     primary_id = next(item["id"] for item in listing["items"] if item["is_primary"])
-    assert access[primary_id] == "normal"
+    # Phase 2C: every *shared* calendar, including the primary, is now
+    # read_only_due_to_plan on Free — the Home owner's own Personal
+    # Calendar is the one retained resource instead (see _calendar_access).
+    assert access[primary_id] == "read_only_due_to_plan"
     assert access[calendar_b["id"]] == "read_only_due_to_plan"
     assert access[calendar_c["id"]] == "read_only_due_to_plan"
+    assert listing["personal_calendar"]["commercial_access"] == "normal"
 
-    # The retained calendar remains fully usable.
+    # The retained calendar (the owner's Personal Calendar) remains fully
+    # usable.
     normal_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=_event_body(calendar_id=listing["personal_calendar"]["id"]),
+    )
+    assert normal_event.status_code == 201
+
+    # Creating a new event on the now-restricted primary calendar is
+    # blocked too...
+    blocked_primary = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
         json=_event_body(calendar_id=primary_id),
     )
-    assert normal_event.status_code == 201
+    assert blocked_primary.status_code == 403
+    assert blocked_primary.json()["detail"]["code"] == "resource_restricted_by_plan"
 
-    # Creating a new event in an excess calendar is blocked...
+    # ...as is one of the other excess calendars.
     blocked = await unsafe(
         client,
         "POST",

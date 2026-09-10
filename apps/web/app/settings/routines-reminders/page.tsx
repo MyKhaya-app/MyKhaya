@@ -183,6 +183,8 @@ export default function RoutinesRemindersPage() {
   const [todoCategories, setTodoCategories] = useState<TodoCategory[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [householdRoutinesEnabled, setHouseholdRoutinesEnabled] = useState(false);
+  const [nudgesEntitled, setNudgesEntitled] = useState<boolean | null>(null);
+  const [moduleReleased, setModuleReleased] = useState<boolean | null>(null);
 
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [formKind, setFormKind] = useState<"routine" | "reminder" | "todo" | null>(null);
@@ -235,8 +237,24 @@ export default function RoutinesRemindersPage() {
     if (!activeHomeId) return;
     api
       .billingStatus(activeHomeId)
-      .then((billing) => setHouseholdRoutinesEnabled(billing.household_routines_enabled))
-      .catch(() => setHouseholdRoutinesEnabled(false));
+      .then((billing) => {
+        setHouseholdRoutinesEnabled(billing.household_routines_enabled);
+        setNudgesEntitled(billing.nudges_enabled);
+      })
+      .catch(() => {
+        setHouseholdRoutinesEnabled(false);
+        setNudgesEntitled(false);
+      });
+  }, [activeHomeId]);
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .featureMatrix(activeHomeId)
+      .then((matrix) =>
+        setModuleReleased(matrix.features.some((row) => row.feature === "nudges" && row.enabled)),
+      )
+      .catch(() => setModuleReleased(false));
   }, [activeHomeId]);
 
   useEffect(() => {
@@ -787,6 +805,41 @@ export default function RoutinesRemindersPage() {
   const canManageAny = canManageRoutines || canManageReminders;
   const scopeWord = scopeTab === "household" ? "household" : "personal";
   const typeWord = typeTab === "all" ? "items" : typeTab === "todos" ? "to-dos" : typeTab;
+
+  if (activeHomeId && moduleReleased === false) {
+    return (
+      <SettingsPage title="Nudges" hideHeading className="module-page">
+        <div className="rr-page">
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">Nudges</p>
+              <h1>Nudges</h1>
+            </div>
+          </div>
+          <p className="empty-mini">Nudges isn't available for this Home yet. Please check back soon.</p>
+        </div>
+      </SettingsPage>
+    );
+  }
+
+  if (activeHomeId && nudgesEntitled === false) {
+    return (
+      <SettingsPage title="Nudges" hideHeading className="module-page">
+        <div className="rr-page">
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">Nudges</p>
+              <h1>Nudges</h1>
+            </div>
+          </div>
+          <FamilyUpsell
+            title="Nudges"
+            description="Keep track of routines, reminders and things to do — together. Included with Family."
+          />
+        </div>
+      </SettingsPage>
+    );
+  }
 
   return (
     <SettingsPage title="Nudges" hideHeading className="module-page">

@@ -83,6 +83,10 @@ async def test_home_admin_features_relationships_and_managed_child(
     # .home_admin_manageable).
     assert "notifications" not in module_ids
     assert "external_sharing" not in module_ids
+    # Nudges (Routines + Reminders + To-dos) is a genuine, independently
+    # governed Home module — see test_feature_precedence.py for its full
+    # authorization/precedence coverage.
+    assert "nudges" in module_ids
 
     hidden_update = await unsafe(
         client,

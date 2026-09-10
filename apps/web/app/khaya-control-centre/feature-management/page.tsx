@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { FeatureKey, HouseholdModule } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { KhayaControlShell } from "@/components/khaya-control-shell";
@@ -106,7 +107,16 @@ export default function FeatureManagementPage() {
                     Beta modules may change and are disabled by default.
                   </p>
                 )}
-                {module.toggleable ? (
+                {module.toggleable && module.blocked_by === "plan" ? (
+                  <p className="core-note">
+                    Included with MyKhaya Family.{" "}
+                    <Link href="/settings/billing">View Family plan</Link>
+                  </p>
+                ) : module.toggleable && module.blocked_by === "platform" ? (
+                  <p className="core-note">
+                    Currently unavailable platform-wide.
+                  </p>
+                ) : module.toggleable ? (
                   <button
                     type="button"
                     className={module.enabled ? "secondary" : ""}

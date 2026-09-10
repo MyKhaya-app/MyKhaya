@@ -65,6 +65,7 @@ function billing(overrides: Record<string, unknown> = {}) {
     meals_enabled: false,
     lists_enabled: false,
     wishlists_enabled: false,
+    nudges_enabled: false,
     ...overrides,
   };
 }
@@ -103,6 +104,7 @@ beforeEach(() => {
       { feature: "calendar", enabled: false },
       { feature: "meals", enabled: true },
       { feature: "shopping", enabled: true },
+      { feature: "nudges", enabled: true },
     ],
   });
 });
@@ -238,14 +240,17 @@ describe("Home — Wishlists shortcut", () => {
   });
 });
 
-describe("Home — Routines shortcut", () => {
-  it("always links to the Nudges settings screen, with no feature flag or lock", async () => {
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
+describe("Home — Nudges shortcut", () => {
+  it("links to Nudges with no lock treatment on a Family Home", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ nudges_enabled: true }),
+    );
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
         { feature: "meals", enabled: false },
         { feature: "shopping", enabled: false },
+        { feature: "nudges", enabled: true },
       ],
     });
 
@@ -256,11 +261,49 @@ describe("Home — Routines shortcut", () => {
     expect(link.className).not.toMatch(/quick-action-locked/);
   });
 
-  it("groups Add event/Invite family into a 2-tile row and Routines/Meal plans/Lists into a 3-tile row, with no empty placeholder tile", async () => {
+  it("shows the locked treatment but still links through on a Free Home", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ nudges_enabled: false }),
+    );
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "meals", enabled: false },
+        { feature: "shopping", enabled: false },
+        { feature: "nudges", enabled: true },
+      ],
+    });
+
+    render(<HomePage />);
+
+    const link = await screen.findByRole("link", { name: /nudges/i });
+    expect(link).toHaveAttribute("href", "/settings/routines-reminders");
+    expect(link.className).toMatch(/quick-action-locked/);
+  });
+
+  it("hides the shortcut entirely when the module isn't released for this Home", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: false },
+        { feature: "meals", enabled: false },
+        { feature: "shopping", enabled: false },
+        { feature: "nudges", enabled: false },
+      ],
+    });
+
+    render(<HomePage />);
+
+    await screen.findByText("Around the house");
+    expect(screen.queryByRole("link", { name: /nudges/i })).not.toBeInTheDocument();
+  });
+
+  it("groups Add event/Invite family into a 2-tile row and Nudges/Meal plans/Lists into a 3-tile row, with no empty placeholder tile", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
       billing({
         meals_enabled: true,
         lists_enabled: true,
+        nudges_enabled: true,
         member_usage: { count: 1, limit: 4, over_limit: false },
       }),
     );
@@ -269,6 +312,7 @@ describe("Home — Routines shortcut", () => {
         { feature: "calendar", enabled: true },
         { feature: "meals", enabled: true },
         { feature: "shopping", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
 
@@ -289,12 +333,15 @@ describe("Home — Routines shortcut", () => {
   });
 
   it("shrinks the feature row to match however many shortcuts are actually entitled/released", async () => {
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({ nudges_enabled: true }),
+    );
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
         { feature: "meals", enabled: false },
         { feature: "shopping", enabled: false },
+        { feature: "nudges", enabled: true },
       ],
     });
 
@@ -717,7 +764,7 @@ describe("Home — household routines", () => {
       features: [
         { feature: "calendar", enabled: false },
         { feature: "meals", enabled: false },
-        { feature: "notifications", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -794,7 +841,7 @@ describe("Home — household routines", () => {
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
-        { feature: "notifications", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -860,7 +907,7 @@ describe("Home — reminders on the combined To-do list", () => {
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
-        { feature: "notifications", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -912,7 +959,7 @@ describe("Home — reminders on the combined To-do list", () => {
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
-        { feature: "notifications", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -969,7 +1016,7 @@ describe("Home — reminders on the combined To-do list", () => {
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [
         { feature: "calendar", enabled: false },
-        { feature: "notifications", enabled: true },
+        { feature: "nudges", enabled: true },
       ],
     });
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [reminder()] });

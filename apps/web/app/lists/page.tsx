@@ -7,8 +7,8 @@ import type { BillingStatus, HouseholdList, ListIcon } from "@mykhaya/shared-typ
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
-import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { atListLimitMessage, canCreateList, listBadgeLabel } from "@/components/lists-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
 import { LIST_ICON_OPTIONS, listIconImage } from "./list-icons";
 
@@ -83,25 +83,6 @@ export default function ListsPage() {
       <AppShellContent>
         <main className="standard-page module-page">
           <p role="status">Loading Lists…</p>
-        </main>
-      </AppShellContent>
-    );
-  }
-
-  if (!billing.lists_enabled) {
-    return (
-      <AppShellContent>
-        <main className="standard-page module-page">
-          <div className="page-heading">
-            <div>
-              <p className="eyebrow">Lists</p>
-              <h1>Lists</h1>
-            </div>
-          </div>
-          <FamilyUpsell
-            title="Lists"
-            description="Keep groceries, packing, DIY and household bits together — shared with the whole family. Included with Family."
-          />
         </main>
       </AppShellContent>
     );
@@ -201,6 +182,7 @@ export default function ListsPage() {
               <div className="lists-grid">
                 {lists.map((list) => {
                   const complete = list.item_count > 0 && list.remaining_count === 0;
+                  const badge = listBadgeLabel(list);
                   return (
                     <article className="card lists-card" key={list.id}>
                       <Link className="lists-card-body" href={`/lists/${list.id}`}>
@@ -208,11 +190,13 @@ export default function ListsPage() {
                         <span className="lists-card-copy">
                           <strong>{list.name}</strong>
                           <span className={complete ? "lists-card-status lists-card-complete" : "lists-card-status"}>
-                            {list.item_count === 0
-                              ? "No items yet"
-                              : complete
-                                ? `Complete · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`
-                                : `${list.remaining_count} remaining · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`}
+                            {badge
+                              ? `${badge} — included with Family`
+                              : list.item_count === 0
+                                ? "No items yet"
+                                : complete
+                                  ? `Complete · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`
+                                  : `${list.remaining_count} remaining · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`}
                           </span>
                         </span>
                         <ChevronRight size={18} className="lists-card-chevron" aria-hidden="true" />
@@ -233,6 +217,9 @@ export default function ListsPage() {
           </>
         )}
 
+        {billing.list_usage && !canCreateList(billing.list_usage) && (
+          <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
+        )}
         <button type="button" className="rr-fab" aria-label="Add" onClick={() => setCreating(true)}>
           <Plus size={22} aria-hidden="true" />
           <span aria-hidden="true">Add</span>

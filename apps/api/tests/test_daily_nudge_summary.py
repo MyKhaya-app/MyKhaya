@@ -23,6 +23,7 @@ from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    FeatureFlag,
     FeatureKey,
     FeatureOverride,
     HouseholdRoutine,
@@ -329,6 +330,103 @@ async def test_deliver_skips_when_disabled(client: AsyncClient) -> None:
             select(Notification).where(Notification.recipient_user_id == user_id)
         )
         assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_on_free_plan_even_with_outstanding_items(client: AsyncClient) -> None:
+    """Phase 2B: nudges.enabled is Family-only — a Free Home's routines/
+    reminders/to-dos never surface in, or trigger, the Daily Nudge Summary,
+    even though the underlying data exists and the user has the preference
+    enabled."""
+    user_id = await create_verified_user(client, unique_email("freenudge"), "Free Nudge Owner")
+    home_id = await create_home_with_notifications(client, family=False)
+    await set_user_timezone(user_id)
+    await configure_summary(user_id)
+    today = datetime.now(UTC).astimezone(TZ).date()
+
+    async with SessionFactory() as db:
+        db.add(
+            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
+        )
+        await db.commit()
+        await deliver_daily_nudge_summary(db, get_settings(), str(user_id), today.isoformat())
+        await db.commit()
+        notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == user_id)
+        )
+        assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_when_nudges_module_disabled_for_home(client: AsyncClient) -> None:
+    """A Home Admin (or a stale override) disabling the Nudges module
+    itself suppresses the summary too — not just Notifications."""
+    user_id = await create_verified_user(client, unique_email("nudgesoff"), "Nudges Off Owner")
+    home_id = await create_home_with_notifications(client, family=True)
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.nudges, group_id=home_id, enabled=False))
+        await db.commit()
+    await set_user_timezone(user_id)
+    await configure_summary(user_id)
+    today = datetime.now(UTC).astimezone(TZ).date()
+
+    async with SessionFactory() as db:
+        db.add(
+            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
+        )
+        await db.commit()
+        await deliver_daily_nudge_summary(db, get_settings(), str(user_id), today.isoformat())
+        await db.commit()
+        notification = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == user_id)
+        )
+        assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_when_notifications_disabled_for_home(client: AsyncClient) -> None:
+    """Notifications delivery infrastructure is checked independently of
+    Nudges module/entitlement state — disabling it (platform-wide, here)
+    suppresses the summary send without affecting Nudges API access
+    itself."""
+    user_id = await create_verified_user(
+        client, unique_email("notifsoff"), "Notifications Off Owner"
+    )
+    home_id = await create_home_with_notifications(client, family=True)
+    await set_user_timezone(user_id)
+    await configure_summary(user_id)
+    today = datetime.now(UTC).astimezone(TZ).date()
+
+    async with SessionFactory() as db:
+        db.add(
+            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
+        )
+        # The Home's own FeatureOverride says notifications=True (set by
+        # create_home_with_notifications) — disable it globally instead, to
+        # prove the platform layer is checked too, not just the override.
+        flag = await db.scalar(
+            select(FeatureFlag).where(FeatureFlag.key == FeatureKey.notifications)
+        )
+        assert flag is not None
+        original = flag.enabled
+        flag.enabled = False
+        await db.commit()
+    try:
+        async with SessionFactory() as db:
+            await deliver_daily_nudge_summary(db, get_settings(), str(user_id), today.isoformat())
+            await db.commit()
+            notification = await db.scalar(
+                select(Notification).where(Notification.recipient_user_id == user_id)
+            )
+            assert notification is None
+    finally:
+        async with SessionFactory() as db:
+            flag = await db.scalar(
+                select(FeatureFlag).where(FeatureFlag.key == FeatureKey.notifications)
+            )
+            assert flag is not None
+            flag.enabled = original
+            await db.commit()
 
 
 @pytest.mark.asyncio

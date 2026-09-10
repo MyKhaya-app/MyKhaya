@@ -328,6 +328,12 @@ export default function CalendarsPage() {
               <section className="card details">
                 <h2>Personal calendar</h2>
                 <p className="muted">Only visible to you — never automatically shared with your Home.</p>
+                {calendarBadgeLabel(personalCalendar) && (
+                  <p className="quiet-state">
+                    {calendarBadgeLabel(personalCalendar)} — events here can be viewed but not
+                    created, edited or deleted.
+                  </p>
+                )}
                 <p>
                   <Link href="/settings/calendar-tags">Calendar colour and settings</Link>
                 </p>

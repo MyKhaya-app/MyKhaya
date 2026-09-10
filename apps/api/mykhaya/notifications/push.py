@@ -15,7 +15,7 @@ from typing import Literal
 
 import httpx
 import structlog
-from authlib.jose import jwt as apns_jwt
+from authlib.jose import jwt as apns_jwt  # type: ignore[import-untyped]
 from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid
 from pywebpush import WebPushException, webpush

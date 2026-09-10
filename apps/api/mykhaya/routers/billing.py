@@ -68,12 +68,14 @@ from mykhaya.entitlements import (
     ensure_home_subscription,
     get_home_subscription,
     has_entitlement,
+    list_usage,
     member_usage,
     plan_definition_for,
     resolve_effective_state,
 )
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
 from mykhaya.models import (
+    HomeSubscription,
     StripeWebhookFailure,
     SubscriptionPlan,
     SubscriptionProvider,
@@ -292,7 +294,9 @@ async def billing_status(
         ),
         meals_enabled=await has_entitlement(db, group_id, "meals.enabled"),
         lists_enabled=await has_entitlement(db, group_id, "lists.enabled"),
+        list_usage=await list_usage(db, group_id),
         wishlists_enabled=await has_entitlement(db, group_id, "wishlists.enabled"),
+        nudges_enabled=await has_entitlement(db, group_id, "nudges.enabled"),
     )
 
 
@@ -405,6 +409,7 @@ async def confirm_checkout(
 
     # The service performs its own authoritative retrieval and all validation;
     # the first lookup above exists only to derive the server-side Home binding.
+    subscription: HomeSubscription | None = None
     try:
         confirmed, subscription = await confirm_checkout_session(
             db, config, group_id, body.session_id

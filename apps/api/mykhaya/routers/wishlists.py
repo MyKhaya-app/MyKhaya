@@ -27,6 +27,7 @@ import secrets
 import string
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, func, select
@@ -197,13 +198,16 @@ async def _membership_or_none(
 async def _active_share_for_recipient(
     db: AsyncSession, wishlist_id: uuid.UUID, user_id: uuid.UUID
 ) -> WishlistShare | None:
-    return await db.scalar(
-        select(WishlistShare).where(
-            WishlistShare.wishlist_id == wishlist_id,
-            WishlistShare.recipient_user_id == user_id,
-            WishlistShare.share_type == WishlistShareType.mykhaya_user,
-            WishlistShare.revoked_at.is_(None),
-        )
+    return cast(
+        WishlistShare | None,
+        await db.scalar(
+            select(WishlistShare).where(
+                WishlistShare.wishlist_id == wishlist_id,
+                WishlistShare.recipient_user_id == user_id,
+                WishlistShare.share_type == WishlistShareType.mykhaya_user,
+                WishlistShare.revoked_at.is_(None),
+            )
+        ),
     )
 
 
@@ -243,7 +247,7 @@ async def _share_counts(db: AsyncSession, wishlist_ids: list[uuid.UUID]) -> dict
                 )
                 .group_by(WishlistShare.wishlist_id)
             )
-        ).all()
+        ).tuples().all()
     )
 
 
@@ -517,7 +521,7 @@ async def list_wishlists(
     ).all()
     if not rows:
         return WishlistListResponse(items=[])
-    counts = dict(
+    counts: dict[uuid.UUID, int] = dict(
         (
             await db.execute(
                 select(WishlistItem.wishlist_id, func.count())
@@ -527,17 +531,17 @@ async def list_wishlists(
                 )
                 .group_by(WishlistItem.wishlist_id)
             )
-        ).all()
+        ).tuples().all()
     )
     share_counts = await _share_counts(db, [row.id for row in rows])
-    owner_names = dict(
+    owner_names: dict[uuid.UUID, str] = dict(
         (
             await db.execute(
                 select(User.id, User.display_name).where(
                     User.id.in_({row.owner_user_id for row in rows})
                 )
             )
-        ).all()
+            ).tuples().all()
     )
     return WishlistListResponse(
         items=[
@@ -1173,7 +1177,7 @@ async def shared_with_me(
     ).all()
     if not rows:
         return WishlistListResponse(items=[])
-    counts = dict(
+    counts: dict[uuid.UUID, int] = dict(
         (
             await db.execute(
                 select(WishlistItem.wishlist_id, func.count())
@@ -1183,16 +1187,16 @@ async def shared_with_me(
                 )
                 .group_by(WishlistItem.wishlist_id)
             )
-        ).all()
+            ).tuples().all()
     )
-    owner_names = dict(
+    owner_names: dict[uuid.UUID, str] = dict(
         (
             await db.execute(
                 select(User.id, User.display_name).where(
                     User.id.in_({row.owner_user_id for row in rows})
                 )
             )
-        ).all()
+            ).tuples().all()
     )
     return WishlistListResponse(
         items=[

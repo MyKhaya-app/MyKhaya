@@ -8,12 +8,31 @@ from mykhaya.models import FeatureFlag, FeatureKey, FeatureOverride
 from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
 
 
+async def platform_feature_enabled(db: AsyncSession, feature_key: FeatureKey) -> bool:
+    """The PCC global FeatureFlag state alone — the top of the authority
+    hierarchy (see docs/architecture/feature-flags.md). A Home override can
+    never make a feature available when this is False; it can only opt a
+    Home *out* of a feature the platform has made available. Hidden modules
+    are not consulted here — callers that need the hidden-fails-closed rule
+    should go through is_feature_enabled, which checks it first."""
+    global_value = await db.scalar(
+        select(FeatureFlag.enabled).where(FeatureFlag.key == feature_key)
+    )
+    return bool(global_value)
+
+
 async def is_feature_enabled(
     db: AsyncSession,
     feature_key: FeatureKey | str,
     home_id: uuid.UUID | None = None,
 ) -> bool:
-    """Evaluate Home override, then global state, failing closed for unknown keys."""
+    """Evaluate platform availability first, then the Home override, failing
+    closed for unknown/hidden keys. PCC platform availability is
+    authoritative: when the global FeatureFlag is disabled (or missing), the
+    feature is disabled everywhere and no Home override can re-enable it. A
+    Home override only ever narrows access further (disable) or opts back
+    in to what the platform already allows (enable) — it is never absolute.
+    See docs/architecture/feature-flags.md."""
     try:
         key = feature_key if isinstance(feature_key, FeatureKey) else FeatureKey(feature_key)
     except ValueError:
@@ -21,6 +40,9 @@ async def is_feature_enabled(
 
     definition = module_definition(key.value)
     if definition.release_state == ReleaseState.hidden:
+        return False
+
+    if not await platform_feature_enabled(db, key):
         return False
 
     if home_id is not None:
@@ -33,8 +55,7 @@ async def is_feature_enabled(
         if override is not None:
             return bool(override)
 
-    global_value = await db.scalar(select(FeatureFlag.enabled).where(FeatureFlag.key == key))
-    return bool(global_value) if global_value is not None else False
+    return True
 
 
 async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKey, bool]:
@@ -46,7 +67,9 @@ async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKe
         ).all()
     }
     return {
-        key: overrides.get(key, flags.get(key, False))
+        # Platform-authoritative: a disabled/missing global flag means
+        # disabled regardless of any Home override — see is_feature_enabled.
+        key: (overrides.get(key, True) if flags.get(key, False) else False)
         for key in FeatureKey
         if module_definition(key.value).release_state != ReleaseState.hidden
     }

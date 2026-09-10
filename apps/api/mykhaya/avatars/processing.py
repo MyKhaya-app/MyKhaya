@@ -13,7 +13,7 @@ from PIL import Image, ImageOps
 try:
     import pillow_heif
 
-    pillow_heif.register_heif_opener()
+    pillow_heif.register_heif_opener()  # type: ignore[attr-defined]
     HEIC_SUPPORTED = True
 except ImportError:  # pragma: no cover - depends on platform wheel availability
     HEIC_SUPPORTED = False

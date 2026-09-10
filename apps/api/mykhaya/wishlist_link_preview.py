@@ -42,6 +42,7 @@ import socket
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
+from typing import Any
 
 import httpx
 import structlog
@@ -146,7 +147,7 @@ def _resolve_hostname(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.I
         return []
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for info in infos:
-        raw = info[4][0]
+        raw = str(info[4][0])
         try:
             addresses.append(ipaddress.ip_address(raw.split("%", 1)[0]))
         except ValueError:
@@ -163,7 +164,7 @@ def _validate_target(url: str) -> str | None:
         return "unparseable_url"
     if parsed.scheme not in ("http", "https"):
         return "disallowed_scheme"
-    hostname = parsed.host
+    hostname = str(parsed.host) if parsed.host is not None else ""
     if not hostname:
         return "no_host"
     normalised_host = hostname.strip(".").casefold()
@@ -364,12 +365,12 @@ class _MetaExtractor(HTMLParser):
             self._json_ld_buffer.append(data)
 
 
-def _iter_json_ld_products(data: object) -> list[dict]:
+def _iter_json_ld_products(data: object) -> list[dict[str, Any]]:
     """Defensive JSON-LD walk — a real page's JSON-LD is very often a single
     object, sometimes a list, sometimes a Product nested under @graph.
     Anything that doesn't match that shape is silently skipped, never
     raised."""
-    products: list[dict] = []
+    products: list[dict[str, Any]] = []
     items = data if isinstance(data, list) else [data]
     for item in items:
         if not isinstance(item, dict):

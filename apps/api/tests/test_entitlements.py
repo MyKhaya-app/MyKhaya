@@ -23,11 +23,16 @@ from mykhaya.entitlements import (
     require_within_limit,
     resolve_effective_plan,
     resolve_effective_state,
+    retained_member_id,
 )
 from mykhaya.models import (
     Group,
     HomeSubscription,
     HomeSubscriptionEvent,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -53,6 +58,33 @@ async def _set_subscription(home_id: uuid.UUID, **fields: object) -> None:
         for key, value in fields.items():
             setattr(subscription, key, value)
         await db.commit()
+
+
+async def _add_membership(
+    home_id: uuid.UUID,
+    *,
+    relationship: HouseholdRelationship = HouseholdRelationship.review_required,
+    removed: bool = False,
+) -> uuid.UUID:
+    """A minimal Membership row for retained_member_id tests — colour is
+    left unset (nullable) to avoid depending on the full ColourToken/
+    assign_member_colour flow, which is irrelevant to retention ordering."""
+    async with SessionFactory() as db:
+        user = User(email=f"member-{uuid.uuid4()}@example.com", display_name="Member")
+        db.add(user)
+        await db.flush()
+        db.add(
+            Membership(
+                group_id=home_id,
+                user_id=user.id,
+                role=Role.member,
+                relationship=relationship,
+                permission_profile=PermissionProfile.review_required,
+                removed_at=datetime.now(UTC) if removed else None,
+            )
+        )
+        await db.commit()
+        return user.id
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +135,10 @@ async def test_missing_subscription_record_resolves_to_free() -> None:
     async with SessionFactory() as db:
         assert await get_home_subscription(db, home_id) is None
         assert await effective_plan(db, home_id) == SubscriptionPlan.free
-        assert await has_entitlement(db, home_id, "lists.enabled") is False
+        # Lists is included on Free (Phase 2B) — bounded by lists.max_lists,
+        # not a boolean gate.
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
+        assert await has_entitlement(db, home_id, "nudges.enabled") is False
 
 
 @pytest.mark.asyncio
@@ -114,8 +149,12 @@ async def test_free_resolves_free_entitlements_and_calendar_limit_of_one() -> No
         await db.commit()
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.free
-        assert await has_entitlement(db, home_id, "lists.enabled") is False
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
+        assert await get_limit(db, home_id, "lists.max_lists") == 2
         assert await get_limit(db, home_id, "calendar.max_categories") == 1
+        # Phase 2C: a *separate* limit from calendar.max_categories — see its
+        # PLAN_DEFINITIONS docstring. Combined personal+shared calendar count.
+        assert await get_limit(db, home_id, "calendar.max_calendars") == 1
 
 
 @pytest.mark.asyncio
@@ -133,7 +172,9 @@ async def test_family_resolves_family_entitlements_and_unlimited_calendars() -> 
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.family
         assert await has_entitlement(db, home_id, "lists.enabled") is True
+        assert await get_limit(db, home_id, "lists.max_lists") is None
         assert await get_limit(db, home_id, "calendar.max_categories") is None
+        assert await get_limit(db, home_id, "calendar.max_calendars") is None
 
 
 # ---------------------------------------------------------------------------
@@ -151,16 +192,20 @@ async def test_free_resolves_the_full_agreed_capability_matrix() -> None:
         assert await get_limit(db, home_id, "home.max_members") == 1
         assert await get_limit(db, home_id, "calendar.max_categories") == 1
         assert await get_limit(db, home_id, "routines.personal.max_active") == 3
+        assert await get_limit(db, home_id, "lists.max_lists") == 2
         # Included on both plans — not a Family differentiator.
         assert await has_entitlement(db, home_id, "notes.enabled") is True
+        # Lists is included on Free too (Phase 2B) — see lists.max_lists
+        # above for the actual Free/Family differentiator.
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
         assert await has_entitlement(db, home_id, "routines.household.enabled") is False
         assert await has_entitlement(db, home_id, "events.shared.enabled") is False
-        assert await has_entitlement(db, home_id, "lists.enabled") is False
         assert await has_entitlement(db, home_id, "chores.enabled") is False
         assert await has_entitlement(db, home_id, "wishlists.enabled") is False
         assert await has_entitlement(db, home_id, "members.external_invites.enabled") is False
         assert await has_entitlement(db, home_id, "family_plans.enabled") is False
         assert await has_entitlement(db, home_id, "support.priority.enabled") is False
+        assert await has_entitlement(db, home_id, "nudges.enabled") is False
 
 
 @pytest.mark.asyncio
@@ -174,6 +219,7 @@ async def test_family_resolves_the_full_agreed_capability_matrix() -> None:
         assert await get_limit(db, home_id, "home.max_members") is None
         assert await get_limit(db, home_id, "calendar.max_categories") is None
         assert await get_limit(db, home_id, "routines.personal.max_active") is None
+        assert await get_limit(db, home_id, "lists.max_lists") is None
         assert await has_entitlement(db, home_id, "notes.enabled") is True
         assert await has_entitlement(db, home_id, "routines.household.enabled") is True
         assert await has_entitlement(db, home_id, "events.shared.enabled") is True
@@ -183,6 +229,7 @@ async def test_family_resolves_the_full_agreed_capability_matrix() -> None:
         assert await has_entitlement(db, home_id, "members.external_invites.enabled") is True
         assert await has_entitlement(db, home_id, "family_plans.enabled") is True
         assert await has_entitlement(db, home_id, "support.priority.enabled") is True
+        assert await has_entitlement(db, home_id, "nudges.enabled") is True
 
 
 @pytest.mark.asyncio
@@ -299,7 +346,10 @@ async def test_complimentary_family_with_past_expiry_resolves_free() -> None:
     )
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.free
-        assert await has_entitlement(db, home_id, "lists.enabled") is False
+        # lists.enabled no longer differentiates Free/Family (Phase 2B —
+        # both plans include it, differentiated by lists.max_lists
+        # instead), so nudges.enabled is the Family-only proxy here.
+        assert await has_entitlement(db, home_id, "nudges.enabled") is False
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +422,7 @@ async def test_entitlement_resolution_is_independent_of_feature_flags() -> None:
         # Free Home, calendar feature flag state is irrelevant here — the
         # commercial layer only knows about calendar.max_categories, not
         # about FeatureKey.calendar at all.
-        assert await has_entitlement(db, home_id, "lists.enabled") is False
+        assert await has_entitlement(db, home_id, "nudges.enabled") is False
 
 
 # ---------------------------------------------------------------------------
@@ -509,3 +559,51 @@ async def test_effective_plan_sql_filter_matches_python_resolution() -> None:
                 subscription = await get_home_subscription(db, home_id)
                 python_plan = resolve_effective_plan(subscription)
                 assert (home_id in sql_matches) == (python_plan == plan)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C: retained_member_id — deterministic Free-downgrade member policy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retained_member_id_is_none_for_a_home_with_no_membership() -> None:
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        assert await retained_member_id(db, home_id) is None
+
+
+@pytest.mark.asyncio
+async def test_retained_member_id_is_the_sole_member_of_a_new_home() -> None:
+    home_id = await _make_home()
+    member = await _add_membership(home_id, relationship=HouseholdRelationship.home_admin)
+    async with SessionFactory() as db:
+        assert await retained_member_id(db, home_id) == member
+
+
+@pytest.mark.asyncio
+async def test_retained_member_id_prefers_home_admin_over_older_members() -> None:
+    home_id = await _make_home()
+    oldest = await _add_membership(home_id, relationship=HouseholdRelationship.partner)
+    admin = await _add_membership(home_id, relationship=HouseholdRelationship.home_admin)
+    async with SessionFactory() as db:
+        assert await retained_member_id(db, home_id) != oldest
+        assert await retained_member_id(db, home_id) == admin
+
+
+@pytest.mark.asyncio
+async def test_retained_member_id_falls_back_to_oldest_membership_without_a_home_admin() -> None:
+    home_id = await _make_home()
+    oldest = await _add_membership(home_id, relationship=HouseholdRelationship.partner)
+    await _add_membership(home_id, relationship=HouseholdRelationship.child)
+    async with SessionFactory() as db:
+        assert await retained_member_id(db, home_id) == oldest
+
+
+@pytest.mark.asyncio
+async def test_retained_member_id_ignores_removed_memberships() -> None:
+    home_id = await _make_home()
+    await _add_membership(home_id, relationship=HouseholdRelationship.home_admin, removed=True)
+    survivor = await _add_membership(home_id, relationship=HouseholdRelationship.partner)
+    async with SessionFactory() as db:
+        assert await retained_member_id(db, home_id) == survivor

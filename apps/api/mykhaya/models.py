@@ -175,6 +175,7 @@ class FeatureKey(StrEnum):
     wish_lists = "wish_lists"
     notifications = "notifications"
     external_sharing = "external_sharing"
+    nudges = "nudges"
 
 
 class UuidTimeMixin:

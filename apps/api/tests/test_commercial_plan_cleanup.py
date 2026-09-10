@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.entitlements import get_home_subscription
+from mykhaya.entitlements import PLAN_DEFINITIONS, get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -206,26 +206,33 @@ async def test_downgrade_preserves_existing_members_but_blocks_new_invites(
 
 
 @pytest.mark.asyncio
-async def test_free_home_can_create_up_to_three_personal_routines(client: AsyncClient) -> None:
+async def test_free_home_cannot_create_any_personal_routines(client: AsyncClient) -> None:
+    """Phase 2B: Nudges (Routines + Reminders + To-dos) became Family-only
+    (nudges.enabled) — a Free Home is now blocked at that boolean module
+    gate before routines.personal.max_active is ever reached, superseding
+    the earlier "up to 3 personal routines on Free" rule. See
+    docs/architecture/commercial-entitlements.md and
+    mykhaya.routers.household_routines' require_feature/require_entitlement
+    pair. routines.personal.max_active remains declared in
+    PLAN_DEFINITIONS (data only, matching this repo's established pattern
+    for a superseded-but-not-deleted key) and its underlying numeric-limit
+    mechanism is still exercised directly below, on a Family Home with a
+    temporarily narrowed limit — see
+    test_disabling_a_personal_routine_frees_up_the_limit and
+    test_concurrent_personal_routine_creation_cannot_exceed_the_limit."""
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
-    for index in range(3):
-        response = await unsafe(
-            client,
-            "POST",
-            f"/api/v1/homes/{home_id}/routines",
-            json=_routine_body(title=f"Routine {index}"),
-        )
-        assert response.status_code == 201, response.text
 
-    fourth = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/routines", json=_routine_body(title="Routine 4")
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/routines",
+        json=_routine_body(title="Routine 1"),
     )
-    assert fourth.status_code == 403
-    detail = fourth.json()["detail"]
-    assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "routines.personal.max_active"
-    assert detail["limit"] == 3
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "plan_feature_unavailable"
+    assert detail["entitlement"] == "nudges.enabled"
 
 
 @pytest.mark.asyncio
@@ -244,9 +251,31 @@ async def test_family_home_personal_routines_are_unlimited(client: AsyncClient) 
 
 
 @pytest.mark.asyncio
-async def test_disabling_a_personal_routine_frees_up_the_limit(client: AsyncClient) -> None:
+async def test_disabling_a_personal_routine_frees_up_the_limit(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """routines.personal.max_active is unreachable in practice now (Free is
+    blocked earlier by nudges.enabled; Family is unlimited) — see
+    test_free_home_cannot_create_any_personal_routines. This temporarily
+    narrows Family's limit to 3, mirroring
+    test_concurrent_calendar_creation_cannot_exceed_the_limit's identical
+    technique, so the underlying "disabling frees a slot" mechanism (still
+    real code) keeps direct coverage."""
+    monkeypatch.setitem(
+        PLAN_DEFINITIONS,
+        SubscriptionPlan.family,
+        PLAN_DEFINITIONS[SubscriptionPlan.family].__class__(
+            plan=SubscriptionPlan.family,
+            booleans=PLAN_DEFINITIONS[SubscriptionPlan.family].booleans,
+            limits={
+                **PLAN_DEFINITIONS[SubscriptionPlan.family].limits,
+                "routines.personal.max_active": 3,
+            },
+        ),
+    )
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
     created_ids = []
     for index in range(3):
         response = await unsafe(
@@ -297,14 +326,20 @@ async def test_free_home_cannot_create_a_household_routine(client: AsyncClient) 
         f"/api/v1/homes/{home_id}/routines",
         json=_routine_body(scope="household"),
     )
+    # Phase 2B: blocked at the earlier, blanket nudges.enabled gate now
+    # (Family-only), before the endpoint body ever reaches its own
+    # routines.household.enabled check — see
+    # test_editing_a_routine_to_household_without_entitlement_is_rejected
+    # for direct coverage of that specific, still-real check.
     assert response.status_code == 403
     detail = response.json()["detail"]
     assert detail["code"] == "plan_feature_unavailable"
-    assert detail["entitlement"] == "routines.household.enabled"
+    assert detail["entitlement"] == "nudges.enabled"
 
-    # Confirm nothing was persisted at all — not even as a Personal routine.
+    # Confirm nothing was persisted — the whole module is inaccessible, not
+    # just silently empty.
     listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
-    assert listing.json()["items"] == []
+    assert listing.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -446,13 +481,32 @@ async def test_editing_a_routine_from_household_to_personal_persists(client: Asy
 
 @pytest.mark.asyncio
 async def test_editing_a_routine_to_household_without_entitlement_is_rejected(
-    client: AsyncClient,
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same silent-downgrade guard as create, but on the edit path — a Free
-    Home must not be able to flip an existing Personal routine to Household
-    by PATCH either."""
+    """Same silent-downgrade guard as create, but on the edit path — a Home
+    without routines.household.enabled must not be able to flip an existing
+    Personal routine to Household by PATCH either. routines.household.
+    enabled and nudges.enabled are both True together on every real Family
+    Home today (and both False together on Free), so this temporarily
+    decouples them — Family plus a monkeypatched
+    routines.household.enabled=False — to keep this specific, still-real
+    check under direct test, the same technique used for
+    routines.personal.max_active above."""
+    monkeypatch.setitem(
+        PLAN_DEFINITIONS,
+        SubscriptionPlan.family,
+        PLAN_DEFINITIONS[SubscriptionPlan.family].__class__(
+            plan=SubscriptionPlan.family,
+            booleans={
+                **PLAN_DEFINITIONS[SubscriptionPlan.family].booleans,
+                "routines.household.enabled": False,
+            },
+            limits=PLAN_DEFINITIONS[SubscriptionPlan.family].limits,
+        ),
+    )
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
     created = await unsafe(
         client,
         "POST",
@@ -482,6 +536,14 @@ async def test_editing_a_routine_to_household_without_entitlement_is_rejected(
 async def test_downgrade_preserves_existing_household_routine_and_allows_ordinary_edits(
     client: AsyncClient,
 ) -> None:
+    """Phase 2B: nudges.enabled becoming Family-only means a downgrade to
+    Free now denies *all* Nudges API access, not just new household-scope
+    commitments — see docs/architecture/commercial-entitlements.md 'Safe
+    downgrade principle'. The routine itself is never deleted (verified
+    directly against the database, since the ordinary GET is now also
+    blocked); re-upgrading restores full access and the same, unmodified
+    row, including the "ordinary edit" that downgrade-safety always
+    intended to protect."""
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
@@ -496,13 +558,22 @@ async def test_downgrade_preserves_existing_household_routine_and_allows_ordinar
 
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
 
-    # Still visible, still exists — never deleted by a downgrade.
-    listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
-    assert any(item["id"] == routine_id for item in listing.json()["items"])
+    # The whole module is denied now — not silently empty.
+    denied = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert denied.status_code == 403
 
-    # An ordinary edit that keeps it household-scoped is still allowed —
-    # only a *new* commitment into household scope is blocked, matching
-    # Calendar's downgrade philosophy.
+    # Never deleted by the downgrade — still there, untouched, in the
+    # database.
+    async with SessionFactory() as db:
+        row = await db.get(HouseholdRoutine, uuid.UUID(routine_id))
+        assert row is not None
+        assert row.scope == RoutineScope.household
+
+    # Re-upgrading restores full access to the exact same row, and an
+    # ordinary edit (still household-scoped) succeeds normally again.
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
+    listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/routines")
+    assert listing.status_code == 200
     current = next(item for item in listing.json()["items"] if item["id"] == routine_id)
     edit = await unsafe(
         client,
@@ -517,25 +588,27 @@ async def test_downgrade_preserves_existing_household_routine_and_allows_ordinar
 
 
 @pytest.mark.asyncio
-async def test_free_home_cannot_convert_a_personal_routine_to_household(
-    client: AsyncClient,
-) -> None:
+async def test_free_home_cannot_edit_any_routine(client: AsyncClient) -> None:
+    """Phase 2B: a Free Home cannot even attempt to convert a routine's
+    scope — PATCH is blocked at the same blanket nudges.enabled gate as
+    POST/GET, before the endpoint ever looks the routine up (a
+    non-existent id is enough to prove this — see
+    test_editing_a_routine_to_household_without_entitlement_is_rejected for
+    the routines.household.enabled-specific check on a Home that *does*
+    have Nudges access)."""
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
-    created = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/routines", json=_routine_body()
-    )
-    assert created.status_code == 201
-    routine_id = created.json()["id"]
 
     switch = await unsafe(
         client,
         "PATCH",
-        f"/api/v1/homes/{home_id}/routines/{routine_id}",
-        json=_routine_body(scope="household", expected_updated_at=created.json()["updated_at"]),
+        f"/api/v1/homes/{home_id}/routines/{uuid.uuid4()}",
+        json=_routine_body(scope="household", expected_updated_at="2026-01-01T00:00:00+00:00"),
     )
     assert switch.status_code == 403
-    assert switch.json()["detail"]["code"] == "plan_feature_unavailable"
+    detail = switch.json()["detail"]
+    assert detail["code"] == "plan_feature_unavailable"
+    assert detail["entitlement"] == "nudges.enabled"
 
 
 # ---------------------------------------------------------------------------
@@ -545,14 +618,30 @@ async def test_free_home_cannot_convert_a_personal_routine_to_household(
 
 @pytest.mark.asyncio
 async def test_concurrent_personal_routine_creation_cannot_exceed_the_limit(
-    client: AsyncClient,
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unlike Calendar's Free case (already saturated at Home-creation
-    time), Free's personal-routine limit (3) starts at 0 — a genuine
-    concurrent race window — so this demonstrates the advisory lock with
-    real concurrent requests, no artificial limit-widening needed."""
+    """routines.personal.max_active is unreachable in practice now (Free is
+    blocked earlier by nudges.enabled, Family is unlimited) — see
+    test_free_home_cannot_create_any_personal_routines. This temporarily
+    narrows Family's limit to 3 (mirroring
+    test_concurrent_calendar_creation_cannot_exceed_the_limit's identical
+    technique) to create a genuine concurrent race window, so the advisory
+    lock protecting this numeric-limit mechanism keeps direct coverage."""
+    monkeypatch.setitem(
+        PLAN_DEFINITIONS,
+        SubscriptionPlan.family,
+        PLAN_DEFINITIONS[SubscriptionPlan.family].__class__(
+            plan=SubscriptionPlan.family,
+            booleans=PLAN_DEFINITIONS[SubscriptionPlan.family].booleans,
+            limits={
+                **PLAN_DEFINITIONS[SubscriptionPlan.family].limits,
+                "routines.personal.max_active": 3,
+            },
+        ),
+    )
     home_id = await _make_home(client, _suffix())
     await _enable_notifications(home_id)
+    await _set_subscription(home_id, plan=SubscriptionPlan.family)
 
     async def attempt(index: int) -> int:
         response = await unsafe(

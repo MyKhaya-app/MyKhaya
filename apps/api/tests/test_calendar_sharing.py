@@ -17,6 +17,7 @@ from mykhaya.entitlements import get_home_subscription
 from mykhaya.household_permissions import Capability, capabilities_for
 from mykhaya.main import app
 from mykhaya.models import (
+    FeatureFlag,
     FeatureKey,
     FeatureOverride,
     HouseholdRelationship,
@@ -86,6 +87,19 @@ async def create_verified_user(client: AsyncClient, email: str, name: str) -> No
 
 async def _enable_home(home_id: str, *, family: bool = True) -> None:
     async with SessionFactory() as db:
+        # External sharing is release_state=beta — its global FeatureFlag is
+        # off by default (Phase 2A's PCC-platform-precedence fix means a
+        # Home override alone can no longer make it reachable). This suite
+        # exercises the feature's real behaviour, not platform-rollout
+        # gating itself, so it explicitly opts the platform in, exactly as a
+        # PCC operator piloting the beta would.
+        flag = await db.scalar(
+            select(FeatureFlag).where(FeatureFlag.key == FeatureKey.external_sharing)
+        )
+        if flag is None:
+            db.add(FeatureFlag(key=FeatureKey.external_sharing, enabled=True))
+        else:
+            flag.enabled = True
         for key in (FeatureKey.calendar, FeatureKey.external_sharing, FeatureKey.notifications):
             db.add(FeatureOverride(feature_key=key, group_id=uuid.UUID(home_id), enabled=True))
         if family:

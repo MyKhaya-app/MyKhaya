@@ -41,6 +41,7 @@ from mykhaya.notifications.meal_plans import (
     notify_updated,
     participant_ids,
 )
+from mykhaya.routers.lists import _list_access, _require_list_writable
 from mykhaya.schemas import (
     AddIngredientsToListRequest,
     AddIngredientsToListResponse,
@@ -895,6 +896,12 @@ async def add_ingredients_to_list(
     )
     if target_list is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That list could not be found")
+    # This writes HouseholdListItem rows directly (not through
+    # routers.lists' own endpoints) — it must independently respect the
+    # same over-the-plan-limit restriction those endpoints enforce, or a
+    # read_only_due_to_plan List could be mutated through this back door.
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, target_list.id)
 
     ingredients = (
         await db.scalars(

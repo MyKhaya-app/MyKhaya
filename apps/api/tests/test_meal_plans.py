@@ -206,6 +206,15 @@ async def test_meal_plans_feature_off_returns_404_even_on_family(client: AsyncCl
         subscription.plan = SubscriptionPlan.family
         await db.commit()
 
+    # Meal Plans is globally released (0063_feature_flag_backfill), so
+    # explicitly disable it for this one Home via a FeatureOverride to
+    # exercise the "feature gate is independent of commercial entitlement"
+    # path — an absent override now correctly inherits the global released
+    # state rather than defaulting to disabled.
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.meals, group_id=home_id, enabled=False))
+        await db.commit()
+
     response = await client.get(f"/api/v1/homes/{home_id}/meals")
     assert response.status_code == 404
 
@@ -695,14 +704,19 @@ async def test_billing_status_exposes_meals_enabled_for_the_frontend_locked_stat
 
 @pytest.mark.asyncio
 async def test_billing_status_exposes_lists_enabled(client: AsyncClient) -> None:
+    """Lists is included on both plans (Phase 2B) — the actual Free/Family
+    differentiator is list_usage.limit (lists.max_lists), not lists_enabled
+    itself."""
     await create_verified_user(client, unique_email("lists-billing"), "Lists Billing User")
     home_id = await create_home(client, "Lists Billing Free Home", plan=SubscriptionPlan.free)
     free_status = await client.get(f"/api/v1/groups/{home_id}/billing")
-    assert free_status.json()["lists_enabled"] is False
+    assert free_status.json()["lists_enabled"] is True
+    assert free_status.json()["list_usage"]["limit"] == 2
 
     home_id_family = await create_home(client, "Lists Billing Family Home")
     family_status = await client.get(f"/api/v1/groups/{home_id_family}/billing")
     assert family_status.json()["lists_enabled"] is True
+    assert family_status.json()["list_usage"]["limit"] is None
 
 
 # ---------------------------------------------------------------------------
