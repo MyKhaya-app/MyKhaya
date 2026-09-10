@@ -51,7 +51,7 @@ _MODULE_ENTITLEMENT_KEYS: dict[str, str] = {
 }
 
 
-async def _module_state(
+async def module_state(
     db: AsyncSession, group_id: uuid.UUID, definition: ModuleDefinition
 ) -> tuple[bool, bool, bool, str | None]:
     """Returns (platform_ok, entitled, effective_enabled, blocked_by) for one
@@ -59,7 +59,18 @@ async def _module_state(
     Home feature-flag layer (mykhaya.features) with the commercial-
     entitlement layer (mykhaya.entitlements) for *display* purposes. Never
     used for API authorization itself — every router still calls
-    require_feature/require_entitlement independently at its own boundary."""
+    require_feature/require_entitlement independently at its own boundary.
+
+    Public (not `_module_state`) since routers.platform's PCC Home detail
+    screen reuses this exact same computation for its own operator-facing
+    module-state breakdown (PCC Polish Phase 1) — deliberately the same
+    resolver both consumers share, never a second parallel one.
+
+    blocked_by is "platform"/"plan"/"home"/None, in that priority order —
+    "home" only ever means the Home's own FeatureOverride (or its absence,
+    combined with the module's own default) currently resolves to disabled
+    once platform and plan have both already allowed it; it is never a
+    substitute for "plan" or "platform", which always take priority."""
     if definition.release_state == ReleaseState.core:
         return True, True, True, None
     platform_ok = await platform_feature_enabled(db, FeatureKey(definition.id))
@@ -69,7 +80,14 @@ async def _module_state(
     )
     home_state = await is_feature_enabled(db, definition.id, group_id)
     effective_enabled = entitled and home_state
-    blocked_by = "platform" if not platform_ok else ("plan" if not entitled else None)
+    if not platform_ok:
+        blocked_by = "platform"
+    elif not entitled:
+        blocked_by = "plan"
+    elif not home_state:
+        blocked_by = "home"
+    else:
+        blocked_by = None
     return platform_ok, entitled, effective_enabled, blocked_by
 
 
@@ -112,7 +130,7 @@ async def feature_management(
     for definition in household_modules():
         if not definition.home_admin_manageable:
             continue
-        _platform_ok, entitled, enabled, blocked_by = await _module_state(db, group_id, definition)
+        _platform_ok, entitled, enabled, blocked_by = await module_state(db, group_id, definition)
         rows.append(
             HouseholdModuleResponse(
                 id=definition.id,
@@ -160,7 +178,7 @@ async def navigation_modules(
         # hidden modules (Tasks/Plans) on its own.
         if not definition.home_admin_manageable:
             continue
-        _platform_ok, entitled, enabled, _blocked_by = await _module_state(db, group_id, definition)
+        _platform_ok, entitled, enabled, _blocked_by = await module_state(db, group_id, definition)
         if not enabled:
             continue
         rows.append(
@@ -298,7 +316,7 @@ async def update_household_feature(
         },
     )
     await db.commit()
-    _platform_ok, entitled, effective_enabled, blocked_by = await _module_state(
+    _platform_ok, entitled, effective_enabled, blocked_by = await module_state(
         db, group_id, definition
     )
     return HouseholdModuleResponse(

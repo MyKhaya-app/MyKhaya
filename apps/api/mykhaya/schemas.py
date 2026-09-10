@@ -401,11 +401,15 @@ class HouseholdModuleResponse(BaseModel):
     # entitlement key (e.g. Calendar, always included on both plans).
     entitled: bool = True
     # Why a non-core module currently resolves unavailable, from the Home
-    # Admin's point of view — "platform" outranks "plan" (matching the
-    # agreed authority hierarchy: PCC platform availability, then
-    # commercial entitlement, then Home Admin enablement). None when the
-    # module is available (whether or not the Home Admin has toggled it on).
-    blocked_by: Literal["platform", "plan"] | None = None
+    # Admin's point of view — "platform" outranks "plan" outranks "home"
+    # (matching the agreed authority hierarchy: PCC platform availability,
+    # then commercial entitlement, then Home Admin enablement). "home"
+    # means platform and plan both already allow it, but the Home's own
+    # FeatureOverride currently resolves it disabled — a real, actionable
+    # state (the Home Admin's own toggle controls it), never a genuine
+    # block the way "platform"/"plan" are. None when the module is
+    # currently enabled.
+    blocked_by: Literal["platform", "plan", "home"] | None = None
 
 
 class HouseholdFeatureUpdate(StrictModel):

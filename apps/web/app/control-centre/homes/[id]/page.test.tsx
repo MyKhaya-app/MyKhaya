@@ -30,11 +30,74 @@ const activeHome = {
   members: [{ user_id: "u1", display_name: "Jane Smith", email: "jane@example.com", role: "owner" }],
   pending_invitations: [{ id: "inv-1", email: "invitee@example.com", role: "member", expires_at: "2026-12-01T00:00:00Z" }],
   feature_overrides: [{ feature: "calendar", enabled: true }],
+  modules: [
+    {
+      id: "calendar",
+      name: "Calendar",
+      platform_enabled: true,
+      entitled: true,
+      home_override: true,
+      effective_enabled: true,
+      blocked_by: null,
+      toggleable: true,
+    },
+    {
+      id: "nudges",
+      name: "Nudges",
+      platform_enabled: true,
+      entitled: false,
+      home_override: null,
+      effective_enabled: false,
+      blocked_by: "plan" as const,
+      toggleable: true,
+    },
+    {
+      id: "meals",
+      name: "Meal Plans",
+      platform_enabled: false,
+      entitled: true,
+      home_override: null,
+      effective_enabled: false,
+      blocked_by: "platform" as const,
+      toggleable: true,
+    },
+    {
+      id: "wish_lists",
+      name: "Wishlists",
+      platform_enabled: true,
+      entitled: true,
+      home_override: false,
+      effective_enabled: false,
+      blocked_by: "home" as const,
+      toggleable: true,
+    },
+  ],
   notes: [{ id: "note-1", body: "Called about billing.", created_at: "2026-02-01T00:00:00Z" }],
 };
 const suspendedHome = { ...activeHome, active: false, lifecycle: "disabled" as const };
 const archivedHome = { ...activeHome, active: false, lifecycle: "archived" as const };
 const emptyHome = { ...activeHome, members: [], pending_invitations: [], notes: [] };
+
+// Realistic module states as the backend would actually compute them for a
+// Free vs Family Home (mykhaya.entitlements.PLAN_DEFINITIONS) — platform is
+// on and no Home override exists for any of these in either fixture, so
+// only entitlement varies.
+function freeModules() {
+  return [
+    { id: "calendar", name: "Calendar", platform_enabled: true, entitled: true, home_override: null, effective_enabled: true, blocked_by: null, toggleable: true },
+    { id: "shopping", name: "Lists", platform_enabled: true, entitled: true, home_override: null, effective_enabled: true, blocked_by: null, toggleable: true },
+    { id: "nudges", name: "Nudges", platform_enabled: true, entitled: false, home_override: null, effective_enabled: false, blocked_by: "plan" as const, toggleable: true },
+    { id: "meals", name: "Meal Plans", platform_enabled: true, entitled: false, home_override: null, effective_enabled: false, blocked_by: "plan" as const, toggleable: true },
+    { id: "wish_lists", name: "Wishlists", platform_enabled: true, entitled: false, home_override: null, effective_enabled: false, blocked_by: "plan" as const, toggleable: true },
+  ];
+}
+
+function familyModules() {
+  return freeModules().map((module) => ({ ...module, entitled: true, effective_enabled: true, blocked_by: null }));
+}
+
+const freeHome = { ...activeHome, modules: freeModules() };
+const familyHome = { ...activeHome, modules: familyModules() };
 
 function findDialog(name: RegExp | string) {
   return screen.findByRole("dialog", { name });
@@ -120,10 +183,10 @@ describe("Home detail", () => {
   it("requires confirmation and a reason to toggle a feature flag, and sends it to the exact endpoint", async () => {
     render(<DetailPage />);
     await screen.findByText("The Smiths");
-    // calendar is enabled in the fixture, so its action is "Disable".
-    const calendarRow = screen.getByText("calendar").closest("article")!;
+    // Calendar is effectively enabled in the fixture, so its action is "Disable".
+    const calendarRow = screen.getByText("Calendar").closest("article")!;
     await userEvent.click(within(calendarRow).getByRole("button", { name: "Disable" }));
-    const dialog = await findDialog(/Disable calendar/i);
+    const dialog = await findDialog(/Disable Calendar/i);
     await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Turning off calendar module");
     await userEvent.click(within(dialog).getByRole("button", { name: "Disable" }));
     await waitFor(() =>
@@ -133,6 +196,175 @@ describe("Home detail", () => {
         confirmed: true,
       }),
     );
+  });
+
+  // PCC Polish Phase 1: operators need to understand WHY a module resolves
+  // the way it does, not just a flattened Enabled/Disabled — see
+  // routers.platform.home_detail's modules field and
+  // routers.features.module_state.
+  it("shows a platform-blocked module's reason distinctly", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Meal Plans").closest("article")!;
+    expect(within(row).getByText("Effective: Blocked by platform")).toBeInTheDocument();
+    expect(within(row).getByText("Platform: Disabled")).toBeInTheDocument();
+  });
+
+  it("shows a plan-blocked module's reason distinctly", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Nudges").closest("article")!;
+    expect(within(row).getByText("Effective: Not included in plan")).toBeInTheDocument();
+    expect(within(row).getByText("Plan: Not included")).toBeInTheDocument();
+  });
+
+  it("shows a Home-disabled module distinctly from platform/plan blocked", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Wishlists").closest("article")!;
+    expect(within(row).getByText("Effective: Disabled by Home")).toBeInTheDocument();
+    expect(within(row).getByText("Platform: Enabled")).toBeInTheDocument();
+    expect(within(row).getByText("Plan: Included")).toBeInTheDocument();
+    expect(within(row).getByText("Home: Disabled")).toBeInTheDocument();
+  });
+
+  it("shows an enabled/inherited module truthfully", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Calendar").closest("article")!;
+    expect(within(row).getByText("Effective: Enabled")).toBeInTheDocument();
+    expect(within(row).getByText("Home: Enabled")).toBeInTheDocument();
+  });
+
+  it("never shows a platform-off module as effectively enabled even when the Home override is on", async () => {
+    // Meal Plans: platform disabled, entitled true, no Home override — a
+    // Home override can never bypass a platform-wide OFF (see
+    // mykhaya.features.is_feature_enabled).
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Meal Plans").closest("article")!;
+    expect(within(row).queryByText("Effective: Enabled")).not.toBeInTheDocument();
+  });
+
+  it("shows Nudges/Meal Plans/Wishlists as plan-blocked on a Free Home, and Calendar/Lists as included", async () => {
+    get.mockResolvedValue(freeHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    for (const name of ["Nudges", "Meal Plans", "Wishlists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByText("Effective: Not included in plan")).toBeInTheDocument();
+    }
+    for (const name of ["Calendar", "Lists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByText("Effective: Enabled")).toBeInTheDocument();
+      expect(within(row).getByText("Plan: Included")).toBeInTheDocument();
+    }
+  });
+
+  it("shows every optional module as entitled and enabled on a Family Home", async () => {
+    get.mockResolvedValue(familyHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    for (const name of ["Calendar", "Lists", "Nudges", "Meal Plans", "Wishlists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByText("Effective: Enabled")).toBeInTheDocument();
+      expect(within(row).getByText("Plan: Included")).toBeInTheDocument();
+    }
+  });
+
+  // PCC Polish Phase 1 (correction): the Home enable/disable control must
+  // never be clickable when the module is blocked by platform or plan — a
+  // Home override can never make it effectively available from this layer
+  // (see mykhaya.features.is_feature_enabled), so offering the control
+  // there would let an operator attempt a meaningless override.
+  it("disables the Home control for a platform-blocked module", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Meal Plans").closest("article")!;
+    expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(within(row).getByText("Controlled by platform")).toBeInTheDocument();
+  });
+
+  it("disables the Home control for a plan-blocked module", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Nudges").closest("article")!;
+    expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(within(row).getByText("Not included in this Home's plan")).toBeInTheDocument();
+  });
+
+  it("keeps the Home control actionable for a Home-disabled module, so it can still be enabled", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Wishlists").closest("article")!;
+    const button = within(row).getByRole("button", { name: "Enable" });
+    expect(button).not.toBeDisabled();
+  });
+
+  it("keeps the Home control actionable for an enabled module, so it can still be disabled", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Calendar").closest("article")!;
+    const button = within(row).getByRole("button", { name: "Disable" });
+    expect(button).not.toBeDisabled();
+  });
+
+  it("keeps Calendar/Lists actionable on a Free Home, since they're included", async () => {
+    get.mockResolvedValue(freeHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    for (const name of ["Calendar", "Lists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByRole("button", { name: "Disable" })).not.toBeDisabled();
+    }
+  });
+
+  it("disables Nudges/Meal Plans/Wishlists on a Free Home, since none are included in plan", async () => {
+    get.mockResolvedValue(freeHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    for (const name of ["Nudges", "Meal Plans", "Wishlists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
+    }
+  });
+
+  it("keeps every entitled module actionable on a Family Home", async () => {
+    get.mockResolvedValue(familyHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    for (const name of ["Calendar", "Lists", "Nudges", "Meal Plans", "Wishlists"]) {
+      const row = screen.getByText(name).closest("article")!;
+      expect(within(row).getByRole("button", { name: "Disable" })).not.toBeDisabled();
+    }
+  });
+
+  it("disables a platform-blocked module even on a Family Home that is otherwise entitled", async () => {
+    const platformBlockedFamilyHome = {
+      ...familyHome,
+      modules: familyHome.modules.map((module) =>
+        module.id === "meals"
+          ? { ...module, platform_enabled: false, effective_enabled: false, blocked_by: "platform" as const }
+          : module,
+      ),
+    };
+    get.mockResolvedValue(platformBlockedFamilyHome);
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    const row = screen.getByText("Meal Plans").closest("article")!;
+    expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(within(row).getByText("Effective: Blocked by platform")).toBeInTheDocument();
+  });
+
+  it("never shows Notifications, External sharing, Tasks or Plans as ordinary Home modules", async () => {
+    render(<DetailPage />);
+    await screen.findByText("The Smiths");
+    // Scoped to the module-availability section specifically — PlatformShell's
+    // own sidebar legitimately has an unrelated "Notifications" nav link.
+    const section = screen.getByRole("heading", { name: "Module availability" }).closest("section")!;
+    for (const nonModule of ["Notifications", "External sharing", "Tasks", "Plans"]) {
+      expect(within(section).queryByText(nonModule)).not.toBeInTheDocument();
+    }
   });
 
   it("adds a note without requiring a reason and reloads", async () => {

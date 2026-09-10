@@ -228,3 +228,198 @@ describe("SubscriptionDetailPage", () => {
     );
   });
 });
+
+// PCC Polish Phase 1: the final governance audit found live, enforced
+// entitlements (Lists, Wishlists) still labelled "Planned" here, left over
+// from before those modules shipped — see mykhaya.entitlements.
+// PLAN_DEFINITIONS and each module's router for what's actually enforced
+// today. These tests pin the corrected classification directly against a
+// full entitlements fixture, independent of plan (Free vs Family only
+// changes the *value* shown, never which badge — if any — a key gets).
+describe("SubscriptionDetailPage — plan capability labels", () => {
+  function detailWithEntitlements(overrides: Partial<SubscriptionDetail["entitlements"]>) {
+    const base = freeDetail();
+    return {
+      ...base,
+      entitlements: {
+        plan: "free" as const,
+        booleans: {
+          "notes.enabled": true,
+          "lists.enabled": true,
+          "chores.enabled": false,
+          "wishlists.enabled": false,
+          "routines.household.enabled": false,
+          "events.shared.enabled": false,
+          "members.external_invites.enabled": false,
+          "family_plans.enabled": false,
+          "support.priority.enabled": false,
+          "meals.enabled": false,
+          "nudges.enabled": false,
+        },
+        limits: {
+          "calendar.max_categories": 1,
+          "calendar.max_calendars": 1,
+          "home.max_members": 1,
+          "routines.personal.max_active": 3,
+          "lists.max_lists": 2,
+        },
+        ...overrides,
+      },
+    };
+  }
+
+  function capabilityRow(labelText: string) {
+    const cell = screen.getByRole("cell", { name: labelText });
+    const row = cell.closest("tr");
+    if (!row) throw new Error(`No table row found for capability "${labelText}"`);
+    return row as HTMLElement;
+  }
+
+  it("does not label Lists as Planned", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Lists");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).getByText("Up to 2")).toBeInTheDocument();
+  });
+
+  it("does not label Wishlists as Planned", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me"
+        ? Promise.resolve(actor)
+        : Promise.resolve(
+            detailWithEntitlements({
+              booleans: {
+                ...detailWithEntitlements({}).entitlements.booleans,
+                "wishlists.enabled": true,
+              },
+            }),
+          ),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Gift Wishlists");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).getByText("Included")).toBeInTheDocument();
+  });
+
+  it("represents Meal Plans as live/enforced, not deferred", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Meal Plans");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
+  });
+
+  it("represents Nudges as live/enforced, not deferred", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Nudges (Routines, Reminders, To-dos)");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
+  });
+
+  it("does not show events.shared.enabled as deferred", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Shared family events");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
+  });
+
+  it("does not show members.external_invites.enabled as deferred", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Invite external members");
+    expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
+  });
+
+  it("keeps Notes as future/deferred (Contract only)", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Notes");
+    expect(within(row).getByText("Contract only")).toBeInTheDocument();
+  });
+
+  it("keeps Chores as future/deferred (Contract only)", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Chores");
+    expect(within(row).getByText("Contract only")).toBeInTheDocument();
+  });
+
+  it("keeps Family Plans as future/deferred (Contract only)", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Family Plans");
+    expect(within(row).getByText("Contract only")).toBeInTheDocument();
+  });
+
+  it("keeps Priority Support as future/deferred (Contract only) since it remains unenforced", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Priority Support");
+    expect(within(row).getByText("Contract only")).toBeInTheDocument();
+  });
+
+  it("shows Nudges-gated Personal routines as Not included on Free rather than a reachable-looking number", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Personal routines (within Nudges)");
+    expect(within(row).getByText("Not included")).toBeInTheDocument();
+  });
+
+  it("shows the real Personal routines limit once Nudges is included (Family)", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me"
+        ? Promise.resolve(actor)
+        : Promise.resolve(
+            detailWithEntitlements({
+              booleans: {
+                ...detailWithEntitlements({}).entitlements.booleans,
+                "nudges.enabled": true,
+              },
+              limits: {
+                ...detailWithEntitlements({}).entitlements.limits,
+                "routines.personal.max_active": null,
+              },
+            }),
+          ),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    const row = capabilityRow("Personal routines (within Nudges)");
+    expect(within(row).getByText("Unlimited")).toBeInTheDocument();
+  });
+});

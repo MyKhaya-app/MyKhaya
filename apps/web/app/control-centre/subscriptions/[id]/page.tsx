@@ -37,7 +37,10 @@ import { CcConfirmDialog } from "@/components/control-centre/dialog";
 //
 // "Planned" — the entitlement is real commercial data, but the module
 // behind it is still globally hidden (Feature Management), so it isn't a
-// usable feature for anyone yet, on any plan.
+// usable feature for anyone yet, on any plan. Currently empty (PCC Polish
+// Phase 1): the only hidden modules today (Tasks, Plans) have no backing
+// PLAN_DEFINITIONS key at all, so nothing currently qualifies — kept
+// declared, not removed, for whenever a hidden module does gain one.
 //
 // "Contract only" — there is no module, route, or component of any kind
 // for this capability, released or hidden. It exists purely as a pinned
@@ -45,9 +48,18 @@ import { CcConfirmDialog } from "@/components/control-centre/dialog";
 // whenever the feature is eventually built, it has to be wired through the
 // central entitlement service from day one rather than inventing its own
 // plan check. This is a stronger, more explicit statement than "planned" —
-// there's nothing to release yet, by design.
-const PLANNED_KEYS = new Set(["notes.enabled", "lists.enabled", "chores.enabled", "wishlists.enabled"]);
-const CONTRACT_ONLY_KEYS = new Set(["family_plans.enabled", "support.priority.enabled"]);
+// there's nothing to release yet, by design. Notes and Chores belong here,
+// not "Planned" (PCC Polish Phase 1 correction) — neither has a FeatureKey
+// or module_registry entry of any kind (unlike Tasks/Plans, which are
+// genuinely hidden *modules*), so there is nothing for either to be
+// "planned" behind.
+const PLANNED_KEYS = new Set<string>([]);
+const CONTRACT_ONLY_KEYS = new Set([
+  "notes.enabled",
+  "chores.enabled",
+  "family_plans.enabled",
+  "support.priority.enabled",
+]);
 
 type CapabilityRow = {
   key: string;
@@ -68,8 +80,11 @@ function includedDisplay(enabled: boolean | undefined): string {
 function buildCapabilityRows(entitlements: Entitlements): CapabilityRow[] {
   const { booleans, limits } = entitlements;
   const maxMembers = limits["home.max_members"];
+  const maxCalendars = limits["calendar.max_calendars"];
   const maxCategories = limits["calendar.max_categories"];
+  const maxLists = limits["lists.max_lists"];
   const maxPersonalRoutines = limits["routines.personal.max_active"];
+  const nudgesEnabled = Boolean(booleans["nudges.enabled"]);
   const boolRow = (key: string, label: string): CapabilityRow => ({
     key,
     label,
@@ -88,30 +103,49 @@ function buildCapabilityRows(entitlements: Entitlements): CapabilityRow[] {
     liveRow("people", "People", peopleDisplay(maxMembers)),
     liveRow("calendar", "Calendar", "Included"),
     liveRow(
+      "calendar.max_calendars",
+      "Calendars",
+      maxCalendars === null || maxCalendars === undefined ? "Unlimited" : String(maxCalendars),
+    ),
+    liveRow(
       "calendar.max_categories",
       "Event categories",
       maxCategories === null || maxCategories === undefined ? "Unlimited" : String(maxCategories),
     ),
     liveRow("events", "Events", "Included"),
-    boolRow("notes.enabled", "Notes"),
+    boolRow("events.shared.enabled", "Shared family events"),
+    liveRow(
+      "lists.max_lists",
+      "Lists",
+      maxLists === null || maxLists === undefined ? "Unlimited" : `Up to ${maxLists}`,
+    ),
+    boolRow("meals.enabled", "Meal Plans"),
+    boolRow("wishlists.enabled", "Gift Wishlists"),
+    boolRow("nudges.enabled", "Nudges (Routines, Reminders, To-dos)"),
+    // Both routine limits only ever apply once Nudges itself is included —
+    // see mykhaya.routers.household_routines, which requires nudges.enabled
+    // before either is ever reached. Showing "Up to 3" here for a Free Home
+    // (nudges.enabled=false) would misrepresent a number Free customers can
+    // never actually reach (PCC Polish Phase 1 correction) — the module
+    // gate, not the number, is what determines availability.
     liveRow(
       "routines.personal.max_active",
-      "Personal routines",
-      maxPersonalRoutines === null || maxPersonalRoutines === undefined
-        ? "Unlimited"
-        : `Up to ${maxPersonalRoutines}`,
+      "Personal routines (within Nudges)",
+      nudgesEnabled
+        ? maxPersonalRoutines === null || maxPersonalRoutines === undefined
+          ? "Unlimited"
+          : `Up to ${maxPersonalRoutines} each`
+        : "Not included",
     ),
-    boolRow("routines.household.enabled", "Household routines"),
-    boolRow("events.shared.enabled", "Shared family events"),
-    boolRow("lists.enabled", "Lists"),
-    boolRow("chores.enabled", "Chores"),
-    boolRow("wishlists.enabled", "Gift Wishlists"),
+    boolRow("routines.household.enabled", "Household routines (within Nudges)"),
     liveRow(
       "invite_household_members",
       "Invite household members",
       includedDisplay(maxMembers === null || maxMembers === undefined || maxMembers > 1),
     ),
     boolRow("members.external_invites.enabled", "Invite external members"),
+    boolRow("notes.enabled", "Notes"),
+    boolRow("chores.enabled", "Chores"),
     boolRow("family_plans.enabled", "Family Plans"),
     boolRow("support.priority.enabled", "Priority Support"),
   ];

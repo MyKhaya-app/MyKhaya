@@ -116,7 +116,12 @@ from mykhaya.models import (
     Wishlist,
     WorkerJobRecord,
 )
-from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
+from mykhaya.module_registry import (
+    ReleaseState,
+    feature_modules,
+    household_modules,
+    module_definition,
+)
 from mykhaya.notifications.default_templates import (
     DEFAULT_TEMPLATE_VERSION,
     SAMPLE_VARIABLES,
@@ -259,6 +264,7 @@ from mykhaya.platform_settings import (
     validate_setting_value,
 )
 from mykhaya.rate_limit import enforce_rate_limit
+from mykhaya.routers.features import module_state
 from mykhaya.secrets_crypto import (
     SecretDecryptionError,
     decrypt_secret,
@@ -3455,6 +3461,40 @@ async def home_detail(
     overrides = (
         await db.scalars(select(FeatureOverride).where(FeatureOverride.group_id == group_id))
     ).all()
+    override_by_feature = {row.feature_key.value: row.enabled for row in overrides}
+    # PCC Polish Phase 1: the current optional Home modules only — the exact
+    # same home_admin_manageable filter the Home Admin Module Management
+    # screen itself uses (mykhaya.routers.features.feature_management), so
+    # Notifications (core platform infrastructure) and External sharing (a
+    # Calendar capability, not a standalone module) never appear here as if
+    # they were ordinary Home modules; household_modules() already excludes
+    # hidden modules (Tasks, Plans) on its own. Reuses module_state — the
+    # same platform/plan/Home resolver the Home Admin screen and consumer
+    # navigation listing already share — rather than a second, parallel
+    # computation.
+    modules = []
+    for definition in household_modules():
+        if not definition.home_admin_manageable or definition.release_state == ReleaseState.core:
+            continue
+        platform_ok, entitled, effective_enabled, blocked_by = await module_state(
+            db, group_id, definition
+        )
+        modules.append(
+            {
+                "id": definition.id,
+                "name": definition.name,
+                "platform_enabled": platform_ok,
+                "entitled": entitled,
+                # None = no Home override row (inherits platform/plan) —
+                # distinct from a row that explicitly says enabled=False,
+                # even though both can currently resolve to the same
+                # effective_enabled. See mykhaya.features.is_feature_enabled.
+                "home_override": override_by_feature.get(definition.id),
+                "effective_enabled": effective_enabled,
+                "blocked_by": blocked_by,
+                "toggleable": definition.household_toggleable,
+            }
+        )
     notes = (
         await db.scalars(
             select(AdministrativeNote)
@@ -3491,6 +3531,7 @@ async def home_detail(
         "feature_overrides": [
             {"feature": row.feature_key, "enabled": row.enabled} for row in overrides
         ],
+        "modules": modules,
         "notes": [{"id": row.id, "body": row.body, "created_at": row.created_at} for row in notes],
     }
 

@@ -382,3 +382,111 @@ async def test_complimentary_expiry_in_the_future_can_be_granted(
     )
     assert response.status_code == 200
     assert response.json()["complimentary_expires_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# PCC Polish Phase 1 — GET /platform/homes/{id}'s "modules" field: reuses
+# mykhaya.routers.features.module_state (the same resolver the Home Admin
+# Module Management screen and consumer navigation already share) rather
+# than a second parallel computation, restricted to the current optional
+# Home modules exactly like that screen already is.
+# ---------------------------------------------------------------------------
+
+
+def _module(modules: list[dict], module_id: str) -> dict:
+    return next(row for row in modules if row["id"] == module_id)
+
+
+@pytest.mark.asyncio
+async def test_free_home_module_state_shows_calendar_included_and_nudges_plan_blocked(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    modules = detail.json()["modules"]
+
+    calendar = _module(modules, "calendar")
+    assert calendar["entitled"] is True
+    assert calendar["platform_enabled"] is True
+    assert calendar["effective_enabled"] is True
+    assert calendar["blocked_by"] is None
+
+    for module_id in ("nudges", "meals", "wish_lists"):
+        module = _module(modules, module_id)
+        assert module["entitled"] is False
+        assert module["effective_enabled"] is False
+        assert module["blocked_by"] == "plan"
+
+    module_ids = {row["id"] for row in modules}
+    # Part C: never shown as ordinary Home modules on this screen.
+    for excluded in ("notifications", "external_sharing", "tasks", "plans"):
+        assert excluded not in module_ids
+
+
+@pytest.mark.asyncio
+async def test_family_home_module_state_shows_every_optional_module_entitled(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    granted = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "complimentary_reason": "Test Family entitlement",
+            "confirmed": True,
+            "reason": "Verifying module state for Family",
+        },
+    )
+    assert granted.status_code == 200, granted.text
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    modules = detail.json()["modules"]
+    for module_id in ("calendar", "shopping", "nudges", "meals", "wish_lists"):
+        module = _module(modules, module_id)
+        assert module["entitled"] is True, module_id
+        assert module["effective_enabled"] is True, module_id
+        assert module["blocked_by"] is None, module_id
+
+
+@pytest.mark.asyncio
+async def test_home_admin_disabling_a_module_shows_home_blocked_reason(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """A module the Home's own FeatureOverride currently disables must be
+    distinguishable from platform/plan blocked (Part B) — and toggling that
+    override can never make an actually plan-blocked module read as
+    effectively enabled (a Home override can only narrow/opt back into what
+    platform+plan already allow — see mykhaya.features.is_feature_enabled)."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    disabled = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/feature-flags/calendar",
+        json={"enabled": False, "confirmed": True, "reason": "Testing Home-disabled state"},
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    calendar = _module(detail.json()["modules"], "calendar")
+    assert calendar["platform_enabled"] is True
+    assert calendar["entitled"] is True
+    assert calendar["home_override"] is False
+    assert calendar["effective_enabled"] is False
+    assert calendar["blocked_by"] == "home"

@@ -31,6 +31,28 @@ import {
 
 type Lifecycle = "active" | "disabled" | "archived";
 
+// PCC Polish Phase 1: the current optional Home modules only, exactly as
+// the backend already filters them (home_admin_manageable, non-hidden,
+// non-core — see routers.platform.home_detail) — Notifications, External
+// sharing, Tasks and Plans never appear in this list at all, matching the
+// Home Admin Module Management screen's own established exclusion. Reuses
+// mykhaya.routers.features.module_state, the same platform/plan/Home
+// resolver that screen and consumer navigation already share, rather than
+// a second parallel computation.
+type ModuleState = {
+  id: string;
+  name: string;
+  platform_enabled: boolean;
+  entitled: boolean;
+  // null = no Home FeatureOverride row (inherits platform/plan); otherwise
+  // the row's own enabled value — distinct from effective_enabled, which
+  // also factors in platform/plan.
+  home_override: boolean | null;
+  effective_enabled: boolean;
+  blocked_by: "platform" | "plan" | "home" | null;
+  toggleable: boolean;
+};
+
 type HomeDetail = {
   id: string;
   name: string;
@@ -40,24 +62,27 @@ type HomeDetail = {
   members: { user_id: string; display_name: string; email: string; role: string }[];
   pending_invitations: { id: string; email: string; role: string; expires_at: string }[];
   feature_overrides: { feature: string; enabled: boolean }[];
+  modules: ModuleState[];
   notes: { id: string; body: string; created_at: string }[];
 };
-
-const FEATURES = [
-  "calendar",
-  "tasks",
-  "shopping",
-  "meals",
-  "plans",
-  "wish_lists",
-  "notifications",
-  "external_sharing",
-] as const;
 
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
-const featureLabel = (feature: string) => feature.replaceAll("_", " ");
+// Truthful per the agreed authority order (platform, then plan, then Home
+// Admin enablement) — never implies a Home override can bypass platform OFF
+// or a plan restriction. See ModuleState.blocked_by.
+function effectiveStateLabel(module: ModuleState): { text: string; tone: "success" | "neutral" } {
+  if (module.effective_enabled) return { text: "Enabled", tone: "success" };
+  if (module.blocked_by === "platform") return { text: "Blocked by platform", tone: "neutral" };
+  if (module.blocked_by === "plan") return { text: "Not included in plan", tone: "neutral" };
+  return { text: "Disabled by Home", tone: "neutral" };
+}
+
+function homeOverrideLabel(module: ModuleState): string {
+  if (module.home_override === null) return "Inherit";
+  return module.home_override ? "Enabled" : "Disabled";
+}
 
 export default function PlatformHomeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -71,7 +96,9 @@ export default function PlatformHomeDetail() {
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [featureDialog, setFeatureDialog] = useState<{ feature: string; enabled: boolean } | null>(null);
+  const [featureDialog, setFeatureDialog] = useState<
+    { feature: string; name: string; enabled: boolean } | null
+  >(null);
   const [moveMemberTarget, setMoveMemberTarget] = useState<HomeDetail["members"][number] | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBlockers, setDeleteBlockers] = useState<string[] | null>(null);
@@ -124,25 +151,27 @@ export default function PlatformHomeDetail() {
     },
   );
 
-  const setFeature = guarded(async (feature: string, enabled: boolean, formData: FormData) => {
-    setFeatureDialog(null);
-    setBusy(`feature:${feature}`);
-    setError("");
-    try {
-      await platformApi.put(`/homes/${encodeURIComponent(id)}/feature-flags/${feature}`, {
-        enabled,
-        reason: formData.get("audit_reason"),
-        confirmed: true,
-      });
-      setMessage(`${featureLabel(feature)} override updated.`);
-      await load();
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 403) throw cause;
-      setError(safeError(cause, `Unable to update the ${featureLabel(feature)} override.`));
-    } finally {
-      setBusy("");
-    }
-  });
+  const setFeature = guarded(
+    async (feature: string, name: string, enabled: boolean, formData: FormData) => {
+      setFeatureDialog(null);
+      setBusy(`feature:${feature}`);
+      setError("");
+      try {
+        await platformApi.put(`/homes/${encodeURIComponent(id)}/feature-flags/${feature}`, {
+          enabled,
+          reason: formData.get("audit_reason"),
+          confirmed: true,
+        });
+        setMessage(`${name} override updated.`);
+        await load();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 403) throw cause;
+        setError(safeError(cause, `Unable to update the ${name} override.`));
+      } finally {
+        setBusy("");
+      }
+    },
+  );
 
   async function openDelete() {
     setDeleteBlockers(null);
@@ -310,30 +339,66 @@ export default function PlatformHomeDetail() {
               </CcRecordList>
             </CcSection>
 
-            <CcSection title="Feature availability">
+            <CcSection
+              title="Module availability"
+              description="Why each module currently resolves the way it does for this Home — platform availability and plan entitlement always outrank the Home's own override (see docs/architecture/feature-flags.md)."
+            >
               <CcRecordList variant="grid">
-                {FEATURES.map((feature) => {
-                  const enabled = Boolean(data.feature_overrides.find((item) => item.feature === feature)?.enabled);
+                {data.modules.map((module) => {
+                  const effective = effectiveStateLabel(module);
+                  // What toggling actually does: flips an explicit Home
+                  // override away from whatever currently resolves "on" —
+                  // the inherited/effective state when there's no override
+                  // yet, or the override's own value when there is one.
+                  // Never bypasses platform/plan: the button only ever
+                  // writes the Home's own FeatureOverride row, exactly as
+                  // before (PCC Polish Phase 1 — no new control).
+                  const currentlyOn = module.home_override ?? module.effective_enabled;
+                  // A Home override can never make a module available when
+                  // platform or plan already blocks it (see
+                  // mykhaya.features.is_feature_enabled) — the control is
+                  // disabled in both cases so an operator can never attempt
+                  // a meaningless override, matching this same truthful
+                  // meta-line mechanism already used for Platform/Plan/Home
+                  // above rather than a new visual treatment.
+                  const controlDisabled =
+                    module.blocked_by === "platform" || module.blocked_by === "plan";
+                  const meta = [
+                    `Platform: ${module.platform_enabled ? "Enabled" : "Disabled"}`,
+                    `Plan: ${module.entitled ? "Included" : "Not included"}`,
+                    `Home: ${homeOverrideLabel(module)}`,
+                  ];
+                  if (module.blocked_by === "platform") meta.push("Controlled by platform");
+                  if (module.blocked_by === "plan") meta.push("Not included in this Home's plan");
                   return (
                     <CcRecordCard
-                      key={feature}
-                      title={featureLabel(feature)}
-                      badge={enabled ? "Enabled" : "Disabled"}
-                      badgeTone={enabled ? "success" : "neutral"}
+                      key={module.id}
+                      title={module.name}
+                      meta={meta}
+                      badge={`Effective: ${effective.text}`}
+                      badgeTone={effective.tone}
                       actions={
-                        <button
-                          type="button"
-                          className="secondary cc-action"
-                          disabled={Boolean(busy)}
-                          onClick={() => setFeatureDialog({ feature, enabled: !enabled })}
-                        >
-                          {enabled ? (
-                            <ToggleLeft aria-hidden size={16} strokeWidth={2} />
-                          ) : (
-                            <ToggleRight aria-hidden size={16} strokeWidth={2} />
-                          )}
-                          <span>{enabled ? "Disable" : "Enable"}</span>
-                        </button>
+                        module.toggleable && (
+                          <button
+                            type="button"
+                            className="secondary cc-action"
+                            disabled={Boolean(busy) || controlDisabled}
+                            onClick={() =>
+                              setFeatureDialog({
+                                feature: module.id,
+                                name: module.name,
+                                enabled: !currentlyOn,
+                              })
+                            }
+                          >
+                            {currentlyOn ? (
+                              <ToggleLeft aria-hidden size={16} strokeWidth={2} />
+                            ) : (
+                              <ToggleRight aria-hidden size={16} strokeWidth={2} />
+                            )}
+                            <span>{currentlyOn ? "Disable" : "Enable"}</span>
+                          </button>
+                        )
                       }
                     />
                   );
@@ -463,15 +528,17 @@ export default function PlatformHomeDetail() {
       <CcConfirmDialog
         open={featureDialog !== null}
         onClose={() => setFeatureDialog(null)}
-        title={featureDialog ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureLabel(featureDialog.feature)}` : ""}
+        title={featureDialog ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureDialog.name}` : ""}
         description={
           featureDialog
-            ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureLabel(featureDialog.feature)} for this Home?`
+            ? `${featureDialog.enabled ? "Enable" : "Disable"} ${featureDialog.name} for this Home? This only sets the Home's own override — it cannot make a module available if the platform or plan currently blocks it.`
             : ""
         }
         confirmLabel={featureDialog?.enabled ? "Enable" : "Disable"}
         onConfirm={(formData) => {
-          if (featureDialog) void setFeature(featureDialog.feature, featureDialog.enabled, formData);
+          if (featureDialog) {
+            void setFeature(featureDialog.feature, featureDialog.name, featureDialog.enabled, formData);
+          }
         }}
       />
 
