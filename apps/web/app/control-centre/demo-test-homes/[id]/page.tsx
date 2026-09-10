@@ -35,7 +35,13 @@ import { validateManagedDemoPassword, MANAGED_DEMO_PASSWORD_MIN_LENGTH } from ".
 
 const formatDate = (value: string | null) => (value ? new Date(value).toLocaleString() : "No expiry");
 const typeLabel = (value: ManagedDemoHome["fixture_type"]) =>
-  value === "apple_review" ? "Apple Review" : value === "demo" ? "Family Demo" : "QA Test";
+  value === "apple_review"
+    ? "Apple Review"
+    : value === "demo"
+      ? "Family Demo"
+      : value === "free_demo"
+        ? "Free Plan Demo"
+        : "QA Test";
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
@@ -311,8 +317,8 @@ export default function ManagedDemoHomeDetailPage() {
                   <CcMetadataItem label="Last refreshed">
                     {home.refreshed_at ? formatDate(home.refreshed_at) : "Never"}
                   </CcMetadataItem>
-                  <CcMetadataItem label="Family access">
-                    <CcBadge tone="info">{home.access === "family" ? "Family" : home.access}</CcBadge>
+                  <CcMetadataItem label="Plan access">
+                    <CcBadge tone="info">{home.access === "family" ? "Family" : "Free"}</CcBadge>
                   </CcMetadataItem>
                   <CcMetadataItem label="Expiry">{formatDate(home.expires_at)}</CcMetadataItem>
                   <CcMetadataItem label="Template version">
@@ -337,7 +343,7 @@ export default function ManagedDemoHomeDetailPage() {
                   icon={statusIcon[home.status]}
                   items={[
                     { label: "Expiry", value: formatDate(home.expires_at) },
-                    { label: "Access", value: home.access === "family" ? "Family" : home.access },
+                    { label: "Access", value: home.access === "family" ? "Family" : "Free" },
                   ]}
                 >
                   <p className="cc-status-card-note">

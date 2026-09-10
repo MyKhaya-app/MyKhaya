@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const bootstrapSession = vi.fn();
 const login = vi.fn();
 const childLogin = vi.fn();
+const register = vi.fn();
+const verifyEmail = vi.fn();
 const logout = vi.fn();
 const nativeClientCtor = vi.fn();
 
@@ -14,7 +16,7 @@ vi.mock("@mykhaya/api-client", () => ({
   }),
   NativeMyKhayaClient: vi.fn().mockImplementation((...args: unknown[]) => {
     nativeClientCtor(...args);
-    return { bootstrapSession, hasStoredSession: vi.fn().mockResolvedValue(true), login, childLogin, logout, request: vi.fn() };
+    return { bootstrapSession, hasStoredSession: vi.fn().mockResolvedValue(true), login, childLogin, register, verifyEmail, logout, request: vi.fn() };
   }),
   nativeApiBaseUrlForWebHost: vi.fn().mockReturnValue("https://api.dev.mykhaya.app/api/v1"),
 }));
@@ -75,6 +77,22 @@ describe("native-auth", () => {
     await nativeLogin("a@example.com", "pw");
 
     expect(login).toHaveBeenCalledWith("a@example.com", "pw");
+  });
+
+  it("nativeRegister uses the unauthenticated native registration call", async () => {
+    register.mockResolvedValue({ message: "Check your inbox.", verification_required: true });
+    const { nativeRegister } = await import("./native-auth");
+
+    await expect(nativeRegister({
+      email: "new@example.com",
+      display_name: "New User",
+      password: "correct horse battery staple",
+    })).resolves.toEqual({ message: "Check your inbox.", verification_required: true });
+    expect(register).toHaveBeenCalledWith({
+      email: "new@example.com",
+      display_name: "New User",
+      password: "correct horse battery staple",
+    });
   });
 
   it("requires biometric unlock before restoring an enabled native session", async () => {

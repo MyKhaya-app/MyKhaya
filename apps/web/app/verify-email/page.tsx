@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import { nativeVerifyEmail } from "@/components/native-auth";
+import { isNativeShell } from "@/components/native-runtime";
 export default function VerifyEmail() {
   const params = useSearchParams(),
     token = params.get("token"),
@@ -19,8 +21,9 @@ export default function VerifyEmail() {
     [error, setError] = useState("");
   useEffect(() => {
     if (!token) return;
-    api
-      .post<{ message: string }>("/auth/verify-email", { token })
+    (isNativeShell()
+      ? nativeVerifyEmail(token)
+      : api.post<{ message: string }>("/auth/verify-email", { token }))
       .then((r) => setMessage(r.message))
       .catch((err: unknown) => {
         setMessage("");

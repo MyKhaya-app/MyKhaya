@@ -296,7 +296,17 @@ OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
 SUPPORT = (*OPERATORS, PlatformRole.support)
 
 
-def _managed_demo_response(row: ManagedDemoHome, owner: User) -> ManagedDemoHomeResponse:
+async def _managed_demo_response(
+    db: AsyncSession, row: ManagedDemoHome, owner: User
+) -> ManagedDemoHomeResponse:
+    # Computed from the Home's actual subscription, never assumed —
+    # Free Plan Demo resolves to the real Free plan through the normal
+    # entitlement path (see ManagedDemoService.create), so this must reflect
+    # that rather than hardcoding "family" for every template.
+    subscription = await get_home_subscription(db, row.home_id)
+    access: Literal["family", "free"] = (
+        "free" if subscription is not None and subscription.plan == SubscriptionPlan.free else "family"
+    )
     return ManagedDemoHomeResponse(
         id=row.id,
         fixture_key=row.fixture_key,
@@ -313,6 +323,7 @@ def _managed_demo_response(row: ManagedDemoHome, owner: User) -> ManagedDemoHome
         disabled_at=row.disabled_at,
         account_email=owner.email,
         email_verified=owner.email_verified_at is not None,
+        access=access,
     )
 
 
@@ -326,7 +337,7 @@ async def managed_demo_homes(
     for row in rows:
         owner = await db.get(User, row.owner_user_id)
         if owner is not None:
-            result.append(_managed_demo_response(row, owner))
+            result.append(await _managed_demo_response(db, row, owner))
     return result
 
 
@@ -358,7 +369,7 @@ async def create_managed_demo_home(
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
-    return _managed_demo_response(row, owner)
+    return await _managed_demo_response(db, row, owner)
 
 
 @router.post("/demo-test-homes/{fixture_id}/enable", response_model=ManagedDemoHomeResponse)
@@ -395,7 +406,7 @@ async def _set_managed_demo_enabled(
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
-    return _managed_demo_response(row, owner)
+    return await _managed_demo_response(db, row, owner)
 
 
 @router.post("/demo-test-homes/{fixture_id}/password", status_code=204)
@@ -433,7 +444,7 @@ async def refresh_managed_demo_home(
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
-    return _managed_demo_response(row, owner)
+    return await _managed_demo_response(db, row, owner)
 
 
 @router.patch("/demo-test-homes/{fixture_id}/expiry", response_model=ManagedDemoHomeResponse)
@@ -454,7 +465,7 @@ async def update_managed_demo_expiry(
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
-    return _managed_demo_response(row, owner)
+    return await _managed_demo_response(db, row, owner)
 
 
 @router.delete("/demo-test-homes/{fixture_id}", status_code=204)

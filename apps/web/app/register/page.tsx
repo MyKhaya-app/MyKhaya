@@ -8,6 +8,8 @@ import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
 import { intervalName } from "@/components/billing-logic";
 import { parseIntentFromParams, saveOnboardingIntent } from "@/components/onboarding-intent";
+import { nativeRegister } from "@/components/native-auth";
+import { isNativeShell } from "@/components/native-runtime";
 export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
@@ -62,15 +64,18 @@ export default function Register() {
       return;
     }
     try {
-      const result = await api.post<{
-        message: string;
-        verification_required: boolean;
-      }>("/auth/register", {
+      const body = {
         email: d.get("email"),
         display_name: d.get("name"),
         password: d.get("password"),
         invitation_token: invitation,
-      });
+      };
+      const result = isNativeShell()
+        ? await nativeRegister(body)
+        : await api.post<{
+            message: string;
+            verification_required: boolean;
+          }>("/auth/register", body);
       if (intent && intent.plan === "family") saveOnboardingIntent(intent);
       const carry = invitation
         ? `invitation=${encodeURIComponent(invitation)}`

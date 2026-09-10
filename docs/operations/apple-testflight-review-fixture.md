@@ -15,10 +15,21 @@ subscription path with reason `Apple TestFlight review fixture`. It creates no
 Stripe subscription. The managed record and subscription are scoped to the same
 Home and are removed together by the managed delete path.
 
-Supported types are `apple_review`, `demo`, and `qa_test`. Apple Review currently
-uses the existing canonical sample content. The PCC create endpoint provisions a
-verified normal Home Admin account and Home; template-specific content should be
-seeded by the corresponding managed template before external review.
+Supported types are `apple_review`, `demo`, `qa_test`, and `free_demo`. Apple
+Review currently uses the existing canonical sample content. The PCC create
+endpoint provisions a verified normal Home Admin account and Home;
+template-specific content should be seeded by the corresponding managed
+template before external review.
+
+`apple_review`, `demo` and `qa_test` all resolve to a complimentary Family
+subscription. `free_demo` ("Free Plan Demo") is the one exception: it resolves
+to the real Free plan through the normal subscription/entitlement path (see
+`ManagedDemoService.create`), a single-person Home with exactly one Personal
+Calendar and exactly two Lists (the Free plan's `lists.max_lists` limit) — a
+fixture for validating the actual Free product experience, not a Family demo
+with Free-looking data. `ManagedDemoHomeResponse.access` reflects whichever
+plan a given fixture actually resolved to ("family" or "free"), not a
+hardcoded value.
 
 Expiry is processed by the existing scheduler: it marks the managed record
 `expired`, disables only its owner account, and retains Home data and audit history.

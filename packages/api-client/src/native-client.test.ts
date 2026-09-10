@@ -119,6 +119,49 @@ describe("NativeMyKhayaClient — login", () => {
   });
 });
 
+describe("NativeMyKhayaClient — unauthenticated account flow", () => {
+  it("registers without requiring a stored native session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(202, { message: "Check your inbox.", verification_required: true }),
+    );
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), {
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.register({
+        email: "new@example.com",
+        display_name: "New User",
+        password: "correct horse battery staple",
+      }),
+    ).resolves.toEqual({ message: "Check your inbox.", verification_required: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_URL}/auth/register`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+  });
+
+  it("verifies an email without requiring a stored native session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { message: "Your email is verified." }),
+    );
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), {
+      fetch: fetchMock,
+    });
+
+    await expect(client.verifyEmail("verification-token")).resolves.toEqual({
+      message: "Your email is verified.",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_URL}/auth/verify-email`,
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
 describe("NativeMyKhayaClient — DEV diagnostic probe", () => {
   it("probes GET and progressively adds native headers without logging sensitive data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "invalid" }));

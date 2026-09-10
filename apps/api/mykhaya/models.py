@@ -350,6 +350,7 @@ class ManagedDemoType(StrEnum):
     apple_review = "apple_review"
     demo = "demo"
     qa_test = "qa_test"
+    free_demo = "free_demo"
 
 
 class ManagedDemoStatus(StrEnum):

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.models import (
     AuthIdentity,
     CalendarEvent,
@@ -130,7 +131,15 @@ class ManagedDemoService:
         from mykhaya.entitlements import ensure_home_subscription
 
         subscription = await ensure_home_subscription(db, home.id)
-        subscription.plan = SubscriptionPlan.family
+        # Free Plan Demo must exercise the real Free-plan entitlement path
+        # (see docs/architecture/commercial-entitlements.md) rather than a
+        # Home override — every other template is a Family-access fixture
+        # (App Store review, sales demo, generic QA), unchanged.
+        subscription.plan = (
+            SubscriptionPlan.free
+            if fixture_type == ManagedDemoType.free_demo
+            else SubscriptionPlan.family
+        )
         subscription.provider = SubscriptionProvider.complimentary
         subscription.complimentary_reason = f"Managed Demo/Test Home: {fixture_key}"
         await ManagedDemoService.seed_template(db, row)
@@ -155,6 +164,17 @@ class ManagedDemoService:
         reminders: tuple[tuple[str, int], ...]
         meals: tuple[str, ...]
         lists: tuple[tuple[str, tuple[str, ...]], ...]
+        # Free Plan Demo's own events live on the owner's Personal Calendar
+        # (owner_user_id IS NOT NULL), not the shared "Home Calendar" every
+        # template gets from ManagedDemoService.create — matching what a
+        # genuine solo Free signup gets (see mykhaya.calendar_provisioning
+        # and mykhaya.routers.groups.create_group, which provision both for
+        # every new Home) rather than hacking the shared calendar away.
+        # calendar.max_calendars=1 on Free then makes the entitlement system
+        # itself classify the shared Home Calendar as read_only_due_to_plan,
+        # exactly as it would for a real Free Home — nothing here needs to
+        # fake that.
+        events_calendar_id = calendar.id
         if row.fixture_type == ManagedDemoType.apple_review:
             member_specs = (
                 ("Jamie Review", "jamie-review@mykhaya.app", False),
@@ -171,6 +191,30 @@ class ManagedDemoService:
             reminders = (("Order school lunches", 1), ("Call grandparents", 3))
             meals = ("Spaghetti Bolognese", "Chicken Fajitas", "Homemade Pizza", "Curry")
             lists = (("Shopping", ("Milk", "Bread", "Apples", "Pasta", "Coffee")),)
+        elif row.fixture_type == ManagedDemoType.free_demo:
+            # Free is a single-person personal organiser (see
+            # docs/architecture/commercial-entitlements.md) — no second
+            # member, no Nudges/Meal Plans/Wishlists/External Sharing rows
+            # of any kind, so those tuples stay empty rather than seeding
+            # Family-only content this fixture exists to prove is absent.
+            member_specs = ()
+            personal_calendar = await ensure_personal_calendar(db, row.home_id, owner.id)
+            events_calendar_id = personal_calendar.id
+            events = (
+                ("Dentist appointment", 1, 10, 10, 45),
+                ("Personal appointment", 0, 15, 15, 45),
+                ("Grocery run", 2, 9, 9, 45),
+                ("Weekend activity", 5, 11, 13, 0),
+            )
+            routines = ()
+            reminders = ()
+            meals = ()
+            # Exactly two Lists, deliberately at the Free plan's
+            # lists.max_lists=2 limit — see the module docstring.
+            lists = (
+                ("Groceries", ("Milk", "Bread", "Eggs", "Coffee")),
+                ("Weekend jobs", ("Mow the lawn", "Wash the car", "Tidy the garage")),
+            )
         else:
             member_specs = (
                 ("Jamie Carter", "jamie-carter@demo.mykhaya.invalid", False),
@@ -266,7 +310,7 @@ class ManagedDemoService:
             )
             event = CalendarEvent(
                 group_id=row.home_id,
-                calendar_id=calendar.id,
+                calendar_id=events_calendar_id,
                 title=title,
                 start_at=start,
                 end_at=end,

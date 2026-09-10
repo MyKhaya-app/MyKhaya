@@ -229,6 +229,25 @@ export class NativeMyKhayaClient {
     return user;
   }
 
+  /** Public account creation deliberately does not require a native session.
+   * This is the native equivalent of the browser's POST /auth/register; it
+   * must remain on the unauthenticated transport because a new account has no
+   * session yet. */
+  register(body: {
+    email: unknown;
+    display_name: unknown;
+    password: unknown;
+    invitation_token?: unknown;
+  }): Promise<{ message: string; verification_required: boolean }> {
+    return this.postUnauthenticated("/auth/register", body);
+  }
+
+  /** Email verification is also intentionally public: the verification link
+   * is the credential for this one-time action, not a pre-existing session. */
+  verifyEmail(token: string): Promise<{ message: string }> {
+    return this.postUnauthenticated("/auth/verify-email", { token });
+  }
+
   /**
    * Explicit, deliberate rotation (POST /auth/mobile/sessions/rotate) — not
    * triggered automatically by `request()`. Per ADR 0010, the old token is

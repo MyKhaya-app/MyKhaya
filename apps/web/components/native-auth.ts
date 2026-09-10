@@ -154,6 +154,19 @@ export function nativeLogin(email: string, password: string): Promise<User> {
   });
 }
 
+export function nativeRegister(body: {
+  email: unknown;
+  display_name: unknown;
+  password: unknown;
+  invitation_token?: unknown;
+}): Promise<{ message: string; verification_required: boolean }> {
+  return client().register(body);
+}
+
+export function nativeVerifyEmail(token: string): Promise<{ message: string }> {
+  return client().verifyEmail(token);
+}
+
 export function consumeBiometricOfferAfterLogin(): boolean {
   const result = offerBiometricAfterLogin;
   offerBiometricAfterLogin = false;

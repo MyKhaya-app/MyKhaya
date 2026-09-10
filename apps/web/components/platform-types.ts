@@ -25,7 +25,7 @@ export type PlatformActor = {
   recovery_codes?: string[] | null;
 };
 
-export type ManagedDemoType = "apple_review" | "demo" | "qa_test";
+export type ManagedDemoType = "apple_review" | "demo" | "qa_test" | "free_demo";
 export type ManagedDemoStatus = "enabled" | "disabled" | "expired";
 export type ManagedDemoHome = {
   id: string;
@@ -43,7 +43,7 @@ export type ManagedDemoHome = {
   disabled_at: string | null;
   account_email: string;
   email_verified: boolean;
-  access: "family";
+  access: "family" | "free";
 };
 
 export type ManagedDemoHomeCreateRequest = {

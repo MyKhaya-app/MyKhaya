@@ -16,7 +16,12 @@ import { CcNotice } from "@/components/control-centre/status-message";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { validateManagedDemoPassword, MANAGED_DEMO_PASSWORD_MIN_LENGTH } from "./password-validation";
 
-const labels = { apple_review: "Apple Review", demo: "Family Demo", qa_test: "QA Test" } as const;
+const labels = {
+  apple_review: "Apple Review",
+  demo: "Family Demo",
+  qa_test: "QA Test",
+  free_demo: "Free Plan Demo",
+} as const;
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
@@ -127,8 +132,8 @@ export default function DemoTestHomesPage() {
     },
     {
       key: "access",
-      header: "Family access",
-      render: (row) => <CcBadge tone="info">{row.access === "family" ? "Family" : row.access}</CcBadge>,
+      header: "Plan access",
+      render: (row) => <CcBadge tone="info">{row.access === "family" ? "Family" : "Free"}</CcBadge>,
     },
     {
       key: "refreshed",
@@ -178,6 +183,7 @@ export default function DemoTestHomesPage() {
                   <select name="fixture_type" defaultValue="apple_review">
                     <option value="apple_review">Apple Review</option>
                     <option value="demo">Family Demo</option>
+                    <option value="free_demo">Free Plan Demo</option>
                   </select>
                 </CcField>
                 <CcField label="Fixture key">
