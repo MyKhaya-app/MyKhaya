@@ -13,6 +13,7 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
@@ -44,17 +45,28 @@ from mykhaya.schemas import (
 )
 
 
-async def require_notifications_feature(
+async def require_nudges_feature(
     home_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    await require_feature(db, FeatureKey.notifications, home_id)
+    # Access to Nudges data/functionality — distinct from whether a
+    # particular reminder notification can actually be sent, which is
+    # checked independently by the delivery worker
+    # (mykhaya.notifications.standalone_reminders) against
+    # FeatureKey.notifications. Notifications is core platform
+    # infrastructure, not a Home module, and must never gate whether a
+    # Reminder can be created/edited/completed.
+    #
+    # Module/platform gate first, then commercial entitlement (Phase 2B) —
+    # Nudges is Family-only, independently of any Home FeatureOverride.
+    await require_feature(db, FeatureKey.nudges, home_id)
+    await require_entitlement(db, home_id, "nudges.enabled")
 
 
 router = APIRouter(
     prefix="/homes",
     tags=["reminders"],
-    dependencies=[Depends(require_notifications_feature)],
+    dependencies=[Depends(require_nudges_feature)],
 )
 
 

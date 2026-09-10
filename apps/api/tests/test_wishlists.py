@@ -212,6 +212,14 @@ async def test_wishlists_feature_off_returns_404_even_on_family(client: AsyncCli
         assert subscription is not None
         subscription.plan = SubscriptionPlan.family
         await db.commit()
+    # Wishlists is globally released (0063_feature_flag_backfill), so
+    # explicitly disable it for this one Home via a FeatureOverride to
+    # exercise the "feature gate is independent of commercial entitlement"
+    # path — an absent override now correctly inherits the global released
+    # state rather than defaulting to disabled.
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.wish_lists, group_id=home_id, enabled=False))
+        await db.commit()
     response = await unsafe(
         client,
         "POST",

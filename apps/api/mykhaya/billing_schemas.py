@@ -129,14 +129,26 @@ class BillingStatusResponse(BaseModel):
     # module entry show its locked state before the user ever taps in and
     # hits a 403. See routers.meal_plans' meals.enabled enforcement.
     meals_enabled: bool
-    # Whether this Home's plan currently includes Household Lists — used by
-    # Meal Plans' "Add ingredients to list" to show its own locked state
-    # (Lists is a separate entitlement from meals.enabled, even though both
-    # currently match Free/Family 1:1). See routers.lists.
+    # Whether this Home's plan currently includes Household Lists at all —
+    # True on both Free and Family since Phase 2B (Lists is included on
+    # Free, bounded by lists.max_lists/list_usage below, not a boolean
+    # gate). Kept as its own field rather than removed: Meal Plans' "Add
+    # ingredients to list" still checks it as a distinct entitlement from
+    # meals.enabled. See routers.lists.
     lists_enabled: bool
+    # How many active Lists this Home currently has vs. lists.max_lists —
+    # same shared shape/purpose as calendar_usage. See
+    # mykhaya.entitlements.list_usage.
+    list_usage: CalendarUsageResponse
     # Whether this Home's plan currently includes Wishlists. See
     # routers.wishlists' wishlists.enabled enforcement.
     wishlists_enabled: bool
+    # Whether this Home's plan currently includes Nudges (Routines +
+    # Reminders + To-dos) — lets the Nudges module entry/destination page
+    # show its locked state before the user ever taps in and hits a 403.
+    # See routers.household_routines/reminders/todos' nudges.enabled
+    # enforcement.
+    nudges_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):

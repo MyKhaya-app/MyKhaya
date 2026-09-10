@@ -154,6 +154,17 @@ MODULES: tuple[ModuleDefinition, ...] = (
         route="/wish-lists",
     ),
     ModuleDefinition(
+        FeatureKey.nudges.value,
+        "Nudges",
+        "Routines, reminders and things to do for the household.",
+        "Family",
+        ReleaseState.released,
+        True,
+        "0.5.0",
+        dependencies=("household_members",),
+        route="/settings/routines-reminders",
+    ),
+    ModuleDefinition(
         FeatureKey.notifications.value,
         "Notifications",
         "Push, email and in-app reminders — event reminders, daily briefings and "

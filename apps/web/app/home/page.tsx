@@ -251,6 +251,8 @@ export default function HomePage() {
   const [listsEnabled, setListsEnabled] = useState(false);
   const [wishlistsFeatureOn, setWishlistsFeatureOn] = useState(false);
   const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
+  const [nudgesFeatureOn, setNudgesFeatureOn] = useState(false);
+  const [nudgesEntitled, setNudgesEntitled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
@@ -283,12 +285,14 @@ export default function HomePage() {
         setMealsEnabled(billing.meals_enabled);
         setListsEnabled(billing.lists_enabled);
         setWishlistsEnabled(billing.wishlists_enabled);
+        setNudgesEntitled(billing.nudges_enabled);
       })
       .catch(() => {
         setCanInviteMore(false);
         setMealsEnabled(false);
         setListsEnabled(false);
         setWishlistsEnabled(false);
+        setNudgesEntitled(false);
       });
     // Member roster is only used for display (event participant avatars) —
     // its own membership-gated read (Capability.members_view) isn't held by
@@ -315,10 +319,11 @@ export default function HomePage() {
         setWishlistsFeatureOn(
           matrix.features.some((feature) => feature.feature === "wish_lists" && feature.enabled),
         );
-        const notificationsEnabled = matrix.features.some(
-          (feature) => feature.feature === "notifications" && feature.enabled,
+        const nudgesEnabled = matrix.features.some(
+          (feature) => feature.feature === "nudges" && feature.enabled,
         );
-        if (!enabled && !notificationsEnabled) {
+        setNudgesFeatureOn(nudgesEnabled);
+        if (!enabled && !nudgesEnabled) {
           setSummary(null);
           setUpcoming([]);
           setRoutines([]);
@@ -361,7 +366,7 @@ export default function HomePage() {
           setSummary(null);
           setUpcoming([]);
         }
-        const [routineData, reminderData] = notificationsEnabled
+        const [routineData, reminderData] = nudgesEnabled
           ? await Promise.all([
               api.routines(activeHomeId, { home: true }).catch(() => null),
               api.reminders(activeHomeId, { home: true }).catch(() => null),
@@ -707,16 +712,21 @@ export default function HomePage() {
                 </Link>
               )}
             </QuickActionsRow>
-            {/* Routines & Reminders has no feature flag of its own — same as
-                its More → Settings entry, the shortcut always links through
-                to the combined /settings/routines-reminders module, which
-                owns the personal-vs-household (Free vs Family) gating
-                itself. */}
             <QuickActionsRow>
-              <Link className="quick-action" href="/settings/routines-reminders">
-                <ClipboardList size={20} aria-hidden="true" />
-                Nudges
-              </Link>
+              {nudgesFeatureOn && (
+                <Link
+                  className={`quick-action${nudgesEntitled ? "" : " quick-action-locked"}`}
+                  href="/settings/routines-reminders"
+                >
+                  {!nudgesEntitled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <ClipboardList size={20} aria-hidden="true" />
+                  Nudges
+                </Link>
+              )}
               {mealsFeatureOn && (
                 <Link
                   className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}

@@ -11,12 +11,15 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
+from mykhaya.entitlements import has_entitlement
+from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
+    FeatureKey,
     Group,
     HouseholdRoutine,
     HouseholdRoutineCompletion,
@@ -48,6 +51,39 @@ DAY_COMPLETE_TOPIC = "notification.nudges.day_complete"
 DAILY_SUMMARY_TOPIC = "notification.daily_nudge_summary"
 
 
+async def _nudges_eligible_group_ids(
+    db: AsyncSession, group_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """Filters a user's Home ids down to the ones eligible to contribute to
+    a Nudges-specific scheduled notification (evening cleanup, day-complete,
+    Daily Nudge Summary) — three independent conditions, all required:
+
+    1. FeatureKey.nudges is enabled (platform/Home module gating, see
+       mykhaya.features.is_feature_enabled) — the same check
+       mykhaya.routers.household_routines/reminders/todos enforce for
+       ordinary API access to Nudges data.
+    2. nudges.enabled commercial entitlement passes (Family-only, Phase
+       2B) — same as above.
+    3. FeatureKey.notifications is enabled for the Home — notification
+       *delivery* infrastructure, checked independently, exactly like
+       mykhaya.notifications.routines/standalone_reminders/briefing already
+       do before sending anything. Never conflated with (1)/(2): a Home
+       with Nudges fully available but Notifications switched off simply
+       never gets *notified* about it — this never affects whether the
+       Nudges API itself is reachable, and never affects unrelated
+       notification types (briefings, events, meal plans), which are
+       entirely unaffected by this module."""
+    eligible: list[uuid.UUID] = []
+    for group_id in group_ids:
+        if (
+            await is_feature_enabled(db, FeatureKey.nudges, group_id)
+            and await has_entitlement(db, group_id, "nudges.enabled")
+            and await is_feature_enabled(db, FeatureKey.notifications, group_id)
+        ):
+            eligible.append(group_id)
+    return eligible
+
+
 async def relevant_todos(
     db: AsyncSession, user_id: uuid.UUID, local_date: date, *, outstanding_only: bool = True
 ) -> list[Todo]:
@@ -56,7 +92,9 @@ async def relevant_todos(
             select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
-    group_ids = [membership.group_id for membership in memberships]
+    group_ids = await _nudges_eligible_group_ids(
+        db, [membership.group_id for membership in memberships]
+    )
     if not group_ids:
         return []
     rows = (
@@ -66,7 +104,7 @@ async def relevant_todos(
                 (Todo.scope == "personal") & (Todo.owner_user_id == user_id)
                 | (Todo.scope == "household"),
                 Todo.due_date <= local_date,
-                Todo.completed_at.is_(None) if outstanding_only else True,
+                Todo.completed_at.is_(None) if outstanding_only else true(),
             )
         )
     ).all()
@@ -93,12 +131,17 @@ async def _relevant_routines(
             select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
+    group_ids = await _nudges_eligible_group_ids(
+        db, [row.group_id for row in memberships]
+    )
+    if not group_ids:
+        return []
     rows = (
         await db.scalars(
             select(HouseholdRoutine)
             .join(Group, Group.id == HouseholdRoutine.group_id)
             .where(
-                HouseholdRoutine.group_id.in_([row.group_id for row in memberships]),
+                HouseholdRoutine.group_id.in_(group_ids),
                 HouseholdRoutine.enabled.is_(True),
                 Group.is_active.is_(True),
             )
@@ -141,12 +184,17 @@ async def _relevant_reminders(
             select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
+    group_ids = await _nudges_eligible_group_ids(
+        db, [row.group_id for row in memberships]
+    )
+    if not group_ids:
+        return []
     rows = (
         await db.scalars(
             select(Reminder)
             .join(Group, Group.id == Reminder.group_id)
             .where(
-                Reminder.group_id.in_([row.group_id for row in memberships]),
+                Reminder.group_id.in_(group_ids),
                 Reminder.enabled.is_(True),
                 Group.is_active.is_(True),
             )
@@ -182,6 +230,24 @@ async def _relevant_reminders(
     return result
 
 
+async def _user_has_any_eligible_nudges_home(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    """Whether `user_id` belongs to at least one Home where Nudges is
+    currently reachable (see _nudges_eligible_group_ids). Needed on top of
+    the relevant_*() functions' own filtering because an *empty* result
+    from those is ambiguous — "nothing outstanding today" (a real,
+    positive "day complete" event) and "no eligible Home at all" (Nudges
+    disabled/Free — must never produce any Nudge summary, including a
+    misleading 'you're all caught up' day-complete message) both look like
+    an empty list otherwise."""
+    memberships = (
+        await db.scalars(
+            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+        )
+    ).all()
+    eligible = await _nudges_eligible_group_ids(db, [row.group_id for row in memberships])
+    return bool(eligible)
+
+
 def _summary(rows: list[Todo], local_date: date) -> tuple[int, int, str]:
     overdue = sum(row.due_date < local_date for row in rows)
     lines = [f"• {row.title}" for row in rows[:5]]
@@ -208,6 +274,8 @@ async def scan_due_nudges(db: AsyncSession, settings: Settings) -> None:
         local_now = now.astimezone(tz)
         scheduled = datetime.combine(local_now.date(), prefs.nudges_evening_time, tzinfo=tz)
         if not (scheduled <= local_now < scheduled + LOOKAHEAD):
+            continue
+        if not await _user_has_any_eligible_nudges_home(db, user.id):
             continue
         rows = await relevant_todos(db, user.id, local_now.date())
         routines = await _relevant_routines(db, user.id, local_now.date())
@@ -244,6 +312,13 @@ async def deliver_nudge_summary(
     if day_complete and not prefs.nudges_day_complete_enabled:
         return
     if not day_complete and not prefs.nudges_evening_cleanup_enabled:
+        return
+    # Re-checked here, not just in scan_due_nudges: Nudges access could have
+    # changed (downgrade, Home Admin disable) between scheduling and
+    # delivery. Without this, a day_complete=True send with a since-emptied
+    # eligible-Home set would otherwise fall through to a misleading
+    # "you're all caught up" message for a Home that never had access.
+    if not await _user_has_any_eligible_nudges_home(db, user.id):
         return
     local_date = date.fromisoformat(date_iso)
     rows = await relevant_todos(db, user.id, local_date)

@@ -387,12 +387,25 @@ class HouseholdModuleResponse(BaseModel):
     description: str
     category: str
     release_state: str
+    # Effective: also accounts for commercial entitlement, not just platform/
+    # Home feature-flag state — a module the Home's plan doesn't include is
+    # never `enabled`, regardless of any Home FeatureOverride (Phase 2B).
     enabled: bool
     toggleable: bool
     introduced_version: str | None
     dependencies: list[str]
     permissions: list[str]
     route: str | None
+    # Whether the Home's current plan includes this module at all — True
+    # for core modules and any module with no boolean commercial
+    # entitlement key (e.g. Calendar, always included on both plans).
+    entitled: bool = True
+    # Why a non-core module currently resolves unavailable, from the Home
+    # Admin's point of view — "platform" outranks "plan" (matching the
+    # agreed authority hierarchy: PCC platform availability, then
+    # commercial entitlement, then Home Admin enablement). None when the
+    # module is available (whether or not the Home Admin has toggled it on).
+    blocked_by: Literal["platform", "plan"] | None = None
 
 
 class HouseholdFeatureUpdate(StrictModel):
@@ -1367,6 +1380,12 @@ class ListResponse(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    # "normal" = usable now; "read_only_due_to_plan" = preserved but over
+    # the Home's current lists.max_lists allowance (almost always the
+    # result of a downgrade) — viewable, but create/rename/item-mutation
+    # endpoints reject it. Same shape/purpose as HomeCalendarResponse
+    # .commercial_access — see mykhaya.routers.lists._list_access.
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
 
 
 class ListDetailResponse(BaseModel):
@@ -1379,6 +1398,7 @@ class ListDetailResponse(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
 
 
 class ListListResponse(BaseModel):
@@ -1468,6 +1488,7 @@ class PushSubscriptionCreate(StrictModel):
     endpoint: str = Field(min_length=1, max_length=4000)
     keys: PushSubscriptionKeys
     device_label: str | None = Field(default=None, max_length=120)
+    user_agent: str | None = Field(default=None, max_length=300)
 
 
 class NativePushDeviceCreate(StrictModel):
@@ -1484,9 +1505,6 @@ class NativePushDeviceResponse(BaseModel):
     created_at: datetime
     last_seen_at: datetime | None
     disabled_at: datetime | None
-    user_agent: str | None = Field(default=None, max_length=300)
-
-
 class PushSubscriptionResponse(BaseModel):
     id: uuid.UUID
     device_label: str | None

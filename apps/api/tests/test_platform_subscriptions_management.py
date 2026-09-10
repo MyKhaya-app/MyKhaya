@@ -355,7 +355,11 @@ async def test_detail_resolves_free_entitlements_correctly(
     payload = response.json()
     assert payload["entitlements"]["plan"] == "free"
     assert payload["entitlements"]["limits"]["calendar.max_categories"] == 1
-    assert payload["entitlements"]["booleans"]["lists.enabled"] is False
+    # lists.enabled is True on both plans (Phase 2B) — lists.max_lists is
+    # the actual Free/Family differentiator.
+    assert payload["entitlements"]["booleans"]["lists.enabled"] is True
+    assert payload["entitlements"]["limits"]["lists.max_lists"] == 2
+    assert payload["entitlements"]["booleans"]["nudges.enabled"] is False
     assert payload["subscription"]["effective_plan"] == "free"
     assert payload["member_count"] >= 1
 
@@ -375,6 +379,8 @@ async def test_detail_resolves_family_entitlements_correctly(
     assert payload["entitlements"]["plan"] == "family"
     assert payload["entitlements"]["limits"]["calendar.max_categories"] is None
     assert payload["entitlements"]["booleans"]["lists.enabled"] is True
+    assert payload["entitlements"]["limits"]["lists.max_lists"] is None
+    assert payload["entitlements"]["booleans"]["nudges.enabled"] is True
     assert payload["subscription"]["complimentary_granted_by_display_name"] == "Test Operator"
 
 

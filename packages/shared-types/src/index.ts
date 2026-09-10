@@ -397,7 +397,8 @@ export type FeatureKey =
   | "plans"
   | "wish_lists"
   | "notifications"
-  | "external_sharing";
+  | "external_sharing"
+  | "nudges";
 
 export interface FeatureEvaluation {
   feature: FeatureKey;
@@ -416,12 +417,19 @@ export interface HouseholdModule {
   description: string;
   category: string;
   release_state: ReleaseState;
+  // Effective: also accounts for commercial entitlement, not just platform/
+  // Home feature-flag state.
   enabled: boolean;
   toggleable: boolean;
   introduced_version: string | null;
   dependencies: string[];
   permissions: string[];
   route: string | null;
+  // Whether the Home's current plan includes this module at all.
+  entitled: boolean;
+  // Why a non-core module currently resolves unavailable — "platform"
+  // outranks "plan". null when available (whether or not toggled on).
+  blocked_by: "platform" | "plan" | null;
 }
 
 export type ChildAgeBand = "under_13" | "13_to_15" | "16_to_17";
@@ -846,6 +854,11 @@ export interface HouseholdList {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // "normal" = usable now; "read_only_due_to_plan" = preserved but over
+  // the Home's current lists.max_lists allowance (almost always the
+  // result of a downgrade) — viewable, but create/rename/item-mutation is
+  // rejected. Same shape as HomeCalendar.commercial_access.
+  commercial_access: CalendarCommercialAccess;
 }
 
 export interface HouseholdListDetail {
@@ -858,6 +871,7 @@ export interface HouseholdListDetail {
   created_by: string;
   created_at: string;
   updated_at: string;
+  commercial_access: CalendarCommercialAccess;
 }
 
 export interface HouseholdListListResponse {
@@ -963,8 +977,12 @@ export interface BillingStatus {
   shared_events_enabled: boolean;
   external_invites_enabled: boolean;
   meals_enabled: boolean;
+  // True on both Free and Family since Phase 2B — see list_usage below for
+  // the actual Free/Family differentiator (lists.max_lists).
   lists_enabled: boolean;
+  list_usage: CalendarUsage;
   wishlists_enabled: boolean;
+  nudges_enabled: boolean;
 }
 
 export interface PricingOption {

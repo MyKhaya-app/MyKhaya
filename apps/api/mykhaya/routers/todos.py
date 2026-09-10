@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
@@ -40,7 +41,15 @@ async def _require_member(home_id: uuid.UUID, auth: AuthContext, db: AsyncSessio
     membership = await active_membership(db, home_id, auth.user.id)
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    await require_feature(db, FeatureKey.notifications, home_id)
+    # Access to Nudges data/functionality — distinct from whether a
+    # particular notification can actually be sent (Notifications is core
+    # platform infrastructure, not a Home module, and must never gate
+    # whether a To-do can be created/edited/completed).
+    #
+    # Module/platform gate first, then commercial entitlement (Phase 2B) —
+    # Nudges is Family-only, independently of any Home FeatureOverride.
+    await require_feature(db, FeatureKey.nudges, home_id)
+    await require_entitlement(db, home_id, "nudges.enabled")
     return membership
 
 

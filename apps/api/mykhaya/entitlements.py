@@ -32,6 +32,8 @@ from mykhaya.models import (
     HomeCalendar,
     HomeSubscription,
     HomeSubscriptionEvent,
+    HouseholdList,
+    HouseholdRelationship,
     HouseholdRoutine,
     Membership,
     RoutineScope,
@@ -79,8 +81,13 @@ class PlanDefinition:
 # Enforced today (a real endpoint calls require_entitlement/require_within_limit
 # against it): calendar.max_categories, home.max_members,
 # routines.personal.max_active, routines.household.enabled, meals.enabled,
-# lists.enabled (mykhaya.routers.lists, reusing FeatureKey.shopping's
-# release slot — see docs/architecture/meal-plans.md "Lists integration").
+# lists.enabled + lists.max_lists (mykhaya.routers.lists, reusing
+# FeatureKey.shopping's release slot — see docs/architecture/meal-plans.md
+# "Lists integration"; lists.enabled is True on both plans, with
+# lists.max_lists as the actual Free/Family differentiator, Phase 2B),
+# nudges.enabled (mykhaya.routers.household_routines/reminders/todos —
+# independent of, and checked in addition to, FeatureKey.nudges's
+# platform/Home module gating, Phase 2B).
 # members.external_invites.enabled now also gates creating an external
 # Calendar Share (mykhaya.routers.calendar_sharing.create_share) — the
 # source Home's plan, never the recipient's, per the "Deferred enforcement"
@@ -101,7 +108,13 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             # unreleased (mykhaya.module_registry), so this is data only
             # until it ships.
             "notes.enabled": True,
-            "lists.enabled": False,
+            # Lists is included on Free too (Phase 2B) — bounded by the
+            # lists.max_lists numeric limit below, not a boolean gate. The
+            # key stays here (rather than being removed) because module
+            # access still requires it to be True on both plans — see
+            # "Module flag vs commercial entitlement" in
+            # docs/architecture/commercial-entitlements.md.
+            "lists.enabled": True,
             "chores.enabled": False,
             "wishlists.enabled": False,
             "routines.household.enabled": False,
@@ -112,11 +125,37 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             # Meal Plans (mykhaya.routers.meal_plans) — Family-only, per
             # docs/architecture/meal-plans.md.
             "meals.enabled": False,
+            # Nudges (Routines + Reminders + To-dos) — Family-only (Phase
+            # 2B). Independent of FeatureKey.nudges (platform/Home module
+            # gating) — see mykhaya.routers.household_routines/reminders/
+            # todos, which require both.
+            "nudges.enabled": False,
         },
         limits={
             "calendar.max_categories": 1,
+            # Phase 2C: the total number of usable HomeCalendar rows — both
+            # the Home's own shared/"Home Calendar" (owner_user_id IS NULL)
+            # and every member's Personal Calendar (owner_user_id IS NOT
+            # NULL) count against this one combined limit. Deliberately
+            # distinct from calendar.max_categories, which continues to
+            # govern only CalendarEventLabel ("event category") count and
+            # is otherwise unchanged. See mykhaya.routers.calendar's
+            # _calendar_access for how the single retained calendar is
+            # chosen (always the retained Free member's own Personal
+            # Calendar — see mykhaya.entitlements.retained_member_id) —
+            # this reintroduces, under a new name and a materially
+            # different combined-resource-type meaning, the restriction the
+            # "Commercial plan cleanup" task deliberately renamed away from
+            # calendar.max_calendars to calendar.max_categories; see that
+            # migration's own comment in routers/calendar.py for the prior,
+            # different, abandoned meaning.
+            "calendar.max_calendars": 1,
             "home.max_members": 1,
             "routines.personal.max_active": 3,
+            # Household Lists a Free Home may have active at once — Phase
+            # 2B. See mykhaya.routers.lists' numeric-limit enforcement and
+            # classify_ordered_resources-based downgrade classification.
+            "lists.max_lists": 2,
         },
     ),
     SubscriptionPlan.family: PlanDefinition(
@@ -132,11 +171,14 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "family_plans.enabled": True,
             "support.priority.enabled": True,
             "meals.enabled": True,
+            "nudges.enabled": True,
         },
         limits={
             "calendar.max_categories": None,
+            "calendar.max_calendars": None,
             "home.max_members": None,
             "routines.personal.max_active": None,
+            "lists.max_lists": None,
         },
     ),
 }
@@ -188,6 +230,49 @@ def classify_ordered_resources(
     if limit is None:
         return {resource_id: True for resource_id in ordered_ids}
     return {resource_id: index < limit for index, resource_id in enumerate(ordered_ids)}
+
+
+async def retained_member_id(db: AsyncSession, home_id: uuid.UUID) -> uuid.UUID | None:
+    """Phase 2C: the single member whose access stays fully unrestricted
+    when a Home's effective plan is Free — every other existing member is
+    preserved (never evicted, never deleted; see "Safe downgrade
+    principle") but loses access to household-collaboration resources
+    (see calendar.max_calendars) until the Home returns to Family.
+    home.max_members only ever blocked *new* growth — this is the first
+    place a *retained* single member is chosen from among Homes that
+    already have several, so it is its own function rather than folded
+    into an existing one.
+
+    Deterministic priority order, inspected against the actual
+    role/relationship data (mykhaya.models.HouseholdRelationship) rather
+    than assumed:
+
+    1. A `home_admin` relationship — the Home's own administering account,
+       semantically the right "single person" for a Free personal
+       organiser. A Home can (rarely) have more than one home_admin; the
+       earliest-created one wins, for the same reason as (2).
+    2. Otherwise, the oldest active membership by `created_at`.
+    3. A stable `id` tie-break (UUIDv7 ids are themselves time-ordered, so
+       this only matters for the vanishingly unlikely case of two rows
+       sharing a `created_at` timestamp).
+
+    Returns the member's `user_id` (not the Membership row's own id) since
+    every caller compares it against `HomeCalendar.owner_user_id` or a
+    request's own viewer identity, both of which key off `user_id`.
+    Returns `None` only if the Home has no active membership at all (not
+    reachable in practice — every Home has at least its creator)."""
+    memberships = (
+        await db.scalars(
+            select(Membership)
+            .where(Membership.group_id == home_id, Membership.removed_at.is_(None))
+            .order_by(Membership.created_at.asc(), Membership.id.asc())
+        )
+    ).all()
+    if not memberships:
+        return None
+    admins = [row for row in memberships if row.relationship == HouseholdRelationship.home_admin]
+    retained = admins[0] if admins else memberships[0]
+    return retained.user_id
 
 
 async def get_home_subscription(db: AsyncSession, home_id: uuid.UUID) -> HomeSubscription | None:
@@ -510,6 +595,26 @@ async def personal_routine_usage(
         or 0
     )
     limit = await get_limit(db, home_id, "routines.personal.max_active")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def list_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many active (non-deleted) HouseholdList rows a Home currently has
+    vs. its plan's lists.max_lists — same shared-diagnostic shape/purpose as
+    calendar_usage. See mykhaya.routers.lists' _ordered_lists/_list_access
+    for the matching enforcement-side classification (same rows, same
+    ordering)."""
+    count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(HouseholdList)
+            .where(HouseholdList.group_id == home_id, HouseholdList.deleted_at.is_(None))
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "lists.max_lists")
     return CalendarUsageResponse(
         count=count, limit=limit, over_limit=limit is not None and count > limit
     )

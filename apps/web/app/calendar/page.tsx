@@ -223,6 +223,20 @@ function isRecurringOwnEvent(event: EventOccurrence): boolean {
   return !event.share_id && event.recurrence !== "none";
 }
 
+// Phase 2D: one shared rule for every Calendar picker option (Home calendars
+// and the Personal Calendar alike) — a calendar preserved read-only past a
+// downgrade can't be newly targeted, but an event already assigned to it
+// stays selectable so resaving/viewing it never breaks. Matches
+// update_event's own "transition-safe" check server-side.
+function isCalendarLockedForSelection(
+  calendar: Pick<HomeCalendar, "id" | "commercial_access">,
+  currentCalendarId: string | null | undefined,
+): boolean {
+  return (
+    calendar.commercial_access === "read_only_due_to_plan" && currentCalendarId !== calendar.id
+  );
+}
+
 function EventForm({
   formId,
   labels,
@@ -231,7 +245,7 @@ function EventForm({
   initial,
   initialDay,
   timeZone,
-  personalCalendarId,
+  personalCalendar,
   writableShares = [],
   busy,
   sharedEventsEnabled,
@@ -260,8 +274,12 @@ function EventForm({
   timeZone: string;
   /** The signed-in user's private Personal Calendar within this Home — null
    *  only in the brief window before it's loaded (see CalendarPage.load) or
-   *  for a managed Child, who doesn't have one. */
-  personalCalendarId: string | null;
+   *  for a managed Child, who doesn't have one. Phase 2D: the full
+   *  HomeCalendar (not just its id) so the picker can see its
+   *  commercial_access, same as homeCalendars already does — a Personal
+   *  Calendar preserved read-only after a Family-to-Free downgrade with
+   *  multiple members must not be offered as a new target either. */
+  personalCalendar: HomeCalendar | null;
   /** Externally shared calendars the signed-in user may create events on
    *  (permission "manage", accepted) — offered as extra targets in the
    *  Calendar picker only when creating a brand-new event (initial is
@@ -327,11 +345,23 @@ function EventForm({
   // ever reflects, never changes, initial.calendar_id on edit.
   const [calendarTarget, setCalendarTarget] = useState(() => {
     if (initial) {
-      return personalCalendarId && initial.calendar_id === personalCalendarId
+      return personalCalendar && initial.calendar_id === personalCalendar.id
         ? PERSONAL_CALENDAR_VALUE
         : initial.calendar_id;
     }
-    return homeCalendars.find((calendar) => calendar.is_primary)?.id ?? "";
+    // Phase 2D: default to a calendar the user can actually use — the
+    // primary Home calendar when it's writable (unchanged behaviour), else
+    // the Personal Calendar when that's the one entitled resource instead
+    // (a Free Home after this session's Phase 2C work), else fall back to
+    // the primary anyway so the picker always has *some* selection.
+    const primary = homeCalendars.find((calendar) => calendar.is_primary);
+    if (primary && !isCalendarLockedForSelection(primary, null)) {
+      return primary.id;
+    }
+    if (personalCalendar && !isCalendarLockedForSelection(personalCalendar, null)) {
+      return PERSONAL_CALENDAR_VALUE;
+    }
+    return primary?.id ?? "";
   });
   // The Calendar Tag picker's value — a real CalendarEventLabel id, or ""
   // for "No tag". Entirely independent of calendarTarget: which calendar
@@ -494,7 +524,7 @@ function EventForm({
       // forced to null just because the calendar is Personal.
       member_ids: isPersonal ? [] : data.getAll("members").map(String),
       label_id: tagSelection || null,
-      calendar_id: isPersonal ? personalCalendarId : calendarTarget || null,
+      calendar_id: isPersonal ? (personalCalendar?.id ?? null) : calendarTarget || null,
       location_text: formText(data, "location") || null,
       reminder_minutes: formText(data, "reminder")
         ? Number(formText(data, "reminder"))
@@ -716,13 +746,7 @@ function EventForm({
         >
           <optgroup label="Home calendars">
             {homeCalendars.map((calendar) => {
-              // Transition-safe, matching update_event's own check: the
-              // calendar an event already lives on stays selectable (so
-              // resaving never breaks), but a different, over-the-plan-limit
-              // calendar preserved past a downgrade can't be newly targeted.
-              const locked =
-                calendar.commercial_access === "read_only_due_to_plan" &&
-                initial?.calendar_id !== calendar.id;
+              const locked = isCalendarLockedForSelection(calendar, initial?.calendar_id);
               return (
                 <option key={calendar.id} value={calendar.id} disabled={locked}>
                   {calendar.is_primary ? "Home calendar" : calendar.name}
@@ -731,9 +755,15 @@ function EventForm({
               );
             })}
           </optgroup>
-          {personalCalendarId && (
-            <option value={PERSONAL_CALENDAR_VALUE}>Personal calendar</option>
-          )}
+          {personalCalendar && (() => {
+            const locked = isCalendarLockedForSelection(personalCalendar, initial?.calendar_id);
+            return (
+              <option value={PERSONAL_CALENDAR_VALUE} disabled={locked}>
+                Personal calendar
+                {locked ? " (Family)" : ""}
+              </option>
+            );
+          })()}
           {/* Only ever offered when creating a brand-new event — an
               existing event's calendar assignment never changes via edit
               (initial is undefined here whenever writableShares is
@@ -2142,7 +2172,7 @@ export default function CalendarPage() {
               members={members}
               initialDay={editorDay}
               timeZone={calendarTimezone}
-              personalCalendarId={personalCalendarId}
+              personalCalendar={personalCalendar}
               writableShares={writableShares}
               busy={busy}
               sharedEventsEnabled={sharedEventsEnabled}
@@ -2200,7 +2230,7 @@ export default function CalendarPage() {
                   initial={selectedEvent}
                   initialDay={new Date(selectedEvent.start_at)}
                   timeZone={calendarTimezone}
-                  personalCalendarId={personalCalendarId}
+                  personalCalendar={personalCalendar}
                   busy={busy}
                   sharedEventsEnabled={sharedEventsEnabled}
                   onSubmit={update}

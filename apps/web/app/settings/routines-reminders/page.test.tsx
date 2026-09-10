@@ -66,6 +66,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       deleteTodoCategory: vi.fn(),
       members: vi.fn(),
       billingStatus: vi.fn(),
+      featureMatrix: vi.fn(),
     },
   };
 });
@@ -140,6 +141,10 @@ beforeEach(() => {
     calendar_usage: { count: 1, limit: null, over_limit: false },
     shared_events_enabled: true,
     external_invites_enabled: true,
+    nudges_enabled: true,
+  });
+  (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+    features: [{ feature: "nudges", enabled: true }],
   });
   (api.createRoutine as ReturnType<typeof vi.fn>).mockResolvedValue(routine());
   (api.updateRoutine as ReturnType<typeof vi.fn>).mockResolvedValue(routine());
@@ -188,6 +193,41 @@ function mockBoth() {
     items: [reminder({ id: "reminder-1", title: "Call the dentist", scope: "personal" })],
   });
 }
+
+describe("Routines & Reminders — Nudges module gating", () => {
+  it("shows an unavailable message instead of the module when Nudges is disabled for the Home", async () => {
+    mockBoth();
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [{ feature: "nudges", enabled: false }],
+    });
+    render(<RoutinesRemindersPage />);
+
+    expect(
+      await screen.findByText("Nudges isn't available for this Home yet. Please check back soon."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Put bins out")).not.toBeInTheDocument();
+  });
+
+  it("shows the Family upsell instead of the module on a Free Home", async () => {
+    mockBoth();
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      household_routines_enabled: false,
+      member_usage: { count: 1, limit: 1, over_limit: false },
+      calendar_usage: { count: 1, limit: 1, over_limit: false },
+      shared_events_enabled: false,
+      external_invites_enabled: false,
+      nudges_enabled: false,
+    });
+    render(<RoutinesRemindersPage />);
+
+    expect(await screen.findByText(/Included with Family/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View Family plan" })).toHaveAttribute(
+      "href",
+      "/settings/billing",
+    );
+    expect(screen.queryByText("Put bins out")).not.toBeInTheDocument();
+  });
+});
 
 describe("Routines & Reminders — combined module", () => {
   it("renders both Routines and Reminders together in the All view, subtly labelled", async () => {
@@ -337,6 +377,7 @@ describe("Routines & Reminders — create menu", () => {
       calendar_usage: { count: 1, limit: 1, over_limit: false },
       shared_events_enabled: false,
       external_invites_enabled: false,
+      nudges_enabled: true,
     });
     render(<RoutinesRemindersPage />);
     const user = userEvent.setup();

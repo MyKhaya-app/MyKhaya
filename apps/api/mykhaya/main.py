@@ -1,12 +1,14 @@
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import TypedDict
 
 import structlog
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import Message
 
 from mykhaya.config import get_settings
 from mykhaya.routers import (
@@ -41,17 +43,26 @@ settings = get_settings()
 log = structlog.get_logger()
 
 
-def api_documentation_urls(environment: str) -> dict[str, str | None]:
+class ApiDocumentationUrls(TypedDict):
+    docs_url: str | None
+    redoc_url: str | None
+    openapi_url: str | None
+
+
+def api_documentation_urls(environment: str) -> ApiDocumentationUrls:
     """Keep interactive/API schema documentation out of production."""
     if environment == "production":
         return {"docs_url": None, "redoc_url": None, "openapi_url": None}
     return {"docs_url": "/docs", "redoc_url": None, "openapi_url": "/openapi.json"}
 
 
+documentation_urls = api_documentation_urls(settings.environment)
 app = FastAPI(
     title="MyKhaya API",
     version=settings.version,
-    **api_documentation_urls(settings.environment),
+    docs_url=documentation_urls["docs_url"],
+    redoc_url=documentation_urls["redoc_url"],
+    openapi_url=documentation_urls["openapi_url"],
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 app.add_middleware(
@@ -134,7 +145,7 @@ async def security_and_limits(
         original_receive = request.receive
         received = 0
 
-        async def limited_receive() -> object:
+        async def limited_receive() -> Message:
             nonlocal received
             message = await original_receive()
             if message.get("type") == "http.request":

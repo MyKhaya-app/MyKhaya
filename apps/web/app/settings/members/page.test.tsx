@@ -118,8 +118,10 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
     shared_events_enabled: false,
     external_invites_enabled: false,
     meals_enabled: false,
-    lists_enabled: false,
+    lists_enabled: true,
+    list_usage: { count: 0, limit: 2, over_limit: false },
     wishlists_enabled: false,
+    nudges_enabled: false,
     ...overrides,
   };
 }

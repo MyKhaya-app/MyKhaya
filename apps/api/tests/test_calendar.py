@@ -94,16 +94,31 @@ async def test_calendar_crud_and_conflict(client: AsyncClient) -> None:
     assert group.status_code == 201
     home_id = group.json()["id"]
 
-    disabled = await client.get(f"/api/v1/homes/{home_id}/event-labels")
-    assert disabled.status_code == 404
+    # Calendar is globally released (0063_feature_flag_backfill), so a fresh
+    # Home inherits it enabled by default — explicitly disable it for this
+    # one Home via a FeatureOverride to exercise the "feature gate is
+    # reachable and independent" path, rather than relying on an absent
+    # override to mean disabled.
     async with SessionFactory() as db:
         db.add(
             FeatureOverride(
                 feature_key=FeatureKey.calendar,
                 group_id=uuid.UUID(home_id),
-                enabled=True,
+                enabled=False,
             )
         )
+        await db.commit()
+    disabled = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert disabled.status_code == 404
+    async with SessionFactory() as db:
+        override = await db.scalar(
+            select(FeatureOverride).where(
+                FeatureOverride.group_id == uuid.UUID(home_id),
+                FeatureOverride.feature_key == FeatureKey.calendar,
+            )
+        )
+        assert override is not None
+        override.enabled = True
         await db.commit()
     evaluation = await client.get(f"/api/v1/features/{home_id}/calendar")
     assert evaluation.status_code == 200
@@ -932,7 +947,7 @@ async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "Activity", "color": "emerald"},
+        json={"name": "Hobby", "color": "emerald"},
     )
     assert activity.status_code == 201, activity.text
     activity_id = activity.json()["id"]
@@ -959,7 +974,7 @@ async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
     event = created.json()
     assert event["calendar_id"] == gfoat_id
     assert event["label"]["id"] == activity_id
-    assert event["label"]["name"] == "Activity"
+    assert event["label"]["name"] == "Hobby"
     # The colour on the wire is the Calendar Tag's, not GFOAT's own colour —
     # see _occurrence/_calendar_color_map: a label always wins.
     assert event["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
@@ -976,7 +991,7 @@ async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
         item for item in listed.json()["items"] if item["event_id"] == event["event_id"]
     )
     assert listed_event["calendar_id"] == gfoat_id
-    assert listed_event["label"]["name"] == "Activity"
+    assert listed_event["label"]["name"] == "Hobby"
 
 
 @pytest.mark.asyncio
@@ -998,7 +1013,7 @@ async def test_personal_calendar_event_can_carry_a_calendar_tag(client: AsyncCli
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "Other", "color": "sky"},
+        json={"name": "Misc", "color": "sky"},
     )
     assert other_tag.status_code == 201, other_tag.text
     other_tag_id = other_tag.json()["id"]
@@ -1025,7 +1040,7 @@ async def test_personal_calendar_event_can_carry_a_calendar_tag(client: AsyncCli
     event = created.json()
     assert event["calendar_id"] == personal_id
     assert event["label"]["id"] == other_tag_id
-    assert event["label"]["name"] == "Other"
+    assert event["label"]["name"] == "Misc"
 
 
 @pytest.mark.asyncio
@@ -1164,7 +1179,7 @@ async def test_label_usage_endpoint_reports_affected_event_count(client: AsyncCl
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "Activity", "color": "emerald"},
+        json={"name": "Hobby", "color": "emerald"},
     )
     assert created.status_code == 201
     label_id = created.json()["id"]
@@ -1216,7 +1231,7 @@ async def test_deleting_a_calendar_tag_untags_its_events_without_touching_anythi
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "Activity", "color": "violet"},
+        json={"name": "Hobby", "color": "violet"},
     )
     assert created_label.status_code == 201
     label_id = created_label.json()["id"]
@@ -1287,7 +1302,7 @@ async def test_deleting_a_calendar_tag_leaves_a_recurring_event_intact(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "Activity", "color": "violet"},
+        json={"name": "Hobby", "color": "violet"},
     )
     assert created_label.status_code == 201
     label_id = created_label.json()["id"]

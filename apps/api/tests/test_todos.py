@@ -10,8 +10,16 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import ActionToken, FeatureKey, FeatureOverride, TokenPurpose, User
+from mykhaya.models import (
+    ActionToken,
+    FeatureKey,
+    FeatureOverride,
+    SubscriptionPlan,
+    TokenPurpose,
+    User,
+)
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -73,6 +81,13 @@ async def create_home_with_notifications(client: AsyncClient) -> str:
         db.add(
             FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
         )
+        # To-dos require the nudges.enabled commercial entitlement
+        # (Family-only, Phase 2B) in addition to FeatureKey.nudges — see
+        # mykhaya.routers.todos. Free-plan denial is covered separately in
+        # test_feature_precedence.py.
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return str(home_id)
 
@@ -161,8 +176,7 @@ async def test_todo_requires_due_date_and_new_home_starts_empty(client: AsyncCli
     )
     assert missing_date.status_code == 422, missing_date.text
 
-    other = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Other Home"})
-    assert other.status_code == 201
-    response = await unsafe(client, "GET", f"/api/v1/homes/{other.json()['id']}/todos")
+    other_home_id = await create_home_with_notifications(client)
+    response = await unsafe(client, "GET", f"/api/v1/homes/{other_home_id}/todos")
     assert response.status_code == 200, response.text
     assert response.json()["items"] == []

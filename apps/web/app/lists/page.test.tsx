@@ -56,14 +56,73 @@ beforeEach(() => {
   });
 });
 
-describe("Lists — Free plan locked state", () => {
-  it("shows the Family upsell and no list content for a Free Home", async () => {
-    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ lists_enabled: false });
+describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
+  it("shows the ordinary overview for a Free Home under its limit — no upsell", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 1, limit: 2, over_limit: false },
+    });
 
     render(<ListsPage />);
 
-    expect(await screen.findByText(/view family plan/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /new list/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/view family plan/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the at-limit message once a Free Home has reached lists.max_lists", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 2, limit: 2, over_limit: false },
+    });
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "l1",
+          name: "Groceries",
+          icon: null,
+          item_count: 0,
+          remaining_count: 0,
+          created_by: "u1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          commercial_access: "normal",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+
+    expect(
+      await screen.findByText("You've reached the Free plan limit of 2 lists."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a read-only badge on a list over the plan limit after a downgrade", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 3, limit: 2, over_limit: true },
+    });
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "l3",
+          name: "Extra list",
+          icon: null,
+          item_count: 0,
+          remaining_count: 0,
+          created_by: "u1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          commercial_access: "read_only_due_to_plan",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+
+    expect(
+      await screen.findByText(/Read-only on Free — included with Family/),
+    ).toBeInTheDocument();
   });
 });
 

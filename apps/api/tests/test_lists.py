@@ -22,6 +22,7 @@ from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    FeatureFlag,
     FeatureKey,
     FeatureOverride,
     HouseholdRelationship,
@@ -150,17 +151,40 @@ async def test_family_user_can_use_lists(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_free_user_cannot_use_lists(client: AsyncClient) -> None:
+async def test_free_user_can_create_first_and_second_list(client: AsyncClient) -> None:
+    """Lists is included on Free (Phase 2B) — bounded by lists.max_lists=2,
+    not a boolean gate. See docs/architecture/commercial-entitlements.md."""
     await create_verified_user(client, unique_email("free"), "Free User")
     home_id = await create_home(client, "Free Lists Home", plan=SubscriptionPlan.free)
 
-    create = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X"})
-    assert create.status_code == 403
-    assert create.json()["detail"]["code"] == "plan_feature_unavailable"
-    assert create.json()["detail"]["entitlement"] == "lists.enabled"
+    first = await create_list(client, home_id, name="Groceries")
+    assert first["commercial_access"] == "normal"
+    second = await create_list(client, home_id, name="Packing")
+    assert second["commercial_access"] == "normal"
 
-    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
-    assert listed.status_code == 403
+
+@pytest.mark.asyncio
+async def test_free_user_cannot_create_a_third_list(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("free3"), "Free User")
+    home_id = await create_home(client, "Free Lists Limit Home", plan=SubscriptionPlan.free)
+    await create_list(client, home_id, name="Groceries")
+    await create_list(client, home_id, name="Packing")
+
+    third = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Third"}
+    )
+    assert third.status_code == 403
+    assert third.json()["detail"]["code"] == "plan_limit_reached"
+    assert third.json()["detail"]["entitlement"] == "lists.max_lists"
+
+
+@pytest.mark.asyncio
+async def test_family_can_create_more_than_two_lists(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("family3"), "Family User")
+    home_id = await create_home(client, "Family Lists Home")
+    for name in ("A", "B", "C", "D"):
+        created = await create_list(client, home_id, name=name)
+        assert created["commercial_access"] == "normal"
 
 
 @pytest.mark.asyncio
@@ -173,9 +197,146 @@ async def test_lists_feature_off_returns_404_even_on_family(client: AsyncClient)
         assert subscription is not None
         subscription.plan = SubscriptionPlan.family
         await db.commit()
-    # No FeatureOverride for shopping was set — module isn't released here.
+    # Lists (shopping) is globally released (0063_feature_flag_backfill), so
+    # explicitly disable it for this one Home via a FeatureOverride to
+    # exercise the "feature gate is independent of commercial entitlement"
+    # path — an absent override now correctly inherits the global released
+    # state rather than defaulting to disabled.
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.shopping, group_id=home_id, enabled=False))
+        await db.commit()
     response = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X"})
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_platform_disabled_blocks_lists_even_with_home_override_and_family_plan(
+    client: AsyncClient,
+) -> None:
+    """PCC platform availability outranks both the Home FeatureOverride and
+    the commercial plan (Phase 2A precedence fix) — a Home override alone
+    was the pre-Phase-2A bug this guards against regressing."""
+    await create_verified_user(client, unique_email("platformoff"), "Platform Off User")
+    home_id = await create_home(client, "Platform Off Home")  # override=True, plan=family
+    async with SessionFactory() as db:
+        flag = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.shopping))
+        assert flag is not None
+        original = flag.enabled
+        flag.enabled = False
+        await db.commit()
+    try:
+        response = await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X"}
+        )
+        assert response.status_code == 404
+    finally:
+        async with SessionFactory() as db:
+            flag = await db.scalar(
+                select(FeatureFlag).where(FeatureFlag.key == FeatureKey.shopping)
+            )
+            assert flag is not None
+            flag.enabled = original
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_excess_lists_survive_downgrade_and_are_deterministically_classified(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("downgrade"), "Downgrade User")
+    home_id = await create_home(client, "Downgrade Lists Home")
+    first = await create_list(client, home_id, name="Oldest")
+    second = await create_list(client, home_id, name="Middle")
+    third = await create_list(client, home_id, name="Newest")
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
+    assert listed.status_code == 200
+    by_id = {row["id"]: row for row in listed.json()["items"]}
+    # All three preserved — nothing deleted by the downgrade.
+    assert {first["id"], second["id"], third["id"]} == set(by_id)
+    # Oldest-created-first is the deterministic rule (no "primary" concept
+    # for Lists) — the first two created stay normal, the third locks.
+    assert by_id[first["id"]]["commercial_access"] == "normal"
+    assert by_id[second["id"]]["commercial_access"] == "normal"
+    assert by_id[third["id"]]["commercial_access"] == "read_only_due_to_plan"
+
+    # The excess list is still fully viewable...
+    detail = await client.get(f"/api/v1/homes/{home_id}/lists/{third['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["commercial_access"] == "read_only_due_to_plan"
+
+    # ...but rejects every mutation.
+    rename = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}",
+        json={"name": "Renamed", "expected_updated_at": third["updated_at"]},
+    )
+    assert rename.status_code == 403
+    assert rename.json()["detail"]["code"] == "resource_restricted_by_plan"
+
+    add_item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert add_item.status_code == 403
+    assert add_item.json()["detail"]["code"] == "resource_restricted_by_plan"
+
+    # Voluntary deletion of an excess list is still allowed (the customer's
+    # own way to get back within the Free limit) — matches Calendar's
+    # identical downgrade exemption.
+    delete = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/lists/{third['id']}")
+    assert delete.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_upgrade_restores_full_access_to_preserved_lists(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("reupgrade"), "Reupgrade User")
+    home_id = await create_home(client, "Reupgrade Lists Home")
+    first = await create_list(client, home_id, name="Oldest")
+    await create_list(client, home_id, name="Middle")
+    third = await create_list(client, home_id, name="Newest")
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+    blocked = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert blocked.status_code == 403
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
+
+    restored = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert restored.status_code == 201
+    assert restored.json()["commercial_access"] == "normal"
+    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
+    ids = {row["id"] for row in listed.json()["items"]}
+    assert first["id"] in ids
+    assert third["id"] in ids
+    assert all(row["commercial_access"] == "normal" for row in listed.json()["items"])
 
 
 # ---------------------------------------------------------------------------

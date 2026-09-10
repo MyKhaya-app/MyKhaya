@@ -23,14 +23,21 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.entitlements import require_entitlement
+from mykhaya.entitlements import (
+    CommercialRestrictionCode,
+    classify_ordered_resources,
+    commercial_restriction_error,
+    get_limit,
+    require_entitlement,
+    require_within_limit,
+)
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import FeatureKey, HouseholdList, HouseholdListItem, Membership
@@ -47,12 +54,57 @@ from mykhaya.schemas import (
     ListResponse,
 )
 
+LISTS_LIMIT_KEY = "lists.max_lists"
+
 
 async def require_lists_feature(home_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
     await require_feature(db, FeatureKey.shopping, home_id)
 
 
 router = APIRouter(prefix="/homes", tags=["lists"], dependencies=[Depends(require_lists_feature)])
+
+
+async def _ordered_lists(db: AsyncSession, group_id: uuid.UUID) -> list[HouseholdList]:
+    """Deterministic priority order for commercial classification: oldest-
+    created first (Lists has no "primary" concept, unlike HomeCalendar), a
+    stable id tie-breaker for the vanishingly unlikely case of two rows
+    sharing a created_at timestamp. See "Choosing the retained Free
+    calendar" in docs/architecture/commercial-entitlements.md for the
+    equivalent Calendar rule this mirrors."""
+    return list(
+        (
+            await db.scalars(
+                select(HouseholdList)
+                .where(HouseholdList.group_id == group_id, HouseholdList.deleted_at.is_(None))
+                .order_by(HouseholdList.created_at.asc(), HouseholdList.id.asc())
+            )
+        ).all()
+    )
+
+
+async def _list_access(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, bool]:
+    """True = normal (within the Home's current lists.max_lists
+    entitlement), False = read_only_due_to_plan. Computed fresh from
+    current usage + entitlement on every call — never persisted, so it can
+    never drift when the Home's plan changes. See mykhaya.entitlements
+    .classify_ordered_resources and routers.calendar._calendar_access for
+    the identical pattern this mirrors."""
+    lists = await _ordered_lists(db, group_id)
+    limit = await get_limit(db, group_id, LISTS_LIMIT_KEY)
+    return classify_ordered_resources([row.id for row in lists], limit)
+
+
+def _require_list_writable(access: dict[uuid.UUID, bool], list_id: uuid.UUID) -> None:
+    if not access.get(list_id, False):
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.resource_restricted_by_plan,
+            "This list is included with MyKhaya Family. Upgrade to add or edit items here.",
+            entitlement=LISTS_LIMIT_KEY,
+        )
+
+
+def _access_state(access: dict[uuid.UUID, bool], list_id: uuid.UUID) -> str:
+    return "normal" if access.get(list_id, False) else "read_only_due_to_plan"
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +160,9 @@ async def _counts(db: AsyncSession, list_ids: list[uuid.UUID]) -> dict[uuid.UUID
     return {list_id: (total, remaining) for list_id, total, remaining in rows}
 
 
-def _list_response(row: HouseholdList, total: int, remaining: int) -> ListResponse:
+def _list_response(
+    row: HouseholdList, total: int, remaining: int, access: dict[uuid.UUID, bool]
+) -> ListResponse:
     return ListResponse(
         id=row.id,
         name=row.name,
@@ -118,6 +172,7 @@ def _list_response(row: HouseholdList, total: int, remaining: int) -> ListRespon
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        commercial_access=_access_state(access, row.id),
     )
 
 
@@ -147,7 +202,9 @@ def _item_response(row: HouseholdListItem) -> ListItemResponse:
     )
 
 
-async def _detail_response(db: AsyncSession, row: HouseholdList) -> ListDetailResponse:
+async def _detail_response(
+    db: AsyncSession, row: HouseholdList, access: dict[uuid.UUID, bool]
+) -> ListDetailResponse:
     items = await _list_items(db, row.id)
     remaining = sum(1 for item in items if not item.is_checked)
     return ListDetailResponse(
@@ -160,6 +217,7 @@ async def _detail_response(db: AsyncSession, row: HouseholdList) -> ListDetailRe
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        commercial_access=_access_state(access, row.id),
     )
 
 
@@ -190,6 +248,21 @@ async def create_list(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
 
+    # Race-safe: serialises concurrent "create another list" attempts for
+    # this Home so two simultaneous requests can't both observe the same
+    # under-limit count and both insert past it — identical pattern to
+    # routers.calendar.create_calendar's per-Home advisory lock. See
+    # mykhaya.entitlements.require_within_limit's docstring.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"lists:{home_id}"}
+    )
+    current_count = await db.scalar(
+        select(func.count())
+        .select_from(HouseholdList)
+        .where(HouseholdList.group_id == home_id, HouseholdList.deleted_at.is_(None))
+    )
+    await require_within_limit(db, home_id, LISTS_LIMIT_KEY, current_count or 0)
+
     row = HouseholdList(
         group_id=home_id,
         name=" ".join(body.name.strip().split()),
@@ -200,7 +273,7 @@ async def create_list(
     await db.flush()
     audit(db, request, "lists.list.created", auth.user.id, home_id, "list", row.id)
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, {row.id: True})
 
 
 @router.get("/{home_id}/lists", response_model=ListListResponse)
@@ -225,8 +298,9 @@ async def list_lists(
         )
     ).all()
     counts = await _counts(db, [row.id for row in rows])
+    access = await _list_access(db, home_id)
     return ListListResponse(
-        items=[_list_response(row, *counts.get(row.id, (0, 0))) for row in rows]
+        items=[_list_response(row, *counts.get(row.id, (0, 0)), access) for row in rows]
     )
 
 
@@ -240,7 +314,8 @@ async def get_list(
     await require_capability(home_id, Capability.lists_view, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id)
-    return await _detail_response(db, row)
+    access = await _list_access(db, home_id)
+    return await _detail_response(db, row, access)
 
 
 @router.patch("/{home_id}/lists/{list_id}", response_model=ListDetailResponse)
@@ -255,6 +330,8 @@ async def rename_list(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id, for_update=True)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     if row.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This list changed. Reload and try again.")
     row.name = " ".join(body.name.strip().split())
@@ -262,7 +339,7 @@ async def rename_list(
     audit(db, request, "lists.list.renamed", auth.user.id, home_id, "list", row.id)
     await db.commit()
     await db.refresh(row)
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
 
 
 @router.delete("/{home_id}/lists/{list_id}", status_code=204)
@@ -303,6 +380,8 @@ async def add_list_item(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     if body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
     next_position = await _next_position(db, row.id)
@@ -324,7 +403,7 @@ async def add_list_item(
         )
     audit(db, request, "lists.item.added", auth.user.id, home_id, "list", row.id)
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
 
 
 @router.patch("/{home_id}/lists/{list_id}/items/{item_id}", response_model=ListDetailResponse)
@@ -345,6 +424,8 @@ async def update_list_item(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     item = await db.scalar(
         select(HouseholdListItem).where(
             HouseholdListItem.id == item_id, HouseholdListItem.list_id == row.id
@@ -382,7 +463,7 @@ async def update_list_item(
         )
     audit(db, request, "lists.item.updated", auth.user.id, home_id, "list", row.id)
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
 
 
 @router.delete("/{home_id}/lists/{list_id}/items/{item_id}", response_model=ListDetailResponse)
@@ -397,6 +478,8 @@ async def remove_list_item(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     await db.execute(
         delete(HouseholdListItem).where(
             HouseholdListItem.id == item_id, HouseholdListItem.list_id == row.id
@@ -404,7 +487,7 @@ async def remove_list_item(
     )
     audit(db, request, "lists.item.removed", auth.user.id, home_id, "list", row.id)
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
 
 
 @router.post("/{home_id}/lists/{list_id}/items/reorder", response_model=ListDetailResponse)
@@ -425,6 +508,8 @@ async def reorder_list_items(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id, for_update=True)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     items = await _list_items(db, row.id)
     current_ids = {item.id for item in items}
     requested_ids = body.item_ids
@@ -437,7 +522,7 @@ async def reorder_list_items(
     for position, item_id in enumerate(requested_ids):
         by_id[item_id].position = position
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
 
 
 @router.post("/{home_id}/lists/{list_id}/items/clear-completed", response_model=ListDetailResponse)
@@ -451,6 +536,8 @@ async def clear_completed_items(
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
     await db.execute(
         delete(HouseholdListItem).where(
             HouseholdListItem.list_id == row.id, HouseholdListItem.is_checked.is_(True)
@@ -458,4 +545,4 @@ async def clear_completed_items(
     )
     audit(db, request, "lists.items.cleared_completed", auth.user.id, home_id, "list", row.id)
     await db.commit()
-    return await _detail_response(db, row)
+    return await _detail_response(db, row, access)
