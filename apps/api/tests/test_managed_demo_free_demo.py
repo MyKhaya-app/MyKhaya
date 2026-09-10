@@ -60,7 +60,9 @@ async def household_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
-async def admin_factory() -> AsyncIterator[Callable[[PlatformRole], Awaitable[PlatformAdministrator]]]:
+async def admin_factory() -> (
+    AsyncIterator[Callable[[PlatformRole], Awaitable[PlatformAdministrator]]]
+):
     identifiers: list[uuid.UUID] = []
 
     async def factory(role: PlatformRole = PlatformRole.owner) -> PlatformAdministrator:
@@ -332,7 +334,9 @@ async def test_free_demo_module_management_reflects_free_state(
 
     # Test 18/19: the same module_state()-backed source of truth the More
     # menu/Home dashboard already read from resolves this fixture correctly.
-    modules = await unsafe(household_client, "GET", f"/api/v1/features/{home_id}/modules/management")
+    modules = await unsafe(
+        household_client, "GET", f"/api/v1/features/{home_id}/modules/management"
+    )
     assert modules.status_code == 200, modules.text
     by_id = {row["id"]: row for row in modules.json()}
 
@@ -363,7 +367,9 @@ async def test_free_demo_seeds_no_family_only_fixture_rows(
         ).all()
         assert len(members) == 1
         routines = (
-            await db.scalars(select(HouseholdRoutine.id).where(HouseholdRoutine.group_id == home_id))
+            await db.scalars(
+                select(HouseholdRoutine.id).where(HouseholdRoutine.group_id == home_id)
+            )
         ).all()
         assert routines == []
         reminders = (

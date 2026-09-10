@@ -304,9 +304,8 @@ async def _managed_demo_response(
     # entitlement path (see ManagedDemoService.create), so this must reflect
     # that rather than hardcoding "family" for every template.
     subscription = await get_home_subscription(db, row.home_id)
-    access: Literal["family", "free"] = (
-        "free" if subscription is not None and subscription.plan == SubscriptionPlan.free else "family"
-    )
+    is_free = subscription is not None and subscription.plan == SubscriptionPlan.free
+    access: Literal["family", "free"] = "free" if is_free else "family"
     return ManagedDemoHomeResponse(
         id=row.id,
         fixture_key=row.fixture_key,

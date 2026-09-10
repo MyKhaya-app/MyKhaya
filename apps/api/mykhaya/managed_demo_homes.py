@@ -602,6 +602,18 @@ class ManagedDemoService:
         )
         if len(memberships) != 1 or memberships[0].group_id != row.home_id:
             raise ManagedDemoError("Refusing to delete an owner account used outside this fixture")
+        # Bulk-delete via Core `delete()`, not ORM object deletion — with
+        # the Membership row(s) above loaded into the session's identity
+        # map, SQLAlchemy would otherwise try to NULL out their (NOT NULL)
+        # group_id during `home`'s own flush, since Group.memberships
+        # carries no delete cascade of its own (a Core statement bypasses
+        # that relationship-cascade path entirely). Every other Home-owned
+        # table already has ondelete="CASCADE" at the database level (see
+        # mykhaya.models) and is never loaded into the ORM session here, so
+        # deleting `home` below still removes all of it correctly.
+        for membership in memberships:
+            db.expunge(membership)
+        await db.execute(delete(Membership).where(Membership.group_id == row.home_id))
         await db.delete(row)
         await db.delete(home)
         await db.flush()
