@@ -74,6 +74,24 @@ old one-time generation step — now detects the existing `ios/` and no-ops
 (see `mac-bootstrap.sh`'s own check); it is **recovery-only**, see "If
 `ios/` is ever lost or corrupted" near the end of this document.
 
+### Native avatar selection (`@capacitor/camera` + `@capacitor/filesystem`)
+
+If this pull added `@capacitor/filesystem` (native avatar-photo full-
+resolution reads — see ADR 0013), also register its bundled Privacy
+Manifest with the Xcode project once, after `npx cap sync ios`:
+
+```sh
+bundle exec ruby scripts/add-privacy-manifest.rb   # or: ruby scripts/add-privacy-manifest.rb
+```
+
+Idempotent, same pattern as `add-app-target-sources.rb` — adds
+`ios/App/App/PrivacyInfo.xcprivacy` (already on disk, committed) to the
+`App` target's Copy Bundle Resources build phase if it isn't already
+there. Without this, App Store Connect can reject the binary at
+upload/validation for using a "required reason" API
+(`NSPrivacyAccessedAPICategoryFileTimestamp`, via `Filesystem.readFile`)
+without a declaring privacy manifest.
+
 ## Step 2 — Open the project in Xcode
 
 ```sh

@@ -1,4 +1,5 @@
 import { Camera, CameraErrorCode, MediaTypeSelection, type MediaResult } from "@capacitor/camera";
+import { Filesystem } from "@capacitor/filesystem";
 import { logAvatarDiagnostic } from "./avatar-upload";
 
 // Native iOS avatar selection — see ADR 0013's "Native/browser avatar
@@ -9,6 +10,23 @@ import { logAvatarDiagnostic } from "./avatar-upload";
 // the older getPhoto({source: CameraSource...}) it replaces is deprecated
 // and slated for removal, so this deliberately targets the supported one
 // rather than the API the deprecated symbols still technically work under.
+//
+// REGRESSION FIX: an earlier version of this module read upload bytes via
+// `fetch(result.webPath)`. That broke both Take Photo and Choose from
+// Photos on physical TestFlight builds ("We couldn't read that photo").
+// Root cause: MediaResult.webPath is documented by @capacitor/camera only
+// as "a path that can be used to set the src attribute of a media item for
+// efficient loading and rendering" — a display/preview convenience, never
+// a documented fetch-for-bytes contract — and MyKhaya's shell loads a
+// REMOTE server.url (https://dev.mykhaya.app / https://mykhaya.app, see
+// ADR 0012), not Capacitor's default bundled-app local origin, which is
+// exactly the configuration Capacitor's own docs say to use `uri` (via the
+// Filesystem plugin) for full-resolution native bytes instead of `webPath`.
+// This module now reads `result.uri` through Filesystem.readFile — the
+// officially documented mechanism — never `fetch(webPath)` for upload
+// bytes. `webPath` is retained only for its documented purpose (nothing in
+// this profile flow currently needs a preview, so it isn't used at all
+// today, but a future preview should use it, never re-derive bytes from it).
 
 export type NativeAvatarFailureCategory = "permission" | "read" | "unknown";
 
@@ -34,7 +52,7 @@ export interface CameraProvider {
 const defaultProvider: CameraProvider = {
   // quality 90 matches the HTML-input path's historical implicit behaviour
   // (no client-side recompression at all — this is the plugin's own JPEG
-  // re-encode quality when it writes out webPath, still far above what
+  // re-encode quality when it writes out the asset, still far above what
   // visibly loses fidelity, and the backend recompresses to WebP anyway).
   // includeMetadata: true is the only way to get MediaMetadata.format/size,
   // used to build a sensible filename/MIME without decoding image bytes
@@ -60,6 +78,27 @@ export function resetCameraProvider(): void {
   provider = defaultProvider;
 }
 
+// Injectable seam for the Filesystem read step, same rationale as
+// CameraProvider above — real Filesystem.readFile only does anything
+// meaningful on a native device.
+export interface FilesystemProvider {
+  readFile(path: string): Promise<{ data: string | Blob }>;
+}
+
+const defaultFilesystemProvider: FilesystemProvider = {
+  readFile: (path) => Filesystem.readFile({ path }),
+};
+
+let filesystemProvider: FilesystemProvider = defaultFilesystemProvider;
+
+export function setFilesystemProviderForTesting(next: FilesystemProvider): void {
+  filesystemProvider = next;
+}
+
+export function resetFilesystemProvider(): void {
+  filesystemProvider = defaultFilesystemProvider;
+}
+
 function nativeErrorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? String((error as { code: unknown }).code)
@@ -74,6 +113,10 @@ function nativeErrorCode(error: unknown): string | undefined {
 // same "couldn't read that photo" wording the four-category error taxonomy
 // this feature exposes to the user already uses for an unreadable file —
 // there is no fifth bucket to invent for "camera hardware unavailable" etc.
+// This only ever classifies a *picker*-stage failure (the plugin call
+// itself); a failure reading the returned asset afterwards is a distinct
+// diagnostic stage — see nativeAssetToFile below — even though it surfaces
+// the same user-facing "read" message.
 function categoriseNativeError(error: unknown): "cancelled" | NativeAvatarFailureCategory {
   const code = nativeErrorCode(error);
   if (code === CameraErrorCode.TakePhotoCancelled || code === CameraErrorCode.ChooseMediaCancelled) {
@@ -93,46 +136,112 @@ function permissionMessage(source: "camera" | "photos"): string {
     : "MyKhaya doesn’t have permission to access your photos. You can allow access in iPhone Settings.";
 }
 
+// Filesystem.readFile without a `directory` returns the file's bytes as a
+// base64 string on native (see @capacitor/filesystem's ReadFileResult:
+// "Blob is only available on Web. On native, the data is returned as a
+// string."). Decoding it via atob keeps the whole conversion local and
+// synchronous — no further network-ish call of the kind that made webPath
+// unreliable in the first place. A 20 MiB original (the documented avatar
+// upload ceiling) becomes a ~27 MiB base64 string crossing the JS bridge —
+// real, but a one-off, in-memory, synchronous operation on a modern
+// device; not the sort of cost that justifies falling back to an
+// undocumented, already-proven-unreliable transport. See ADR 0013.
+function base64ToBlob(base64: string, mimeType: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+// Android/iOS may return "jpg" rather than "jpeg" for the same format, and
+// HEIC/HEIF gallery assets are reported as such when the plugin doesn't
+// re-encode them (see MediaMetadata.format's own documentation) — normalise
+// before comparing. Missing/unusual metadata never blocks an otherwise
+// valid read: it only affects the filename/MIME guess, defaulting to JPEG,
+// while the backend remains the sole authority on what the bytes actually
+// are (see ADR 0013's "Shared binary upload processing").
+function extensionAndMimeFromFormat(format: string | undefined): { extension: string; mimeType: string } {
+  const normalised = format?.toLowerCase().replace(/^jpg$/, "jpeg");
+  switch (normalised) {
+    case "png":
+      return { extension: "png", mimeType: "image/png" };
+    case "webp":
+      return { extension: "webp", mimeType: "image/webp" };
+    case "heic":
+    case "heif":
+      return { extension: "heic", mimeType: "image/heic" };
+    default:
+      return { extension: "jpg", mimeType: "image/jpeg" };
+  }
+}
+
 // Converts the plugin's MediaResult into a browser File suitable for the
 // existing api.uploadAvatar() multipart flow — without decoding image bytes
-// in JavaScript. `webPath` is Capacitor's supported approach for this: a
-// URL served through the native webview's own local scheme handler, safe to
-// fetch() from inside WKWebView (a raw `uri`/`file://` path is not — see
-// ADR 0013). `thumbnail` is deliberately never used here: it is a
-// low-resolution base64 preview, not the original image.
-async function mediaResultToFile(result: MediaResult, filenamePrefix: string): Promise<File> {
-  if (!result.webPath) {
-    throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
-  }
+// in JavaScript. Reads `uri` (the native file reference) via the Filesystem
+// plugin; never `webPath` (see the module-level regression-fix comment).
+async function nativeAssetToFile(result: MediaResult, filenamePrefix: string): Promise<File> {
   logAvatarDiagnostic("native-asset-received", {
     sourceType: "capacitor-camera-plugin",
-    hasWebPath: true,
+    hasWebPath: Boolean(result.webPath),
     hasUri: Boolean(result.uri),
     resultFormat: result.metadata?.format ?? "(unknown)",
-    byteSize: result.metadata?.size ?? "(unknown)",
+    metadataByteSize: result.metadata?.size ?? "(unknown)",
   });
-  let response: Response;
+
+  if (!result.uri) {
+    logAvatarDiagnostic("native-uri-read-failed", { stage: "filesystem-read", reason: "no-uri-in-result" });
+    throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
+  }
+
+  logAvatarDiagnostic("native-uri-read-started", { stage: "filesystem-read" });
+  let data: string | Blob;
   try {
-    response = await fetch(result.webPath);
+    ({ data } = await filesystemProvider.readFile(result.uri));
   } catch {
+    logAvatarDiagnostic("native-uri-read-failed", { stage: "filesystem-read", reason: "plugin-rejected" });
     throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
   }
-  if (!response.ok) {
-    throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
+
+  const { extension, mimeType } = extensionAndMimeFromFormat(result.metadata?.format);
+  const filename = `${filenamePrefix}-${Date.now()}.${extension}`;
+
+  let blob: Blob;
+  if (typeof data === "string") {
+    if (!data) {
+      logAvatarDiagnostic("native-uri-read-failed", { stage: "filesystem-read", reason: "empty-data" });
+      throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
+    }
+    logAvatarDiagnostic("native-uri-read-succeeded", {
+      stage: "filesystem-read",
+      resultFormat: "base64",
+      base64Length: data.length,
+    });
+    try {
+      blob = base64ToBlob(data, mimeType);
+    } catch {
+      logAvatarDiagnostic("native-blob-construction-failed", { stage: "blob-construction" });
+      throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
+    }
+  } else {
+    // Filesystem's Web implementation returns a real Blob directly — not
+    // reached on native (native-shell avatar selection is iOS-only, gated
+    // by isNativeShell()), kept only so this compiles against the plugin's
+    // shared cross-platform type rather than asserting the branch away.
+    logAvatarDiagnostic("native-uri-read-succeeded", { stage: "filesystem-read", resultFormat: "blob" });
+    blob = data;
   }
-  const blob = await response.blob();
+
   if (!blob.size) {
+    logAvatarDiagnostic("native-blob-construction-failed", { stage: "blob-construction", reason: "empty-blob" });
     throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
   }
-  // Android/iOS may report "jpg" rather than "jpeg" for the same format
-  // (documented on MediaMetadata.format) — normalise before comparing.
-  const format = result.metadata?.format?.toLowerCase().replace(/^jpg$/, "jpeg");
-  const extension = format === "png" ? "png" : format === "webp" ? "webp" : "jpg";
-  const mimeType =
-    blob.type || (format === "png" ? "image/png" : format === "webp" ? "image/webp" : "image/jpeg");
-  const file = new File([blob], `${filenamePrefix}-${Date.now()}.${extension}`, { type: mimeType });
+
+  const file = new File([blob], filename, { type: mimeType });
   logAvatarDiagnostic("native-blob-created", {
     sourceType: "capacitor-camera-plugin",
+    stage: "blob-construction",
     name: file.name,
     type: file.type,
     size: file.size,
@@ -145,16 +254,17 @@ async function mediaResultToFile(result: MediaResult, filenamePrefix: string): P
 // no-file-selected behaviour). Throws NativeAvatarPickerError for every
 // other outcome (permission denial, unreadable asset).
 async function pickAvatar(source: "camera" | "photos"): Promise<File | null> {
-  logAvatarDiagnostic("native-picker-opened", { source });
+  logAvatarDiagnostic("native-picker-opened", { source, stage: "picker" });
   try {
     if (source === "camera") {
       const result = await provider.takePhoto();
-      logAvatarDiagnostic("native-picker-returned", { source, outcome: "success" });
-      return await mediaResultToFile(result, "camera");
+      logAvatarDiagnostic("native-picker-returned", { source, stage: "picker", outcome: "success" });
+      return await nativeAssetToFile(result, "camera");
     }
     const { results } = await provider.chooseFromGallery();
     logAvatarDiagnostic("native-picker-returned", {
       source,
+      stage: "picker",
       outcome: "success",
       resultCount: results.length,
     });
@@ -162,11 +272,11 @@ async function pickAvatar(source: "camera" | "photos"): Promise<File | null> {
     // Empty results with no thrown cancel code — treat the same as a
     // cancellation rather than a failure; the user simply chose nothing.
     if (!first) return null;
-    return await mediaResultToFile(first, "photos");
+    return await nativeAssetToFile(first, "photos");
   } catch (cause) {
     if (cause instanceof NativeAvatarPickerError) throw cause;
     const category = categoriseNativeError(cause);
-    logAvatarDiagnostic("native-picker-returned", { source, outcome: category });
+    logAvatarDiagnostic("native-picker-returned", { source, stage: "picker", outcome: category });
     if (category === "cancelled") return null;
     throw new NativeAvatarPickerError(
       category,

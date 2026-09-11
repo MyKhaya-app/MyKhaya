@@ -24,7 +24,9 @@ function readJson(relativePath: string): { dependencies: Record<string, string> 
 // native-biometric-preference.ts, open-external-url.ts,
 // native-avatar-picker.ts) must also be an explicit apps/ios-shell
 // dependency, matched exactly (never rely on pnpm workspace hoisting to
-// make a plugin "available").
+// make a plugin "available"). @capacitor/filesystem was added alongside
+// @capacitor/camera when native avatar selection moved off the unreliable
+// fetch(webPath) transport onto Filesystem.readFile(uri) — see ADR 0013.
 
 const REQUIRED_NATIVE_PLUGINS = [
   "@aparajita/capacitor-biometric-auth",
@@ -33,6 +35,7 @@ const REQUIRED_NATIVE_PLUGINS = [
   "@capacitor/browser",
   "@capacitor/camera",
   "@capacitor/core",
+  "@capacitor/filesystem",
   "@capacitor/ios",
   "@capacitor/push-notifications",
 ] as const;

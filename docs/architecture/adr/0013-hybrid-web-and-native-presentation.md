@@ -63,20 +63,63 @@ shell's WKWebView hosting a file input from a remote origin, not a general
 mobile-Safari/PWA defect, so there is no reason to change the browser path.
 
 **No client-side HEIC decoding, on either path.** The native picker result
-(`MediaResult.webPath`, fetched via `fetch()` and converted to a `Blob`/
-`File` — Capacitor's supported approach; a raw `uri`/`file://` path is not
-fetchable from WKWebView) is handed to the API exactly like an HTML-input
-`File` is. Any HEIC→JPEG conversion for a Photos-library asset happens
-inside the Camera plugin's own native (Swift/ImageIO) code when it writes
-out `webPath` — never in MyKhaya's JavaScript. `native-avatar-picker.ts`
-does not call `createImageBitmap`, `Image`, or canvas on the selected asset.
+is converted into a `Blob`/`File` (see "Native full-resolution asset read"
+below) and handed to the API exactly like an HTML-input `File` is. Any
+HEIC→JPEG conversion for a Photos-library asset happens inside the Camera
+plugin's own native (Swift/ImageIO) code — never in MyKhaya's JavaScript.
+`native-avatar-picker.ts` does not call `createImageBitmap`, `Image`, or
+canvas on the selected asset.
 
 **Native asset result type.** `takePhoto`/`chooseFromGallery` return a
 `MediaResult` (`{ webPath, uri, metadata: { format, size }, thumbnail }`).
 `thumbnail` is a low-resolution base64 preview and is never used as the
-upload source. `uri` is a native file reference not fetchable from web code
-and is only used for logging its presence, never its value. `webPath` is the
-one field used to build the uploaded `File`.
+upload source.
+
+**Native full-resolution asset read: `uri` via the Filesystem plugin, never
+`fetch(webPath)`.** An earlier version of this feature read upload bytes via
+`fetch(result.webPath)`. That broke both Take Photo and Choose from Photos
+on physical TestFlight builds — the picker succeeded but every selection
+then failed with "We couldn't read that photo." **Root cause:** `webPath`
+is documented by `@capacitor/camera` only as "a path that can be used to
+set the `src` attribute of a media item for efficient loading and
+rendering" — a display/preview convenience, never a documented
+fetch-for-bytes contract. Capacitor's own docs say that when full-resolution
+image *bytes* are required on native, read the returned `uri` via the
+Filesystem plugin instead. This is exactly the configuration MyKhaya's
+shell uses: `server.url` points at a **remote** origin
+(`https://dev.mykhaya.app` / `https://mykhaya.app`, see ADR 0012 — not
+Capacitor's default bundled-app local origin), and `webPath` reliability is
+tied to that local-origin model. `native-avatar-picker.ts` now reads
+`result.uri` via `Filesystem.readFile({ path: uri })` (no `directory` —
+`uri` is used as an absolute native file reference) and decodes the
+resulting base64 string into a `Blob` itself (`atob` + `Uint8Array`, fully
+local/synchronous, no further network-ish call of the kind that made
+`webPath` unreliable in the first place). `webPath` is retained on the type
+only for its documented display/preview purpose; nothing in the avatar flow
+currently renders a picker preview, so it isn't read at all today. `uri`'s
+*value* is still never logged (only its presence, as `hasUri`) — see
+"Native diagnostics" below.
+
+A 20 MiB original (the documented avatar upload ceiling) becomes a ~27 MiB
+base64 string crossing the Capacitor JS bridge. This is a real, one-off,
+in-memory cost, but reliability was prioritised over avoiding it: the
+alternative (continuing to rely on `fetch(webPath)`) is the API this ADR
+already documents Capacitor does not support for this configuration, not a
+choice available to "optimise back to."
+
+**Native diagnostics.** `native-avatar-picker.ts` logs (never photo bytes,
+base64 payloads, EXIF/GPS, auth tokens, or raw URI/path values — only their
+presence as booleans) each stage separately, so a real device failure can be
+attributed to the exact stage rather than collapsed into one generic
+category: picker call started/returned (`stage: "picker"`, with
+`source: "camera"|"photos"`), the received `MediaResult`'s `hasUri`/
+`hasWebPath`/`metadata.format`/`metadata.size` (`native-asset-received`),
+the Filesystem read attempt and its outcome (`stage: "filesystem-read"`,
+`native-uri-read-started`/`-succeeded`/`-failed`), and Blob/File construction
+(`stage: "blob-construction"`, `native-blob-created` or
+`native-blob-construction-failed`). All of these still funnel into the same
+four user-facing categories (cancel/permission/read/upload) — the added
+granularity is for `console.debug` diagnosis, not new UI states.
 
 **Native error handling.** The plugin returns a structured `CameraErrorCode`
 (e.g. `OS-PLUG-CAMR-0006` = take-photo cancelled, `OS-PLUG-CAMR-0003` =
@@ -110,7 +153,18 @@ is invisible to native auto-linking. This was the confirmed root cause of an
 earlier TestFlight build's persistent-login/biometric failures, and is now a
 regression test (`apps/ios-shell/src/plugin-ownership.test.ts`): every native
 plugin `apps/web` imports at runtime must also be an explicit `apps/ios-shell`
-dependency at a matching version, `@capacitor/camera` included.
+dependency at a matching version, `@capacitor/camera` and
+`@capacitor/filesystem` included.
+
+**Privacy manifest.** `@capacitor/filesystem`'s `readFile` uses a
+"required reason" API (`NSPrivacyAccessedAPICategoryFileTimestamp`) Apple's
+App Store Connect can reject a binary over at upload/validation if the app
+doesn't declare it. `ios/App/App/PrivacyInfo.xcprivacy` declares it (reason
+code `C617.1`, no tracking, no collected data types). The file exists on
+disk in the repo; registering it in the Xcode project's Copy Bundle
+Resources build phase is a Mac-only step
+(`ruby scripts/add-privacy-manifest.rb`, modelled on the existing
+`add-app-target-sources.rb`) — see the Mac checklist for when to run it.
 
 ## Shared binary upload processing
 
