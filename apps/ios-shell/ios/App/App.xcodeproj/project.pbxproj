@@ -12,7 +12,7 @@
 		0BBB9153FFE25E9F4E70B6E4 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FFDEB96A374B406799D2CC /* Color+Hex.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		3602F3C78D1C601EE084F99F /* NextEventWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A01DD9B4A643D3E13BF2E3 /* NextEventWidget.swift */; };
-		4A8F8570878052AECEC9233E /* .appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 88251383D8228AC5983F37F9 /* .appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4A8F8570878052AECEC9233E /* MyKhayaWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 88251383D8228AC5983F37F9 /* MyKhayaWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
@@ -30,6 +30,7 @@
 		BB7D127C08279A2AF09CE8A7 /* TodoWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B14BC78F28CD29DA5158953 /* TodoWidget.swift */; };
 		BB93AA7519E5EB0FE473B9E4 /* NextEventViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C470DE596D938C60615630B6 /* NextEventViews.swift */; };
 		DC9A6BF024E7396E4503D5DD /* CalendarWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86369121C098782A39A02D2 /* CalendarWidget.swift */; };
+		E1E3B7F4E8BD2385451A7338 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 87ED1C165680BD37FADE56AA /* PrivacyInfo.xcprivacy */; };
 		E4EE24FC3D6F9CA0563DB2E0 /* TodoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5568CB6FC0AE88C6A727E132 /* TodoProvider.swift */; };
 		E5ADE660DAEFBE4DEB8DA12F /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512F2FA2FBB32DA405D82B2 /* DeepLink.swift */; };
 		F116D91478F5A7DD5B006162 /* CalendarProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A3A43502B4F616AABD6B0A /* CalendarProvider.swift */; };
@@ -53,7 +54,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				4A8F8570878052AECEC9233E /* .appex in Embed App Extensions */,
+				4A8F8570878052AECEC9233E /* MyKhayaWidgets.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -79,7 +80,8 @@
 		59A01DD9B4A643D3E13BF2E3 /* NextEventWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NextEventWidget.swift; path = ../../MyKhayaWidgets/NextEventWidget.swift; sourceTree = "<group>"; };
 		75FFDEB96A374B406799D2CC /* Color+Hex.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = "Color+Hex.swift"; path = "../../MyKhayaWidgets/Shared/Color+Hex.swift"; sourceTree = "<group>"; };
 		7DFE00C82B0FBFB91B3F8A30 /* CalendarViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalendarViews.swift; path = ../../MyKhayaWidgets/Views/CalendarViews.swift; sourceTree = "<group>"; };
-		88251383D8228AC5983F37F9 /* .appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = .appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		87ED1C165680BD37FADE56AA /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		88251383D8228AC5983F37F9 /* MyKhayaWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyKhayaWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WidgetBridgePlugin.swift; sourceTree = "<group>"; };
 		929F848D304980D800561283 /* AppRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppRelease.entitlements; sourceTree = "<group>"; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
@@ -147,7 +149,7 @@
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				504EC3051FED79650016851F /* Products */,
-				88251383D8228AC5983F37F9 /* .appex */,
+				88251383D8228AC5983F37F9 /* MyKhayaWidgets.appex */,
 				2FE217EB460464073FD11B88 /* Frameworks */,
 				E86AFE6B782412D527B19463 /* MyKhayaWidgets */,
 				BC726EB5E341ED093D8F669C /* MyKhayaWidgetsTests.xctest */,
@@ -178,6 +180,7 @@
 				50B271D01FEDC1A000F3C39B /* public */,
 				89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */,
 				BDA3DB5330950B521A7044C7 /* MainViewController.swift */,
+				87ED1C165680BD37FADE56AA /* PrivacyInfo.xcprivacy */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -244,7 +247,7 @@
 				CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */,
 			);
 			productName = MyKhayaWidgets;
-			productReference = 88251383D8228AC5983F37F9 /* .appex */;
+			productReference = 88251383D8228AC5983F37F9 /* MyKhayaWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
@@ -297,6 +300,7 @@
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+				E1E3B7F4E8BD2385451A7338 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -487,7 +491,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/AppDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -495,10 +499,14 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.18;
+				MARKETING_VERSION = 0.1.25;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -511,7 +519,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/AppRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -519,9 +527,13 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.18;
+				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -534,11 +546,11 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.18;
+				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -554,11 +566,11 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.18;
+				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
