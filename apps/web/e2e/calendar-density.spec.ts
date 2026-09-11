@@ -143,6 +143,33 @@ test.describe("calendar month view density", () => {
     // The multi-day event renders as a single spanning bar, not five separate items.
     const spanningBars = await page.locator(".month-event", { hasText: "Spans a week boundary" }).count();
     expect(spanningBars).toBeGreaterThanOrEqual(1);
+
+    // Regression: the day number must stay visible (painted on top) on every
+    // populated cell, not just quiet ones. Converting the date number from a
+    // <button> to a <span> (Month View -> Day List -> Event Detail change)
+    // dropped the CSS that reserved its own row and let event bars/the
+    // overflow chip paint over it — see .calendar-week .day-number in
+    // styles.css. Check this via real hit-testing (elementFromPoint), not
+    // just DOM presence, since the bug was purely a visual overlap that a
+    // jsdom presence check can't see.
+    const checkNumberOnTop = (day: number) =>
+      page.evaluate((d) => {
+        const cells = Array.from(document.querySelectorAll(".calendar-day"));
+        const cell = cells.find((el) => el.querySelector(".day-number span")?.textContent === String(d));
+        if (!cell) return { found: false as const };
+        const span = cell.querySelector(".day-number span")!;
+        const rect = span.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return { found: true as const, tag: top?.tagName, className: (top as HTMLElement)?.className };
+      }, day);
+
+    // 3rd: the busiest day in this fixture (6 events, overflow chip).
+    const busyDayNumber = await checkNumberOnTop(3);
+    expect(busyDayNumber).toEqual({ found: true, tag: "SPAN", className: "" });
+    // 15th: a middle day of the multi-day bar spanning the 12th-19th.
+    const spannedDayNumber = await checkNumberOnTop(15);
+    expect(spannedDayNumber).toEqual({ found: true, tag: "SPAN", className: "" });
+
     // Tapping the overflow indicator opens the day sheet.
     await page.locator(".overflow-events").first().click();
     await expect(page.locator(".bottom-sheet")).toBeVisible();

@@ -3120,8 +3120,22 @@ html.native-shell .home-section-overlap {
   background: color-mix(in srgb, var(--colour-terracotta) 4%, transparent);
 }
 .calendar-week .day-number {
+  /* Was a <button>, which the global button reset makes display:inline-flex
+     (see the button, .button rule above) — that's what let width/min-height
+     below actually apply and reserve this cell's own row-1 track. Now that
+     it's a plain (non-interactive) span, it defaults to display:inline,
+     where width/min-height on a non-replaced inline box have no effect at
+     all: the element collapses to its content size instead of reserving
+     the row, so the number no longer reliably stays clear of the event
+     rows below it. flex here is the same "occupies its own box" behaviour
+     the button gave it for free, not a visual change. */
+  align-items: center;
+  display: flex;
+  justify-content: center;
   min-height: var(--month-day-number-h);
+  position: relative;
   width: 100%;
+  z-index: 6;
 }
 .calendar-week .overflow-events {
   /* Sits in the same visual slot as the day's last visible event lane and must render
