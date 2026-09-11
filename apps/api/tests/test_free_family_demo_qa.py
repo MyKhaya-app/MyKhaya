@@ -1,14 +1,21 @@
-"""Functional QA pass for the Free-vs-Family experience, run against real
-Free Plan Demo / Family Demo managed fixtures created through the real PCC
-API — see the "visual/manual QA" task this supports. Deliberately mirrors
-the checklist in that task's FUNCTIONAL QA section rather than being general
+"""Permanent regression coverage for the Free-vs-Family experience, run
+against real Free Plan Demo / Family Demo managed fixtures created through
+the real PCC API. Deliberately mirrors the FUNCTIONAL QA checklist from the
+visual/manual QA task this originated in, rather than being general
 entitlement coverage (that already exists in test_entitlements.py,
 test_lists.py, test_wishlists.py, etc.) — this file exists to prove the two
 managed-demo fixtures themselves exhibit the correct end-to-end behaviour a
 real Free or Family Home would, via the real API, not database row counts.
 
-Not committed as part of the QA session unless a genuine defect fix needs a
-regression test alongside it — see the QA report for that decision.
+Each test is self-contained: a fresh PlatformAdministrator and a
+uniquely-keyed managed-demo Home are created per test (no shared/global
+state, no ordering dependency), and both are deleted in fixture teardown via
+the real ManagedDemoService/audit-cleanup paths — see admin_factory and
+demo_keys below. No real credentials or customer data: passwords are
+fixed test-only strings never used outside this file, and every seeded
+email uses the mykhaya.app operator-owned domain (see
+test_managed_demo_free_demo.py for why — EmailStr rejects the .invalid
+convention seed_template's own fixture members use).
 """
 
 import uuid

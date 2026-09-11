@@ -126,6 +126,94 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
   });
 });
 
+// Free/Family visual QA follow-up, Part B: unify the Lists at-limit
+// create-flow with the same Family/upgrade CTA pattern used elsewhere
+// (FamilyUpsell's own markup/wording), and never submit a create request
+// the frontend already knows the Free plan limit would reject.
+describe("Lists — at-limit create flow (Part B)", () => {
+  function mockBilling(usage: { count: number; limit: number | null; over_limit: boolean }) {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: usage,
+    });
+  }
+
+  it("6. Free with 0 Lists -> Add opens the ordinary create form", async () => {
+    mockBilling({ count: 0, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create list/i })).toBeInTheDocument();
+  });
+
+  it("7. Free with 1 List -> Add opens the ordinary create form", async () => {
+    mockBilling({ count: 1, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+  });
+
+  it("8. Free with 2 Lists -> Add reflects the limit before any submission, no create form shown", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    // The sheet-only CTA line, unique to the at-limit view (unlike the
+    // limit sentence itself, which is also shown passively near the FAB).
+    expect(
+      await screen.findByText("Upgrade to MyKhaya Family for unlimited lists."),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/list name/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create list/i })).not.toBeInTheDocument();
+  });
+
+  it("9. At-limit view shows the same Family/upgrade CTA pattern used elsewhere (FamilyUpsell's link)", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "View Family plan" });
+    expect(link).toHaveAttribute("href", "/settings/billing");
+  });
+
+  it("10. No create API call happens when the UI already knows the limit is reached", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.");
+    expect(api.createList).not.toHaveBeenCalled();
+  });
+
+  it("11. A raced backend plan_limit_reached rejection still maps to the same unified message", async () => {
+    mockBilling({ count: 1, limit: 2, over_limit: false }); // stale client-side: under limit
+    const { ApiError } = await import("@mykhaya/api-client");
+    (api.createList as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(
+        403,
+        "This would exceed what your current plan allows. Upgrade to add more.",
+        "plan_limit_reached",
+        { entitlement: "lists.max_lists", limit: 2 },
+      ),
+    );
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.type(await screen.findByLabelText(/list name/i), "Third list");
+    await userEvent.click(screen.getByRole("button", { name: /create list/i }));
+    expect(
+      await screen.findByText(
+        "You've reached the Free plan limit of 2 lists. Upgrade to MyKhaya Family for unlimited lists.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("12. Family (unlimited) -> Add always opens the ordinary create form, never the at-limit view", async () => {
+    mockBilling({ count: 5, limit: null, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reached the Free plan limit/)).not.toBeInTheDocument();
+  });
+});
+
 describe("Lists — feature-gate consistency", () => {
   it("shows a calm message instead of the interactive overview when the module isn't released", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ lists_enabled: true });

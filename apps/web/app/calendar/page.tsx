@@ -53,6 +53,7 @@ import {
   DEFAULT_EVENT_DURATION_MINUTES,
   dateKey,
   dayRange,
+  defaultCalendarTarget,
   displayDate,
   emptyStateMessage,
   eventsForDay,
@@ -61,9 +62,11 @@ import {
   filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
+  isCalendarLockedForSelection,
   monthCells,
   monthRange,
   parseLocalInputValue,
+  PERSONAL_CALENDAR_VALUE,
   resolveMemberFilter,
   shiftEndWithStart,
   splitZoned,
@@ -199,8 +202,9 @@ function utcMidnightOf(dateInput: string): Date {
 // by their real HomeCalendar id; Personal Calendar and a writable shared
 // calendar aren't in that same list, so they need their own sentinel
 // values, never sent to the API as-is — submit() translates them into
-// calendar_id (or routes to onSubmitShared entirely).
-const PERSONAL_CALENDAR_VALUE = "__personal__";
+// calendar_id (or routes to onSubmitShared entirely). PERSONAL_CALENDAR_VALUE
+// itself lives in calendar-utils.ts (imported above) alongside
+// isCalendarLockedForSelection/defaultCalendarTarget, which both need it.
 // Sentinel prefix for a writable (Can add & edit) externally shared
 // calendar, appended with its CalendarShare.id. Only ever offered when
 // *creating* a brand-new event (see writableShares below); an existing
@@ -221,20 +225,6 @@ const SHARE_VALUE_PREFIX = "__share__:";
 // whole-event behaviour unconditionally, same as before this feature.
 function isRecurringOwnEvent(event: EventOccurrence): boolean {
   return !event.share_id && event.recurrence !== "none";
-}
-
-// Phase 2D: one shared rule for every Calendar picker option (Home calendars
-// and the Personal Calendar alike) — a calendar preserved read-only past a
-// downgrade can't be newly targeted, but an event already assigned to it
-// stays selectable so resaving/viewing it never breaks. Matches
-// update_event's own "transition-safe" check server-side.
-function isCalendarLockedForSelection(
-  calendar: Pick<HomeCalendar, "id" | "commercial_access">,
-  currentCalendarId: string | null | undefined,
-): boolean {
-  return (
-    calendar.commercial_access === "read_only_due_to_plan" && currentCalendarId !== calendar.id
-  );
 }
 
 function EventForm({
@@ -349,19 +339,7 @@ function EventForm({
         ? PERSONAL_CALENDAR_VALUE
         : initial.calendar_id;
     }
-    // Phase 2D: default to a calendar the user can actually use — the
-    // primary Home calendar when it's writable (unchanged behaviour), else
-    // the Personal Calendar when that's the one entitled resource instead
-    // (a Free Home after this session's Phase 2C work), else fall back to
-    // the primary anyway so the picker always has *some* selection.
-    const primary = homeCalendars.find((calendar) => calendar.is_primary);
-    if (primary && !isCalendarLockedForSelection(primary, null)) {
-      return primary.id;
-    }
-    if (personalCalendar && !isCalendarLockedForSelection(personalCalendar, null)) {
-      return PERSONAL_CALENDAR_VALUE;
-    }
-    return primary?.id ?? "";
+    return defaultCalendarTarget(homeCalendars, personalCalendar);
   });
   // The Calendar Tag picker's value — a real CalendarEventLabel id, or ""
   // for "No tag". Entirely independent of calendarTarget: which calendar

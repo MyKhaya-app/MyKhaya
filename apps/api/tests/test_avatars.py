@@ -161,6 +161,25 @@ def test_process_avatar_upload_accepts_heif_and_produces_webp() -> None:
     assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
 
 
+def test_process_avatar_upload_accepts_webp_and_produces_webp() -> None:
+    source = Image.new("RGB", (640, 480), (120, 40, 180))
+    buffer = io.BytesIO()
+    source.save(buffer, format="WEBP")
+
+    processed = process_avatar_upload(buffer.getvalue())
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_rejects_corrupted_heif() -> None:
+    source = make_heif()
+    corrupted = source[: max(1, len(source) // 2)]
+
+    with pytest.raises(UnsupportedImageError, match="could not be read"):
+        process_avatar_upload(corrupted)
+
+
 def test_process_avatar_upload_rejects_non_image_bytes() -> None:
     with pytest.raises(UnsupportedImageError):
         process_avatar_upload(b"not an image, just some bytes pretending to be one")

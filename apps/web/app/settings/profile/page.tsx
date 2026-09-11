@@ -271,14 +271,14 @@ export default function Profile() {
             // the bytes. The server owns image decoding and processing,
             // including HEIC/HEIF when pillow-heif is available; the client
             // must not depend on inconsistent WKWebView transcoding.
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             style={{ display: "none" }}
             onChange={(event) => handleAvatarSelected(event, "photo-library")}
           />
           <input
             ref={cameraInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             capture="environment"
             style={{ display: "none" }}
             onChange={(event) => handleAvatarSelected(event, "camera")}

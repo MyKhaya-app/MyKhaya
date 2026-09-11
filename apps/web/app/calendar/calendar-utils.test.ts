@@ -11,18 +11,21 @@ import {
   DEFAULT_EVENT_DURATION_MINUTES,
   DEFAULT_EVENT_END_TIME,
   DEFAULT_EVENT_START_TIME,
+  defaultCalendarTarget,
   emptyStateMessage,
   eventDateBounds,
   eventsForDay,
   filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
+  isCalendarLockedForSelection,
   isCalendarVisible,
   isEventStillUpcoming,
   layoutWeekEvents,
   monthCells,
   monthRange,
   parseLocalInputValue,
+  PERSONAL_CALENDAR_VALUE,
   resolveMemberFilter,
   shiftEndWithStart,
   toEventUpdatePayload,
@@ -1755,5 +1758,50 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     });
     const rows = layout([longUnderlyingEndsEarlyThisWeek, shortButFullyVisible]);
     expect(rowOf(rows, "short-visible")).toBeLessThan(rowOf(rows, "long-underlying"));
+  });
+});
+
+// Free/Family visual QA follow-up, Part A: the new-event Calendar picker's
+// default must be explicitly Personal-first on Free (calendar.max_calendars
+// = 1) while leaving Family's existing primary-first default untouched —
+// see defaultCalendarTarget's own docstring in calendar-utils.ts.
+describe("defaultCalendarTarget — new-event Calendar picker default", () => {
+  const writablePrimary = { id: "home-cal", is_primary: true, commercial_access: "normal" as const };
+  const lockedPrimary = {
+    id: "home-cal",
+    is_primary: true,
+    commercial_access: "read_only_due_to_plan" as const,
+  };
+  const writablePersonal = { id: "personal-cal", commercial_access: "normal" as const };
+  const lockedPersonal = { id: "personal-cal", commercial_access: "read_only_due_to_plan" as const };
+
+  it("1. Free (primary locked) + writable Personal Calendar -> Personal selected by default", () => {
+    expect(defaultCalendarTarget([lockedPrimary], writablePersonal)).toBe(PERSONAL_CALENDAR_VALUE);
+  });
+
+  it("2. Free + restricted shared Home Calendar explicitly read_only_due_to_plan -> Personal selected", () => {
+    expect(defaultCalendarTarget([lockedPrimary], writablePersonal)).toBe(PERSONAL_CALENDAR_VALUE);
+    expect(isCalendarLockedForSelection(lockedPrimary, null)).toBe(true);
+  });
+
+  it("3. Family (primary writable) -> existing default behaviour unchanged, primary selected", () => {
+    expect(defaultCalendarTarget([writablePrimary], writablePersonal)).toBe(writablePrimary.id);
+  });
+
+  it("4. Restricted calendars remain non-selectable as a new-event default", () => {
+    // Both locked (e.g. a non-retained member on a downgraded multi-member
+    // Free Home) — falls back to the primary id only as an always-something
+    // last resort; never silently picks a locked calendar as if it were
+    // usable without that being the only option available.
+    expect(defaultCalendarTarget([lockedPrimary], lockedPersonal)).toBe(lockedPrimary.id);
+    expect(isCalendarLockedForSelection(lockedPersonal, null)).toBe(true);
+  });
+
+  it("5. Edit-event current-calendar behaviour is unaffected — the locked calendar an event already belongs to stays selectable", () => {
+    // defaultCalendarTarget is only ever called for a brand-new event (see
+    // EventForm's calendarTarget initializer, which reads initial.calendar_id
+    // directly when editing) — isCalendarLockedForSelection's own
+    // "currentCalendarId" escape hatch is what edit relies on, unchanged.
+    expect(isCalendarLockedForSelection(lockedPrimary, lockedPrimary.id)).toBe(false);
   });
 });

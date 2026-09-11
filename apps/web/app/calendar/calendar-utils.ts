@@ -3,6 +3,7 @@ import type {
   EventOccurrence,
   EventPayload,
   EventUpdatePayload,
+  HomeCalendar,
   Member,
   SharedEventPayload,
   SharedEventUpdatePayload,
@@ -13,6 +14,54 @@ import type {
 // backend's own HomeCalendar.timezone ORM default, so it's never a source of
 // drift once real data arrives; it must never be treated as "the" timezone.
 export const FALLBACK_TIMEZONE = "Europe/London";
+
+// The Calendar picker's sentinel value for "the signed-in user's own
+// Personal Calendar" — never a real HomeCalendar id, since the Personal
+// Calendar is never included in the Home-calendars list the picker's other
+// options come from (see CalendarListResponse.personal_calendar).
+export const PERSONAL_CALENDAR_VALUE = "__personal__";
+
+// Phase 2D: one shared rule for every Calendar picker option (Home calendars
+// and the Personal Calendar alike) — a calendar preserved read-only past a
+// downgrade can't be newly targeted, but an event already assigned to it
+// stays selectable so resaving/viewing it never breaks. Matches
+// update_event's own "transition-safe" check server-side.
+export function isCalendarLockedForSelection(
+  calendar: Pick<HomeCalendar, "id" | "commercial_access">,
+  currentCalendarId: string | null | undefined,
+): boolean {
+  return (
+    calendar.commercial_access === "read_only_due_to_plan" && currentCalendarId !== calendar.id
+  );
+}
+
+// The new-event Calendar picker's default selection. FREE
+// (calendar.max_calendars=1): the retained member's own Personal Calendar
+// always wins the Home's one writable slot (see
+// mykhaya.routers.calendar._calendar_access) — the shared primary Home
+// Calendar is consequently always read_only_due_to_plan on a Free Home, so
+// "prefer Personal whenever the primary isn't writable" already is the
+// Free rule, made explicit here rather than left to fall out of a generic
+// writable/locked fallback chain. FAMILY (unlimited): both are normally
+// writable, so the primary Home calendar — the existing, unchanged default
+// — still wins. Entirely derived from each calendar's own commercial_access
+// (real entitlement state already returned by the API), never a hardcoded
+// plan-name check. Only ever used for a brand-new event — edit-event
+// behaviour reads the event's own existing calendar_id instead and never
+// calls this.
+export function defaultCalendarTarget(
+  homeCalendars: Pick<HomeCalendar, "id" | "is_primary" | "commercial_access">[],
+  personalCalendar: Pick<HomeCalendar, "id" | "commercial_access"> | null,
+): string {
+  const primary = homeCalendars.find((calendar) => calendar.is_primary);
+  const primaryWritable = Boolean(primary) && !isCalendarLockedForSelection(primary!, null);
+  const personalWritable =
+    Boolean(personalCalendar) && !isCalendarLockedForSelection(personalCalendar!, null);
+  if (!primaryWritable && personalWritable) return PERSONAL_CALENDAR_VALUE;
+  if (primaryWritable) return primary!.id;
+  if (personalWritable) return PERSONAL_CALENDAR_VALUE;
+  return primary?.id ?? "";
+}
 
 // ---------------------------------------------------------------------------
 // Timed events vs all-day events are two different concepts and must never

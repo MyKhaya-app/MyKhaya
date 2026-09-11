@@ -8,7 +8,12 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
-import { atListLimitMessage, canCreateList, listBadgeLabel } from "@/components/lists-entitlement-logic";
+import {
+  atListLimitMessage,
+  canCreateList,
+  LIST_LIMIT_UPGRADE_TEXT,
+  listBadgeLabel,
+} from "@/components/lists-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
 import { LIST_ICON_OPTIONS, listIconImage } from "./list-icons";
 
@@ -248,6 +253,8 @@ export default function ListsPage() {
         {creating && (
           <CreateListSheet
             homeId={activeHomeId}
+            atLimit={Boolean(billing.list_usage && !canCreateList(billing.list_usage))}
+            limitMessage={billing.list_usage ? atListLimitMessage(billing.list_usage) : null}
             onClose={() => setCreating(false)}
             onCreated={async () => {
               setCreating(false);
@@ -273,10 +280,20 @@ export default function ListsPage() {
 
 function CreateListSheet({
   homeId,
+  atLimit,
+  limitMessage,
   onClose,
   onCreated,
 }: {
   homeId: string;
+  /** Known client-side, from the same billing.list_usage the passive
+   * near-FAB banner already reads — when true, the limit is reflected here
+   * instead of the create form, and no create request is ever attempted
+   * (the backend's own plan_limit_reached check remains the authoritative
+   * enforcement either way; this only avoids a request the frontend can
+   * already see would fail). */
+  atLimit: boolean;
+  limitMessage: string | null;
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
@@ -297,10 +314,44 @@ function CreateListSheet({
       await api.createList(homeId, { name: name.trim(), icon: icon || null });
       await onCreated();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not create this list.");
+      // A stale client-side atLimit=false (raced by another tab/device)
+      // still reaches the real backend enforcement — mapped to the exact
+      // same wording atLimit's own view below uses, not the generic
+      // backend string, so the user never sees two different messages for
+      // the same condition. limitMessage itself is only populated when the
+      // frontend already knew it was at the limit (the common case, where
+      // this catch branch is unreachable); the race case derives the same
+      // wording from the error's own `limit` metadata instead.
+      if (cause instanceof ApiError && cause.code === "plan_limit_reached") {
+        const rawLimit = cause.metadata?.limit;
+        const count = typeof rawLimit === "number" ? rawLimit : null;
+        const fallback =
+          count === null
+            ? "You've reached the Free plan limit."
+            : `You've reached the Free plan limit of ${count} list${count === 1 ? "" : "s"}.`;
+        setError(`${limitMessage ?? fallback} ${LIST_LIMIT_UPGRADE_TEXT}`);
+      } else {
+        setError(cause instanceof ApiError ? cause.message : "Could not create this list.");
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  if (atLimit) {
+    return (
+      <BottomSheet title="New list" onDismiss={onClose}>
+        <div className="card details family-upsell">
+          <p>
+            <strong>{limitMessage ?? "You've reached the Free plan limit."}</strong>
+          </p>
+          <p className="muted">{LIST_LIMIT_UPGRADE_TEXT}</p>
+          <Link className="button secondary" href="/settings/billing">
+            View Family plan
+          </Link>
+        </div>
+      </BottomSheet>
+    );
   }
 
   return (
