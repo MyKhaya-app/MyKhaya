@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     cookie_domain: str | None = None
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
+    browser_mfa_handoff_enabled: bool = False
     trusted_device_days: int = Field(default=90, ge=7, le=365)
     trusted_device_activity_update_hours: int = Field(default=24, ge=1, le=168)
     smtp_host: str = "mailpit"
@@ -120,6 +121,22 @@ class Settings(BaseSettings):
     apns_bundle_id: str = "app.mykhaya.mobile"
     apns_private_key: SecretStr | None = None
     apns_delivery_configured: bool = False
+    # Deployment-managed external sign-in configuration. Secrets never enter
+    # platform_settings or API responses; explicit enablement does not itself
+    # implement a provider ceremony.
+    apple_sign_in_enabled: bool = False
+    apple_client_id: str | None = None
+    apple_service_id: str | None = None
+    apple_team_id: str | None = None
+    apple_key_id: str | None = None
+    apple_private_key: SecretStr | None = None
+    apple_redirect_uri: str | None = None
+    apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
+    apple_token_url: str = "https://appleid.apple.com/auth/token"
+    apple_jwks_url: str = "https://appleid.apple.com/auth/keys"
+    google_sign_in_enabled: bool = False
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
     # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
     # which also support a Platform-Admin-managed DB override. A payment
     # provider's credentials are rotated through infrastructure, not typed into

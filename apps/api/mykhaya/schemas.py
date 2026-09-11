@@ -46,6 +46,48 @@ class LoginRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class AuthContinuationResponse(BaseModel):
+    authentication_state: Literal["additional_auth_required"]
+    transaction_id: str
+    destination: str | None = None
+    onboarding: bool = False
+
+
+class MfaStartRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    method: Literal["totp", "email"]
+
+
+class MfaVerifyRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    method: Literal["totp", "email"]
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def numeric_code(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Verification code must contain six digits")
+        return value
+
+
+class MfaOptionsResponse(BaseModel):
+    methods: list[Literal["totp", "email"]]
+    destination: str | None = None
+    onboarding: bool = False
+    policy: Literal["optional", "required"] = "required"
+    policy_source: str = "platform"
+    enrolment_required: bool = False
+
+
+class MfaStartResponse(BaseModel):
+    method: Literal["totp", "email"]
+    destination: str | None = None
+    provisioning_uri: str | None = None
+    manual_key: str | None = None
+    enrolling: bool = False
+
+
 class TokenRequest(StrictModel):
     token: str = Field(min_length=30, max_length=500)
 

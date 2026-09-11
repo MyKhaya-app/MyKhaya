@@ -23,11 +23,19 @@ import { getLastNativeLoginDiagnostic, nativeLogin, runNativeNetworkDiagnostics 
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 
+type BrowserAuthResult =
+  | User
+  | {
+      authentication_state: "additional_auth_required";
+      transaction_id: string;
+    };
+
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
   const calendarShare = params.get("calendar_share");
+  const appleResult = params.get("apple");
   const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
   // the exact protected path (e.g. a calendar-share accept link's
@@ -62,7 +70,8 @@ export default function Login() {
     [shareContext, setShareContext] = useState<{
       calendar_name: string;
       source_group_name: string;
-    } | null>(null);
+    } | null>(null),
+    [appleEnabled, setAppleEnabled] = useState(false);
 
   const hint = getBiometricHint();
 
@@ -108,6 +117,23 @@ export default function Login() {
       .then((result) => setShareContext(result))
       .catch((reason: ApiError) => setError(reason.message));
   }, [calendarShare]);
+
+  useEffect(() => {
+    if (isNativeShell()) return;
+    api
+      .authProviders()
+      .then((result) =>
+        setAppleEnabled(
+          result.providers.some((item) => item.provider === "apple" && item.enabled),
+        ),
+      )
+      .catch(() => setAppleEnabled(false));
+  }, []);
+
+  function startAppleSignIn() {
+    const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
+    window.location.assign(`/api/v1/auth/apple/start${query}`);
+  }
 
   async function afterSignedIn(user: User) {
     setAuthenticatedUser(user);
@@ -186,10 +212,14 @@ export default function Login() {
       // sign-in against /auth/mobile/login, persisted to the iOS Keychain
       // (see components/native-auth.ts) — never the browser cookie
       // /auth/login. The two transports are never merged.
-      const user = isNativeShell()
+      const result: BrowserAuthResult = isNativeShell()
         ? await nativeLogin(email, password)
-        : await api.post<User>("/auth/login", { email, password });
-      await afterSignedIn(user);
+        : await api.post<BrowserAuthResult>("/auth/login", { email, password });
+      if ("authentication_state" in result) {
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        return;
+      }
+      await afterSignedIn(result);
     } catch (err) {
       // The user-facing message stays generic on purpose (never reveal
       // which layer failed to a potential attacker) — recordLoginFailureDiagnostic
@@ -281,6 +311,14 @@ export default function Login() {
           {shareContext.source_group_name}.
         </p>
       )}
+      {appleResult === "link_required" && (
+        <p className="notice">
+          Sign in with your existing account first. Apple can then be linked from your security settings.
+        </p>
+      )}
+      {appleResult === "error" && (
+        <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
+      )}
       <form onSubmit={submit}>
         <label>
           Email
@@ -308,6 +346,11 @@ export default function Login() {
         )}
         <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
+      {appleEnabled && (
+        <button type="button" className="apple-sign-in" onClick={startAppleSignIn} disabled={busy}>
+          Continue with Apple
+        </button>
+      )}
     </AuthCard>
   );
 }

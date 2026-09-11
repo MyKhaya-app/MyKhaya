@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from mykhaya.models import NotificationChannel
 
-DEFAULT_TEMPLATE_VERSION = 3
+DEFAULT_TEMPLATE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,22 @@ class TemplateDefault:
 
 
 TEMPLATES: dict[str, TemplateDefault] = {
+    "mfa_email_code": TemplateDefault(
+        subject="Your MyKhaya verification code",
+        body=(
+            "Your verification code\n\n"
+            "{{code}}\n\n"
+            "Use this code to finish signing in to MyKhaya.\n\n"
+            "This code expires in 15 minutes.\n\n"
+            "If you didn't try to sign in, you can safely ignore this email."
+        ),
+        allowed_variables=frozenset({"code"}),
+        required_variables=frozenset({"code"}),
+        description="Sent when a browser sign-in needs email MFA verification.",
+        module="account_security",
+        disableable=False,
+        security_critical=True,
+    ),
     "email_verification": TemplateDefault(
         subject="Verify your MyKhaya email",
         body=(

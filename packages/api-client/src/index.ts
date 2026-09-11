@@ -78,6 +78,10 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  authProviders = () =>
+    this.request<{ providers: Array<{ provider: string; enabled: boolean }> }>(
+      "/auth/providers",
+    );
   renew = () => this.request<User>("/auth/renew", { method: "POST", body: "{}" });
   devices = () =>
     this.request<{
@@ -1112,6 +1116,7 @@ export class MyKhayaClient {
     );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
+  get = <T>(path: string) => this.request<T>(path);
   patch = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
   put = <T>(path: string, body: unknown) =>

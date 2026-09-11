@@ -182,6 +182,21 @@ class MfaPolicyResponse(BaseModel):
     environment_enforced: bool
 
 
+class ConsumerMfaPolicyUpdate(SensitiveActionRequest):
+    policy: Literal["optional", "required", "inherit"]
+    allowed_methods: list[Literal["totp", "email"]] = ["totp", "email"]
+
+
+class ConsumerMfaPolicyResponse(BaseModel):
+    configured: str
+    effective: Literal["optional", "required"]
+    source: str
+    allowed_methods: list[Literal["totp", "email"]]
+    enforcement_enabled: bool
+    email_code_lifetime_minutes: int = 15
+    recent_auth_window_minutes: int = 15
+
+
 class AdministratorInvitationCreate(SensitiveActionRequest):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=100)

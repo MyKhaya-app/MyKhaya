@@ -197,3 +197,17 @@ password/host/port (`platform_smtp_settings` already exists as the correct
 Platform-Admin-managed path for the *non-secret* SMTP fields — see above), VAPID/APNs
 private keys, Stripe secret/webhook keys, and any future OAuth client secret. Secrets
 never touch `platform_settings`, and no endpoint here returns one even read-only.
+
+### Authentication & Security provider status
+
+The PCC Authentication & Security page reads Apple and Google provider health
+from the same centralized provider-state module used by the API. It displays
+configuration metadata only: provider secrets remain deployment-managed and
+are never returned to the browser. Operator access uses the existing PCC role
+authorization; configuration-health tests additionally require recent
+authentication and create an immutable platform audit event. There is no PCC
+secret-write path, provider enable/disable mutation, OAuth callback, or new
+session flow is introduced by the PCC. A complete Apple configuration is
+reported as enabled only when the deployment flag is explicitly enabled; the
+PCC has no secret-write or provider-disable control, so shutdown remains an
+infrastructure change subject to the deployment runbook.

@@ -20,14 +20,31 @@ const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
 const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
 
 const optionalPolicy = { required: false, environment_enforced: false };
+const optionalBrowserPolicy = {
+  configured: "optional",
+  effective: "optional",
+  source: "platform",
+  allowed_methods: ["totp", "email"],
+  enforcement_enabled: false,
+  email_code_lifetime_minutes: 15,
+  recent_auth_window_minutes: 15,
+};
 const events = [
   { id: "e1", created_at: "2026-09-07T09:00:00Z", event_type: "login_failed", severity: "warning", outcome: "blocked", safe_detail: "Too many attempts" },
 ];
+const providers = {
+  providers: [
+    { provider: "apple", state: "not_configured", configured: false, framework_available: true, client_identifier: null, redirect_uri: null, credential_configured: false, enabled: false, last_configuration_test: null },
+    { provider: "google", state: "not_configured", configured: false, framework_available: true, client_identifier: null, redirect_uri: null, credential_configured: false, enabled: false, last_configuration_test: null },
+  ],
+};
 
-function mockLoad(policy = optionalPolicy, eventItems = events) {
+function mockLoad(policy = optionalPolicy, eventItems = events, browserPolicy = optionalBrowserPolicy) {
   get.mockImplementation((path: string) => {
     if (path === "/auth/mfa/policy") return Promise.resolve(policy);
+    if (path === "/auth/mfa/browser-policy") return Promise.resolve(browserPolicy);
     if (path.startsWith("/security")) return Promise.resolve({ items: eventItems });
+    if (path === "/auth/providers") return Promise.resolve(providers);
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
 }
@@ -42,7 +59,7 @@ beforeEach(() => {
 describe("Global Security", () => {
   it("renders the MFA policy state and the security event log", async () => {
     render(<GlobalSecurityPage />);
-    expect(await screen.findByText("Optional")).toBeInTheDocument();
+    expect((await screen.findAllByText("Optional")).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Login Failed")).toBeInTheDocument();
     expect(screen.getByText("Too many attempts")).toBeInTheDocument();
   });

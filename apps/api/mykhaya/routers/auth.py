@@ -6,27 +6,61 @@ from typing import cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.apple_auth import (
+    AppleAuthenticationError,
+    AppleFlowState,
+    authorization_url,
+    consume_flow_state,
+    exchange_code,
+    require_apple_configuration,
+    store_flow_state,
+    verify_identity_token,
+)
 from mykhaya.audit import audit
+from mykhaya.auth_providers import external_auth_provider_statuses
+from mykhaya.browser_preauth import (
+    consume_browser_pre_auth,
+    create_browser_pre_auth,
+    load_browser_pre_auth,
+)
 from mykhaya.config import Settings, get_settings
+from mykhaya.consumer_mfa import (
+    EMAIL_CHALLENGE_TTL_SECONDS,
+    EMAIL_MAX_ATTEMPTS,
+    claim_totp_step,
+    generate_totp_secret,
+    hash_email_code,
+    hash_transaction,
+    matched_totp_step,
+    new_email_code,
+    totp_provisioning_uri,
+)
+from mykhaya.consumer_mfa_policy import resolve_consumer_mfa_policy
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
     ChildProfile,
+    ExternalIdentity,
+    ExternalIdentityProvider,
     Group,
     HouseholdRelationship,
     Invitation,
+    MfaEmailChallenge,
     Membership,
     Session,
     SessionKind,
     TokenPurpose,
     TrustedDevice,
     User,
+    UserMfaMethod,
+    UserMfaMethodRecord,
     UserPasskey,
 )
 from mykhaya.notifications.engine import notify
@@ -42,10 +76,16 @@ from mykhaya.platform_mfa import (
     verify_family_registration,
 )
 from mykhaya.rate_limit import enforce_rate_limit
+from mykhaya.secrets_crypto import decrypt_user_mfa_totp, encrypt_user_mfa_totp
 from mykhaya.schemas import (
+    AuthContinuationResponse,
     ChildLoginRequest,
     ForgotRequest,
     LoginRequest,
+    MfaOptionsResponse,
+    MfaStartRequest,
+    MfaStartResponse,
+    MfaVerifyRequest,
     MessageResponse,
     MobileDeviceRenewRequest,
     MobileSessionResponse,
@@ -67,6 +107,7 @@ from mykhaya.security import (
     clear_auth_cookies,
     consume_action_token,
     create_action_token,
+    current_user,
     decode_derived_token,
     derived_token,
     hash_secret,
@@ -88,6 +129,693 @@ auth_diag_log = structlog.get_logger("auth_diag")
 PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
 PASSKEY_CHALLENGE_TTL_SECONDS = 300
 FRESH_AUTH_WINDOW = timedelta(minutes=10)
+APPLE_LOGIN_ERROR = "apple=error"
+
+
+async def complete_browser_authentication(
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    *,
+    method: str,
+    kind: SessionKind = SessionKind.adult,
+    destination: str | None = None,
+    onboarding: bool = False,
+) -> UserResponse | AuthContinuationResponse:
+    """Shared final browser-auth seam; native callers do not use this path."""
+    policy = (
+        await resolve_consumer_mfa_policy(db, user.id, settings)
+        if kind == SessionKind.adult
+        else None
+    )
+    if policy is not None and policy.enforcement_enabled and policy.required:
+        transaction_id = await create_browser_pre_auth(
+            settings,
+            user_id=str(user.id),
+            method=method,
+            destination=destination,
+            onboarding=onboarding,
+        )
+        audit(db, request, "browser.pre_auth.created", user.id, target_type="browser_pre_auth")
+        return AuthContinuationResponse(
+            authentication_state="additional_auth_required",
+            transaction_id=transaction_id,
+            destination=destination,
+            onboarding=onboarding,
+        )
+    session = await issue_family_session(
+        db, response, request, user, settings, kind, fresh_auth_at=datetime.now(UTC)
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    return user_response(user, session)
+
+
+async def _mfa_preauth_user(
+    transaction_id: str, db: AsyncSession, settings: Settings
+) -> tuple[object, User]:
+    state = await load_browser_pre_auth(settings, transaction_id)
+    if state is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    try:
+        user_id = uuid.UUID(state.user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid."
+        ) from exc
+    user = await db.get(User, user_id)
+    if user is None or not user.is_active or user.email_verified_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
+    return state, user
+
+
+async def _active_mfa_methods(db: AsyncSession, user_id: uuid.UUID) -> set[UserMfaMethod]:
+    rows = (
+        await db.scalars(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user_id,
+                UserMfaMethodRecord.enabled.is_(True),
+                UserMfaMethodRecord.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    return {row.method for row in rows}
+
+
+def _masked_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    if len(local) <= 2:
+        masked = "*" * len(local)
+    else:
+        masked = local[0] + "*" * min(6, len(local) - 2) + local[-1]
+    return f"{masked}@{domain}"
+
+
+@router.get("/mfa/options", response_model=MfaOptionsResponse)
+async def browser_mfa_options(
+    transaction_id: str,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaOptionsResponse:
+    _state, user = await _mfa_preauth_user(transaction_id, db, settings)
+    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    methods = [
+        method.value
+        for method in (UserMfaMethod.totp, UserMfaMethod.email)
+        if method in active
+    ]
+    if not methods:
+        methods = sorted(policy.allowed_methods)
+    return MfaOptionsResponse(
+        methods=methods,
+        destination=_masked_email(user.email),
+        onboarding=_state.onboarding,
+        policy="required" if policy.required else "optional",
+        policy_source=policy.source,
+        enrolment_required=not bool(active & allowed),
+    )
+
+
+@router.post("/mfa/start", response_model=MfaStartResponse)
+async def browser_mfa_start(
+    body: MfaStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaStartResponse:
+    state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
+    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    if body.method not in policy.allowed_methods:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-send:{user.id}", 3, 900)
+        now = datetime.now(UTC)
+        reference_hash = hash_transaction(settings, body.transaction_id)
+        await db.execute(
+            update(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash == reference_hash,
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .values(superseded_at=now)
+        )
+        code = new_email_code()
+        challenge = MfaEmailChallenge(
+            user_id=user.id,
+            transaction_reference_hash=reference_hash,
+            code_hash=hash_email_code(settings, code),
+            expires_at=now + timedelta(seconds=EMAIL_CHALLENGE_TTL_SECONDS),
+        )
+        db.add(challenge)
+        await db.flush()
+        subject, message, html = await render_notification_email(
+            db, settings, "mfa_email_code", {"code": code}
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="mfa_email_code",
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=f"mfa-email:{challenge.id}",
+            is_critical=True,
+        )
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_CREATED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+        await db.commit()
+        enrolling = UserMfaMethod.email not in await _active_mfa_methods(db, user.id)
+        return MfaStartResponse(
+            method="email", destination=_masked_email(user.email), enrolling=enrolling
+        )
+
+    await enforce_rate_limit(request, settings, f"mfa-totp-start:{user.id}", 5, 300)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    enrolling = factor is None or not factor.enabled or factor.revoked_at is not None
+    if enrolling:
+        secret = generate_totp_secret()
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.totp)
+            db.add(factor)
+        factor.encrypted_secret = encrypt_user_mfa_totp(settings, secret)
+        factor.enabled = False
+        factor.revoked_at = None
+        await db.flush()
+        audit(db, request, "MFA_TOTP_ENROLMENT_STARTED", user.id, target_type="mfa_method")
+        await db.commit()
+        return MfaStartResponse(
+            method="totp",
+            provisioning_uri=totp_provisioning_uri(secret, user.email),
+            manual_key=secret,
+            enrolling=True,
+        )
+    audit(db, request, "MFA_TOTP_VERIFICATION_STARTED", user.id, target_type="mfa_method")
+    await db.commit()
+    return MfaStartResponse(method="totp", enrolling=False)
+
+
+@router.post("/mfa/verify", response_model=UserResponse)
+async def browser_mfa_verify(
+    body: MfaVerifyRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
+    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    if body.method not in policy.allowed_methods:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    now = datetime.now(UTC)
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-verify:{user.id}", 10, 900)
+        challenge = await db.scalar(
+            select(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash
+                == hash_transaction(settings, body.transaction_id),
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .order_by(MfaEmailChallenge.created_at.desc())
+            .with_for_update()
+        )
+        if (
+            challenge is None
+            or challenge.expires_at <= now
+            or challenge.attempts >= EMAIL_MAX_ATTEMPTS
+        ):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
+            )
+        challenge.attempts += 1
+        if not secrets.compare_digest(challenge.code_hash, hash_email_code(settings, body.code)):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
+            )
+        challenge.consumed_at = now
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.email,
+            )
+        )
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.email)
+            db.add(factor)
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_SUCCEEDED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+    else:
+        await enforce_rate_limit(request, settings, f"mfa-totp-verify:{user.id}", 10, 300)
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.totp,
+                UserMfaMethodRecord.revoked_at.is_(None),
+            )
+        )
+        if factor is None or not factor.encrypted_secret:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+        was_enabled = factor.enabled
+        step = matched_totp_step(
+            decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
+        )
+        if step is None or not await claim_totp_step(settings, user.id, step):
+            audit(db, request, "MFA_TOTP_VERIFICATION_FAILED", user.id, target_type="mfa_method")
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(db, request, "MFA_TOTP_VERIFICATION_SUCCEEDED", user.id, target_type="mfa_method")
+        if not was_enabled:
+            audit(db, request, "MFA_TOTP_ENROLLED", user.id, target_type="mfa_method")
+
+    consumed = await consume_browser_pre_auth(settings, body.transaction_id)
+    if consumed is None or consumed.user_id != str(user.id):
+        await db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    session = await issue_family_session(
+        db, response, request, user, settings, SessionKind.adult, fresh_auth_at=now
+    )
+    user.last_login_at = now
+    user.last_activity_at = now
+    audit(db, request, "MFA_LOGIN_SUCCEEDED", user.id, target_type="session")
+    await db.commit()
+    return user_response(user, session)
+
+
+@router.post("/mfa/totp/setup", response_model=MfaStartResponse)
+async def authenticated_totp_setup(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaStartResponse:
+    require_fresh_adult_auth(auth)
+    secret = generate_totp_secret()
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None:
+        factor = UserMfaMethodRecord(user_id=auth.user.id, method=UserMfaMethod.totp)
+        db.add(factor)
+    elif factor.enabled:
+        audit(db, request, "MFA_TOTP_RESET", auth.user.id, target_type="mfa_method")
+    factor.encrypted_secret = encrypt_user_mfa_totp(settings, secret)
+    factor.enabled = False
+    factor.revoked_at = None
+    await db.commit()
+    audit(db, request, "MFA_TOTP_ENROLMENT_STARTED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return MfaStartResponse(
+        method="totp",
+        provisioning_uri=totp_provisioning_uri(secret, auth.user.email),
+        manual_key=secret,
+        enrolling=True,
+    )
+
+
+@router.delete("/mfa/totp")
+async def remove_authenticated_totp(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None or not factor.enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Authenticator app is not enabled.")
+    factor.enabled = False
+    factor.revoked_at = datetime.now(UTC)
+    factor.encrypted_secret = None
+    audit(db, request, "MFA_TOTP_REMOVED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return {"message": "Authenticator app removed."}
+
+
+def _safe_return_path(value: str | None) -> str | None:
+    if value and value.startswith("/") and not value.startswith("//"):
+        return value[:500]
+    return None
+
+
+def _apple_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _apple_audit_failure(
+    db: AsyncSession, request: Request, user_id: uuid.UUID | None = None
+) -> None:
+    audit(db, request, "APPLE_LOGIN_FAILED", user_id, target_type="external_identity")
+
+
+def _apple_name(raw: str | None) -> str:
+    if not raw:
+        return "Apple user"
+    try:
+        parsed = json.loads(raw)
+        name = parsed.get("name") if isinstance(parsed, dict) else None
+        if isinstance(name, dict):
+            value = " ".join(
+                str(name.get(part, "")).strip()
+                for part in ("firstName", "lastName")
+                if name.get(part)
+            )
+            if value:
+                return value[:100]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return "Apple user"
+
+
+@router.get("/apple/start")
+async def apple_login_start(
+    request: Request,
+    next_path: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    try:
+        require_apple_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        await store_flow_state(
+            settings,
+            state,
+            AppleFlowState(
+                nonce=nonce,
+                intent="login",
+                user_id=None,
+                return_path=_safe_return_path(next_path),
+            ),
+        )
+        audit(db, request, "APPLE_LOGIN_STARTED", target_type="external_identity")
+        await db.commit()
+        return RedirectResponse(
+            authorization_url(settings, state, nonce), status_code=status.HTTP_303_SEE_OTHER
+        )
+    except AppleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.post("/apple/link/start")
+async def apple_link_start(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        require_apple_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        await store_flow_state(
+            settings,
+            state,
+            AppleFlowState(nonce=nonce, intent="link", user_id=str(auth.user.id), return_path=None),
+        )
+        audit(db, request, "APPLE_LOGIN_STARTED", auth.user.id, target_type="external_identity")
+        await db.commit()
+        return {"authorization_url": authorization_url(settings, state, nonce, "email name")}
+    except AppleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.delete("/apple/link")
+async def unlink_apple_identity(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    identity = await db.scalar(
+        select(ExternalIdentity)
+        .where(
+            ExternalIdentity.user_id == auth.user.id,
+            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+        )
+        .with_for_update()
+    )
+    if identity is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.")
+    password_identity = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
+    )
+    other_external_identity = await db.scalar(
+        select(ExternalIdentity.id).where(
+            ExternalIdentity.user_id == auth.user.id,
+            ExternalIdentity.id != identity.id,
+        )
+    )
+    if password_identity is None and other_external_identity is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Add another sign-in method before unlinking Apple.",
+        )
+    await db.delete(identity)
+    audit(db, request, "APPLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
+    await db.commit()
+    return {"message": "Apple sign-in has been unlinked."}
+
+
+@router.get("/apple/callback")
+async def apple_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    user: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    flow: AppleFlowState | None = None
+    try:
+        if not state or len(state) > 512:
+            raise AppleAuthenticationError("Invalid Apple sign-in state.")
+        flow = await consume_flow_state(settings, state)
+        if error:
+            raise AppleAuthenticationError("Apple sign-in was cancelled.")
+        if not code:
+            raise AppleAuthenticationError("Apple sign-in did not return an authorization code.")
+        identity_token = await exchange_code(settings, code)
+        claims = await verify_identity_token(settings, identity_token, flow.nonce)
+        subject = str(claims["sub"])
+        provider_email = claims.get("email")
+        provider_email = (
+            provider_email.strip().casefold() if isinstance(provider_email, str) else None
+        )
+        email_verified = claims.get("email_verified") in (True, "true", "1")
+
+        identity = await db.scalar(
+            select(ExternalIdentity)
+            .where(
+                ExternalIdentity.provider == ExternalIdentityProvider.apple,
+                ExternalIdentity.provider_subject == subject,
+            )
+            .with_for_update()
+        )
+
+        if flow.intent == "link":
+            linked_user, _session = await current_user(request, db, settings)
+            if flow.user_id != str(linked_user.id):
+                raise AppleAuthenticationError("This Apple linking attempt is invalid.")
+            if identity is not None:
+                if identity.user_id != linked_user.id:
+                    audit(
+                        db,
+                        request,
+                        "APPLE_IDENTITY_LINK_FAILED",
+                        linked_user.id,
+                        target_type="external_identity",
+                    )
+                    await db.commit()
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT, "This Apple identity is already linked."
+                    )
+                identity.last_used_at = datetime.now(UTC)
+            else:
+                identity = ExternalIdentity(
+                    user_id=linked_user.id,
+                    provider=ExternalIdentityProvider.apple,
+                    provider_subject=subject,
+                    provider_email=provider_email,
+                    provider_email_verified=email_verified,
+                    last_used_at=datetime.now(UTC),
+                )
+                db.add(identity)
+            audit(
+                db,
+                request,
+                "APPLE_IDENTITY_LINKED",
+                linked_user.id,
+                target_type="external_identity",
+            )
+            await db.commit()
+            return _apple_redirect(settings, "apple=linked")
+
+        if identity is not None:
+            candidate = await db.get(User, identity.user_id, with_for_update=True)
+            if candidate is None or not candidate.is_active:
+                raise AppleAuthenticationError("Apple sign-in could not be completed.")
+            linked_user = candidate
+            identity.provider_email = provider_email or identity.provider_email
+            identity.provider_email_verified = email_verified or identity.provider_email_verified
+            identity.last_used_at = datetime.now(UTC)
+        else:
+            # An email match is never an implicit identity link. The user must
+            # first sign in to the canonical account and then start the
+            # authenticated link ceremony above.
+            existing = (
+                await db.scalar(select(User).where(User.email == provider_email))
+                if provider_email
+                else None
+            )
+            if existing is not None:
+                _apple_audit_failure(db, request, existing.id)
+                await db.commit()
+                return _apple_redirect(settings, "apple=link_required")
+            if not provider_email:
+                raise AppleAuthenticationError("Apple did not provide an email for this account.")
+            linked_user = User(
+                email=provider_email,
+                display_name=_apple_name(user),
+                email_verified_at=datetime.now(UTC) if email_verified else None,
+            )
+            db.add(linked_user)
+            await db.flush()
+            db.add(
+                ExternalIdentity(
+                    user_id=linked_user.id,
+                    provider=ExternalIdentityProvider.apple,
+                    provider_subject=subject,
+                    provider_email=provider_email,
+                    provider_email_verified=email_verified,
+                    last_used_at=datetime.now(UTC),
+                )
+            )
+            audit(
+                db,
+                request,
+                "APPLE_IDENTITY_LINKED",
+                linked_user.id,
+                target_type="external_identity",
+            )
+
+        has_home = await db.scalar(
+            select(Membership.id).where(Membership.user_id == linked_user.id)
+        )
+        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        session_response = RedirectResponse(
+            f"{settings.public_web_url.rstrip('/')}{destination}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        result = await complete_browser_authentication(
+            db,
+            session_response,
+            request,
+            linked_user,
+            settings,
+            method="apple",
+            destination=destination,
+            onboarding=has_home is None,
+        )
+        if isinstance(result, AuthContinuationResponse):
+            session_response = _apple_redirect(
+                settings,
+                f"auth=additional&transaction={result.transaction_id}",
+            )
+        audit(db, request, "APPLE_LOGIN_SUCCESS", linked_user.id, target_type="external_identity")
+        await db.commit()
+        return session_response
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        try:
+            user_id = uuid.UUID(flow.user_id) if flow and flow.user_id else None
+        except ValueError:
+            user_id = None
+        action = (
+            "APPLE_IDENTITY_LINK_FAILED"
+            if flow is not None and flow.intent == "link"
+            else "APPLE_LOGIN_FAILED"
+        )
+        audit(db, request, action, user_id, target_type="external_identity")
+        await db.commit()
+        if isinstance(exc, AppleAuthenticationError):
+            return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+        return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+
+
+@router.get("/providers")
+async def authentication_provider_status(
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Return safe provider configuration state for future auth surfaces.
+
+    This endpoint reports status only; it never authenticates a provider,
+    creates a session, or returns credentials.
+    """
+    return {"providers": [item.public_dict() for item in external_auth_provider_statuses(settings)]}
 
 
 def _auth_diag(request: Request, event: str, **fields: object) -> None:
@@ -463,23 +1191,20 @@ async def verify_email(
     return MessageResponse(message="Your email is verified. You can sign in now.")
 
 
-@router.post("/login", response_model=UserResponse)
+@router.post("/login", response_model=UserResponse | AuthContinuationResponse)
 async def login(
     body: LoginRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> UserResponse:
+) -> UserResponse | AuthContinuationResponse:
     user = await authenticate_credentials(db, request, settings, body, "login")
-    fresh_auth_at = datetime.now(UTC)
-    session = await issue_family_session(
-        db, response, request, user, settings, SessionKind.adult, fresh_auth_at=fresh_auth_at
+    result = await complete_browser_authentication(
+        db, response, request, user, settings, method="password", destination="/home"
     )
-    user.last_login_at = datetime.now(UTC)
-    user.last_activity_at = datetime.now(UTC)
     await db.commit()
-    return user_response(user, session)
+    return result
 
 
 @router.post("/passkeys/register/options", response_model=PasskeyOptionsResponse)

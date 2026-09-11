@@ -30,6 +30,12 @@ import {
 } from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived";
+type HomeMfaState = {
+  configured: "inherit" | "optional" | "required";
+  effective: "optional" | "required";
+  source: string;
+  allowed_methods: string[];
+};
 
 // PCC Polish Phase 1: the current optional Home modules only, exactly as
 // the backend already filters them (home_admin_manageable, non-hidden,
@@ -64,6 +70,7 @@ type HomeDetail = {
   feature_overrides: { feature: string; enabled: boolean }[];
   modules: ModuleState[];
   notes: { id: string; body: string; created_at: string }[];
+  authentication_mfa: HomeMfaState;
 };
 
 const safeError = (error: unknown, fallback: string) =>
@@ -224,6 +231,28 @@ export default function PlatformHomeDetail() {
     }
   }
 
+  const updateMfaPolicy = guarded(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy("mfa-policy");
+    setError("");
+    try {
+      await platformApi.put(`/homes/${encodeURIComponent(id)}/auth/mfa-policy`, {
+        policy: form.get("policy"),
+        allowed_methods: ["totp", "email"],
+        reason: form.get("reason"),
+        confirmed: true,
+      });
+      setMessage("Home MFA policy updated.");
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to update the Home MFA policy."));
+    } finally {
+      setBusy("");
+    }
+  });
+
   const statusTone: CcBadgeTone =
     data?.lifecycle === "archived" ? "neutral" : data?.lifecycle === "active" ? "success" : "danger";
   const statusLabel =
@@ -322,6 +351,30 @@ export default function PlatformHomeDetail() {
                   />
                 ))}
               </CcRecordList>
+            </CcSection>
+
+            <CcSection title="Authentication & MFA">
+              <CcCard>
+                <CcMetadataGrid>
+                  <CcMetadataItem label="Configured">{data.authentication_mfa.configured}</CcMetadataItem>
+                  <CcMetadataItem label="Effective">{data.authentication_mfa.effective}</CcMetadataItem>
+                  <CcMetadataItem label="Source">{data.authentication_mfa.source}</CcMetadataItem>
+                  <CcMetadataItem label="Allowed methods">{data.authentication_mfa.allowed_methods.join(", ")}</CcMetadataItem>
+                </CcMetadataGrid>
+                <form onSubmit={updateMfaPolicy}>
+                  <CcField label="Home policy override">
+                    <select name="policy" defaultValue={data.authentication_mfa.configured}>
+                      <option value="inherit">Inherit platform policy</option>
+                      <option value="optional">Optional</option>
+                      <option value="required">Require MFA for this Home</option>
+                    </select>
+                  </CcField>
+                  <CcField label="Reason for this change">
+                    <input name="reason" minLength={10} maxLength={500} required />
+                  </CcField>
+                  <button disabled={Boolean(busy)}>Save MFA policy</button>
+                </form>
+              </CcCard>
             </CcSection>
 
             <CcSection title="Pending invitations">

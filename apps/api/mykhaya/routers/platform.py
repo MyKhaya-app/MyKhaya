@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.auth_providers import external_auth_provider_status, external_auth_provider_statuses
 from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import resolve_stripe_config
@@ -27,6 +28,12 @@ from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
+from mykhaya.consumer_mfa_policy import (
+    CONSUMER_MFA_POLICY_SETTING_KEY,
+    methods_value,
+    policy_value,
+    resolve_consumer_mfa_policy,
+)
 from mykhaya.db import get_db
 from mykhaya.entitlements import (
     calendar_usage,
@@ -112,6 +119,7 @@ from mykhaya.models import (
     TokenPurpose,
     TrustedDevice,
     User,
+    UserMfaMethodRecord,
     UserPasskey,
     Wishlist,
     WorkerJobRecord,
@@ -186,6 +194,8 @@ from mykhaya.platform_schemas import (
     ManagedDemoPasswordReset,
     MfaPolicyResponse,
     MfaPolicyUpdate,
+    ConsumerMfaPolicyResponse,
+    ConsumerMfaPolicyUpdate,
     ModuleUpdate,
     MoveMemberRequest,
     NoteRequest,
@@ -1374,6 +1384,166 @@ async def update_mfa_policy(
     return MfaPolicyResponse(required=body.required, environment_enforced=False)
 
 
+def _consumer_policy_response(
+    *, configured: str, effective: str, source: str, methods: set[str], settings: Settings
+) -> ConsumerMfaPolicyResponse:
+    return ConsumerMfaPolicyResponse(
+        configured=configured,
+        effective=effective,
+        source=source,
+        allowed_methods=sorted(methods),
+        enforcement_enabled=settings.browser_mfa_handoff_enabled,
+    )
+
+
+async def _consumer_platform_values(db: AsyncSession) -> tuple[str, set[str]]:
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY)
+    )
+    value = row.value if row else {}
+    return str(value.get("policy", "optional")), set(value.get("allowed_methods", ["totp", "email"]))
+
+
+@router.get("/auth/mfa/browser-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_platform_policy(
+    _: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    configured, methods = await _consumer_platform_values(db)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=configured,
+        source="platform",
+        methods=methods,
+        settings=settings,
+    )
+
+
+@router.put("/auth/mfa/browser-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_platform_policy(
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(PlatformRole.owner)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    configured = policy_value(body.policy)
+    if configured == "inherit":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Platform policy cannot inherit.")
+    methods = methods_value(body.allowed_methods)
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY)
+    )
+    previous = row.value if row else {"policy": "optional", "allowed_methods": ["totp", "email"]}
+    if row is None:
+        row = PlatformSetting(key=CONSUMER_MFA_POLICY_SETTING_KEY, value={})
+        db.add(row)
+    row.value = {"policy": configured, "allowed_methods": methods}
+    row.updated_by = context.administrator.id
+    platform_audit(db, request, context, "MFA_PLATFORM_POLICY_CHANGED", "platform_setting", None, reason=body.reason, previous=previous, new=row.value)
+    if configured == "required":
+        platform_audit(db, request, context, "MFA_ENFORCEMENT_ENABLED", "platform_setting", None)
+    elif previous.get("policy") == "required":
+        platform_audit(db, request, context, "MFA_ENFORCEMENT_DISABLED", "platform_setting", None)
+    await db.commit()
+    return _consumer_policy_response(configured=configured, effective=configured, source="platform", methods=set(methods), settings=settings)
+
+
+@router.get("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_home_policy(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    platform_policy, methods = await _consumer_platform_values(db)
+    configured = group.mfa_policy.value
+    effective = "required" if configured == "required" or platform_policy == "required" else "optional"
+    source = "home" if configured == "required" else "platform"
+    if group.mfa_allowed_methods is not None:
+        methods &= set(group.mfa_allowed_methods)
+    return _consumer_policy_response(configured=configured, effective=effective, source=source, methods=methods, settings=settings)
+
+
+@router.put("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_home_policy(
+    group_id: uuid.UUID,
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(PlatformRole.owner)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    group = await db.get(Group, group_id, with_for_update=True)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    configured = policy_value(body.policy)
+    methods = methods_value(body.allowed_methods)
+    platform_policy, platform_methods = await _consumer_platform_values(db)
+    if configured == "optional" and platform_policy == "required":
+        raise HTTPException(status.HTTP_409_CONFLICT, "A Home cannot weaken the platform MFA requirement.")
+    if not (set(methods) & platform_methods):
+        raise HTTPException(status.HTTP_409_CONFLICT, "The Home must retain a method allowed by the platform.")
+    previous = {"policy": group.mfa_policy.value, "allowed_methods": group.mfa_allowed_methods}
+    group.mfa_policy = configured
+    group.mfa_allowed_methods = None if set(methods) == platform_methods else methods
+    platform_audit(db, request, context, "MFA_HOME_POLICY_CHANGED", "home", group.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": group.mfa_allowed_methods})
+    await db.commit()
+    effective = "required" if configured == "required" or platform_policy == "required" else "optional"
+    return _consumer_policy_response(configured=configured, effective=effective, source="home" if configured == "required" else "platform", methods=set(methods) & platform_methods, settings=settings)
+
+
+@router.get("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_user_policy(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    return _consumer_policy_response(configured=user.mfa_policy.value, effective=policy.effective, source=policy.source, methods=set(policy.allowed_methods), settings=settings)
+
+
+@router.put("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_user_policy(
+    user_id: uuid.UUID,
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    configured = policy_value(body.policy)
+    methods = methods_value(body.allowed_methods)
+    current = await resolve_consumer_mfa_policy(db, user_id, settings)
+    if configured == "optional" and current.required and current.source != "user":
+        raise HTTPException(status.HTTP_409_CONFLICT, "A User cannot weaken an inherited MFA requirement.")
+    _, platform_methods = await _consumer_platform_values(db)
+    if not (set(methods) & platform_methods):
+        raise HTTPException(status.HTTP_409_CONFLICT, "The User must retain a method allowed by the platform.")
+    previous = {"policy": user.mfa_policy.value, "allowed_methods": user.mfa_allowed_methods}
+    user.mfa_policy = configured
+    user.mfa_allowed_methods = methods
+    event = "MFA_USER_FORCED" if configured == "required" else "MFA_USER_FORCE_REMOVED" if previous["policy"] == "required" else "MFA_USER_POLICY_CHANGED"
+    platform_audit(db, request, context, event, "user", user.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": methods})
+    await db.commit()
+    resolved = await resolve_consumer_mfa_policy(db, user_id, settings)
+    return _consumer_policy_response(configured=configured, effective=resolved.effective, source=resolved.source, methods=set(resolved.allowed_methods), settings=settings)
+
+
 @router.get("/administrators/{administrator_id}/security")
 async def administrator_security(
     administrator_id: uuid.UUID,
@@ -2454,6 +2624,7 @@ async def user_detail(
     user_id: uuid.UUID,
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     user = await db.get(User, user_id)
     if user is None:
@@ -2482,6 +2653,13 @@ async def user_detail(
             )
             .order_by(AdministrativeNote.created_at.desc())
             .limit(50)
+        )
+    ).all()
+    consumer_policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    mfa_methods = (
+        await db.execute(
+            select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled)
+            .where(UserMfaMethodRecord.user_id == user_id)
         )
     ).all()
     return {
@@ -2518,6 +2696,16 @@ async def user_detail(
             }
             for row in notes
         ],
+        "authentication_mfa": {
+            "configured": user.mfa_policy,
+            "effective": consumer_policy.effective,
+            "source": consumer_policy.source,
+            "allowed_methods": sorted(consumer_policy.allowed_methods),
+            "methods": [
+                {"method": method.value, "enabled": enabled}
+                for method, enabled in mfa_methods
+            ],
+        },
     }
 
 
@@ -3517,6 +3705,9 @@ async def home_detail(
         )
     ).all()
     subscription = await get_home_subscription(db, group_id)
+    platform_policy, platform_methods = await _consumer_platform_values(db)
+    home_policy = group.mfa_policy.value
+    home_effective = "required" if home_policy == "required" or platform_policy == "required" else "optional"
     return {
         "id": group.id,
         "name": group.name,
@@ -3525,6 +3716,15 @@ async def home_detail(
         "active": group.is_active,
         "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
         "subscription": await _subscription_response(db, subscription),
+        "authentication_mfa": {
+            "configured": home_policy,
+            "effective": home_effective,
+            "source": "home" if home_policy == "required" else "platform",
+            "allowed_methods": sorted(
+                platform_methods
+                & (set(group.mfa_allowed_methods) if group.mfa_allowed_methods is not None else platform_methods)
+            ),
+        },
         "members": [
             {
                 "user_id": user.id,
@@ -5371,6 +5571,47 @@ async def update_module(
     )
     await db.commit()
     return {"key": key, "enabled": body.enabled, "release_state": body.release_state}
+
+
+@router.get("/auth/providers")
+async def authentication_provider_configuration(
+    _: PlatformContext = Depends(require_roles(*OPERATORS)),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """PCC-safe provider state; credentials are deployment-managed."""
+    return {"providers": [item.public_dict() for item in external_auth_provider_statuses(settings)]}
+
+
+@router.post("/auth/providers/{provider}/test")
+async def test_authentication_provider_configuration(
+    provider: str,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object | None]:
+    """Validate deployment configuration without contacting a provider.
+
+    A real Apple OAuth test requires provider credentials and callback
+    configuration that are not present in this environment. This endpoint is
+    deliberately limited to safe local completeness checks and is protected by
+    the existing recent-auth and audit controls.
+    """
+    if provider not in {"apple", "google"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That sign-in provider is not supported.")
+    require_recent_auth(context, settings)
+    result = external_auth_provider_status(settings, "apple" if provider == "apple" else "google")
+    platform_audit(
+        db,
+        request,
+        context,
+        "APPLE_PROVIDER_CONFIG_TESTED",
+        "auth_provider",
+        reason=f"Validated {provider} deployment configuration.",
+        new={"provider": provider, "state": result.state, "configured": result.configured},
+    )
+    await db.commit()
+    return result.public_dict()
 
 
 @router.get("/security", response_model=PageResponse)

@@ -68,6 +68,7 @@ MANDATORY_EMAIL_TYPES = {
     # An external calendar-share invitation is exactly as action-required as
     # a household_invitation — the recipient can't accept/decline without it.
     "calendar_share_invitation",
+    "mfa_email_code",
 }
 
 

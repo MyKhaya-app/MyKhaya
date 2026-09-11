@@ -21,6 +21,13 @@ import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog
 import { Archive, ArchiveRestore, KeyRound, Mail, Power, ShieldOff, Shuffle, UserX } from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived" | "anonymised";
+type UserMfaState = {
+  configured: "inherit" | "optional" | "required";
+  effective: "optional" | "required";
+  source: string;
+  allowed_methods: string[];
+  methods: { method: string; enabled: boolean }[];
+};
 
 type UserDetail = {
   id: string;
@@ -35,6 +42,7 @@ type UserDetail = {
   homes: { id: string; name: string; role: string }[];
   sessions: { id: string; user_agent: string; last_seen_at: string; expires_at: string }[];
   notes: { id: string; body: string; created_at: string }[];
+  authentication_mfa: UserMfaState;
 };
 
 type GatedAction =
@@ -155,6 +163,28 @@ export default function PlatformUserDetail() {
       setError(safeError(cause, "Unable to add this note."));
     }
   }
+
+  const updateMfaPolicy = guarded(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy("mfa-policy");
+    setError("");
+    try {
+      await platformApi.put(`/users/${encodeURIComponent(id)}/auth/mfa-policy`, {
+        policy: form.get("policy"),
+        allowed_methods: ["totp", "email"],
+        reason: form.get("reason"),
+        confirmed: true,
+      });
+      setMessage("User MFA policy updated.");
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to update the user MFA policy."));
+    } finally {
+      setBusy("");
+    }
+  });
 
   const statusTone: CcBadgeTone =
     data?.lifecycle === "anonymised"
@@ -346,6 +376,33 @@ export default function PlatformUserDetail() {
                   <CcRecordCard key={home.id} title={home.name} meta={[home.role.replaceAll("_", " ")]} />
                 ))}
               </CcRecordList>
+            </CcSection>
+
+            <CcSection title="Authentication & MFA">
+              <CcCard>
+                <CcMetadataGrid>
+                  <CcMetadataItem label="Configured">{data.authentication_mfa.configured}</CcMetadataItem>
+                  <CcMetadataItem label="Effective">{data.authentication_mfa.effective}</CcMetadataItem>
+                  <CcMetadataItem label="Source">{data.authentication_mfa.source}</CcMetadataItem>
+                  <CcMetadataItem label="Enrolled methods">
+                    {data.authentication_mfa.methods.filter((method) => method.enabled).map((method) => method.method).join(", ") || "None"}
+                  </CcMetadataItem>
+                </CcMetadataGrid>
+                <form onSubmit={updateMfaPolicy}>
+                  <CcField label="User policy override">
+                    <select name="policy" defaultValue={data.authentication_mfa.configured}>
+                      <option value="inherit">Inherit</option>
+                      <option value="optional">Optional</option>
+                      <option value="required">Force MFA</option>
+                    </select>
+                  </CcField>
+                  <CcField label="Reason for this change">
+                    <input name="reason" minLength={10} maxLength={500} required />
+                  </CcField>
+                  <button disabled={Boolean(busy)}>Save MFA policy</button>
+                </form>
+                <small>Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.</small>
+              </CcCard>
             </CcSection>
 
             <CcSection title="Active sessions">

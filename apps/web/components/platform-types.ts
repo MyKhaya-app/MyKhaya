@@ -106,6 +106,16 @@ export type MfaPolicy = {
   environment_enforced: boolean;
 };
 
+export type ConsumerMfaPolicy = {
+  configured: "optional" | "required" | "inherit";
+  effective: "optional" | "required";
+  source: string;
+  allowed_methods: ("totp" | "email")[];
+  enforcement_enabled: boolean;
+  email_code_lifetime_minutes: number;
+  recent_auth_window_minutes: number;
+};
+
 export type InvitationState = "pending" | "accepted" | "expired" | "revoked";
 
 export type AdministratorInvitation = {

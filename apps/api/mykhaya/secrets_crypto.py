@@ -24,6 +24,7 @@ from mykhaya.config import Settings
 _HKDF_INFO = b"mykhaya-smtp-secret-v1"
 _STRIPE_HKDF_INFO = b"mykhaya-stripe-secret-v1"
 _HOME_JOIN_CODE_HKDF_INFO = b"mykhaya-home-join-code-v1"
+_USER_MFA_TOTP_HKDF_INFO = b"mykhaya-user-mfa-totp-v1"
 _HKDF_SALT = b"mykhaya-secrets-crypto"
 
 
@@ -72,3 +73,11 @@ def encrypt_home_join_code(settings: Settings, plaintext: str) -> str:
 
 def decrypt_home_join_code(settings: Settings, ciphertext: str) -> str:
     return decrypt_secret(settings, ciphertext, info=_HOME_JOIN_CODE_HKDF_INFO)
+
+
+def encrypt_user_mfa_totp(settings: Settings, plaintext: str) -> str:
+    return encrypt_secret(settings, plaintext, info=_USER_MFA_TOTP_HKDF_INFO)
+
+
+def decrypt_user_mfa_totp(settings: Settings, ciphertext: str) -> str:
+    return decrypt_secret(settings, ciphertext, info=_USER_MFA_TOTP_HKDF_INFO)

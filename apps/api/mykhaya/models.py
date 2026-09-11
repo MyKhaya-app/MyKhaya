@@ -143,6 +143,17 @@ class SessionKind(StrEnum):
     managed_child = "managed_child"
 
 
+class UserMfaMethod(StrEnum):
+    totp = "totp"
+    email = "email"
+
+
+class ConsumerMfaPolicy(StrEnum):
+    inherit = "inherit"
+    optional = "optional"
+    required = "required"
+
+
 class PlatformRole(StrEnum):
     owner = "platform_owner"
     administrator = "platform_administrator"
@@ -219,6 +230,12 @@ class User(UuidTimeMixin, Base):
     # implies archived_at is also set and is_active=False, but not the
     # reverse: an Archived user is not necessarily anonymised.
     anonymised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_policy: Mapped[ConsumerMfaPolicy] = mapped_column(
+        Enum(ConsumerMfaPolicy, name="consumer_mfa_policy"),
+        default=ConsumerMfaPolicy.inherit,
+        server_default=ConsumerMfaPolicy.inherit.value,
+    )
+    mfa_allowed_methods: Mapped[list[str] | None] = mapped_column(JSON)
     timezone: Mapped[str | None] = mapped_column(String(100))
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)
@@ -231,6 +248,9 @@ class User(UuidTimeMixin, Base):
     avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
     external_identities: Mapped[list["ExternalIdentity"]] = orm_relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    mfa_methods: Mapped[list["UserMfaMethodRecord"]] = orm_relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -246,6 +266,52 @@ class AuthIdentity(UuidTimeMixin, Base):
     )
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserMfaMethodRecord(UuidTimeMixin, Base):
+    """Explicitly enrolled consumer MFA methods.
+
+    TOTP material is encrypted with the application secret and is never exposed
+    through a response. Email is represented as an enrolled method only after a
+    successful challenge.
+    """
+
+    __tablename__ = "user_mfa_methods"
+    __table_args__ = (
+        UniqueConstraint("user_id", "method", name="uq_user_mfa_method"),
+        Index("ix_user_mfa_methods_user_active", "user_id", "enabled"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    method: Mapped[UserMfaMethod] = mapped_column(
+        Enum(UserMfaMethod, name="user_mfa_method"), nullable=False
+    )
+    encrypted_secret: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user: Mapped[User] = orm_relationship(back_populates="mfa_methods")
+
+
+class MfaEmailChallenge(UuidTimeMixin, Base):
+    """Hashed, bounded, single-use email MFA challenge state."""
+
+    __tablename__ = "mfa_email_challenges"
+    __table_args__ = (
+        Index("ix_mfa_email_challenges_transaction", "transaction_reference_hash"),
+        Index("ix_mfa_email_challenges_user_created", "user_id", "created_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    transaction_reference_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ExternalIdentity(UuidTimeMixin, Base):
@@ -367,6 +433,12 @@ class Group(UuidTimeMixin, Base):
     # Same Disabled-vs-Archived distinction as User.archived_at — see
     # mykhaya.routers.platform.archive_home/restore_home.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_policy: Mapped[ConsumerMfaPolicy] = mapped_column(
+        Enum(ConsumerMfaPolicy, name="consumer_mfa_policy", create_type=False),
+        default=ConsumerMfaPolicy.inherit,
+        server_default=ConsumerMfaPolicy.inherit.value,
+    )
+    mfa_allowed_methods: Mapped[list[str] | None] = mapped_column(JSON)
     # A short, random, non-sequential code — never the Home name or id — that a
     # managed Child types in alongside their username/PIN to identify which Home
     # they belong to at sign-in, without exposing membership or enumerating real
