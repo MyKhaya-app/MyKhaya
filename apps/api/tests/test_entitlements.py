@@ -9,6 +9,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from mykhaya.db import SessionFactory
@@ -19,17 +20,17 @@ from mykhaya.entitlements import (
     ensure_home_subscription,
     explain_resource_access,
     explain_user_entitlement,
-    grant_home_family_sponsorship,
     get_home_subscription,
     get_limit,
+    grant_home_family_sponsorship,
     has_entitlement,
     has_user_entitlement,
-    revoke_home_family_sponsorship,
     require_entitlement,
     require_within_limit,
     resolve_effective_plan,
     resolve_effective_state,
     retained_member_id,
+    revoke_home_family_sponsorship,
 )
 from mykhaya.models import (
     CalendarShare,
@@ -37,6 +38,7 @@ from mykhaya.models import (
     CalendarShareStatus,
     Group,
     HomeCalendar,
+    HomeEntitlementGrant,
     HomeSubscription,
     HomeSubscriptionEvent,
     HouseholdRelationship,
@@ -183,6 +185,46 @@ async def test_personal_family_entitlement_is_scoped_to_the_personal_home() -> N
         assert decision is not None
         assert decision.source is EntitlementSource.personal
         assert await has_user_entitlement(db, user_id, other_home, "meals.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_home_admin_family_access_is_subscription_derived_not_sponsorship() -> None:
+    owner_id, home_id = await _make_personal_home(family=True)
+
+    async with SessionFactory() as db:
+        decision = await explain_user_entitlement(db, owner_id, home_id, "family_plans.enabled")
+        assert decision is not None
+        assert decision.source is EntitlementSource.personal
+        with pytest.raises(HTTPException) as error:
+            await grant_home_family_sponsorship(db, home_id, owner_id)
+        assert error.value.status_code == 409
+        assert await db.scalar(
+            select(HomeEntitlementGrant).where(
+                HomeEntitlementGrant.source_group_id == home_id,
+                HomeEntitlementGrant.recipient_user_id == owner_id,
+                HomeEntitlementGrant.revoked_at.is_(None),
+            )
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_erroneous_home_admin_grant_does_not_change_subscription_source() -> None:
+    owner_id, home_id = await _make_personal_home(family=True)
+
+    async with SessionFactory() as db:
+        db.add(
+            HomeEntitlementGrant(
+                source_group_id=home_id,
+                recipient_user_id=owner_id,
+                entitlement_key="family",
+            )
+        )
+        await db.commit()
+
+    async with SessionFactory() as db:
+        decision = await explain_user_entitlement(db, owner_id, home_id, "family_plans.enabled")
+        assert decision is not None
+        assert decision.source is EntitlementSource.personal
 
 
 @pytest.mark.asyncio

@@ -227,6 +227,8 @@ async def members(
     db: AsyncSession = Depends(get_db),
 ) -> list[MemberResponse]:
     await require_capability(group_id, Capability.members_view, auth, db)
+    home = await db.get(Group, group_id)
+    home_owner_id = home.created_by if home is not None else None
     rows = (
         await db.execute(
             select(Membership, User)
@@ -264,7 +266,11 @@ async def members(
             shared_resources=membership.shared_resources,
             colour=membership.colour,
             avatar_version=user.avatar_key,
-            family_sponsored=user.id in sponsored_ids,
+            family_sponsored=(
+                user.id != home_owner_id
+                and membership.relationship != HouseholdRelationship.home_admin
+                and user.id in sponsored_ids
+            ),
             family_access=decision is not None,
         ))
     return result
@@ -283,6 +289,11 @@ async def _member_response_for_user(
     user = await db.get(User, user_id)
     if membership is None or user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
+    home = await db.get(Group, group_id)
+    home_derived_access = (
+        home is not None
+        and (user.id == home.created_by or membership.relationship == HouseholdRelationship.home_admin)
+    )
     sponsored = await db.scalar(
         select(HomeEntitlementGrant.id).where(
             HomeEntitlementGrant.source_group_id == group_id,
@@ -308,7 +319,7 @@ async def _member_response_for_user(
         shared_resources=membership.shared_resources,
         colour=membership.colour,
         avatar_version=user.avatar_key,
-        family_sponsored=sponsored is not None,
+        family_sponsored=not home_derived_access and sponsored is not None,
         family_access=decision is not None,
     )
 

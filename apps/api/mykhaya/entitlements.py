@@ -520,15 +520,23 @@ async def grant_home_family_sponsorship(
             "Family sponsorship requires an active Family subscription.",
             entitlement="family",
         )
-    member_id = await db.scalar(
-        select(Membership.id).where(
+    membership = await db.scalar(
+        select(Membership).where(
             Membership.group_id == source_home_id,
             Membership.user_id == recipient_user_id,
             Membership.removed_at.is_(None),
         )
     )
-    if member_id is None:
+    if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user is not an active Home member.")
+    home_owner_id = await db.scalar(
+        select(Group.created_by).where(Group.id == source_home_id)
+    )
+    if recipient_user_id == home_owner_id or membership.relationship == HouseholdRelationship.home_admin:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The Home Admin receives Family access from this Home's subscription, not sponsorship.",
+        )
     existing = await db.scalar(
         select(HomeEntitlementGrant).where(
             HomeEntitlementGrant.source_group_id == source_home_id,

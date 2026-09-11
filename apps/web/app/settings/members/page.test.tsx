@@ -478,6 +478,20 @@ describe("Manage members page — explicit Family sponsorship", () => {
     expect(screen.getByText(/family access shared from this home/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /stop sharing family/i })).toBeInTheDocument();
   });
+
+  it("shows Home Admin access as Home-derived and never offers self-sponsorship controls", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...ownerMember(), family_sponsored: true, family_access: true },
+      { ...partnerMember(), family_sponsored: true, family_access: true },
+    ]);
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+
+    expect(screen.getByText("Provided by this Home’s Family plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop sharing family/i })).toBeInTheDocument();
+    const ownerCard = screen.getByText("Owner").closest("article") ?? screen.getByText("Owner").parentElement;
+    expect(within(ownerCard as HTMLElement).queryByRole("button", { name: /stop sharing family/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("Manage members page — Home join codes", () => {

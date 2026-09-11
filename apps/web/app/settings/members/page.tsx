@@ -131,6 +131,12 @@ export default function ManageMembers() {
       });
   }, [activeHomeId]);
 
+  useEffect(() => {
+    if (status.kind !== "success") return;
+    const timeout = window.setTimeout(() => setStatus({ kind: "idle" }), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [status]);
+
   const canInvite =
     activeHome?.capabilities.includes("members.invite") ?? false;
   const canManage =
@@ -940,21 +946,30 @@ export default function ManageMembers() {
                     )}
                     {familyAccess && canManage && member.relationship !== "child" && (
                       <div className="family-member-sponsorship">
-                        <small className="muted">
-                          {member.family_sponsored
-                            ? "Family access shared from this Home"
-                            : member.family_access
-                              ? "Family access retained from an earlier Home membership"
-                              : "No Family access from this Home"}
-                        </small>
-                        <button
-                          type="button"
-                          className="tertiary"
-                          disabled={sponsorshipBusy === member.user_id}
-                          onClick={() => void changeFamilySponsorship(member, !member.family_sponsored)}
-                        >
-                          {member.family_sponsored ? "Stop sharing Family" : "Share Family access"}
-                        </button>
+                        {member.relationship === "home_admin" ? (
+                          <>
+                            <strong>Family access</strong>
+                            <small className="muted">Provided by this Home&rsquo;s Family plan</small>
+                          </>
+                        ) : (
+                          <>
+                            <small className="muted">
+                              {member.family_sponsored
+                                ? "Family access shared from this Home"
+                                : member.family_access
+                                  ? "Family access retained from an earlier Home membership"
+                                  : "No Family access from this Home"}
+                            </small>
+                            <button
+                              type="button"
+                              className="tertiary"
+                              disabled={sponsorshipBusy === member.user_id}
+                              onClick={() => void changeFamilySponsorship(member, !member.family_sponsored)}
+                            >
+                              {member.family_sponsored ? "Stop sharing Family" : "Share Family access"}
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                     {member.relationship === "child" && canManage && (
