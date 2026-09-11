@@ -12,7 +12,12 @@ from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
-from mykhaya.entitlements import require_within_limit
+from mykhaya.entitlements import (
+    grant_home_family_sponsorship,
+    has_entitlement,
+    require_entitlement,
+    require_within_limit,
+)
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
@@ -74,6 +79,9 @@ async def invite(
             "Use calendar sharing to give someone outside the Home access instead.",
         )
 
+    if body.family_sponsorship:
+        await require_entitlement(db, body.group_id, "family_plans.enabled")
+
     # Race-safe Free-Home member limit — same per-Home advisory-lock pattern
     # as routers.calendar's calendar-creation endpoint (see
     # mykhaya.entitlements.require_within_limit's docstring). A Free Home's
@@ -119,6 +127,7 @@ async def invite(
         if body.relationship
         in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}
         else [],
+        family_sponsorship=body.family_sponsorship,
         token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
         invited_by=auth.user.id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
@@ -170,6 +179,7 @@ async def invite(
         permission_profile=row.permission_profile,
         shared_resources=row.shared_resources,
         expires_at=row.expires_at,
+        family_sponsorship=row.family_sponsorship,
     )
 
 
@@ -228,6 +238,7 @@ async def list_invitations(
             relationship=invitation.relationship,
             permission_profile=invitation.permission_profile,
             shared_resources=invitation.shared_resources,
+            family_sponsorship=invitation.family_sponsorship,
             expires_at=invitation.expires_at,
             accepted_at=invitation.accepted_at,
             revoked_at=invitation.revoked_at,
@@ -290,6 +301,7 @@ async def resend_invitation(
         permission_profile=row.permission_profile,
         shared_resources=row.shared_resources,
         expires_at=row.expires_at,
+        family_sponsorship=row.family_sponsorship,
     )
 
 
@@ -418,6 +430,7 @@ async def accept(
                 permission_profile=row.permission_profile,
                 shared_resources=row.shared_resources,
                 colour=await assign_member_colour(db, row.group_id),
+                family_sponsorship_decided=row.family_sponsorship,
             )
         )
     else:
@@ -426,6 +439,7 @@ async def accept(
         existing.relationship = row.relationship
         existing.permission_profile = row.permission_profile
         existing.shared_resources = row.shared_resources
+        existing.family_sponsorship_decided = row.family_sponsorship
         if existing.colour is None:
             existing.colour = await assign_member_colour(db, row.group_id)
     # Give the new/returning adult member their Personal Calendar up front —
@@ -435,6 +449,10 @@ async def accept(
     # that ever changes.
     if row.relationship != HouseholdRelationship.child:
         await ensure_personal_calendar(db, row.group_id, auth.user.id)
+    if row.family_sponsorship and await has_entitlement(
+        db, row.group_id, "family_plans.enabled"
+    ):
+        await grant_home_family_sponsorship(db, row.group_id, auth.user.id, row.invited_by)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

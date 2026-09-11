@@ -22,6 +22,7 @@ import { FamilyChatPreview } from "@/components/family-chat-preview";
 import { useActiveHome } from "@/components/use-active-home";
 import { isBirthdayThisMonthAndUpcoming } from "../home/birthday-utils";
 import { localIsoDate, routineDueLabel } from "../home/routine-utils";
+import { FamilyUpsell } from "@/components/family-upsell";
 
 // The Family tab — a people-focused household overview. All administrative
 // controls (invite, change relationship/colour, child privacy) live at
@@ -150,6 +151,7 @@ export default function Family() {
   const [weekEvents, setWeekEvents] = useState<EventOccurrence[] | null>(null);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [error, setError] = useState("");
+  const [familyAccess, setFamilyAccess] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -188,6 +190,7 @@ export default function Family() {
     api
       .billingStatus(activeHomeId)
       .then(async (billing) => {
+        if (!cancelled) setFamilyAccess(billing.family_access);
         if (!billing.meals_enabled || cancelled) return;
         const day = await api.mealPlanDay(activeHomeId, localIsoDate());
         if (!cancelled) setMealsToday(day.entries);
@@ -289,6 +292,22 @@ export default function Family() {
   return (
     <AppShellContent>
       <main className="standard-page module-page">
+        {familyAccess === false ? (
+          <>
+            <div className="page-heading family-page-heading">
+              <div>
+                <p className="eyebrow">{(activeHome?.name ?? "Your Home").toUpperCase()}</p>
+                <h1>Family</h1>
+                <p className="muted">Bring your household together in one place</p>
+              </div>
+            </div>
+            <FamilyUpsell
+              title="The Family module is included with MyKhaya Family"
+              description="Upgrade to see and coordinate the people in this Home."
+            />
+          </>
+        ) : (
+        <>
         <div className="page-heading family-page-heading">
           <div>
             <p className="eyebrow">{(activeHome?.name ?? "Your Home").toUpperCase()}</p>
@@ -444,6 +463,8 @@ export default function Family() {
             </section>
           )}
         </div>
+        </>
+        )}
       </main>
     </AppShellContent>
   );

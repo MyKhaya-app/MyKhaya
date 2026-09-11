@@ -174,12 +174,16 @@ export default function PlanAndBillingSettings() {
   }
 
   const cardKind = status ? resolvePlanCardKind(status) : null;
+  const restoreOption = pricing?.options[0];
   const stillConfirming =
     checkoutBanner === "success" && status?.effective_plan === "free" && !confirmationTimedOut;
 
   return (
-    <SettingsPage title="Plan & Billing">
-      <main className="standard-page">
+    <SettingsPage
+      title="Plan & Billing"
+      description="Manage this Home's Family access, payment and retention status."
+    >
+      <main className="standard-page module-page">
         {checkoutBanner === "success" && (
           <p className="notice" role="status">
             {status?.effective_plan === "family"
@@ -325,7 +329,54 @@ export default function PlanAndBillingSettings() {
                   </p>
                   <p>You&rsquo;ll keep Family access until then.</p>
                   <p>Family applies to everyone in this Home.</p>
+                  <div className="notice" role="status">
+                    <strong>Your Home will move to MyKhaya Free when Family ends.</strong>
+                    <p>
+                      Free supports one person per Home. Your Home Admin will remain connected;
+                      additional adult members will lose connectivity here and fall back to their
+                      own MyKhaya plan. Their accounts and Home data will not be deleted.
+                    </p>
+                    {status.affected_adult_members?.length ? (
+                      <p>Affected members: {status.affected_adult_members.join(", ")}.</p>
+                    ) : null}
+                    <p>
+                      Sponsored Family access from this Home will end. Independently shared
+                      calendars remain separate, and Family data is not purged in this phase.
+                    </p>
+                  </div>
                 </>
+              )}
+
+              {(status.retention_state === "retained_free" ||
+                status.retention_state === "purge_pending") &&
+                status.retention_deadline && (
+                  <div className="notice" role="status">
+                    <strong>Family data retained until {formatDate(status.retention_deadline)}</strong>
+                    <p>
+                      Your personal calendar remains available. Family-only data is unavailable
+                      while this Home is Free, but remains retained during this 90-day window.
+                      Renew Family before the date above to restore it; after that, eligible data
+                      is permanently removed and cannot be recovered.
+                    </p>
+                    {restoreOption && (
+                      <button
+                        disabled={busy}
+                        onClick={() => startCheckout(restoreOption.interval)}
+                      >
+                        Restore with MyKhaya Family
+                      </button>
+                    )}
+                  </div>
+                )}
+
+              {status.retention_state === "purged" && status.retention_deadline && (
+                <div className="notice" role="status">
+                  <strong>Family data retention ended on {formatDate(status.retention_deadline)}</strong>
+                  <p>
+                    Eligible Family-only data was permanently removed. Your Home, account and
+                    personal calendar remain available.
+                  </p>
+                </div>
               )}
 
               {stillConfirming && (

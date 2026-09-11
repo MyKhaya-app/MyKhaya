@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
-from mykhaya.entitlements import require_within_limit
+from mykhaya.entitlements import require_user_entitlement, require_within_limit
 from mykhaya.household_permissions import (
     SAFE_CHILD_DEFAULTS,
     Capability,
@@ -178,6 +178,7 @@ async def create_child(
     db: AsyncSession = Depends(get_db),
 ) -> ChildResponse:
     await require_capability(group_id, Capability.child_manage, auth, db)
+    await require_user_entitlement(db, auth.user.id, group_id, "family_plans.enabled")
     guardians = await _validate_guardians(db, group_id, body.guardian_membership_ids)
     # A child gets a full Membership row like any other household member (see
     # below), so this is a genuine member-add path and must respect
@@ -211,6 +212,7 @@ async def create_child(
         role=Role.member,
         relationship=HouseholdRelationship.child,
         permission_profile=PermissionProfile.child_restricted,
+        family_sponsorship_decided=False,
         colour=await assign_member_colour(db, group_id),
     )
     db.add(membership)

@@ -40,7 +40,7 @@ export function KhayaControlShell({
 
   return (
     <AppShellContent>
-      <main className="standard-page control-page">
+      <main className="standard-page module-page control-page">
         <header className="page-heading">
           <div>
             <p className="eyebrow">Home administration</p>

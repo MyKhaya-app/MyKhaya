@@ -137,8 +137,8 @@ async def test_plan_comparison_reflects_backend_plan_definitions(client: AsyncCl
     response = await client.get("/api/v1/billing/plans")
     assert response.status_code == 200
     rows = response.json()["rows"]
-    categories = next(row for row in rows if row["key"] == "calendar.max_categories")
-    assert categories["free_display"] == "1 category"
+    categories = next(row for row in rows if row["key"] == "calendar.max_tags")
+    assert categories["free_display"] == "2 categories"
     assert categories["family_display"] == "Unlimited"
 
     people = next(row for row in rows if row["key"] == "home.max_members")

@@ -215,8 +215,8 @@ async def test_free_home_cannot_add_a_child_beyond_the_member_limit(client: Asyn
     )
     assert response.status_code == 403
     detail = response.json()["detail"]
-    assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "home.max_members"
+    assert detail["code"] == "plan_feature_unavailable"
+    assert detail["entitlement"] == "family_plans.enabled"
 
 
 @pytest.mark.asyncio
@@ -252,6 +252,7 @@ async def test_billing_status_reports_member_usage_and_household_routines(
     body = response.json()
     assert body["member_usage"] == {"count": 1, "limit": 1, "over_limit": False}
     assert body["household_routines_enabled"] is False
+    assert body["family_access"] is False
 
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
     response = await unsafe(client, "GET", f"/api/v1/groups/{home_id}/billing")
@@ -259,3 +260,4 @@ async def test_billing_status_reports_member_usage_and_household_routines(
     body = response.json()
     assert body["member_usage"] == {"count": 1, "limit": None, "over_limit": False}
     assert body["household_routines_enabled"] is True
+    assert body["family_access"] is True

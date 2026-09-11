@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./auth-provider";
 import { AppHeader } from "./app-header";
@@ -8,6 +8,7 @@ import { BottomNav } from "./bottom-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
+import { api } from "@mykhaya/api-client";
 
 export function AppShell({
   children,
@@ -24,6 +25,20 @@ export function AppShell({
   const router = useRouter();
   const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
+  const [familyAccess, setFamilyAccess] = useState(false);
+
+  useEffect(() => {
+    if (!activeHome?.id) {
+      setFamilyAccess(false);
+      return;
+    }
+    let cancelled = false;
+    setFamilyAccess(false);
+    api.billingStatus(activeHome.id)
+      .then((billing) => { if (!cancelled) setFamilyAccess(billing.family_access); })
+      .catch(() => { if (!cancelled) setFamilyAccess(false); });
+    return () => { cancelled = true; };
+  }, [activeHome?.id]);
 
   useEffect(() => {
     // A Home-less user has a legitimate reason to be here: a brand-new Free
@@ -104,7 +119,7 @@ export function AppShell({
         {hero}
         <main className="app-main"><NativeBiometricOffer />{children}</main>
       </div>
-      <BottomNav principalType={user?.principal_type} />
+      <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />
     </div>
   );
 }

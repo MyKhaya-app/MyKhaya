@@ -212,6 +212,11 @@ export function CalendarTagsManager({ homeId }: { homeId: string }) {
         it&rsquo;s mainly for, or what type of event it is. They&rsquo;re not separate
         calendars; see <Link href="/calendar/calendars">Home calendars</Link> for that.
       </p>
+      {categoryUsage && categoryUsage.limit !== null && (
+        <p className="muted" role="status">
+          {categoryUsage.count} of {categoryUsage.limit} Calendar Tags used
+        </p>
+      )}
       <FormStatus
         message={status.kind === "success" ? status.message : undefined}
         error={status.kind === "error" ? status.message : undefined}

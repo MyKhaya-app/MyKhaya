@@ -32,8 +32,10 @@ export const PRIMARY_NAV_DESTINATIONS: readonly PrimaryNavDestination[] = [
 
 export function primaryNavDestinationsFor(
   principalType?: PrincipalType,
+  familyAccess = true,
 ): readonly PrimaryNavDestination[] {
-  return PRIMARY_NAV_DESTINATIONS.filter(
-    (item) => !item.adultOnly || principalType !== "managed_child",
-  );
+  return PRIMARY_NAV_DESTINATIONS.filter((item) => {
+    if (item.id === "family" && !familyAccess) return false;
+    return !item.adultOnly || principalType !== "managed_child";
+  });
 }

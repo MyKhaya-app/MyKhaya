@@ -170,11 +170,13 @@ const MORE_GROUPS: readonly MoreGroup[] = [
 
 export function SettingsPage({
   title = "More",
+  description,
   hideHeading = false,
   className = "",
   children,
 }: {
   title?: string;
+  description?: string;
   hideHeading?: boolean;
   className?: string;
   children?: React.ReactNode;
@@ -240,6 +242,7 @@ export function SettingsPage({
                 <div>
                   <p className="eyebrow">A calm place for the details</p>
                   <h1>{title}</h1>
+                  {description && <p className="muted">{description}</p>}
                 </div>
               </div>
             )}

@@ -17,7 +17,7 @@ import uuid
 import stripe
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.billing.checkout import (
@@ -68,18 +68,26 @@ from mykhaya.entitlements import (
     ensure_home_subscription,
     get_home_subscription,
     has_entitlement,
+    has_user_entitlement,
     list_usage,
     member_usage,
     plan_definition_for,
     resolve_effective_state,
+    retained_member_id,
+    transition_expired_family_home,
 )
+from mykhaya.family_retention import start_family_retention
 from mykhaya.household_permissions import Capability, capabilities_for, require_capability
 from mykhaya.models import (
+    HomeRetentionLifecycle,
     HomeSubscription,
+    HouseholdRelationship,
+    Membership,
     StripeWebhookFailure,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
+    User,
 )
 from mykhaya.rate_limit import enforce_rate_limit
 
@@ -150,7 +158,9 @@ def _people_display(max_members: int | None) -> str:
 
 
 def _categories_display(max_categories: int | None) -> str:
-    return f"{max_categories} category" if max_categories is not None else "Unlimited"
+    if max_categories is None:
+        return "Unlimited"
+    return f"{max_categories} category" if max_categories == 1 else f"{max_categories} categories"
 
 
 def _personal_routines_display(max_active: int | None) -> str:
@@ -183,8 +193,8 @@ async def plan_comparison(
     family = plan_definition_for(SubscriptionPlan.family)
     free_members = free.limits.get("home.max_members")
     family_members = family.limits.get("home.max_members")
-    free_categories = free.limits.get("calendar.max_categories")
-    family_categories = family.limits.get("calendar.max_categories")
+    free_categories = free.limits.get("calendar.max_tags")
+    family_categories = family.limits.get("calendar.max_tags")
     free_personal_routines = free.limits.get("routines.personal.max_active")
     family_personal_routines = family.limits.get("routines.personal.max_active")
     return PlanComparisonResponse(
@@ -196,8 +206,8 @@ async def plan_comparison(
                 family_display=_people_display(family_members),
             ),
             PlanComparisonRow(
-                key="calendar.max_categories",
-                label="Event categories",
+                key="calendar.max_tags",
+                label="Calendar Tags",
                 free_display=_categories_display(free_categories),
                 family_display=_categories_display(family_categories),
             ),
@@ -232,12 +242,36 @@ async def billing_status(
     backend-prepared, display-safe view of the Home's commercial state, so
     the frontend never has to infer Stripe semantics itself. See
     docs/architecture/commercial-entitlements.md#household-plan-billing."""
+    subscription = await get_home_subscription(db, group_id)
+    await transition_expired_family_home(db, group_id)
+    lifecycle = await start_family_retention(db, group_id)
+    await db.commit()
+    if lifecycle is None:
+        lifecycle = await db.scalar(
+            select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == group_id)
+        )
     membership = await membership_for(group_id, auth, db)
     subscription = await get_home_subscription(db, group_id)
     resolved_plan = await effective_plan(db, group_id)
     resolution = resolve_effective_state(subscription)
     capabilities = await capabilities_for(db, membership)
     config = await resolve_stripe_config(settings, db)
+    retained_user = await retained_member_id(db, group_id)
+    affected_adult_members = list(
+        (
+            await db.scalars(
+                select(User.display_name)
+                .join(Membership, Membership.user_id == User.id)
+                .where(
+                    Membership.group_id == group_id,
+                    Membership.removed_at.is_(None),
+                    Membership.user_id != retained_user,
+                    Membership.relationship != HouseholdRelationship.child,
+                )
+                .order_by(User.display_name.asc())
+            )
+        ).all()
+    )
 
     price: SubscriptionPriceResponse | None = None
     if (
@@ -270,6 +304,9 @@ async def billing_status(
         cancel_at_period_end=bool(
             subscription and subscription.status == SubscriptionStatus.cancel_at_period_end
         ),
+        affected_adult_members=affected_adult_members,
+        retention_state=lifecycle.state.value if lifecycle else None,
+        retention_deadline=lifecycle.retention_deadline.isoformat() if lifecycle else None,
         complimentary_expires_at=subscription.complimentary_expires_at.isoformat()
         if subscription and subscription.complimentary_expires_at
         else None,
@@ -282,6 +319,9 @@ async def billing_status(
         # decide whether to show Checkout at all, so a disabled kill switch
         # correctly hides it there too, not only at the API layer.
         stripe_billing_available=config.configured and config.acquisition_enabled,
+        family_access=await has_user_entitlement(
+            db, auth.user.id, group_id, "family_plans.enabled"
+        ),
         calendar_usage=await calendar_usage(db, group_id),
         category_usage=await category_usage(db, group_id),
         member_usage=await member_usage(db, group_id),

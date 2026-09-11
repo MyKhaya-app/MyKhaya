@@ -23,6 +23,11 @@ describe("primaryNavDestinationsFor", () => {
     expect(ids).not.toContain("family");
   });
 
+  it("hides Family for a standalone Free Home", () => {
+    const ids = primaryNavDestinationsFor("adult", false).map((d) => d.id);
+    expect(ids).toEqual(["home", "calendar", "more"]);
+  });
+
   it("includes all destinations when no principal type is given", () => {
     expect(primaryNavDestinationsFor().map((d) => d.id)).toHaveLength(4);
   });

@@ -13,12 +13,18 @@ from sqlalchemy import select
 
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import (
+    EntitlementSource,
     effective_plan,
     effective_plan_sql_filter,
     ensure_home_subscription,
+    explain_resource_access,
+    explain_user_entitlement,
+    grant_home_family_sponsorship,
     get_home_subscription,
     get_limit,
     has_entitlement,
+    has_user_entitlement,
+    revoke_home_family_sponsorship,
     require_entitlement,
     require_within_limit,
     resolve_effective_plan,
@@ -26,7 +32,11 @@ from mykhaya.entitlements import (
     retained_member_id,
 )
 from mykhaya.models import (
+    CalendarShare,
+    CalendarSharePermission,
+    CalendarShareStatus,
     Group,
+    HomeCalendar,
     HomeSubscription,
     HomeSubscriptionEvent,
     HouseholdRelationship,
@@ -87,9 +97,230 @@ async def _add_membership(
         return user.id
 
 
+async def _make_personal_home(*, family: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
+    async with SessionFactory() as db:
+        user = User(email=f"personal-{uuid.uuid4()}@example.com", display_name="Personal")
+        db.add(user)
+        await db.flush()
+        group = Group(name="Personal Home", created_by=user.id)
+        db.add(group)
+        await db.flush()
+        db.add(
+            Membership(
+                group_id=group.id,
+                user_id=user.id,
+                role=Role.owner,
+                relationship=HouseholdRelationship.home_admin,
+                permission_profile=PermissionProfile.home_admin,
+            )
+        )
+        await db.flush()
+        subscription = await ensure_home_subscription(db, group.id)
+        if family:
+            subscription.plan = SubscriptionPlan.family
+            subscription.provider = SubscriptionProvider.stripe
+        await db.commit()
+        return user.id, group.id
+
+
+async def _add_member(
+    home_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    family_sponsorship_decided: bool | None = False,
+) -> None:
+    async with SessionFactory() as db:
+        db.add(
+            Membership(
+                group_id=home_id,
+                user_id=user_id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+                family_sponsorship_decided=family_sponsorship_decided,
+            )
+        )
+        await db.commit()
+
+
+async def _sponsor(home_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    async with SessionFactory() as db:
+        await grant_home_family_sponsorship(db, home_id, user_id)
+        await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Default behaviour
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scoped_entitlement_matrix_keeps_personal_and_home_access_separate() -> None:
+    user_id, own_home = await _make_personal_home()
+    _, family_home = await _make_personal_home(family=True)
+    await _add_member(family_home, user_id)
+
+    async with SessionFactory() as db:
+        assert await has_user_entitlement(db, user_id, own_home, "meals.enabled") is False
+        assert await has_user_entitlement(db, user_id, family_home, "meals.enabled") is False
+
+    await _sponsor(family_home, user_id)
+    async with SessionFactory() as db:
+        decision = await explain_user_entitlement(db, user_id, family_home, "meals.enabled")
+        assert decision is not None
+        assert decision.source is EntitlementSource.home_sponsored
+        assert await has_user_entitlement(db, user_id, own_home, "meals.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_personal_family_entitlement_is_scoped_to_the_personal_home() -> None:
+    user_id, own_home = await _make_personal_home(family=True)
+    _, other_home = await _make_personal_home()
+    await _add_member(other_home, user_id)
+
+    async with SessionFactory() as db:
+        decision = await explain_user_entitlement(db, user_id, own_home, "meals.enabled")
+        assert decision is not None
+        assert decision.source is EntitlementSource.personal
+        assert await has_user_entitlement(db, user_id, other_home, "meals.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_sponsorship_requires_current_family_source_and_active_membership() -> None:
+    user_id, source_home = await _make_personal_home(family=True)
+    recipient_id, recipient_home = await _make_personal_home()
+    await _add_member(source_home, recipient_id)
+    await _sponsor(source_home, recipient_id)
+
+    async with SessionFactory() as db:
+        assert await has_user_entitlement(db, recipient_id, source_home, "meals.enabled") is True
+        source_subscription = await get_home_subscription(db, source_home)
+        assert source_subscription is not None
+        source_subscription.plan = SubscriptionPlan.free
+        assert await has_user_entitlement(db, recipient_id, source_home, "meals.enabled") is False
+        source_subscription.plan = SubscriptionPlan.family
+        membership = await db.scalar(
+            select(Membership).where(
+                Membership.group_id == source_home,
+                Membership.user_id == recipient_id,
+            )
+        )
+        assert membership is not None
+        membership.removed_at = datetime.now(UTC)
+        assert await has_user_entitlement(db, recipient_id, source_home, "meals.enabled") is False
+        assert await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_explicit_sponsorship_decision_is_home_scoped_and_legacy_members_are_preserved() -> None:
+    recipient_id, personal_home = await _make_personal_home()
+    _, family_home = await _make_personal_home(family=True)
+    await _add_member(family_home, recipient_id, family_sponsorship_decided=None)
+
+    async with SessionFactory() as db:
+        membership = await db.scalar(
+            select(Membership).where(
+                Membership.group_id == family_home,
+                Membership.user_id == recipient_id,
+            )
+        )
+        assert membership is not None
+        # Existing paid members have NULL and retain transitional legacy access
+        # without creating a HomeEntitlementGrant row.
+        assert membership.family_sponsorship_decided is None
+        assert await has_user_entitlement(db, recipient_id, family_home, "family_plans.enabled")
+        assert await has_user_entitlement(db, recipient_id, personal_home, "family_plans.enabled") is False
+
+        membership.family_sponsorship_decided = False
+        await db.flush()
+        assert await has_user_entitlement(db, recipient_id, family_home, "family_plans.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_revoking_one_home_sponsorship_keeps_another_source_and_membership_intact() -> None:
+    recipient_id, _ = await _make_personal_home()
+    _, first_home = await _make_personal_home(family=True)
+    _, second_home = await _make_personal_home(family=True)
+    await _add_member(first_home, recipient_id)
+    await _add_member(second_home, recipient_id)
+    await _sponsor(first_home, recipient_id)
+    await _sponsor(second_home, recipient_id)
+
+    async with SessionFactory() as db:
+        assert await revoke_home_family_sponsorship(db, first_home, recipient_id) is True
+        first_membership = await db.scalar(
+            select(Membership).where(
+                Membership.group_id == first_home,
+                Membership.user_id == recipient_id,
+            )
+        )
+        assert first_membership is not None
+        assert first_membership.removed_at is None
+        assert await has_user_entitlement(db, recipient_id, first_home, "family_plans.enabled") is False
+        assert await has_user_entitlement(db, recipient_id, second_home, "family_plans.enabled") is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_member_loses_home_family_access_after_paid_period_expiry() -> None:
+    recipient_id, _ = await _make_personal_home()
+    _, home_id = await _make_personal_home(family=True)
+    await _add_member(home_id, recipient_id, family_sponsorship_decided=None)
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.provider = SubscriptionProvider.stripe
+        subscription.status = SubscriptionStatus.cancel_at_period_end
+        subscription.current_period_end = datetime.now(UTC) - timedelta(minutes=1)
+        assert await has_user_entitlement(db, recipient_id, home_id, "family_plans.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_resource_share_is_explicit_and_does_not_grant_family_entitlement() -> None:
+    owner_id, source_home = await _make_personal_home()
+    recipient_id, recipient_home = await _make_personal_home()
+    async with SessionFactory() as db:
+        calendar = HomeCalendar(group_id=source_home, name="Shared")
+        db.add(calendar)
+        await db.flush()
+        db.add(
+            CalendarShare(
+                resource_type="calendar",
+                calendar_id=calendar.id,
+                source_group_id=source_home,
+                requested_by_user_id=owner_id,
+                recipient_email=f"recipient-{recipient_id}@example.com",
+                recipient_user_id=recipient_id,
+                permission=CalendarSharePermission.view,
+                status=CalendarShareStatus.accepted,
+                token_hash=f"token-{uuid.uuid4()}",
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+        resource = await explain_resource_access(db, recipient_id, "calendar", calendar.id)
+        assert resource is not None
+        assert resource.source is EntitlementSource.resource_share
+        assert resource.home_id == source_home
+        assert await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_multiple_sponsorship_sources_recalculate_independently() -> None:
+    recipient_id, own_home = await _make_personal_home()
+    _, first_home = await _make_personal_home(family=True)
+    _, second_home = await _make_personal_home(family=True)
+    await _add_member(first_home, recipient_id)
+    await _add_member(second_home, recipient_id)
+    await _sponsor(first_home, recipient_id)
+    await _sponsor(second_home, recipient_id)
+
+    async with SessionFactory() as db:
+        assert await has_user_entitlement(db, recipient_id, first_home, "meals.enabled") is True
+        assert await has_user_entitlement(db, recipient_id, second_home, "meals.enabled") is True
+        assert await has_user_entitlement(db, recipient_id, own_home, "meals.enabled") is False
+        assert await revoke_home_family_sponsorship(db, first_home, recipient_id) is True
+        assert await has_user_entitlement(db, recipient_id, first_home, "meals.enabled") is False
+        assert await has_user_entitlement(db, recipient_id, second_home, "meals.enabled") is True
 
 
 @pytest.mark.asyncio

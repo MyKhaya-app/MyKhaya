@@ -91,16 +91,22 @@ class BillingStatusResponse(BaseModel):
     price: SubscriptionPriceResponse | None
     current_period_end: str | None
     cancel_at_period_end: bool
+    affected_adult_members: list[str]
+    retention_state: str | None
+    retention_deadline: str | None
     complimentary_expires_at: str | None
     can_manage_billing: bool
     has_stripe_customer: bool
     stripe_billing_available: bool
-    # How many calendars this Home currently has vs. what its effective plan
+    # User-scoped Family access for this Home. This preserves sponsored access
+    # and multi-Home boundaries in presentation decisions.
+    family_access: bool
+    # How many shared Home calendars this Home currently has vs. what its effective plan
     # allows. Populated for every Home (not just over-limit ones) so the
     # page can show "1 of 1" on a normal Free Home too; see "Household Plan
     # & Billing messaging" in docs/architecture/commercial-entitlements.md.
     calendar_usage: CalendarUsageResponse
-    # The actual user-facing "event category" resource (CalendarEventLabel,
+    # The actual user-facing Calendar Tag resource (CalendarEventLabel,
     # not HomeCalendar) shown on Settings -> Home settings' "Calendars &
     # categories" page — see mykhaya.entitlements.category_usage.
     category_usage: CalendarUsageResponse

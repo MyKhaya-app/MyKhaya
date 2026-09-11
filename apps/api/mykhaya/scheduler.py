@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.family_retention import scan_family_retention
 from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent
 from mykhaya.notifications.birthdays import scan_due_birthdays
@@ -44,6 +45,8 @@ async def run() -> None:
                 await scan_due_standalone_reminders(db, settings)
                 await scan_due_nudges(db, settings)
                 await scan_due_daily_nudge_summary(db, settings)
+                await scan_family_retention(db)
+                await db.commit()
             async with SessionFactory() as db:
                 rows = (
                     await db.scalars(

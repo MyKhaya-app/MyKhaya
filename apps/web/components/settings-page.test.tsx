@@ -263,6 +263,17 @@ describe("More — green hero header", () => {
     expect(container.querySelector(".more-hero")).toBeNull();
   });
 
+  it("renders the shared supporting description without changing the More hero", async () => {
+    render(
+      <SettingsPage title="Calendar tags" description="Colour and organise events across your Home calendars.">
+        <p>content</p>
+      </SettingsPage>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Calendar tags" })).toBeInTheDocument();
+    expect(screen.getByText("Colour and organise events across your Home calendars.")).toBeInTheDocument();
+  });
+
   // The static AppHeader (rendered by AppShell, above this component) already
   // shows the MyKhaya icon/home name/avatar — the hero must not repeat a
   // second logo/icon. See the "Simplify the green More header" fix.

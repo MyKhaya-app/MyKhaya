@@ -15,11 +15,13 @@ const ICONS: Record<PrimaryNavDestination["id"], typeof Home> = {
 
 export function BottomNav({
   principalType,
+  familyAccess,
 }: {
   principalType?: PrincipalType;
+  familyAccess?: boolean;
 }) {
   const path = usePathname();
-  const items = primaryNavDestinationsFor(principalType);
+  const items = primaryNavDestinationsFor(principalType, familyAccess);
   return (
     <nav className="bottom-nav" aria-label="Primary navigation">
       {items.map(({ id, href, label }) => {

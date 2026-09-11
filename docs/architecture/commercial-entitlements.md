@@ -724,3 +724,126 @@ Deactivating labels is never automatic. A Family Home with 3 active labels that 
 
 - **Settings -> Home settings "Calendars & categories"** (`app/settings/home/page.tsx`): now fetches `include_inactive=true` so every label — not just the currently-active one — is visible. A `commercial_access: "read_only_due_to_plan"` row renders muted, with a lock icon and "Family" indicator, no working "Active" checkbox, no rename/recolour controls (Option A from the review). The create form is replaced entirely by a locked "Add another category 🔒 — Unlimited categories are included with MyKhaya Family" card (`FamilyUpsell`, Option B) once the Home is at its limit — driven by a new `category_usage` field on `GET /groups/{id}/billing`, computed by the new `mykhaya.entitlements.category_usage` (parallel to the existing `calendar_usage`/`member_usage`).
 - **Calendar page's event-category selector** (`app/calendar/page.tsx`): the same transition-safe locking as the routine-scope and household-member selectors — a locked category shows `disabled` with a "(Family)" suffix, except when it's the event's own current category (so editing an existing event never breaks).
+-
+## Phase 1 scoped entitlement foundation
+
+`HomeSubscription` remains the billing state for one Home. It is not copied to
+users and it is not sufficient by itself to describe a member's access across
+multiple Homes. `HomeEntitlementGrant` is the separate, Home-scoped record for
+a deliberate sponsorship of the `family` entitlement to a specific user. It
+can be revoked independently of membership, and the resolver checks the source
+Home's current effective plan on every access decision. Therefore ending the
+source subscription removes sponsored access without deleting the grant or
+rewriting membership history.
+
+`mykhaya.entitlements.explain_user_entitlement()` resolves a commercial
+entitlement in an explicit `(user, Home)` context and reports whether the
+source is `personal` or `home_sponsored`. Personal access is limited to the
+user's own Home (`Group.created_by`). Sponsored access requires both an active
+membership in the sponsoring Home and an active grant from that same Home.
+There is no global `is_family_user` state, and access in one Home does not
+spill into another.
+
+`explain_resource_access()` is intentionally separate. An accepted
+`CalendarShare` can grant access to that calendar even when the recipient is
+not a member of the source Home, but it never satisfies a commercial Family
+entitlement check. This preserves resource-level sharing as an independent
+permission boundary.
+
+Migration `0065_home_entitlement_grants` creates the sponsorship table with no
+backfill. Existing Homes, subscriptions, memberships and calendar shares are
+therefore unchanged.
+
+## Phase 3 explicit Family sponsorship
+
+Family sponsorship is an explicit Home-level decision, separate from
+membership and separate from resource sharing. An email invitation stores a
+visible `family_sponsorship` choice, and a join-code approval stores the same
+choice. The choice is applied only after the recipient becomes an active
+member. If the source Home is no longer entitled to `family_plans.enabled` at
+acceptance time, membership may still be created but no invalid sponsorship is
+granted.
+
+`Membership.family_sponsorship_decided` records the decision for new and
+reactivated memberships. Its nullable value is deliberate transitional
+compatibility: existing paid Home members with `NULL` retain the legacy
+Home-level Family behaviour without an automatic grant backfill. New members
+with an explicit `false` do not receive Family access merely because the Home
+is paid. The existing `HomeEntitlementGrant` remains the authoritative record
+for later grant/revoke actions, and all access checks still resolve against the
+source Home on every request.
+
+Only a Home Admin with the existing member-management capability can grant or
+revoke sponsorship. Revocation leaves membership and calendar sharing intact;
+it removes only that Home's sponsored Family entitlement. The member list
+exposes scoped `family_sponsored` and `family_access` state so the admin can
+distinguish an active grant, legacy access, and no access. No personal Home
+subscription is changed, and sponsorship in one Home never grants access in
+another.
+
+## Phase 4 cancellation and expiry transition
+
+Stripe's existing `cancel_at_period_end` status and `current_period_end` are
+the source of truth. A scheduled cancellation is still active Family access:
+the effective plan, members, sponsorship, and Family features remain unchanged
+until the paid period end. Renewal/reversal is represented by Stripe returning
+the status to `active` or `trialing`, so no parallel cancellation state is
+introduced.
+
+At or after the authoritative period end, the entitlement resolver returns
+Free. The billing-status read path materialises the idempotent expiry
+transition after committed authoritative billing state is present; Stripe
+webhooks and reconciliation continue to update that state through the existing
+subscription-state path. The transition acquires a Home advisory lock and records a
+`family_entitlement_expired` history marker. The Home Admin remains active;
+other active memberships are marked disconnected with `removed_at`, not
+deleted. Active Home sponsorship grants are marked revoked at this point, and
+all source-Home entitlement checks independently resolve to Free. User
+accounts, the Home, calendars, shared-calendar permissions, and Family-only
+content are preserved for the later retention phase.
+
+No migration performs this transition or backfills `removed_at`/revocation
+timestamps. Existing active Family Homes are therefore unchanged at deploy.
+Legacy `NULL` sponsorship-decision members stop receiving Home-derived Family
+access naturally when the source Home resolves to Free; no grant backfill is
+created. A renewal before expiry never enters the transition and keeps legacy
+compatibility and explicit sponsorship intact.
+
+## Phase 5 Family-data retention and purge
+
+There was no existing scheduled Stripe reconciliation loop: Stripe webhooks
+and the Platform Control Centre reconciliation path update subscription state,
+but the scheduler previously handled notification/outbox work only. The
+scheduler now runs a bounded Home-scoped retention scan every cycle. It first
+uses the authoritative `HomeSubscription.current_period_end` and cancellation
+state to materialise any missed Phase 4 expiry, then starts retention, so the
+90-day window never depends on a user opening Plan & Billing.
+
+`home_retention_lifecycles` is created only when an actual Family expiry is
+observed. Its explicit state is `retained_free`, `restored`, `purge_pending`,
+or `purged`, with the authoritative expiry and exact deadline persisted. The
+0067 migration does not backfill active Homes. `home_retention_memberships`
+records only memberships disconnected by that expiry. Restoration reactivates
+managed Child memberships and expiry-revoked sponsorship grants, but never
+silently reactivates former adults; adult reconnection remains an explicit
+future Home Admin/reinvite flow.
+
+The deadline is `current_period_end + 90 days`, using timezone-aware Stripe
+timestamps. During retention, the Home remains Free and retained Family data
+is inaccessible through normal Family entitlements. After the deadline, the
+purge rechecks the current subscription and lifecycle while holding the same
+per-Home PostgreSQL advisory lock used by renewal and expiry. It removes only
+clearly Home-owned Family data: household-scoped routines/reminders/to-dos,
+Meals and Meal Plans, Home Lists, Home-visible wishlists, unshared secondary
+shared calendars and their events, Home feature overrides, and managed Child
+profiles/Child memberships. Personal-scoped records, all user accounts, the
+Home and Home Admin membership, the primary and every personal calendar,
+active independently shared calendars, billing/subscription history,
+security/audit history, and unrelated Homes are protected. Private/user-owned
+wishlists are retained rather than inferred to be Home-owned.
+
+Purge is transactional, retry-safe and idempotent. A `family_data_purged`
+subscription-history event records the lifecycle action without copying any
+deleted content. The Plan & Billing surface shows the exact retained-until
+date and a focused `Restore with MyKhaya Family` action; it does not claim that
+Family data was deleted at downgrade.

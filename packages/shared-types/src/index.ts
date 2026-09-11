@@ -68,6 +68,8 @@ export interface Member {
   shared_resources: string[];
   colour: string | null;
   avatar_version: string | null;
+  family_sponsored?: boolean;
+  family_access?: boolean;
 }
 
 export type RecurrencePattern =
@@ -277,6 +279,7 @@ export interface InvitationResponse {
   permission_profile: PermissionProfile;
   shared_resources: string[];
   expires_at: string;
+  family_sponsorship?: boolean;
 }
 
 export interface InvitationListItem extends InvitationResponse {
@@ -966,10 +969,14 @@ export interface BillingStatus {
   price: SubscriptionPrice | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  affected_adult_members?: string[];
+  retention_state?: "retained_free" | "restored" | "purge_pending" | "purged" | null;
+  retention_deadline?: string | null;
   complimentary_expires_at: string | null;
   can_manage_billing: boolean;
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;
+  family_access: boolean;
   calendar_usage: CalendarUsage;
   category_usage: CalendarUsage;
   member_usage: CalendarUsage;

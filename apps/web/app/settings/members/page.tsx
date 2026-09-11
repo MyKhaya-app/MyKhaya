@@ -97,6 +97,7 @@ export default function ManageMembers() {
   const [joinRequestRelationship, setJoinRequestRelationship] = useState<
     Record<string, HouseholdRelationship>
   >({});
+  const [joinRequestSponsorship, setJoinRequestSponsorship] = useState<Record<string, boolean>>({});
   const [joinRequestBusy, setJoinRequestBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
   const [sending, setSending] = useState(false);
@@ -106,6 +107,8 @@ export default function ManageMembers() {
   const [colourBusy, setColourBusy] = useState(false);
   const [memberUsage, setMemberUsage] = useState<CalendarUsage | null>(null);
   const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
+  const [familyAccess, setFamilyAccess] = useState(false);
+  const [sponsorshipBusy, setSponsorshipBusy] = useState<string | null>(null);
   const [avatarBusy, setAvatarBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -119,10 +122,12 @@ export default function ManageMembers() {
       .then((billing) => {
         setMemberUsage(billing.member_usage);
         setExternalInvitesEnabled(billing.external_invites_enabled);
+        setFamilyAccess(billing.family_access);
       })
       .catch(() => {
         setMemberUsage(null);
         setExternalInvitesEnabled(false);
+        setFamilyAccess(false);
       });
   }, [activeHomeId]);
 
@@ -220,6 +225,7 @@ export default function ManageMembers() {
     try {
       await api.approveHomeJoinRequest(activeHomeId, request.id, {
         relationship: nextRelationship,
+        family_sponsorship: familyAccess && joinRequestSponsorship[request.id] === true,
         confirmed: true,
       });
       setStatus({
@@ -274,6 +280,7 @@ export default function ManageMembers() {
         group_id: activeHomeId,
         email: data.get("email"),
         relationship,
+        family_sponsorship: data.get("family_sponsorship") === "on",
       });
       // The email send itself happens asynchronously (worker + outbox, so a slow or
       // temporarily-down mail provider never blocks this request) — this only
@@ -341,6 +348,26 @@ export default function ManageMembers() {
       });
     } finally {
       setColourBusy(false);
+    }
+  }
+
+  async function changeFamilySponsorship(member: Member, enabled: boolean) {
+    if (!activeHomeId || sponsorshipBusy) return;
+    if (!enabled && !window.confirm(
+      `${member.display_name} will remain a member of this Home, but will lose Family-only features provided by this Home unless another qualifying entitlement applies. Continue?`,
+    )) return;
+    setSponsorshipBusy(member.user_id);
+    setStatus({ kind: "idle" });
+    try {
+      const updated = enabled
+        ? await api.grantFamilySponsorship(activeHomeId, member.user_id, { confirmed: true })
+        : await api.revokeFamilySponsorship(activeHomeId, member.user_id, { confirmed: true });
+      setMembers((current) => current.map((item) => item.user_id === updated.user_id ? updated : item));
+      setStatus({ kind: "success", message: enabled ? "Family access shared with this member." : "Family access stopped for this member." });
+    } catch (cause) {
+      setStatus({ kind: "error", message: cause instanceof ApiError ? cause.message : "Family sponsorship could not be changed." });
+    } finally {
+      setSponsorshipBusy(null);
     }
   }
 
@@ -425,7 +452,7 @@ export default function ManageMembers() {
 
   return (
     <AppShellContent>
-      <main className="standard-page">
+      <main className="standard-page module-page">
         <div className="page-heading">
           <div>
             <p className="eyebrow">{activeHome?.name ?? "Home"}</p>
@@ -598,6 +625,24 @@ export default function ManageMembers() {
                             required
                           />
                         </label>
+                        {familyAccess && (
+                          <label className="check-row">
+                            <input
+                              name="family_sponsorship"
+                              type="checkbox"
+                              defaultChecked
+                            />
+                            <span>
+                              <strong>Yes, give them Family access</strong>
+                              <small>
+                                They can use Family features in this Home even if their own plan is Free.
+                                Their personal Home is not upgraded, and access ends if sharing stops or this
+                                Home&rsquo;s Family subscription ends.
+                                Leave this unchecked to invite without Family access.
+                              </small>
+                            </span>
+                          </label>
+                        )}
                         <details>
                           <summary>Advanced permissions</summary>
                           <p>
@@ -737,6 +782,24 @@ export default function ManageMembers() {
                       <option value="partner">Partner</option>
                       <option value="adult">Adult</option>
                     </select>
+                    {familyAccess && (
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={joinRequestSponsorship[request.id] === true}
+                          onChange={(event) =>
+                            setJoinRequestSponsorship((current) => ({
+                              ...current,
+                              [request.id]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>
+                          <strong>Yes, give them Family access</strong>
+                          <small>Leave unchecked to approve membership without sponsorship.</small>
+                        </span>
+                      </label>
+                    )}
                     <button
                       className="secondary"
                       type="button"
@@ -874,6 +937,25 @@ export default function ManageMembers() {
                           })}
                         </select>
                       </label>
+                    )}
+                    {familyAccess && canManage && member.relationship !== "child" && (
+                      <div className="family-member-sponsorship">
+                        <small className="muted">
+                          {member.family_sponsored
+                            ? "Family access shared from this Home"
+                            : member.family_access
+                              ? "Family access retained from an earlier Home membership"
+                              : "No Family access from this Home"}
+                        </small>
+                        <button
+                          type="button"
+                          className="tertiary"
+                          disabled={sponsorshipBusy === member.user_id}
+                          onClick={() => void changeFamilySponsorship(member, !member.family_sponsored)}
+                        >
+                          {member.family_sponsored ? "Stop sharing Family" : "Share Family access"}
+                        </button>
+                      </div>
                     )}
                     {member.relationship === "child" && canManage && (
                       <Link className="tertiary" href="/khaya-control-centre/children">

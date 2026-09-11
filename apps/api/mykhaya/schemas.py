@@ -173,6 +173,8 @@ class MemberResponse(BaseModel):
     shared_resources: list[str]
     colour: ColourToken | None
     avatar_version: str | None = None
+    family_sponsored: bool = False
+    family_access: bool = False
 
 
 class MemberColourUpdate(StrictModel):
@@ -197,6 +199,7 @@ class InvitationCreate(StrictModel):
     shared_resources: list[str] = Field(default_factory=list, max_length=20)
     # Accepted during the compatibility window; authority is derived from relationship.
     role: Role | None = None
+    family_sponsorship: bool = False
 
 
 class InvitationResponse(BaseModel):
@@ -208,6 +211,7 @@ class InvitationResponse(BaseModel):
     permission_profile: PermissionProfile
     shared_resources: list[str]
     expires_at: datetime
+    family_sponsorship: bool = False
 
 
 class InvitationListItem(InvitationResponse):
@@ -273,6 +277,12 @@ class HomeJoinRequestApprove(StrictModel):
     # MemberRelationshipUpdate's existing shape.
     reason: str | None = Field(default=None, max_length=500)
     confirmed: Literal[True]
+
+
+class FamilySponsorshipChange(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+    family_sponsorship: bool = False
 
 
 class HomeJoinRequestDecline(StrictModel):

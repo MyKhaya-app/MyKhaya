@@ -22,6 +22,10 @@ from mykhaya.models import (
     BillingInterval,
     Group,
     HomeSubscriptionEvent,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -48,7 +52,7 @@ def _stripe_subscription(
     price_id: str = "price_month",
     interval: str = "month",
     period_start: int = 1_700_000_000,
-    period_end: int = 1_702_592_000,
+    period_end: int = 2_000_000_000,
     customer: str | None = None,
 ) -> dict:
     return {
@@ -341,6 +345,99 @@ async def test_scheduled_cancellation_and_reversal_are_labelled_distinctly() -> 
 
 
 @pytest.mark.asyncio
+async def test_scheduled_cancellation_keeps_family_until_period_end() -> None:
+    home_id = await _make_home()
+    sub_id = f"sub_{uuid.uuid4().hex[:12]}"
+    async with SessionFactory() as db:
+        await apply_stripe_subscription_state(
+            db,
+            group_id=home_id,
+            stripe_subscription=_stripe_subscription(
+                id_=sub_id, status="active", cancel_at_period_end=True
+            ),
+            actor_administrator_id=None,
+            reason="cancel scheduled",
+            event_type_hint="stripe_subscription_updated",
+        )
+        await db.commit()
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        from mykhaya.entitlements import effective_plan
+
+        assert await effective_plan(db, home_id) == SubscriptionPlan.family
+        assert subscription.status == SubscriptionStatus.cancel_at_period_end
+
+
+@pytest.mark.asyncio
+async def test_expiry_disconnects_members_and_sponsorship_without_deleting_accounts() -> None:
+    from mykhaya.entitlements import (
+        effective_plan,
+        ensure_home_subscription,
+        grant_home_family_sponsorship,
+        has_user_entitlement,
+        transition_expired_family_home,
+    )
+
+    async with SessionFactory() as db:
+        owner = User(email=f"owner-{uuid.uuid4()}@example.com", display_name="Owner")
+        member = User(email=f"member-{uuid.uuid4()}@example.com", display_name="Member")
+        db.add_all([owner, member])
+        await db.flush()
+        group = Group(name="Expiring Home", created_by=owner.id)
+        db.add(group)
+        await db.flush()
+        db.add_all(
+            [
+                Membership(
+                    group_id=group.id,
+                    user_id=owner.id,
+                    role=Role.owner,
+                    relationship=HouseholdRelationship.home_admin,
+                    permission_profile=PermissionProfile.home_admin,
+                ),
+                Membership(
+                    group_id=group.id,
+                    user_id=member.id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                    family_sponsorship_decided=True,
+                ),
+            ]
+        )
+        subscription = await ensure_home_subscription(db, group.id)
+        subscription.plan = SubscriptionPlan.family
+        subscription.provider = SubscriptionProvider.stripe
+        subscription.status = SubscriptionStatus.cancel_at_period_end
+        subscription.current_period_end = datetime.now(UTC) + timedelta(minutes=1)
+        await db.flush()
+        await grant_home_family_sponsorship(db, group.id, member.id)
+        subscription.current_period_end = datetime.now(UTC) - timedelta(minutes=1)
+        await db.commit()
+        home_id = group.id
+        member_id = member.id
+
+    async with SessionFactory() as db:
+        assert await transition_expired_family_home(db, home_id) is True
+        await db.commit()
+
+    async with SessionFactory() as db:
+        memberships = (
+            await db.scalars(select(Membership).where(Membership.group_id == home_id))
+        ).all()
+        member_membership = next(row for row in memberships if row.user_id == member_id)
+        owner_membership = next(row for row in memberships if row.relationship == HouseholdRelationship.home_admin)
+        assert member_membership.removed_at is not None
+        assert owner_membership.removed_at is None
+        assert await effective_plan(db, home_id) == SubscriptionPlan.free
+        assert await has_user_entitlement(db, member_id, home_id, "family_plans.enabled") is False
+        assert await db.get(User, member_id) is not None
+        assert await transition_expired_family_home(db, home_id) is False
+
+
+@pytest.mark.asyncio
 async def test_final_cancellation_keeps_plan_family_but_status_cancelled() -> None:
     """The Home's effective plan resolves Free via the entitlement service's
     honoured-status check — the row itself is left as historically
@@ -382,11 +479,13 @@ async def test_final_cancellation_keeps_plan_family_but_status_cancelled() -> No
 @pytest.mark.asyncio
 async def test_out_of_order_event_for_a_different_subscription_id_is_ignored() -> None:
     home_id = await _make_home()
+    current_sub_id = f"sub_new_{uuid.uuid4().hex[:8]}"
+    stale_sub_id = f"sub_old_{uuid.uuid4().hex[:8]}"
     async with SessionFactory() as db:
         await apply_stripe_subscription_state(
             db,
             group_id=home_id,
-            stripe_subscription=_stripe_subscription(id_="sub_new", status="active"),
+            stripe_subscription=_stripe_subscription(id_=current_sub_id, status="active"),
             actor_administrator_id=None,
             reason="activate",
             event_type_hint="stripe_subscription_activated",
@@ -399,7 +498,7 @@ async def test_out_of_order_event_for_a_different_subscription_id_is_ignored() -
         result = await apply_stripe_subscription_state(
             db,
             group_id=home_id,
-            stripe_subscription=_stripe_subscription(id_="sub_old", status="canceled"),
+            stripe_subscription=_stripe_subscription(id_=stale_sub_id, status="canceled"),
             actor_administrator_id=None,
             reason="stale delete",
             event_type_hint="stripe_subscription_cancelled",
@@ -409,7 +508,7 @@ async def test_out_of_order_event_for_a_different_subscription_id_is_ignored() -
     async with SessionFactory() as db:
         subscription = await get_home_subscription(db, home_id)
         assert subscription is not None
-        assert subscription.external_subscription_id == "sub_new"
+        assert subscription.external_subscription_id == current_sub_id
         assert subscription.status == SubscriptionStatus.active
 
 

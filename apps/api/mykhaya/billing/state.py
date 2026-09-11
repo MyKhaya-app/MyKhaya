@@ -40,6 +40,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.entitlements import get_home_subscription, record_subscription_event
@@ -189,6 +190,12 @@ async def apply_stripe_subscription_state(
     if mapped_status is None:
         return None
 
+    # Renewal and purge must serialize on the same Home lifecycle lock.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"family-retention:{group_id}"},
+    )
+
     metadata_group_id_raw = (stripe_subscription.get("metadata") or {}).get("mykhaya_group_id")
     if metadata_group_id_raw:
         try:
@@ -271,6 +278,10 @@ async def apply_stripe_subscription_state(
         subscription.complimentary_note = None
         subscription.complimentary_expires_at = None
 
+
+    from mykhaya.family_retention import restore_family_retention
+
+    await restore_family_retention(db, group_id)
     if not materially_changed:
         return subscription
 

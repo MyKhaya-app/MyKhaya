@@ -410,6 +410,10 @@ class Membership(UuidTimeMixin, Base):
     )
     permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # NULL marks a membership created before explicit Family sponsorship was
+    # introduced. Those legacy members retain the old Home-level Family view
+    # while new invite/join flows persist an explicit yes/no decision.
+    family_sponsorship_decided: Mapped[bool | None] = mapped_column(Boolean)
     # Assigned once at creation via mykhaya.member_colours.assign_member_colour,
     # editable afterwards by the person themselves or a Home Admin. A palette
     # token, never a raw hex value — see mykhaya.colour_palette. Household-scoped,
@@ -677,6 +681,7 @@ class Invitation(UuidTimeMixin, Base):
         Enum(PermissionProfile, name="permission_profile", create_type=False)
     )
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    family_sponsorship: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -2508,6 +2513,100 @@ class HomeSubscriptionEvent(Base):
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
     reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class HomeEntitlementGrant(UuidTimeMixin, Base):
+    """A Home-scoped commercial entitlement deliberately sponsored for a user.
+
+    This is separate from both ``Membership`` and ``HomeSubscription``:
+    membership says who belongs to a Home, while this row says whether the
+    Home has chosen to share a Family capability with a particular member.
+    Effective access still depends on the source Home's current subscription.
+    """
+
+    __tablename__ = "home_entitlement_grants"
+    __table_args__ = (
+        Index(
+            "uq_home_entitlement_grant_active",
+            "source_group_id",
+            "recipient_user_id",
+            "entitlement_key",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_home_entitlement_grant_recipient", "recipient_user_id"),
+    )
+    source_group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    recipient_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    entitlement_key: Mapped[str] = mapped_column(
+        String(100), default="family", server_default="family"
+    )
+    granted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class HomeRetentionState(StrEnum):
+    """Durable lifecycle state for Family data after paid access expires."""
+
+    retained_free = "retained_free"
+    restored = "restored"
+    purge_pending = "purge_pending"
+    purged = "purged"
+
+
+class HomeRetentionLifecycle(UuidTimeMixin, Base):
+    """One retention record created only when a Family Home actually expires.
+
+    A missing row means no Family retention cycle has started; it deliberately
+    does not backfill existing active Homes. The subscription remains the
+    authority for active Family, while this row is the durable retention and
+    purge state machine.
+    """
+
+    __tablename__ = "home_retention_lifecycles"
+    __table_args__ = (
+        UniqueConstraint("home_id", name="uq_home_retention_lifecycle_home"),
+        Index("ix_home_retention_due", "state", "retention_deadline"),
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    state: Mapped[HomeRetentionState] = mapped_column(
+        Enum(HomeRetentionState, name="home_retention_state"),
+        default=HomeRetentionState.retained_free,
+        server_default=HomeRetentionState.retained_free.value,
+    )
+    family_expired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retention_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    purge_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeRetentionMembership(UuidTimeMixin, Base):
+    """Restoration metadata for memberships disconnected at Family expiry."""
+
+    __tablename__ = "home_retention_memberships"
+    __table_args__ = (
+        UniqueConstraint("lifecycle_id", "membership_id", name="uq_retention_membership"),
+    )
+    lifecycle_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("home_retention_lifecycles.id", ondelete="CASCADE"), index=True
+    )
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class StripeWebhookEvent(Base):

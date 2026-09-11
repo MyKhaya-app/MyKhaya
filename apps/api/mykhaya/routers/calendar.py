@@ -83,7 +83,7 @@ from mykhaya.schemas import (
 # can have). See docs/architecture/commercial-entitlements.md#event-categories.
 # Governs CalendarEventLabel ("event category") count only — see
 # _label_access. Unaffected by Phase 2C.
-CALENDAR_LIMIT_KEY = "calendar.max_categories"
+CALENDAR_LIMIT_KEY = "calendar.max_tags"
 
 # Phase 2C: reintroduces the *name* "calendar.max_calendars" the comment
 # above describes as deliberately abandoned, but with a materially
@@ -485,7 +485,7 @@ async def create_calendar(
         .select_from(HomeCalendar)
         .where(HomeCalendar.group_id == home_id, HomeCalendar.owner_user_id.is_(None))
     )
-    await require_within_limit(db, home_id, CALENDAR_LIMIT_KEY, current_count or 0)
+    await require_within_limit(db, home_id, CALENDARS_LIMIT_KEY, current_count or 0)
 
     calendar = HomeCalendar(
         group_id=home_id,

@@ -17,7 +17,14 @@ from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
-from mykhaya.entitlements import ensure_home_subscription, require_within_limit
+from mykhaya.entitlements import (
+    ensure_home_subscription,
+    explain_user_entitlement,
+    grant_home_family_sponsorship,
+    has_entitlement,
+    require_within_limit,
+    revoke_home_family_sponsorship,
+)
 from mykhaya.household_permissions import (
     DELEGATABLE_CAPABILITIES,
     Capability,
@@ -34,6 +41,7 @@ from mykhaya.models import (
     ChildProfile,
     Group,
     HomeCalendar,
+    HomeEntitlementGrant,
     HomeJoinRequest,
     HomeJoinRequestStatus,
     HouseholdRelationship,
@@ -44,6 +52,7 @@ from mykhaya.models import (
 )
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    FamilySponsorshipChange,
     GroupCreate,
     GroupResponse,
     GroupUpdate,
@@ -227,8 +236,23 @@ async def members(
             .limit(200)
         )
     ).all()
-    return [
-        MemberResponse(
+    sponsored_ids = set(
+        await db.scalars(
+            select(HomeEntitlementGrant.recipient_user_id).where(
+                HomeEntitlementGrant.source_group_id == group_id,
+                HomeEntitlementGrant.entitlement_key == "family",
+                HomeEntitlementGrant.revoked_at.is_(None),
+            )
+        )
+    )
+    result = []
+    for membership, user in rows:
+        decision = (
+            await explain_user_entitlement(db, user.id, group_id, "family_plans.enabled")
+            if membership.relationship != HouseholdRelationship.child
+            else None
+        )
+        result.append(MemberResponse(
             membership_id=membership.id,
             user_id=user.id,
             display_name=user.display_name,
@@ -240,9 +264,99 @@ async def members(
             shared_resources=membership.shared_resources,
             colour=membership.colour,
             avatar_version=user.avatar_key,
+            family_sponsored=user.id in sponsored_ids,
+            family_access=decision is not None,
+        ))
+    return result
+
+
+async def _member_response_for_user(
+    db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID
+) -> MemberResponse:
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == group_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
         )
-        for membership, user in rows
-    ]
+    )
+    user = await db.get(User, user_id)
+    if membership is None or user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
+    sponsored = await db.scalar(
+        select(HomeEntitlementGrant.id).where(
+            HomeEntitlementGrant.source_group_id == group_id,
+            HomeEntitlementGrant.recipient_user_id == user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    decision = (
+        await explain_user_entitlement(db, user_id, group_id, "family_plans.enabled")
+        if membership.relationship != HouseholdRelationship.child
+        else None
+    )
+    return MemberResponse(
+        membership_id=membership.id,
+        user_id=user.id,
+        display_name=user.display_name,
+        email=None if membership.relationship == HouseholdRelationship.child else user.email,
+        role=membership.role,
+        relationship=membership.relationship,
+        permission_profile=membership.permission_profile,
+        permission_overrides=membership.permission_overrides,
+        shared_resources=membership.shared_resources,
+        colour=membership.colour,
+        avatar_version=user.avatar_key,
+        family_sponsored=sponsored is not None,
+        family_access=decision is not None,
+    )
+
+
+@router.post(
+    "/{group_id}/members/{user_id}/family-sponsorship",
+    response_model=MemberResponse,
+)
+async def grant_family_sponsorship(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: FamilySponsorshipChange,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> MemberResponse:
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    grant = await grant_home_family_sponsorship(db, group_id, user_id, auth.user.id)
+    audit(
+        db, request, "membership.family_sponsorship_granted", auth.user.id,
+        group_id, "user", user_id, {"reason": body.reason, "grant_id": str(grant.id)},
+    )
+    await db.commit()
+    return await _member_response_for_user(db, group_id, user_id)
+
+
+@router.delete(
+    "/{group_id}/members/{user_id}/family-sponsorship",
+    response_model=MemberResponse,
+)
+async def revoke_family_sponsorship(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: FamilySponsorshipChange,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> MemberResponse:
+    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    changed = await revoke_home_family_sponsorship(db, group_id, user_id)
+    if not changed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Family sponsorship was not found.")
+    audit(
+        db, request, "membership.family_sponsorship_revoked", auth.user.id,
+        group_id, "user", user_id, {"reason": body.reason},
+    )
+    await db.commit()
+    return await _member_response_for_user(db, group_id, user_id)
 
 
 @router.post("/{group_id}/members/{user_id}/avatar", response_model=MemberResponse)
@@ -765,6 +879,7 @@ async def approve_join_request(
             role=role,
             relationship=body.relationship,
             permission_profile=permission_profile,
+            family_sponsorship_decided=body.family_sponsorship,
             colour=await assign_member_colour(db, group_id),
         )
         db.add(membership)
@@ -773,10 +888,17 @@ async def approve_join_request(
         existing.role = role
         existing.relationship = body.relationship
         existing.permission_profile = permission_profile
+        existing.family_sponsorship_decided = body.family_sponsorship
         if existing.colour is None:
             existing.colour = await assign_member_colour(db, group_id)
         membership = existing
     await ensure_personal_calendar(db, group_id, join_request.user_id)
+    if body.family_sponsorship and await has_entitlement(
+        db, group_id, "family_plans.enabled"
+    ):
+        await grant_home_family_sponsorship(
+            db, group_id, join_request.user_id, auth.user.id
+        )
 
     join_request.status = HomeJoinRequestStatus.approved
     join_request.relationship = body.relationship
@@ -797,19 +919,7 @@ async def approve_join_request(
         {"relationship": body.relationship.value, "reason": body.reason},
     )
     await db.commit()
-    return MemberResponse(
-        membership_id=membership.id,
-        user_id=user.id,
-        display_name=user.display_name,
-        email=user.email,
-        role=membership.role,
-        relationship=membership.relationship,
-        permission_profile=membership.permission_profile,
-        permission_overrides=membership.permission_overrides,
-        shared_resources=membership.shared_resources,
-        colour=membership.colour,
-        avatar_version=user.avatar_key,
-    )
+    return await _member_response_for_user(db, group_id, user.id)
 
 
 @router.post(

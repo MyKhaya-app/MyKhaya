@@ -24,12 +24,16 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import ColumnElement, and_, func, not_, or_, select
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.models import (
     CalendarEventLabel,
+    CalendarShare,
+    CalendarShareStatus,
+    Group,
     HomeCalendar,
+    HomeEntitlementGrant,
     HomeSubscription,
     HomeSubscriptionEvent,
     HouseholdList,
@@ -70,7 +74,7 @@ class PlanDefinition:
     plan: SubscriptionPlan
     # Boolean feature entitlements, e.g. "lists.enabled".
     booleans: dict[str, bool]
-    # Numeric limits, e.g. "calendar.max_categories". None means unlimited.
+    # Numeric limits, e.g. "calendar.max_tags". None means unlimited.
     limits: dict[str, int | None]
 
 
@@ -79,7 +83,7 @@ class PlanDefinition:
 # routers.
 #
 # Enforced today (a real endpoint calls require_entitlement/require_within_limit
-# against it): calendar.max_categories, home.max_members,
+# against it): calendar.max_tags, calendar.max_calendars, home.max_members,
 # routines.personal.max_active, routines.household.enabled, meals.enabled,
 # lists.enabled + lists.max_lists (mykhaya.routers.lists, reusing
 # FeatureKey.shopping's release slot — see docs/architecture/meal-plans.md
@@ -132,6 +136,11 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "nudges.enabled": False,
         },
         limits={
+            # User-created Calendar Tags; the primary Home calendar is a
+            # separate resource governed by calendar.max_calendars.
+            "calendar.max_tags": 2,
+            # Retained as a read-only compatibility key for existing billing
+            # diagnostics; all Calendar Tag enforcement uses max_tags.
             "calendar.max_categories": 1,
             # Phase 2C: the total number of usable HomeCalendar rows — both
             # the Home's own shared/"Home Calendar" (owner_user_id IS NULL)
@@ -174,6 +183,7 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "nudges.enabled": True,
         },
         limits={
+            "calendar.max_tags": None,
             "calendar.max_categories": None,
             "calendar.max_calendars": None,
             "home.max_members": None,
@@ -341,6 +351,18 @@ def _complimentary_active(subscription: HomeSubscription) -> bool:
     return subscription.complimentary_expires_at > datetime.now(UTC)
 
 
+def _stripe_entitlement_expired(subscription: HomeSubscription, now: datetime) -> bool:
+    """Whether a Stripe cancellation has reached its paid period end."""
+    if subscription.provider != SubscriptionProvider.stripe:
+        return False
+    if subscription.current_period_end is None or subscription.current_period_end > now:
+        return False
+    return subscription.status in (
+        SubscriptionStatus.cancel_at_period_end,
+        SubscriptionStatus.cancelled,
+    )
+
+
 def resolve_effective_plan(subscription: HomeSubscription | None) -> SubscriptionPlan:
     """The pure resolution rule — no DB access — shared by `effective_plan()`
     (single Home) and any bulk listing/summary query that has already fetched
@@ -352,6 +374,8 @@ def resolve_effective_plan(subscription: HomeSubscription | None) -> Subscriptio
     if subscription is None:
         return SubscriptionPlan.free
     if subscription.status not in _PLAN_HONOURED_STATUSES:
+        return SubscriptionPlan.free
+    if _stripe_entitlement_expired(subscription, datetime.now(UTC)):
         return SubscriptionPlan.free
     if subscription.provider == SubscriptionProvider.complimentary and not _complimentary_active(
         subscription
@@ -370,6 +394,274 @@ class EffectiveStateResolution:
     # whenever they diverge — e.g. expired complimentary access, a
     # cancelled/lapsed status — for display in the Platform Control Centre.
     reason: str | None
+
+
+class EntitlementSource(StrEnum):
+    """The authority that granted a scoped access decision."""
+
+    personal = "personal"
+    home_sponsored = "home_sponsored"
+    legacy_home_member = "legacy_home_member"
+    resource_share = "resource_share"
+
+
+@dataclass(frozen=True)
+class UserEntitlementDecision:
+    user_id: uuid.UUID
+    home_id: uuid.UUID
+    entitlement: str
+    source: EntitlementSource
+
+
+async def explain_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> UserEntitlementDecision | None:
+    """Resolve a commercial entitlement for one user inside one Home.
+
+    A Home subscription is personal only when the Home is the user's own
+    Home. A member of another Home receives Family access there only through
+    an explicit, active sponsorship grant from that same Home. The source
+    subscription is checked on every call, so a downgrade or expiry removes
+    sponsored access without rewriting membership or grant history.
+
+    Resource shares intentionally do not participate in this resolver: a
+    calendar share is permission for that calendar, not plan inheritance.
+    """
+    if key not in PLAN_DEFINITIONS[SubscriptionPlan.family].booleans:
+        return None
+
+    personal_home = await db.scalar(
+        select(Group.id)
+        .join(Membership, Membership.group_id == Group.id)
+        .where(
+            Group.id == home_id,
+            Group.created_by == user_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if personal_home is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.personal)
+
+    # Compatibility window: memberships created before Phase 3 have no
+    # explicit yes/no sponsorship decision. Preserve their existing paid-Home
+    # Family access without creating grants or changing their own Home plan.
+    legacy_membership = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == home_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+            Membership.family_sponsorship_decided.is_(None),
+        )
+    )
+    if legacy_membership is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(
+            user_id, home_id, key, EntitlementSource.legacy_home_member
+        )
+
+    grant = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == home_id,
+            HomeEntitlementGrant.recipient_user_id == user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    member_id = None
+    if grant is not None:
+        member_id = await db.scalar(
+            select(Membership.id).where(
+                Membership.group_id == home_id,
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    if member_id is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.home_sponsored)
+    return None
+
+
+async def has_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> bool:
+    """Whether ``user_id`` has ``key`` in ``home_id`` through a valid source."""
+    return await explain_user_entitlement(db, user_id, home_id, key) is not None
+
+
+async def require_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> UserEntitlementDecision:
+    """Require a scoped commercial entitlement and return its authority."""
+    decision = await explain_user_entitlement(db, user_id, home_id, key)
+    if decision is None:
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "This feature isn't included in your current access.",
+            entitlement=key,
+        )
+    return decision
+
+
+async def grant_home_family_sponsorship(
+    db: AsyncSession,
+    source_home_id: uuid.UUID,
+    recipient_user_id: uuid.UUID,
+    granted_by_user_id: uuid.UUID | None = None,
+) -> HomeEntitlementGrant:
+    """Create or return a Family sponsorship for an active Home member.
+
+    Caller authorization (normally Home Admin capability checking) remains at
+    the route/service boundary; this function enforces the commercial and
+    membership invariants inside the transaction that writes the grant.
+    """
+    if await effective_plan(db, source_home_id) != SubscriptionPlan.family:
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "Family sponsorship requires an active Family subscription.",
+            entitlement="family",
+        )
+    member_id = await db.scalar(
+        select(Membership.id).where(
+            Membership.group_id == source_home_id,
+            Membership.user_id == recipient_user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if member_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user is not an active Home member.")
+    existing = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == source_home_id,
+            HomeEntitlementGrant.recipient_user_id == recipient_user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    if existing is not None:
+        return existing
+    grant = HomeEntitlementGrant(
+        source_group_id=source_home_id,
+        recipient_user_id=recipient_user_id,
+        entitlement_key="family",
+        granted_by_user_id=granted_by_user_id,
+    )
+    db.add(grant)
+    await db.flush()
+    return grant
+
+
+async def revoke_home_family_sponsorship(
+    db: AsyncSession, source_home_id: uuid.UUID, recipient_user_id: uuid.UUID
+) -> bool:
+    """Revoke only this Home's sponsorship; membership remains untouched."""
+    grant = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == source_home_id,
+            HomeEntitlementGrant.recipient_user_id == recipient_user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    if grant is None:
+        return False
+    grant.revoked_at = datetime.now(UTC)
+    return True
+
+
+async def transition_expired_family_home(
+    db: AsyncSession, home_id: uuid.UUID, *, now: datetime | None = None
+) -> bool:
+    """Materialise the reversible membership transition only at expiry.
+
+    Deployment and migration never call this. Billing reconciliation/status
+    paths may call it after Stripe has recorded cancellation and the paid
+    period has ended. The advisory lock and history marker make retries safe.
+    """
+    effective_now = now or datetime.now(UTC)
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"family-retention:{home_id}"},
+    )
+    subscription = await get_home_subscription(db, home_id)
+    if subscription is None or not _stripe_entitlement_expired(subscription, effective_now):
+        return False
+    # Keep lifecycle timestamps anchored to the authoritative Stripe expiry,
+    # even when a webhook/reconciliation read arrives later.
+    effective_expiry = subscription.current_period_end
+    assert effective_expiry is not None
+    already_transitioned = await db.scalar(
+        select(HomeSubscriptionEvent.id).where(
+            HomeSubscriptionEvent.group_id == home_id,
+            HomeSubscriptionEvent.event_type == "family_entitlement_expired",
+        )
+    )
+    if already_transitioned is not None:
+        return False
+
+    retained_user_id = await retained_member_id(db, home_id)
+    memberships = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.group_id == home_id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    ).all()
+    for membership in memberships:
+        if membership.user_id != retained_user_id:
+                membership.removed_at = effective_expiry
+
+    grants = (
+        await db.scalars(
+            select(HomeEntitlementGrant).where(
+                HomeEntitlementGrant.source_group_id == home_id,
+                HomeEntitlementGrant.entitlement_key == "family",
+                HomeEntitlementGrant.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    for grant in grants:
+            grant.revoked_at = effective_expiry
+
+    await record_subscription_event(
+        db,
+        home_id,
+        event_type="family_entitlement_expired",
+        from_plan=subscription.plan,
+        to_plan=SubscriptionPlan.free,
+        from_provider=subscription.provider,
+        to_provider=subscription.provider,
+        from_status=subscription.status,
+        to_status=subscription.status,
+        reason="Family entitlement reached its paid period end.",
+    )
+    return True
+
+
+async def explain_resource_access(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    resource_type: str,
+    resource_id: uuid.UUID,
+) -> UserEntitlementDecision | None:
+    """Resolve explicit resource permission without granting plan access."""
+    if resource_type != "calendar":
+        return None
+    share = await db.scalar(
+        select(CalendarShare).where(
+            CalendarShare.recipient_user_id == user_id,
+            CalendarShare.resource_type == resource_type,
+            CalendarShare.calendar_id == resource_id,
+            CalendarShare.status == CalendarShareStatus.accepted,
+            CalendarShare.revoked_at.is_(None),
+            CalendarShare.expires_at > datetime.now(UTC),
+        )
+    )
+    if share is None:
+        return None
+    return UserEntitlementDecision(
+        user_id, share.source_group_id, resource_type, EntitlementSource.resource_share
+    )
 
 
 def resolve_effective_state(subscription: HomeSubscription | None) -> EffectiveStateResolution:
@@ -411,10 +703,19 @@ def effective_plan_sql_filter(plan: SubscriptionPlan) -> ColumnElement[bool]:
         HomeSubscription.complimentary_expires_at.is_not(None),
         HomeSubscription.complimentary_expires_at <= func.now(),
     )
+    stripe_period_expired = and_(
+        HomeSubscription.provider == SubscriptionProvider.stripe,
+        HomeSubscription.status.in_(
+            (SubscriptionStatus.cancel_at_period_end, SubscriptionStatus.cancelled)
+        ),
+        HomeSubscription.current_period_end.is_not(None),
+        HomeSubscription.current_period_end <= func.now(),
+    )
     is_effectively_free = or_(
         HomeSubscription.id.is_(None),
         HomeSubscription.status.not_in(_PLAN_HONOURED_STATUSES),
         complimentary_expired,
+        stripe_period_expired,
         HomeSubscription.plan == SubscriptionPlan.free,
     )
     if plan == SubscriptionPlan.free:
@@ -527,7 +828,7 @@ async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageR
         )
         or 0
     )
-    limit = await get_limit(db, home_id, "calendar.max_categories")
+    limit = await get_limit(db, home_id, "calendar.max_calendars")
     return CalendarUsageResponse(
         count=count, limit=limit, over_limit=limit is not None and count > limit
     )
@@ -551,7 +852,7 @@ async def category_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageR
         )
         or 0
     )
-    limit = await get_limit(db, home_id, "calendar.max_categories")
+    limit = await get_limit(db, home_id, "calendar.max_tags")
     return CalendarUsageResponse(
         count=count, limit=limit, over_limit=limit is not None and count > limit
     )

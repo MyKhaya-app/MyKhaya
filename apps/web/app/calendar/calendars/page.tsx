@@ -248,7 +248,7 @@ export default function CalendarsPage() {
 
   return (
     <AppShellContent>
-      <main className="standard-page">
+      <main className="standard-page module-page">
         <div className="page-heading">
           <div>
             <p className="eyebrow">Calendar</p>

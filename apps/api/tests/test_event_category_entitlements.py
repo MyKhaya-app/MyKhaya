@@ -172,22 +172,29 @@ async def test_settings_page_endpoint_shows_one_normal_category_and_the_rest_loc
 
 
 @pytest.mark.asyncio
-async def test_free_home_cannot_create_a_second_category(client: AsyncClient) -> None:
+async def test_free_home_can_create_a_second_category_but_not_a_third(client: AsyncClient) -> None:
     home_id = await _make_home(client, _suffix())
-    response = await unsafe(
+    second = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
         json={"name": "Sport", "color": "emerald"},
     )
+    assert second.status_code == 201, second.text
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "School", "color": "blue"},
+    )
     assert response.status_code == 403
     detail = response.json()["detail"]
     assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "calendar.max_categories"
+    assert detail["entitlement"] == "calendar.max_tags"
 
 
 @pytest.mark.asyncio
-async def test_free_home_cannot_activate_a_second_seeded_category(client: AsyncClient) -> None:
+async def test_free_home_can_activate_a_second_seeded_category(client: AsyncClient) -> None:
     home_id = await _make_home(client, _suffix())
     rows = await _label_rows(home_id)
     inactive = next(row for row in rows if not row.is_active)
@@ -197,10 +204,7 @@ async def test_free_home_cannot_activate_a_second_seeded_category(client: AsyncC
         f"/api/v1/homes/{home_id}/event-labels/{inactive.id}",
         json={"is_active": True},
     )
-    assert response.status_code == 403
-    detail = response.json()["detail"]
-    assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "calendar.max_categories"
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.asyncio
@@ -346,7 +350,7 @@ async def test_downgraded_home_cannot_assign_a_locked_category_to_a_new_event(
     assert blocked.status_code == 403
     detail = blocked.json()["detail"]
     assert detail["code"] == "resource_restricted_by_plan"
-    assert detail["entitlement"] == "calendar.max_categories"
+    assert detail["entitlement"] == "calendar.max_tags"
 
 
 @pytest.mark.asyncio

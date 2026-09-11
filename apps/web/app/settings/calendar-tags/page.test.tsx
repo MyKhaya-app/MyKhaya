@@ -136,7 +136,7 @@ describe("Calendar tags — locked states", () => {
   it("shows only one Calendar Tag as Active/manageable on Free, the rest locked", async () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue(sevenSeededLabels);
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
-      category_usage: { count: 1, limit: 1, over_limit: false },
+      category_usage: { count: 1, limit: 2, over_limit: false },
     });
 
     render(<CalendarTagsPage />);
@@ -187,7 +187,7 @@ describe("Calendar tags — permission gating", () => {
     activeHomeValue = freeHome({ capabilities: [] });
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue(sevenSeededLabels);
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
-      category_usage: { count: 1, limit: 1, over_limit: false },
+      category_usage: { count: 1, limit: 2, over_limit: false },
     });
 
     render(<CalendarTagsPage />);
@@ -208,7 +208,7 @@ describe("Calendar tags — Home calendar colour", () => {
   beforeEach(() => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue(sevenSeededLabels);
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
-      category_usage: { count: 1, limit: 1, over_limit: false },
+      category_usage: { count: 1, limit: 2, over_limit: false },
     });
   });
 

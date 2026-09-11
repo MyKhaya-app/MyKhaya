@@ -314,6 +314,7 @@ export class MyKhayaClient {
     requestId: string,
     body: {
       relationship: import("@mykhaya/shared-types").HouseholdRelationship;
+      family_sponsorship: boolean;
       reason?: string;
       confirmed: true;
     },
@@ -715,6 +716,24 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").Todo>(
       `/homes/${encodeURIComponent(homeId)}/todos`,
       { method: "POST", body: JSON.stringify(body) },
+    );
+  grantFamilySponsorship = (
+    homeId: string,
+    userId: string,
+    body: { reason?: string; confirmed: true },
+  ) =>
+    this.request<import("@mykhaya/shared-types").Member>(
+      `/groups/${encodeURIComponent(homeId)}/members/${encodeURIComponent(userId)}/family-sponsorship`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  revokeFamilySponsorship = (
+    homeId: string,
+    userId: string,
+    body: { reason?: string; confirmed: true },
+  ) =>
+    this.request<import("@mykhaya/shared-types").Member>(
+      `/groups/${encodeURIComponent(homeId)}/members/${encodeURIComponent(userId)}/family-sponsorship`,
+      { method: "DELETE", body: JSON.stringify(body) },
     );
   updateTodo = (homeId: string, todoId: string, body: import("@mykhaya/shared-types").TodoUpdatePayload) =>
     this.request<import("@mykhaya/shared-types").Todo>(

@@ -98,6 +98,7 @@ function freeBillingStatus() {
     can_manage_billing: true,
     has_stripe_customer: false,
     stripe_billing_available: true,
+    family_access: true,
     calendar_usage: { count: 1, limit: 1, over_limit: false },
     category_usage: { count: 1, limit: 1, over_limit: false },
     member_usage: { count: 1, limit: 1, over_limit: false },

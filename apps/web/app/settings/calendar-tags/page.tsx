@@ -10,7 +10,10 @@ export default function CalendarTagsPage() {
   const { activeHome, activeHomeId } = useActiveHome();
   const canManageCalendars = activeHome?.capabilities.includes("calendar.edit_all") ?? false;
   return (
-    <SettingsPage title="Calendar tags">
+    <SettingsPage
+      title="Calendar tags"
+      description="Colour and organise events across your Home calendars."
+    >
       {activeHomeId && canManageCalendars ? (
         <CalendarTagsManager homeId={activeHomeId} />
       ) : (

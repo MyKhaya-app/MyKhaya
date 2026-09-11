@@ -61,6 +61,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       listHomeJoinRequests: vi.fn().mockResolvedValue([]),
       approveHomeJoinRequest: vi.fn(),
       declineHomeJoinRequest: vi.fn(),
+      grantFamilySponsorship: vi.fn(),
+      revokeFamilySponsorship: vi.fn(),
     },
   };
 });
@@ -111,6 +113,7 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
     can_manage_billing: true,
     has_stripe_customer: false,
     stripe_billing_available: true,
+    family_access: false,
     calendar_usage: { count: 1, limit: 1, over_limit: false },
     category_usage: { count: 1, limit: 1, over_limit: false },
     member_usage: { count: 1, limit: 1, over_limit: false },
@@ -135,6 +138,7 @@ function familyHomeWithGrowthRoom(): Home {
 
 function familyBillingStatus(): BillingStatus {
   return freeBillingStatus({
+    family_access: true,
     member_usage: { count: 1, limit: null, over_limit: false },
     external_invites_enabled: true,
   });
@@ -425,6 +429,54 @@ describe("Manage members page — external sharing replaces Extended Family/Frie
       .map((option) => option.textContent);
     expect(optionLabels).not.toContain("Extended Family");
     expect(optionLabels).not.toContain("Friend");
+  });
+});
+
+describe("Manage members page — explicit Family sponsorship", () => {
+  beforeEach(() => {
+    setActiveHomeForTest(familyHomeWithGrowthRoom());
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(familyBillingStatus());
+  });
+
+  it("shows the explicit sponsorship choice on an adult email invitation", async () => {
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /add member/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, they live here/i }));
+    await userEvent.setup().selectOptions(screen.getByLabelText("Relationship"), "adult");
+
+    expect(screen.getByText(/yes, give them family access/i)).toBeInTheDocument();
+    expect(screen.getByText(/personal home is not upgraded/i)).toBeInTheDocument();
+  });
+
+  it("sends the checked sponsorship choice with an invitation", async () => {
+    const user = userEvent.setup();
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Owner")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /add member/i }));
+    await user.click(screen.getByRole("button", { name: /yes, they live here/i }));
+    await user.selectOptions(screen.getByLabelText("Relationship"), "adult");
+    await user.type(screen.getByLabelText("Email"), "sponsored@example.com");
+    await user.click(screen.getByRole("button", { name: /send invitation/i }));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        "/invitations",
+        expect.objectContaining({ family_sponsorship: true }),
+      ),
+    );
+  });
+
+  it("renders member sponsorship state and exposes a revoke action", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      ownerMember(),
+      { ...partnerMember(), family_sponsored: true, family_access: true },
+    ]);
+    render(<ManageMembers />);
+    await waitFor(() => expect(screen.getByText("Partner Person")).toBeInTheDocument());
+
+    expect(screen.getByText(/family access shared from this home/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop sharing family/i })).toBeInTheDocument();
   });
 });
 

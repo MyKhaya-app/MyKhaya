@@ -6,6 +6,7 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { KhayaControlShell } from "@/components/khaya-control-shell";
 import { useActiveHome } from "@/components/use-active-home";
+import { FamilyUpsell } from "@/components/family-upsell";
 
 const permissionLabels: Record<string, string> = {
   calendar_view: "View the household calendar",
@@ -44,6 +45,7 @@ export default function ChildrenPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [familyAccess, setFamilyAccess] = useState<boolean | null>(null);
 
   const guardians = members.filter((member) =>
     ["home_admin", "partner"].includes(member.relationship),
@@ -51,12 +53,14 @@ export default function ChildrenPage() {
 
   async function load() {
     if (!activeHomeId) return;
-    const [childRows, memberRows] = await Promise.all([
+    const [childRows, memberRows, billing] = await Promise.all([
       api.children(activeHomeId),
       api.members(activeHomeId),
+      api.billingStatus(activeHomeId),
     ]);
     setChildren(childRows);
     setMembers(memberRows);
+    setFamilyAccess(billing.family_access);
   }
 
   useEffect(() => {
@@ -386,6 +390,12 @@ export default function ChildrenPage() {
       title="Child accounts"
       description="Managed profiles use data minimisation, explicit guardians and the safest available defaults."
     >
+      {familyAccess === false ? (
+        <FamilyUpsell
+          title="Child profiles are included with MyKhaya Family"
+          description="Upgrade to create and manage managed Child profiles in this Home."
+        />
+      ) : (
       <section className="card child-setup">
         <h2>Create a managed Child profile</h2>
         <p>No full date of birth or adult sign-in invitation is required.</p>
@@ -432,6 +442,7 @@ export default function ChildrenPage() {
           </button>
         </form>
       </section>
+      )}
 
       <FormStatus message={message} error={error} />
 
