@@ -2,7 +2,6 @@ import "@mykhaya/design-tokens/css";
 import "./styles.css";
 import type { Metadata, Viewport } from "next";
 import { ServiceWorkerRegister } from "../components/service-worker-register";
-import { InstallPrompt } from "../components/install-prompt";
 import { AuthProvider } from "../components/auth-provider";
 import { PersistentAppShell } from "../components/app-shell";
 import { isPlatformControlCentreHost } from "../components/application-host";
@@ -45,7 +44,6 @@ export default async function RootLayout({
       <body>
         {application}
         <ServiceWorkerRegister />
-        <InstallPrompt />
       </body>
     </html>
   );

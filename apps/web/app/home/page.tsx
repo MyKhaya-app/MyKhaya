@@ -1,18 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Children, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   CalendarPlus,
   Check,
   ChevronRight,
-  ClipboardList,
   Gift,
-  ListChecks,
-  Lock,
-  UserPlus,
-  UtensilsCrossed,
 } from "lucide-react";
 import type {
   BirthdayEntry,
@@ -28,9 +23,7 @@ import { AppShellContent } from "@/components/app-shell";
 import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
-import { canAddMember } from "@/components/member-entitlement-logic";
 import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
-import { HeroFlower } from "@/components/hero-flower";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -235,31 +228,16 @@ function EventRow({
 // tile, and adding/removing a shortcut from either row doesn't require any
 // layout math elsewhere. Generic over the number of shortcuts, not tied to
 // any specific one.
-function QuickActionsRow({ children }: { children: React.ReactNode }) {
-  const items = Children.toArray(children).filter(Boolean);
-  if (items.length === 0) return null;
-  return <div className={`quick-actions-row quick-actions-row-${items.length}`}>{items}</div>;
-}
-
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null);
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
   const [calendarEnabled, setCalendarEnabled] = useState(false);
-  const [mealsFeatureOn, setMealsFeatureOn] = useState(false);
-  const [mealsEnabled, setMealsEnabled] = useState(false);
-  const [listsFeatureOn, setListsFeatureOn] = useState(false);
-  const [listsEnabled, setListsEnabled] = useState(false);
-  const [wishlistsFeatureOn, setWishlistsFeatureOn] = useState(false);
-  const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
-  const [nudgesFeatureOn, setNudgesFeatureOn] = useState(false);
-  const [nudgesEntitled, setNudgesEntitled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [todoExpanded, setTodoExpanded] = useState(false);
-  const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
   const { activeHomeId, activeHome } = useActiveHome();
@@ -279,22 +257,6 @@ export default function HomePage() {
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
-    api
-      .billingStatus(activeHomeId)
-      .then((billing) => {
-        setCanInviteMore(canAddMember(billing.member_usage));
-        setMealsEnabled(billing.meals_enabled);
-        setListsEnabled(billing.lists_enabled);
-        setWishlistsEnabled(billing.wishlists_enabled);
-        setNudgesEntitled(billing.nudges_enabled);
-      })
-      .catch(() => {
-        setCanInviteMore(false);
-        setMealsEnabled(false);
-        setListsEnabled(false);
-        setWishlistsEnabled(false);
-        setNudgesEntitled(false);
-      });
     // Member roster is only used for display (event participant avatars) —
     // its own membership-gated read (Capability.members_view) isn't held by
     // every relationship (e.g. a Child), and that must never block or
@@ -311,19 +273,9 @@ export default function HomePage() {
           (feature) => feature.feature === "calendar" && feature.enabled,
         );
         setCalendarEnabled(enabled);
-        setMealsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "meals" && feature.enabled),
-        );
-        setListsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "shopping" && feature.enabled),
-        );
-        setWishlistsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "wish_lists" && feature.enabled),
-        );
         const nudgesEnabled = matrix.features.some(
           (feature) => feature.feature === "nudges" && feature.enabled,
         );
-        setNudgesFeatureOn(nudgesEnabled);
         if (!enabled && !nudgesEnabled) {
           setSummary(null);
           setUpcoming([]);
@@ -450,8 +402,6 @@ export default function HomePage() {
   // push while the tab is closed) — so the prompt only appears once installed.
   const showNotificationPrompt =
     notificationsSupported() && notifPermission === "default" && isStandalone();
-  const showInstallFirstNotice =
-    notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
   // Each of routines/reminders is already in its own Home priority order
   // (overdue, due today, upcoming, then completed today) — see
@@ -503,7 +453,6 @@ export default function HomePage() {
               ))}
             </div>
           )}
-          <HeroFlower />
         </div>
 
       <main className="home-page">
@@ -694,87 +643,6 @@ export default function HomePage() {
           </section>
         )}
 
-        <section className="card home-section home-summary-card home-around-house-card">
-          <div className="section-heading">
-            <img className="home-card-image" src="/images/home-around-house.svg" alt="" aria-hidden="true" />
-            <h2>Around the house</h2>
-          </div>
-          <div className="quick-actions">
-            <QuickActionsRow>
-              {calendarEnabled && (
-                <Link className="quick-action" href="/calendar">
-                  <CalendarPlus size={20} aria-hidden="true" />
-                  Add event
-                </Link>
-              )}
-              {canInviteMore && (activeHome?.capabilities ?? []).includes("members.invite") && (
-                <Link className="quick-action" href="/settings/members">
-                  <UserPlus size={20} aria-hidden="true" />
-                  Invite family
-                </Link>
-              )}
-            </QuickActionsRow>
-            <QuickActionsRow>
-              {nudgesFeatureOn && (
-                <Link
-                  className={`quick-action${nudgesEntitled ? "" : " quick-action-locked"}`}
-                  href="/settings/routines-reminders"
-                >
-                  {!nudgesEntitled && (
-                    <span className="quick-action-lock" aria-hidden="true">
-                      <Lock size={11} />
-                    </span>
-                  )}
-                  <ClipboardList size={20} aria-hidden="true" />
-                  Nudges
-                </Link>
-              )}
-              {mealsFeatureOn && (
-                <Link
-                  className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}
-                  href="/meal-plans"
-                >
-                  {!mealsEnabled && (
-                    <span className="quick-action-lock" aria-hidden="true">
-                      <Lock size={11} />
-                    </span>
-                  )}
-                  <UtensilsCrossed size={20} aria-hidden="true" />
-                  Meal plans
-                </Link>
-              )}
-              {listsFeatureOn && (
-                <Link
-                  className={`quick-action${listsEnabled ? "" : " quick-action-locked"}`}
-                  href="/lists"
-                >
-                  {!listsEnabled && (
-                    <span className="quick-action-lock" aria-hidden="true">
-                      <Lock size={11} />
-                    </span>
-                  )}
-                  <ListChecks size={20} aria-hidden="true" />
-                  Lists
-                </Link>
-              )}
-              {wishlistsFeatureOn && (
-                <Link
-                  className={`quick-action${wishlistsEnabled ? "" : " quick-action-locked"}`}
-                  href="/wish-lists"
-                >
-                  {!wishlistsEnabled && (
-                    <span className="quick-action-lock" aria-hidden="true">
-                      <Lock size={11} />
-                    </span>
-                  )}
-                  <Gift size={20} aria-hidden="true" />
-                  Wishlists
-                </Link>
-              )}
-            </QuickActionsRow>
-          </div>
-        </section>
-
         {showNotificationPrompt && (
           <section className="card notify-panel">
             <span className="notify-icon" aria-hidden="true">
@@ -790,17 +658,6 @@ export default function HomePage() {
           </section>
         )}
 
-        {showInstallFirstNotice && (
-          <section className="card notify-panel">
-            <span className="notify-icon" aria-hidden="true">
-              <Bell size={20} />
-            </span>
-            <div className="notify-copy">
-              <strong>Install MyKhaya first</strong>
-              <p>Add MyKhaya to your Home Screen to enable notifications.</p>
-            </div>
-          </section>
-        )}
       </main>
     </AppShellContent>
   );

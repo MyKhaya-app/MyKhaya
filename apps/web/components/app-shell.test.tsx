@@ -4,6 +4,10 @@ import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AppShell, PersistentAppShell } from "./app-shell";
 
+vi.mock("./around-house-dock", () => ({
+  AroundHouseDock: () => <aside data-testid="around-house-dock" />,
+}));
+
 vi.mock("./auth-provider", () => ({
   useAuth: () => ({
     user: { id: "u1", display_name: "Owner", principal_type: "adult" },
@@ -173,6 +177,7 @@ describe("AppShell — authenticated navigation", () => {
 
     expect(document.querySelector(".desktop-nav")).not.toBeNull();
     expect(document.querySelector(".bottom-nav")).not.toBeNull();
+    expect(screen.getByTestId("around-house-dock")).toBeInTheDocument();
     expect(document.querySelector(".app-shell")).not.toHaveClass("native-shell-app");
   });
 
@@ -183,6 +188,7 @@ describe("AppShell — authenticated navigation", () => {
     await screen.findByText("content");
 
     expect(document.querySelector(".desktop-nav")).toBeNull();
+    expect(screen.queryByTestId("around-house-dock")).not.toBeInTheDocument();
     expect(document.querySelector(".app-shell")).toHaveClass("native-shell-app");
   });
 

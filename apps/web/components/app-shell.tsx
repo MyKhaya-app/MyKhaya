@@ -9,6 +9,7 @@ import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
+import { AroundHouseDock } from "./around-house-dock";
 import { api } from "@mykhaya/api-client";
 
 export function AppShell({
@@ -124,6 +125,7 @@ export function AppShell({
         <main className="app-main"><NativeBiometricOffer />{children}</main>
       </div>
       <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />
+      {!isNativeShell() && <AroundHouseDock />}
     </div>
   );
 }

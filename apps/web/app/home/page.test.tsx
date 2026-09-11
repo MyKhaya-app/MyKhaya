@@ -1,7 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import HomePage from "./page";
+import HomePageBase from "./page";
+import { AroundHouseDock } from "@/components/around-house-dock";
+
+// The Home page now deliberately delegates household shortcuts to the shared
+// browser shell dock. Keep the Home regression suite exercising that real
+// composition so the old Home-only shortcut coverage does not drift away from
+// the production presentation.
+function HomePage() {
+  return (
+    <>
+      <HomePageBase />
+      <AroundHouseDock />
+    </>
+  );
+}
 
 // Coverage for the Home screen's "Around the house" Meal Plans shortcut —
 // see docs/architecture/meal-plans.md. The shortcut always links to
@@ -85,6 +99,7 @@ beforeEach(() => {
   (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.completeReminder as ReturnType<typeof vi.fn>).mockResolvedValue({});
   (api.mealPlanDay as ReturnType<typeof vi.fn>).mockResolvedValue({ date: "2026-08-20", entries: [] });
+  (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing());
   (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
     today_events: [],
     next_event: null,
@@ -110,6 +125,17 @@ beforeEach(() => {
 });
 
 describe("Home — Meal plans shortcut", () => {
+  it("does not render install promotion or the browser Home hero flower", async () => {
+    const { container } = render(<HomePage />);
+
+    expect(await screen.findByRole("heading", { name: "Megan" })).toBeInTheDocument();
+    expect(screen.queryByText("Install MyKhaya first")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Add MyKhaya to your Home Screen to enable notifications."),
+    ).not.toBeInTheDocument();
+    expect(container.querySelector(".home-hero .hero-flower")).toBeNull();
+  });
+
   it("links to Meal Plans with no lock treatment on a Family Home", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(billing({ meals_enabled: true }));
 
@@ -141,7 +167,7 @@ describe("Home — Meal plans shortcut", () => {
 
     render(<HomePage />);
 
-    await screen.findByText(/around the house/i);
+    await screen.findByRole("heading", { name: "Megan" });
     expect(screen.queryByRole("link", { name: /meal plans/i })).not.toBeInTheDocument();
   });
 });
@@ -179,7 +205,7 @@ describe("Home — Lists shortcut", () => {
 
     render(<HomePage />);
 
-    await screen.findByText(/around the house/i);
+    await screen.findByRole("heading", { name: "Megan" });
     expect(screen.queryByRole("link", { name: /^lists$/i })).not.toBeInTheDocument();
   });
 });
@@ -235,7 +261,7 @@ describe("Home — Wishlists shortcut", () => {
 
     render(<HomePage />);
 
-    await screen.findByText(/around the house/i);
+    await screen.findByRole("heading", { name: "Megan" });
     expect(screen.queryByRole("link", { name: /^wishlists$/i })).not.toBeInTheDocument();
   });
 });
@@ -294,7 +320,7 @@ describe("Home — Nudges shortcut", () => {
 
     render(<HomePage />);
 
-    await screen.findByText("Around the house");
+    await screen.findByRole("heading", { name: "Megan" });
     expect(screen.queryByRole("link", { name: /nudges/i })).not.toBeInTheDocument();
   });
 
@@ -319,16 +345,12 @@ describe("Home — Nudges shortcut", () => {
     const { container } = render(<HomePage />);
 
     await screen.findByRole("link", { name: /add event/i });
-    expect(container.querySelector('img[src="/images/home-around-house.svg"]')).toBeInTheDocument();
+    expect(container.querySelector('img[src="/images/home-around-house.svg"]')).not.toBeInTheDocument();
+    expect(container.querySelector(".home-around-house-card")).toBeNull();
 
-    const topRow = container.querySelector(".quick-actions-row-2");
-    const bottomRow = container.querySelector(".quick-actions-row-3");
-    expect(topRow).not.toBeNull();
-    expect(bottomRow).not.toBeNull();
-    expect(topRow?.children).toHaveLength(2);
-    expect(bottomRow?.children).toHaveLength(3);
-    expect(container.querySelectorAll(".quick-actions-row").length).toBe(2);
-    // No leftover empty grid cell/placeholder from the old flat 2-column grid.
+    const dock = container.querySelector(".around-house-dock");
+    expect(dock).not.toBeNull();
+    expect(dock?.querySelectorAll(".around-house-dock-action")).toHaveLength(5);
     expect(container.querySelector(".quick-action-placeholder")).toBeNull();
   });
 
@@ -348,9 +370,9 @@ describe("Home — Nudges shortcut", () => {
     const { container } = render(<HomePage />);
 
     await screen.findByRole("link", { name: /nudges/i });
-    const bottomRow = container.querySelector(".quick-actions-row-1");
-    expect(bottomRow).not.toBeNull();
-    expect(bottomRow?.children).toHaveLength(1);
+    const actions = container.querySelector(".around-house-dock-actions");
+    expect(actions).not.toBeNull();
+    expect(actions?.children).toHaveLength(1);
     expect(screen.queryByRole("link", { name: /meal plans/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^lists$/i })).not.toBeInTheDocument();
   });
