@@ -189,15 +189,29 @@ export function SettingsPage({
     api.me().then(setUser).catch(() => undefined);
   }, []);
   useEffect(() => {
+    setFeatureMatrix(null);
+    setBillingStatus(null);
     if (!activeHomeId) return;
+    let cancelled = false;
     api
       .featureMatrix(activeHomeId)
-      .then(setFeatureMatrix)
-      .catch(() => setFeatureMatrix(null));
+      .then((next) => {
+        if (!cancelled) setFeatureMatrix(next);
+      })
+      .catch(() => {
+        if (!cancelled) setFeatureMatrix(null);
+      });
     api
       .billingStatus(activeHomeId)
-      .then(setBillingStatus)
-      .catch(() => setBillingStatus(null));
+      .then((next) => {
+        if (!cancelled) setBillingStatus(next);
+      })
+      .catch(() => {
+        if (!cancelled) setBillingStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [activeHomeId]);
   const isAdult = user?.principal_type !== "managed_child";
   const isHomeAdmin = activeHome?.relationship === "home_admin";
@@ -220,7 +234,12 @@ export function SettingsPage({
 
   function locked(item: MoreItem): boolean {
     if (!item.entitlementKey) return false;
-    return !billingStatus?.[item.entitlementKey];
+    // Unknown/loading is deliberately not Free. A lock is only valid after
+    // the current Home's billing response positively says this entitlement
+    // is unavailable. This prevents Family users seeing a transient Free
+    // presentation while the request hydrates, and prevents an old Home's
+    // response from determining the new Home's UI.
+    return billingStatus?.[item.entitlementKey] === false;
   }
 
   return (

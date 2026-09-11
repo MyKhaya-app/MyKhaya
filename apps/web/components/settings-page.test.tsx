@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import type { BillingStatus } from "@mykhaya/shared-types";
 import { SettingsPage } from "./settings-page";
 
 // Coverage for the grouped More menu (consolidating Home settings' old
@@ -41,6 +42,14 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 });
 
 const { api } = await import("@mykhaya/api-client");
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
 
 // Family Home, every optional module released and entitled — the
 // "everything normal" default so every pre-existing test (none of which
@@ -293,6 +302,76 @@ describe("More — green hero header", () => {
 // dashboard's quick actions already use for it (app/home/page.tsx) — never
 // a hardcoded always-active link, and never fully hidden just because it's
 // not entitled on the current plan.
+describe("More — entitlement loading state", () => {
+  it("does not render transient locks while Family entitlement is unknown", async () => {
+    const billing = deferred<BillingStatus>();
+    mockModuleState();
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockReturnValue(billing.promise);
+    const { container } = render(<SettingsPage />);
+
+    await screen.findByRole("heading", { name: "Nudges" });
+    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
+    billing.resolve({
+      ...({} as BillingStatus),
+      nudges_enabled: true,
+      meals_enabled: true,
+      wishlists_enabled: true,
+      lists_enabled: true,
+    });
+    await waitFor(() => expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0));
+  });
+
+  it("shows locks only after unknown entitlement resolves to Free", async () => {
+    const billing = deferred<BillingStatus>();
+    mockModuleState();
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockReturnValue(billing.promise);
+    const { container } = render(<SettingsPage />);
+
+    await screen.findByRole("heading", { name: "Nudges" });
+    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
+    billing.resolve({
+      ...({} as BillingStatus),
+      nudges_enabled: false,
+      meals_enabled: false,
+      wishlists_enabled: false,
+      lists_enabled: true,
+    });
+    await waitFor(() => expect(container.querySelectorAll(".more-row-lock").length).toBeGreaterThan(0));
+  });
+
+  it("clears the previous Home entitlement while switching Homes", async () => {
+    const familyBilling = deferred<BillingStatus>();
+    const freeBilling = deferred<BillingStatus>();
+    mockModuleState();
+    (api.billingStatus as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(familyBilling.promise)
+      .mockReturnValueOnce(freeBilling.promise);
+    const { container, rerender } = render(<SettingsPage />);
+
+    await screen.findByRole("heading", { name: "Nudges" });
+    familyBilling.resolve({
+      ...({} as BillingStatus),
+      nudges_enabled: true,
+      meals_enabled: true,
+      wishlists_enabled: true,
+      lists_enabled: true,
+    });
+    await waitFor(() => expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0));
+
+    activeHomeValue = { id: "home-2", name: "Other Home", relationship: "home_admin" };
+    rerender(<SettingsPage />);
+    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
+    freeBilling.resolve({
+      ...({} as BillingStatus),
+      nudges_enabled: false,
+      meals_enabled: false,
+      wishlists_enabled: false,
+      lists_enabled: true,
+    });
+    await waitFor(() => expect(container.querySelectorAll(".more-row-lock").length).toBeGreaterThan(0));
+  });
+});
+
 describe("More — Wishlists module state", () => {
   it("appears in More as a normal, actionable row when the module is released and this Home's plan includes it", async () => {
     mockModuleState({ wishlistsFeatureOn: true, wishlistsEntitled: true });
