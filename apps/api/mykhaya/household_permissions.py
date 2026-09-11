@@ -19,6 +19,7 @@ class Capability(StrEnum):
     household_manage = "household.manage"
     members_view = "members.view"
     members_invite = "members.invite"
+    members_approve_join_requests = "members.approve_join_requests"
     members_manage_relationships = "members.manage_relationships"
     calendar_view = "calendar.view"
     calendar_view_all = "calendar.view_all"
@@ -144,6 +145,25 @@ def ensure_can_assign_relationship(
         )
 
 
+def ensure_can_manage_relationship(
+    actor: Membership,
+    target: Membership,
+    relationship: HouseholdRelationship,
+) -> None:
+    """Prevent delegated operators from changing authority boundaries."""
+    if actor.user_id == target.user_id and relationship != target.relationship:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot change your own Home role.")
+    if (
+        actor.relationship != HouseholdRelationship.home_admin
+        and target.relationship == HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only a Home Admin can change a Home Admin's role.",
+        )
+    ensure_can_assign_relationship(actor, relationship)
+
+
 CHILD_PERMISSION_CAPABILITIES = {
     "calendar_view": Capability.calendar_view,
     "calendar_create": Capability.calendar_create,
@@ -212,6 +232,9 @@ async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capa
     ):
         profile = default_profile(membership.relationship)
     capabilities = set(PROFILE_CAPABILITIES[profile])
+    if membership.relationship == HouseholdRelationship.partner:
+        capabilities.add(Capability.members_approve_join_requests)
+        capabilities.add(Capability.members_manage_relationships)
     if (
         membership.relationship
         in {

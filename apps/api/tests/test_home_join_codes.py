@@ -230,6 +230,73 @@ async def test_approval_creates_correct_membership_and_role() -> None:
 
 
 @pytest.mark.asyncio
+async def test_partner_cannot_change_own_role_after_approval() -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    async with _client() as admin, _client() as partner:
+        await create_verified_user(admin, f"jc-authority-admin-{suffix}@example.com", "Authority Admin")
+        home_id = await _create_home(admin, "Authority Home")
+        await _upgrade_to_family(home_id)
+        code = await _generate_join_code(admin, home_id)
+
+        await create_verified_user(partner, f"jc-authority-partner-{suffix}@example.com", "Authority Partner")
+        partner_request = await unsafe(partner, "POST", "/api/v1/home-join/request", json={"code": code})
+        assert partner_request.status_code == 201
+        approved_partner = await unsafe(
+            admin,
+            "POST",
+            f"/api/v1/groups/{home_id}/join-requests/{partner_request.json()['id']}/approve",
+            json={"relationship": "partner", "family_sponsorship": False, "confirmed": True},
+        )
+        assert approved_partner.status_code == 200
+
+        partner_user = await partner.get("/api/v1/users/me")
+        assert partner_user.status_code == 200
+        cannot_self_promote = await unsafe(
+            partner,
+            "PATCH",
+            f"/api/v1/groups/{home_id}/members/{partner_user.json()['id']}",
+            json={"relationship": "adult", "confirmed": True},
+        )
+        assert cannot_self_promote.status_code == 403
+
+
+
+@pytest.mark.asyncio
+async def test_adult_can_view_but_cannot_decide_join_request() -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    async with _client() as admin, _client() as adult, _client() as joiner:
+        await create_verified_user(admin, f"jc-adult-authority-admin-{suffix}@example.com", "Adult Authority Admin")
+        home_id = await _create_home(admin, "Adult Authority Home")
+        await _upgrade_to_family(home_id)
+        code = await _generate_join_code(admin, home_id)
+
+        await create_verified_user(adult, f"jc-adult-authority-{suffix}@example.com", "Authority Adult")
+        adult_request = await unsafe(adult, "POST", "/api/v1/home-join/request", json={"code": code})
+        assert adult_request.status_code == 201
+        adult_member = await unsafe(
+            admin,
+            "POST",
+            f"/api/v1/groups/{home_id}/join-requests/{adult_request.json()['id']}/approve",
+            json={"relationship": "adult", "confirmed": True},
+        )
+        assert adult_member.status_code == 200
+
+        await create_verified_user(joiner, f"jc-adult-next-{suffix}@example.com", "Next Joiner")
+        pending = await unsafe(joiner, "POST", "/api/v1/home-join/request", json={"code": code})
+        assert pending.status_code == 201
+        visible = await adult.get(f"/api/v1/groups/{home_id}/join-requests")
+        assert visible.status_code == 200
+        rejected = await unsafe(
+            adult,
+            "POST",
+            f"/api/v1/groups/{home_id}/join-requests/{pending.json()['id']}/approve",
+            json={"relationship": "adult", "confirmed": True},
+        )
+        assert rejected.status_code == 403
+        assert "permission" in rejected.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_decline_creates_no_membership() -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     async with _client() as admin, _client() as joiner:

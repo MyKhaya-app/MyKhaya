@@ -31,6 +31,7 @@ from mykhaya.household_permissions import (
     capabilities_for,
     default_profile,
     ensure_can_assign_relationship,
+    ensure_can_manage_relationship,
     home_admin_count,
     legacy_role,
     require_capability,
@@ -226,7 +227,7 @@ async def members(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[MemberResponse]:
-    await require_capability(group_id, Capability.members_view, auth, db)
+    await require_capability(group_id, Capability.members_invite, auth, db)
     home = await db.get(Group, group_id)
     home_owner_id = home.created_by if home is not None else None
     rows = (
@@ -523,7 +524,7 @@ async def update_member(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    await require_capability(group_id, Capability.members_manage_relationships, auth, db)
+    actor = await require_capability(group_id, Capability.members_manage_relationships, auth, db)
     target = await db.scalar(
         select(Membership)
         .where(
@@ -535,6 +536,7 @@ async def update_member(
     )
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
+    ensure_can_manage_relationship(actor, target, body.relationship)
     if body.relationship == HouseholdRelationship.child:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -764,7 +766,7 @@ async def regenerate_join_code(
     settings: Settings = Depends(get_settings),
 ) -> HomeJoinCodeResponse:
     require_adult_session(auth)
-    await require_capability(group_id, Capability.members_invite, auth, db)
+    await require_capability(group_id, Capability.members_view, auth, db)
     # Matches invitations.invite()'s "household-invitation" bucket shape
     # (20/3600) — generous enough for legitimate re-shares/regenerations,
     # nowhere near enough to matter for abuse (this endpoint doesn't try
@@ -835,7 +837,7 @@ async def approve_join_request(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    approver = await require_capability(group_id, Capability.members_invite, auth, db)
+    approver = await require_capability(group_id, Capability.members_approve_join_requests, auth, db)
     ensure_can_assign_relationship(approver, body.relationship)
     if body.relationship not in _ALLOWED_JOIN_APPROVAL_RELATIONSHIPS:
         raise HTTPException(
@@ -904,13 +906,17 @@ async def approve_join_request(
             existing.colour = await assign_member_colour(db, group_id)
         membership = existing
     await ensure_personal_calendar(db, group_id, join_request.user_id)
+    if body.family_sponsorship and body.relationship == HouseholdRelationship.home_admin:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The Home Admin receives Family access from this Home's subscription, not sponsorship.",
+        )
     if body.family_sponsorship and await has_entitlement(
         db, group_id, "family_plans.enabled"
     ):
         await grant_home_family_sponsorship(
             db, group_id, join_request.user_id, auth.user.id
         )
-
     join_request.status = HomeJoinRequestStatus.approved
     join_request.relationship = body.relationship
     join_request.decided_by = auth.user.id
@@ -944,7 +950,7 @@ async def decline_join_request(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    await require_capability(group_id, Capability.members_invite, auth, db)
+    await require_capability(group_id, Capability.members_approve_join_requests, auth, db)
     join_request = await db.scalar(
         select(HomeJoinRequest)
         .where(

@@ -314,6 +314,7 @@ class HomeJoinRequestListItem(BaseModel):
 
 class HomeJoinRequestApprove(StrictModel):
     relationship: HouseholdRelationship
+    family_sponsorship: bool = False
     # Optional: this is a routine household action, not an operator action —
     # the Home Admin is never prompted to justify it. Matches
     # MemberRelationshipUpdate's existing shape.

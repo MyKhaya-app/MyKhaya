@@ -139,6 +139,10 @@ export default function ManageMembers() {
 
   const canInvite =
     activeHome?.capabilities.includes("members.invite") ?? false;
+  const canViewMembers =
+    activeHome?.capabilities.includes("members.view") ?? false;
+  const canApproveJoinRequests =
+    activeHome?.capabilities.includes("members.approve_join_requests") ?? false;
   const canManage =
     activeHome?.capabilities.includes("members.manage_relationships") ?? false;
   const canAssignHomeAdmin = activeHome?.relationship === "home_admin";
@@ -162,7 +166,7 @@ export default function ManageMembers() {
     const [memberRows, invitationRows, joinRequestRows] = await Promise.all([
       api.members(activeHomeId),
       canInvite ? api.listInvitations(activeHomeId) : Promise.resolve([]),
-      canInvite ? api.listHomeJoinRequests(activeHomeId) : Promise.resolve([]),
+      canViewMembers ? api.listHomeJoinRequests(activeHomeId) : Promise.resolve([]),
     ]);
     setMembers(memberRows);
     setJoinRequests(joinRequestRows);
@@ -187,7 +191,7 @@ export default function ManageMembers() {
 
   useEffect(() => {
     load().catch((cause: Error) => setStatus({ kind: "error", message: cause.message }));
-  }, [activeHomeId, canInvite]);
+  }, [activeHomeId, canInvite, canViewMembers]);
 
   useEffect(() => {
     if (!activeHomeId || !canInvite || inviteMethod !== "code") return;
@@ -758,7 +762,7 @@ export default function ManageMembers() {
           </section>
         )}
 
-        {canInvite && joinRequests.length > 0 && (
+        {canViewMembers && joinRequests.length > 0 && (
           <section className="card details">
             <h2>Join requests ({joinRequests.length})</h2>
             <div className="invitation-list">
@@ -770,7 +774,7 @@ export default function ManageMembers() {
                       {request.email} · Requested using Home code
                     </small>
                   </div>
-                  <div className="actions compact-actions">
+                  {canApproveJoinRequests ? <div className="actions compact-actions">
                     <label className="visually-hidden" htmlFor={`join-request-relationship-${request.id}`}>
                       Relationship for {request.display_name}
                     </label>
@@ -821,7 +825,7 @@ export default function ManageMembers() {
                     >
                       {joinRequestBusy === request.id ? "Approving…" : "Approve"}
                     </button>
-                  </div>
+                  </div> : <small className="muted">Awaiting Home Admin or Partner approval.</small>}
                 </article>
               ))}
             </div>
@@ -912,7 +916,10 @@ export default function ManageMembers() {
                       </span>
                     </div>
                     {member.email && <p className="muted">{member.email}</p>}
-                    {canManage && member.relationship !== "child" && (
+                    {canManage &&
+                      member.relationship !== "child" &&
+                      (activeHome?.relationship === "home_admin" ||
+                        (member.user_id !== currentUserId && member.relationship !== "home_admin")) && (
                       <label className="family-member-relationship">
                         Change relationship
                         <select
@@ -924,7 +931,11 @@ export default function ManageMembers() {
                             )
                           }
                         >
-                          {nonChildRelationships.map((value) => {
+                          {nonChildRelationships
+                            .filter((value) =>
+                              activeHome?.relationship === "home_admin" || value !== "home_admin",
+                            )
+                            .map((value) => {
                             const isExternal = value === "extended_family" || value === "friend";
                             // Extended Family/Friend is retired as a Home-member
                             // relationship (see routers.groups.update_member) —
@@ -940,7 +951,7 @@ export default function ManageMembers() {
                                 {locked ? " (retired)" : ""}
                               </option>
                             );
-                          })}
+                            })}
                         </select>
                       </label>
                     )}

@@ -43,7 +43,7 @@ async def test_only_explicitly_delegatable_overrides_change_capabilities() -> No
     assert Capability.billing_manage not in capabilities
     assert Capability.security_manage not in capabilities
     assert Capability.household_manage not in capabilities
-    assert Capability.members_manage_relationships not in capabilities
+    assert Capability.members_manage_relationships in capabilities
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_legacy_home_admin_profile_on_partner_is_fail_closed() -> None:
 
     assert Capability.billing_manage not in capabilities
     assert Capability.household_manage not in capabilities
-    assert Capability.members_manage_relationships not in capabilities
+    assert Capability.members_manage_relationships in capabilities
     assert Capability.calendar_view in capabilities
 
 
@@ -85,6 +85,24 @@ async def test_only_trusted_adult_profiles_can_invite_members() -> None:
             shared_resources=[],
         )
         assert Capability.members_invite not in await capabilities_for(AsyncMock(), membership)
+
+
+@pytest.mark.asyncio
+async def test_only_partners_and_home_admins_can_approve_or_manage_roles() -> None:
+    partner = Membership(
+        relationship=HouseholdRelationship.partner,
+        permission_profile=PermissionProfile.standard_partner,
+        permission_overrides={},
+    )
+    adult = Membership(
+        relationship=HouseholdRelationship.adult,
+        permission_profile=PermissionProfile.standard_partner,
+        permission_overrides={},
+    )
+    assert Capability.members_approve_join_requests in await capabilities_for(AsyncMock(), partner)
+    assert Capability.members_manage_relationships in await capabilities_for(AsyncMock(), partner)
+    assert Capability.members_approve_join_requests not in await capabilities_for(AsyncMock(), adult)
+    assert Capability.members_manage_relationships not in await capabilities_for(AsyncMock(), adult)
 
 
 def test_non_admin_cannot_assign_home_admin_relationship() -> None:

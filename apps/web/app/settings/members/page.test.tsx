@@ -76,7 +76,7 @@ function freeHome(): Home {
     role: "owner",
     relationship: "home_admin",
     permission_profile: "home_admin",
-    capabilities: ["members.invite", "members.manage_relationships"],
+    capabilities: ["members.view", "members.invite", "members.approve_join_requests", "members.manage_relationships"],
     member_count: 1,
     child_login_code: "1234",
   };
@@ -132,7 +132,7 @@ function freeBillingStatus(overrides: Partial<BillingStatus> = {}): BillingStatu
 function familyHomeWithGrowthRoom(): Home {
   return {
     ...freeHome(),
-    capabilities: ["members.invite", "members.manage_relationships"],
+    capabilities: ["members.view", "members.invite", "members.approve_join_requests", "members.manage_relationships"],
   };
 }
 
@@ -606,6 +606,7 @@ describe("Manage members page — pending join requests", () => {
     await waitFor(() =>
       expect(api.approveHomeJoinRequest).toHaveBeenCalledWith("home-1", "req-1", {
         relationship: "adult",
+        family_sponsorship: false,
         confirmed: true,
       }),
     );
