@@ -104,6 +104,18 @@ class TokenPurpose(StrEnum):
     reset_password = "reset_password"
 
 
+class ExternalIdentityProvider(StrEnum):
+    """External identity providers supported by the provider-neutral identity layer.
+
+    The provider subject, not the provider email address, is the stable identity
+    supplied by the provider.  Sign-in and linking ceremonies are deliberately
+    implemented in later phases.
+    """
+
+    apple = "apple"
+    google = "google"
+
+
 class CalendarSharePermission(StrEnum):
     view = "view"
     manage = "manage"
@@ -218,6 +230,9 @@ class User(UuidTimeMixin, Base):
     avatar_key: Mapped[str | None] = mapped_column(String(64))
     avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
+    external_identities: Mapped[list["ExternalIdentity"]] = orm_relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class AuthIdentity(UuidTimeMixin, Base):
@@ -231,6 +246,41 @@ class AuthIdentity(UuidTimeMixin, Base):
     )
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExternalIdentity(UuidTimeMixin, Base):
+    """A provider identity linked to one canonical MyKhaya user.
+
+    ``provider_email`` is informational provider metadata only.  It is nullable
+    because Apple may withhold it after the first authorisation and may provide a
+    private-relay address.  It is never part of the identity key or used for
+    implicit account linking.
+    """
+
+    __tablename__ = "external_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "provider_subject", name="uq_external_identity_provider_subject"
+        ),
+        Index("ix_external_identities_user_id", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[ExternalIdentityProvider] = mapped_column(
+        Enum(ExternalIdentityProvider, name="external_identity_provider"), nullable=False
+    )
+    provider_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    provider_email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user: Mapped[User] = orm_relationship(back_populates="external_identities")
 
 
 class TrustedDevice(UuidTimeMixin, Base):

@@ -19,7 +19,12 @@
 {$WEB_DOMAIN:mykhaya.app} {
 	encode zstd gzip
 	request_body {
-		max_size 10MB
+		# Coarse edge limit, kept above the API's own avatar_max_upload_bytes
+		# ceiling (20 MiB — see ADR 0013 and mykhaya.config) with headroom for
+		# multipart boundary/header overhead, so an ordinary high-resolution
+		# iPhone photo is never rejected here before the API's own decode-based
+		# validation ever sees it. The API retains its own tighter JSON limit.
+		max_size 25MB
 	}
 	@api path /api/*
 	reverse_proxy @api api:8000 {

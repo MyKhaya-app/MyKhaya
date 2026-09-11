@@ -225,6 +225,58 @@ def test_process_avatar_upload_rejects_svg_masquerading_as_image() -> None:
         process_avatar_upload(svg)
 
 
+def test_process_avatar_upload_accepts_heif_larger_than_previous_five_megabyte_limit() -> None:
+    # A real (decodable) HEIF payload padded past the retired 5 MiB client
+    # ceiling — proves the 5 MiB assumption was never coupled to format
+    # handling either, only ever to the now-removed client-side check.
+    source = make_heif() + b"\0" * (6 * 1024 * 1024)
+
+    processed = process_avatar_upload(source)
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_rejects_a_decodable_but_disallowed_format() -> None:
+    # GIF is a format Pillow can decode perfectly well but that
+    # ALLOWED_PILLOW_FORMATS deliberately excludes (see its own module
+    # docstring) — proves the allow-list, not decodability alone, is what
+    # gates acceptance, and that rejection is reported as "not supported"
+    # rather than "could not be read".
+    image = Image.new("RGB", (200, 200), (10, 10, 10))
+    buffer = io.BytesIO()
+    image.save(buffer, format="GIF")
+
+    with pytest.raises(UnsupportedImageError, match="format is not supported"):
+        process_avatar_upload(buffer.getvalue())
+
+
+def test_process_avatar_upload_rejects_extreme_declared_dimensions_before_full_decode() -> None:
+    # A real, tiny, genuinely-decodable PNG (solid colour compresses to a few
+    # hundred bytes) whose *declared* dimensions alone exceed the pixel
+    # ceiling — a realistic decompression-bomb shape, not a mock. Proves the
+    # width*height check runs before any full-frame decode/load() happens.
+    huge = Image.new("RGB", (10_000, 10_000), (5, 5, 5))
+    buffer = io.BytesIO()
+    huge.save(buffer, format="PNG")
+    assert len(buffer.getvalue()) < 500_000  # genuinely small on the wire
+
+    with pytest.raises(AvatarResourceError):
+        process_avatar_upload(buffer.getvalue())
+
+
+def test_process_avatar_upload_reports_heic_unsupported_when_runtime_support_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only the module's own availability flag is patched — never pillow_heif
+    # itself — so this exercises the real "runtime support missing" branch
+    # without touching the primary HEIC success test's real decode path.
+    monkeypatch.setattr("mykhaya.avatars.processing.HEIC_SUPPORTED", False)
+
+    with pytest.raises(UnsupportedImageError, match="HEIC/HEIF photos are not supported"):
+        process_avatar_upload(make_heif())
+
+
 # --- storage unit tests ------------------------------------------------------
 
 
@@ -341,6 +393,60 @@ async def test_large_jpeg_upload_over_five_megabytes_is_processed_by_endpoint(
 
     assert upload.status_code == 200, upload.text
     assert upload.json()["avatar_version"]
+
+
+@pytest.mark.asyncio
+async def test_large_heif_upload_over_five_megabytes_is_processed_by_endpoint(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("largeheifupload"), "Large HEIF Upload")
+    large_heif = make_heif() + b"\0" * (6 * 1024 * 1024)
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_5678.HEIC", large_heif, "image/heic")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_rejects_a_decodable_but_disallowed_format(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("gifupload"), "Gif Upload")
+    image = Image.new("RGB", (200, 200), (10, 10, 10))
+    buffer = io.BytesIO()
+    image.save(buffer, format="GIF")
+
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("photo.gif", buffer.getvalue(), "image/gif")},
+    )
+    assert response.status_code == 422
+    assert "format is not supported" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_rejects_extreme_declared_dimensions(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("bombupload"), "Bomb Upload")
+    huge = Image.new("RGB", (10_000, 10_000), (5, 5, 5))
+    buffer = io.BytesIO()
+    huge.save(buffer, format="PNG")
+
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("huge.png", buffer.getvalue(), "image/png")},
+    )
+    assert response.status_code == 413
+    assert "too large to process" in response.json()["detail"]
 
 
 # --- API: successful upload, persistence, generated filename ------------------
