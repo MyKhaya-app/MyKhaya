@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.avatars.processing import (
     OUTPUT_CONTENT_TYPE,
+    AvatarResourceError,
     UnsupportedImageError,
     process_avatar_upload,
 )
@@ -96,6 +97,13 @@ async def upload_my_avatar(
     await enforce_rate_limit(request, settings, "avatar-upload", 20, 3600)
 
     raw = await file.read(settings.avatar_max_upload_bytes + 1)
+    log.info(
+        "avatar_upload_received",
+        request_id=getattr(request.state, "request_id", None),
+        filename=file.filename or "(none)",
+        declared_content_type=file.content_type or "(empty)",
+        bytes=len(raw),
+    )
     if len(raw) > settings.avatar_max_upload_bytes:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -110,6 +118,11 @@ async def upload_my_avatar(
     # orientation, crops to a square and re-encodes as WebP.
     try:
         processed = process_avatar_upload(raw)
+    except AvatarResourceError as cause:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large to process. Please choose another image.",
+        ) from cause
     except UnsupportedImageError as cause:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
 

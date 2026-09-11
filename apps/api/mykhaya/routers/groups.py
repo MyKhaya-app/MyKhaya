@@ -6,7 +6,11 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
-from mykhaya.avatars.processing import UnsupportedImageError, process_avatar_upload
+from mykhaya.avatars.processing import (
+    AvatarResourceError,
+    UnsupportedImageError,
+    process_avatar_upload,
+)
 from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import PALETTE_HEX, ColourToken
@@ -285,6 +289,11 @@ async def upload_child_member_avatar(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file was uploaded.")
     try:
         processed = process_avatar_upload(raw)
+    except AvatarResourceError as cause:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large to process. Please choose another image.",
+        ) from cause
     except UnsupportedImageError as cause:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
 

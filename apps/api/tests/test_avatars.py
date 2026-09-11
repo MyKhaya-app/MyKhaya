@@ -24,7 +24,9 @@ from test_child_login import (
 
 from mykhaya.avatars.processing import (
     AVATAR_SIZE,
+    MAX_AVATAR_PIXELS,
     OUTPUT_CONTENT_TYPE,
+    AvatarResourceError,
     UnsupportedImageError,
     process_avatar_upload,
 )
@@ -172,12 +174,44 @@ def test_process_avatar_upload_accepts_webp_and_produces_webp() -> None:
     assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
 
 
+def test_process_avatar_upload_accepts_jpeg_larger_than_previous_five_megabyte_limit() -> None:
+    # JPEG decoders legitimately ignore trailing bytes. This keeps the fixture
+    # deterministic while proving the processor no longer couples source size
+    # to the 512x512 stored output or the retired 5 MiB ceiling.
+    source = make_jpeg() + b"\0" * (6 * 1024 * 1024)
+
+    processed = process_avatar_upload(source)
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
 def test_process_avatar_upload_rejects_corrupted_heif() -> None:
     source = make_heif()
     corrupted = source[: max(1, len(source) // 2)]
 
     with pytest.raises(UnsupportedImageError, match="could not be read"):
         process_avatar_upload(corrupted)
+
+
+def test_process_avatar_upload_rejects_excessive_decoded_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OversizedImage:
+        format = "JPEG"
+        width = MAX_AVATAR_PIXELS + 1
+        height = 1
+
+        def load(self) -> None:
+            raise AssertionError("resource limit should run before full decode")
+
+    monkeypatch.setattr(
+        "mykhaya.avatars.processing.Image.open",
+        lambda _stream: OversizedImage(),
+    )
+
+    with pytest.raises(AvatarResourceError):
+        process_avatar_upload(b"bounded test input")
 
 
 def test_process_avatar_upload_rejects_non_image_bytes() -> None:
@@ -269,6 +303,44 @@ async def test_upload_rejects_non_image_and_svg_and_oversized(client: AsyncClien
         files={"file": ("photo.jpg", oversized, "image/jpeg")},
     )
     assert oversized_response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_heif_upload_endpoint_accepts_multipart_source_and_returns_avatar_version(
+    client: AsyncClient,
+) -> None:
+    user_id = await create_verified_user(client, unique_email("heifupload"), "HEIF Upload")
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_1234.HEIC", make_heif(), "image/heic")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+    served = await client.get(f"/api/v1/users/{user_id}/avatar")
+    assert served.status_code == 200
+    assert served.headers["content-type"].startswith(OUTPUT_CONTENT_TYPE)
+
+
+@pytest.mark.asyncio
+async def test_large_jpeg_upload_over_five_megabytes_is_processed_by_endpoint(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("largeupload"), "Large Upload")
+    large_jpeg = make_jpeg() + b"\0" * (6 * 1024 * 1024)
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("large-camera-photo.jpg", large_jpeg, "image/jpeg")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
 
 
 # --- API: successful upload, persistence, generated filename ------------------

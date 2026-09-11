@@ -146,13 +146,15 @@ class Settings(BaseSettings):
     stripe_billing_acquisition_enabled: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
-    avatar_max_upload_bytes: int = Field(default=5_242_880, ge=1024, le=10_485_760)
+    # The transport ceiling protects the API from unbounded multipart bodies;
+    # decoded pixel limits in avatars.processing protect memory separately.
+    avatar_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments
-    # can raise the value if genuinely needed. The defaults above (10/5) are the
-    # actual production-appropriate values and are deliberately low; nothing about
-    # this field implies 1000 is a sane production setting.
+    # can raise the value if genuinely needed. This is deliberately independent
+    # of the 512x512 stored output size: normal phone originals are processed on
+    # the server before storage.
     rate_limit_login: int = Field(default=10, ge=1, le=1000)
     rate_limit_register: int = Field(default=5, ge=1, le=1000)
     trusted_proxy_cidrs: list[str] = []

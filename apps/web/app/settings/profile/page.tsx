@@ -25,8 +25,6 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
-
 function roleLabel(relationship?: Member["relationship"]) {
   switch (relationship) {
     case "home_admin": return "Home admin";
@@ -132,11 +130,6 @@ export default function Profile() {
 
     setAvatarError("");
     setPhotoSheetOpen(false);
-    if (file.size > MAX_AVATAR_BYTES) {
-      setAvatarError("That photo is too large. Please choose one under 5 MB.");
-      return;
-    }
-
     setAvatarBusy(true);
     try {
       const normalized = await normalizeAvatarFile(file);
@@ -170,7 +163,11 @@ export default function Profile() {
               : "We couldn’t prepare that photo for upload. Please try another image.",
         );
       } else if (cause instanceof ApiError && cause.status === 413) {
-        setAvatarError("This photo is too large to upload. Please choose a smaller image.");
+        setAvatarError(
+          /too large to process/i.test(cause.message)
+            ? "That photo is too large to process. Please choose another image."
+            : "This photo is too large to upload. Please choose a smaller image.",
+        );
       } else if (cause instanceof ApiError && isImageFormatRejection(cause)) {
         // IMAGE PROCESSING FAILURE — the backend's own wording ("...JPEG,
         // PNG or WebP") is meant for troubleshooting, not an ordinary iPhone

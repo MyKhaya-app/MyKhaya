@@ -40,6 +40,13 @@ WKWebView support varies between Photos-library assets; relying on that client
 conversion would make native and browser behaviour diverge. A failed upload
 must leave the existing avatar reference unchanged.
 
+Avatar upload resource limits are independent of the reduced stored output:
+the default multipart file ceiling is 20 MiB and decoded images are limited to
+40 million pixels before full loading. These limits protect request and memory
+resources while allowing ordinary high-resolution phone originals to be uploaded
+and reduced server-side. Exceeding the transport or decoded-pixel ceiling is a
+resource-limit error, not an unsupported-format error.
+
 ## Presentation families
 
 Mobile/native is app-like, stacked, touch-first and safe-area aware. Its current
