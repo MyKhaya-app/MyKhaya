@@ -148,7 +148,9 @@ async def create_fixture(
         "/api/v1/platform/demo-test-homes",
         json={
             "fixture_key": fixture_key,
-            "display_name": "QA Free Plan Demo" if fixture_type == "free_demo" else "QA Family Demo",
+            "display_name": (
+                "QA Free Plan Demo" if fixture_type == "free_demo" else "QA Family Demo"
+            ),
             "fixture_type": fixture_type,
             "email": f"qa-{fixture_type}-{suffix}@demo.mykhaya.app",
             "password": FIXTURE_PASSWORD,

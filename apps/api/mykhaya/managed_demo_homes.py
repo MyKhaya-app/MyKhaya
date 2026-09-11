@@ -602,6 +602,22 @@ class ManagedDemoService:
         )
         if len(memberships) != 1 or memberships[0].group_id != row.home_id:
             raise ManagedDemoError("Refusing to delete an owner account used outside this fixture")
+        # Seed-member ids (every member but the owner) — captured before the
+        # cascade-delete below removes their Membership rows, so the orphan
+        # check afterwards has something to compare against. Mirrors
+        # refresh_template's own orphaned-seed-user cleanup: without this, a
+        # deleted fixture's seed-member Users (Jamie/Sophie/Noah Carter
+        # etc.) are left behind forever with their fixed, non-fixture-scoped
+        # seed_template email — permanently blocking any future fixture of
+        # the same template (apple_review or demo) from ever being created
+        # again, since User.email is unique.
+        other_member_ids = list(
+            await db.scalars(
+                select(Membership.user_id).where(
+                    Membership.group_id == row.home_id, Membership.user_id != owner_id
+                )
+            )
+        )
         # Bulk-delete via Core `delete()`, not ORM object deletion — with
         # the Membership row(s) above loaded into the session's identity
         # map, SQLAlchemy would otherwise try to NULL out their (NOT NULL)
@@ -618,3 +634,11 @@ class ManagedDemoService:
         await db.delete(home)
         await db.flush()
         await db.execute(update(User).where(User.id == owner_id).values(is_active=False))
+        if other_member_ids:
+            remaining_members = select(Membership.user_id).where(
+                Membership.user_id.in_(other_member_ids)
+            )
+            orphaned_member_ids = select(User.id).where(
+                User.id.in_(other_member_ids), ~User.id.in_(remaining_members)
+            )
+            await db.execute(delete(User).where(User.id.in_(orphaned_member_ids)))

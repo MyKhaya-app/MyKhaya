@@ -472,6 +472,39 @@ async def test_free_demo_reset_password_enable_disable_expiry_and_delete_work_un
 
 
 @pytest.mark.asyncio
+async def test_deleting_a_family_demo_fixture_allows_recreating_one(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    demo_keys: list[str],
+) -> None:
+    """Regression for a real bug found via QA: ManagedDemoService.delete only
+    ever deactivated the owner account, never cleaned up seed_template's
+    other member Users (Jamie/Sophie/Noah Carter, fixed emails, not scoped
+    to fixture_key) the way refresh_template already does — so deleting a
+    Family Demo (or Apple Review) fixture left those emails permanently
+    taken, and creating another fixture of the same template would fail
+    with a users.email uniqueness violation forever after. Free Plan Demo
+    doesn't hit this (single member, no seed_template member emails), so it
+    took a second real "demo" fixture to surface."""
+    owner = await admin_factory(PlatformRole.owner)
+    first = await create_free_demo(admin_client, owner, demo_keys, fixture_type="demo")
+
+    deleted = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/demo-test-homes/{first['id']}",
+        json={"reason": "Regression test cleanup", "confirmed": True},
+    )
+    assert deleted.status_code == 204, deleted.text
+    demo_keys.remove(first["fixture_key"])
+
+    # Must succeed, not collide on jamie-carter@demo.mykhaya.invalid (or any
+    # other seed_template member email) left behind by the delete above.
+    second = await create_free_demo(admin_client, owner, demo_keys, fixture_type="demo")
+    assert second["fixture_type"] == "demo"
+
+
+@pytest.mark.asyncio
 async def test_apple_review_fixture_regression_still_resolves_family_access(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
