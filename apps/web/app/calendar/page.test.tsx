@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { resolveColour } from "@mykhaya/design-tokens";
 import type { EventPayload, EventUpdatePayload } from "@mykhaya/shared-types";
@@ -132,6 +132,299 @@ describe("Calendar — Month view navigation", () => {
     vi.useRealTimers();
 
     await waitFor(() => expect(heading.textContent).not.toBe(initialLabel));
+  });
+});
+
+// Month View → Day List → Event Detail: every interaction with a day cell in
+// Month view (blank space, the date number, an event chip, a multi-day bar,
+// the overflow indicator) opens the Day List for that date first — never the
+// event detail directly. Only selecting an event from within the Day List
+// opens it. See month-view.tsx's own comments for the implementation.
+describe("Calendar — Month view opens Day List first", () => {
+  // Thursday 15 January 2026 — a fixed "today" so the current-day and
+  // adjacent-month-day cases are deterministic regardless of when this
+  // suite actually runs. January 2026 starts on a Thursday, so the first
+  // rendered (Monday-first) week row is 29 Dec 2025 - 4 Jan 2026 — real
+  // "outside" (previous-month) cells to exercise against.
+  const TODAY = new Date("2026-01-15T09:00:00Z");
+
+  beforeEach(() => {
+    // Fake only Date, not setTimeout/setInterval — RTL's findBy*/waitFor
+    // polling relies on real timers to ever resolve; faking those too (the
+    // bare vi.useFakeTimers() default) would hang every async query below.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(TODAY);
+    // The member-filter test below persists its choice to localStorage (same
+    // as Month view does for real), which would otherwise leak into later
+    // tests' fresh CalendarPage renders and filter out their events.
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function occ(overrides: Record<string, unknown> = {}) {
+    return {
+      occurrence_id: "occ-1",
+      event_id: "occ-1",
+      calendar_id: "cal-1",
+      title: "Sample event",
+      start_at: "2026-01-15T09:00:00Z",
+      end_at: "2026-01-15T10:00:00Z",
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: "teal",
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-01-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  function dayArticleFor(dateLabel: RegExp) {
+    return screen.getByRole("button", { name: dateLabel });
+  }
+
+  it("1. tapping blank area of a populated day opens the Day List", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Sample event");
+
+    // The day article itself (blank space) — not the chip, not the number.
+    fireEvent.click(dayArticleFor(/15 January 2026, 1 events/));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("2. tapping the date number opens the Day List", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Sample event");
+
+    // MonthSwipeView renders the visible month plus two aria-hidden
+    // peek panels, so "15" alone is ambiguous — scope through the one
+    // uniquely-identified (by full date) day article instead.
+    const dayNumber = dayArticleFor(/15 January 2026, 1 events/).querySelector(".day-number span")!;
+    fireEvent.click(dayNumber);
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("3. tapping a normal event chip opens the Day List, not the event detail", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    fireEvent.click(await screen.findByText("Sample event"));
+
+    const daySheet = await screen.findByRole("dialog");
+    // The Day List, never the event view dialog, directly from Month view.
+    expect(screen.queryByRole("dialog", { name: "Sample event" })).not.toBeInTheDocument();
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("4. tapping another event chip on the same date still opens that same date's Day List", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occ({ occurrence_id: "occ-1", event_id: "occ-1", title: "First event" }),
+        occ({ occurrence_id: "occ-2", event_id: "occ-2", title: "Second event" }),
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    fireEvent.click(await screen.findByText("Second event"));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /First event/ })).toBeInTheDocument();
+    expect(within(daySheet).getByRole("button", { name: /Second event/ })).toBeInTheDocument();
+  });
+
+  it("5. selecting an event from the Day List opens Event Detail", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(await screen.findByText("Sample event"));
+    const daySheet = await screen.findByRole("dialog");
+
+    fireEvent.click(within(daySheet).getByRole("button", { name: /Sample event/ }));
+
+    expect(await screen.findByRole("dialog", { name: "Sample event" })).toBeInTheDocument();
+  });
+
+  it("6. tapping an empty day opens an empty Day List", async () => {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    fireEvent.click(dayArticleFor(/16 January 2026, 0 events/));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByText("No events")).toBeInTheDocument();
+  });
+
+  it("7. Add event on this day uses the selected Day List date", async () => {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(dayArticleFor(/16 January 2026, 0 events/));
+    const daySheet = await screen.findByRole("dialog");
+
+    fireEvent.click(within(daySheet).getByRole("button", { name: "Add event on this day" }));
+
+    const addDialog = await screen.findByRole("dialog", { name: "Add event" });
+    const startDateInput = within(addDialog).getByLabelText<HTMLInputElement>("Date");
+    expect(startDateInput.value).toBe("2026-01-16");
+  });
+
+  it("8. tapping the current (Today-highlighted) day opens today's Day List", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    const today = document.querySelector(".calendar-day.today") as HTMLElement;
+    expect(today).not.toBeNull();
+    fireEvent.click(today);
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("9. tapping an adjacent-month date resolves the full correct date, not just the displayed day number", async () => {
+    // 29 Dec 2025 is an "outside" cell in January's first rendered week row
+    // and shares its day-of-month number (29) with nothing in January
+    // 2026's own dates near it — a naive "current month + this number"
+    // resolution would misresolve this to some January date instead.
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [occ({ start_at: "2025-12-29T09:00:00Z", end_at: "2025-12-29T10:00:00Z" })],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    // Not findByText("Sample event") here: MonthSwipeView's aria-hidden
+    // previous-month peek panel genuinely re-renders 29 Dec in its own
+    // (non-outside) grid too, and text queries — unlike getByRole, which
+    // already correctly excludes aria-hidden content — don't filter that
+    // out, so this waits via the same role-based, aria-hidden-safe query
+    // the click itself uses.
+    const cell = await screen.findByRole("button", { name: /29 December 2025, 1 events/ });
+
+    fireEvent.click(cell);
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("10. tapping a multi-day event segment resolves the specific cell date clicked, not the event's start date", async () => {
+    // 5-9 January 2026 (Mon-Fri) all fall in one rendered week row, so the
+    // bar is one continuous element spanning 5 day columns — the exact
+    // per-pixel resolution is covered directly and precisely in
+    // calendar-utils.test.ts (resolveMultiDaySegmentDay); this proves the
+    // wiring: clicking anywhere on the bar opens *a* Day List, never the
+    // event detail directly, matching every other Month-view interaction.
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occ({
+          title: "Multi-day trip",
+          start_at: "2026-01-05T00:00:00Z",
+          end_at: "2026-01-10T00:00:00Z",
+          is_all_day: true,
+        }),
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    fireEvent.click(await screen.findByText("Multi-day trip"));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(screen.queryByRole("dialog", { name: "Multi-day trip" })).not.toBeInTheDocument();
+    expect(within(daySheet).getByRole("button", { name: /Multi-day trip/ })).toBeInTheDocument();
+  });
+
+  it("11. a recurring occurrence opens the Day List first, same as a normal event", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [occ({ title: "Weekly standup", recurrence: "weekly" })],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    fireEvent.click(await screen.findByText("Weekly standup"));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(screen.queryByRole("dialog", { name: "Weekly standup" })).not.toBeInTheDocument();
+    fireEvent.click(within(daySheet).getByRole("button", { name: /Weekly standup/ }));
+    // Only after Day List selection does the recurrence-aware event detail
+    // open — existing recurrence behaviour is otherwise untouched.
+    expect(await screen.findByRole("dialog", { name: "Weekly standup" })).toBeInTheDocument();
+  });
+
+  it("12. clicking the date number does not open the Day List twice (no bubbling double-fire)", async () => {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    const dayNumber = dayArticleFor(/15 January 2026, 0 events/).querySelector(".day-number span")!;
+    fireEvent.click(dayNumber);
+
+    await screen.findByRole("dialog");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("13. the Day List reflects the same member filter currently applied to Month view", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-anthony", display_name: "Anthony", colour: null, avatar_version: null },
+      { user_id: "member-megan", display_name: "Megan", colour: null, avatar_version: null },
+    ]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occ({
+          occurrence_id: "occ-anthony",
+          event_id: "occ-anthony",
+          title: "Anthony's event",
+          member_ids: ["member-anthony"],
+        }),
+        occ({
+          occurrence_id: "occ-megan",
+          event_id: "occ-megan",
+          title: "Megan's event",
+          member_ids: ["member-megan"],
+        }),
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Anthony's event");
+
+    fireEvent.change(screen.getByLabelText("Filter by household member"), {
+      target: { value: "member-anthony" },
+    });
+    await waitFor(() => expect(screen.queryByText("Megan's event")).not.toBeInTheDocument());
+
+    fireEvent.click(dayArticleFor(/15 January 2026, 1 events/));
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Anthony's event/ })).toBeInTheDocument();
+    expect(within(daySheet).queryByRole("button", { name: /Megan's event/ })).not.toBeInTheDocument();
+  });
+
+  it("14. the day cell opens the Day List via keyboard (Enter) as well as click", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Sample event");
+
+    const cell = dayArticleFor(/15 January 2026, 1 events/);
+    cell.focus();
+    fireEvent.keyDown(cell, { key: "Enter" });
+
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
   });
 });
 
@@ -346,11 +639,17 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     return screen.findByRole("dialog", { name: "Add event" });
   }
 
+  // Month view → Day List → Event Detail: the "Football" month chip now
+  // opens the Day List first (see month-view.tsx), not the event directly —
+  // this helper follows the same two-step path a real user takes, rather
+  // than reaching into the event view dialog in one click as it used to.
   async function openEditEventSheet() {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText("Football"));
+    const daySheet = await screen.findByRole("dialog");
+    fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
     const viewDialog = await screen.findByRole("dialog", { name: "Football" });
     fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
     return screen.findByRole("dialog", { name: "Edit event" });
@@ -631,6 +930,8 @@ describe("Calendar — Add/Edit Event: plan-restricted calendars are not offered
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText("Football"));
+    const daySheet = await screen.findByRole("dialog");
+    fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
     const viewDialog = await screen.findByRole("dialog", { name: "Football" });
     fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit event" });
@@ -731,11 +1032,16 @@ describe("Calendar — Recurring event scope chooser", () => {
     };
   }
 
+  // Month view → Day List → Event Detail: the chip no longer opens the
+  // event dialog directly (see month-view.tsx) — go via the Day List, same
+  // as a real user, rather than reaching the dialog in one click.
   async function openEventDialog(event: Record<string, unknown>) {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText(event.title as string));
+    const daySheet = await screen.findByRole("dialog");
+    fireEvent.click(within(daySheet).getByRole("button", { name: new RegExp(event.title as string) }));
     return screen.findByRole("dialog", { name: event.title as string });
   }
 

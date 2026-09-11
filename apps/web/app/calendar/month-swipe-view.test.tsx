@@ -15,7 +15,6 @@ const FOCUS_DATE = new Date(Date.UTC(2026, 5, 15)); // 15 June 2026
 function renderSwipeView(overrides: { onNavigate?: ReturnType<typeof vi.fn> } = {}) {
   const onNavigate = overrides.onNavigate ?? vi.fn();
   const onDay = vi.fn();
-  const onEvent = vi.fn();
   const { container } = render(
     <MonthSwipeView
       cells={monthCells(FOCUS_DATE)}
@@ -23,13 +22,12 @@ function renderSwipeView(overrides: { onNavigate?: ReturnType<typeof vi.fn> } = 
       focusDate={FOCUS_DATE}
       timeZone="UTC"
       onDay={onDay}
-      onEvent={onEvent}
       onNavigate={onNavigate}
     />,
   );
   const swipeArea = container.querySelector(".calendar-month-swipe");
   if (!swipeArea) throw new Error("swipe container not rendered");
-  return { swipeArea, onNavigate, onDay, onEvent };
+  return { swipeArea, onNavigate, onDay };
 }
 
 // jsdom has no PointerEvent constructor (see jsdom#2527), and

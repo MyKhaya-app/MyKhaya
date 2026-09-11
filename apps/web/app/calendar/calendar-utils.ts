@@ -928,3 +928,30 @@ export function toEventUpdatePayload(
     ...(scope && scope !== "series" ? { scope, occurrence_start: occurrenceStart } : {}),
   };
 }
+
+// Month view → Day List → Event Detail (never Month event chip → Event
+// Detail directly, see month-view.tsx): resolves which single calendar date
+// within a rendered week-segment bar was actually tapped. `start`/`end` are
+// the week-local day indices (0-6) the segment's grid-column span covers —
+// for an ordinary single-day chip they're equal and this returns `days[start]`
+// with no geometry involved. For a multi-day bar the segment stays one
+// continuous visual element (no internal seams/gaps introduced), so the
+// *tapped x position* is what decides which day column was meant — the
+// clicked calendar date is authoritative, never the event's own start date.
+// A keyboard activation (Enter/Space on a focused button) dispatches a
+// synthetic click with clientX 0, which naturally clamps to `days[start]` —
+// a reasonable, deterministic default with no separate keyboard branch
+// needed.
+export function resolveMultiDaySegmentDay(
+  days: Date[],
+  start: number,
+  end: number,
+  clientX: number,
+  targetRect: Pick<DOMRect, "left" | "width">,
+): Date {
+  if (start === end) return days[start]!;
+  const width = targetRect.width || 1;
+  const fraction = Math.min(Math.max((clientX - targetRect.left) / width, 0), 0.999);
+  const offset = Math.floor(fraction * (end - start + 1));
+  return days[Math.min(start + offset, end)]!;
+}

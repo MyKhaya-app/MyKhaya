@@ -13,6 +13,7 @@ import {
   eventTime,
   layoutWeekEvents,
   monthCells,
+  resolveMultiDaySegmentDay,
   zonedDateKey,
 } from "./calendar-utils";
 
@@ -30,7 +31,6 @@ export function MonthSwipeView({
   focusDate,
   timeZone,
   onDay,
-  onEvent,
   onNavigate,
 }: {
   cells: Date[];
@@ -38,7 +38,6 @@ export function MonthSwipeView({
   focusDate: Date;
   timeZone: string;
   onDay: (day: Date) => void;
-  onEvent: (event: EventOccurrence) => void;
   onNavigate: (direction: -1 | 1) => void;
 }) {
   const reducedMotion = usePrefersReducedMotion();
@@ -67,7 +66,6 @@ export function MonthSwipeView({
             focusDate={previousDate}
             timeZone={timeZone}
             onDay={onDay}
-            onEvent={onEvent}
           />
         </div>
         <div className="calendar-month-swipe-panel">
@@ -77,7 +75,6 @@ export function MonthSwipeView({
             focusDate={focusDate}
             timeZone={timeZone}
             onDay={onDay}
-            onEvent={onEvent}
           />
         </div>
         <div className="calendar-month-swipe-panel" aria-hidden="true">
@@ -87,7 +84,6 @@ export function MonthSwipeView({
             focusDate={nextDate}
             timeZone={timeZone}
             onDay={onDay}
-            onEvent={onEvent}
           />
         </div>
       </div>
@@ -109,14 +105,12 @@ export function MonthView({
   focusDate,
   timeZone,
   onDay,
-  onEvent,
 }: {
   cells: Date[];
   events: EventOccurrence[];
   focusDate: Date;
   timeZone: string;
   onDay: (day: Date) => void;
-  onEvent: (event: EventOccurrence) => void;
 }) {
   const todayKey = zonedDateKey(new Date(), timeZone);
   const bounds = useMemo(
@@ -172,16 +166,39 @@ export function MonthView({
                   return startKey <= key && endKey >= key;
                 }).length;
                 const hidden = hiddenByDay[index] ?? 0;
+                // The whole cell — blank space, the date number, the overflow
+                // chip — is one hit target that opens this date's Day List
+                // (Month View → Day List → Event Detail; see month-event's
+                // own onClick below for why event bars are a *separate*
+                // element rather than nested inside this one). day-number/
+                // overflow-events are decorative spans, not nested buttons —
+                // their info is already in this article's own aria-label —
+                // so there is exactly one interactive element per day cell
+                // and no risk of a bubbled click firing onDay twice.
                 return (
                   <article
                     className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
                     key={key}
                     style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onDay(day)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onDay(day);
+                      }
+                    }}
+                    aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events`}
                   >
-                    <button className="day-number" type="button" onClick={() => onDay(day)} aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events`}>
+                    <span className="day-number" aria-hidden="true">
                       <span>{day.getUTCDate()}</span>
-                    </button>
-                    {hidden > 0 && <button className="overflow-events" type="button" onClick={() => onDay(day)}>+{hidden} more</button>}
+                    </span>
+                    {hidden > 0 && (
+                      <span className="overflow-events" aria-hidden="true">
+                        +{hidden} more
+                      </span>
+                    )}
                   </article>
                 );
               })}
@@ -221,7 +238,26 @@ export function MonthView({
                         gridRow: row + 2,
                       } as React.CSSProperties
                     }
-                    onClick={() => onEvent(event)}
+                    // Month View → Day List → Event Detail: an event
+                    // representation in Month view never opens the event
+                    // directly — it opens the Day List for whichever date
+                    // was actually tapped. For a single-day chip that's
+                    // simply this segment's one day; for a multi-day bar
+                    // (still one continuous visual element, no internal
+                    // seams) the tapped x position picks which day column
+                    // within the span was meant — see
+                    // resolveMultiDaySegmentDay's own doc comment.
+                    onClick={(clickEvent) =>
+                      onDay(
+                        resolveMultiDaySegmentDay(
+                          days,
+                          start,
+                          end,
+                          clickEvent.clientX,
+                          clickEvent.currentTarget.getBoundingClientRect(),
+                        ),
+                      )
+                    }
                     aria-label={`${eventTime(event, timeZone)} ${event.title}${
                       event.shared_by_home_name ? `, shared by ${event.shared_by_home_name}` : ""
                     }`}

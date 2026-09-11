@@ -1921,7 +1921,6 @@ export default function CalendarPage() {
             focusDate={focusDate}
             timeZone={calendarTimezone}
             onDay={openDay}
-            onEvent={openEvent}
             onNavigate={move}
           />
         )}

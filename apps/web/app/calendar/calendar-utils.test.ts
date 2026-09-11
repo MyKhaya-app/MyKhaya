@@ -27,6 +27,7 @@ import {
   parseLocalInputValue,
   PERSONAL_CALENDAR_VALUE,
   resolveMemberFilter,
+  resolveMultiDaySegmentDay,
   shiftEndWithStart,
   toEventUpdatePayload,
   toSharedEventPayload,
@@ -1803,5 +1804,68 @@ describe("defaultCalendarTarget — new-event Calendar picker default", () => {
     // directly when editing) — isCalendarLockedForSelection's own
     // "currentCalendarId" escape hatch is what edit relies on, unchanged.
     expect(isCalendarLockedForSelection(lockedPrimary, lockedPrimary.id)).toBe(false);
+  });
+});
+
+// Month View → Day List → Event Detail: which calendar date a tap on a
+// rendered week-segment bar resolves to. `days` here stands in for the 7
+// Date objects a real MonthView week row would pass; only indices
+// start..end (inclusive) are ever read.
+describe("resolveMultiDaySegmentDay — which date a Month-view tap resolves to", () => {
+  const days = [0, 1, 2, 3, 4, 5, 6].map((n) => new Date(Date.UTC(2026, 0, 5 + n))); // Mon 5 - Sun 11 Jan 2026
+
+  it("a single-day chip always resolves to its own day, no geometry involved", () => {
+    const rect = { left: 0, width: 0 }; // deliberately degenerate — must be ignored
+    expect(resolveMultiDaySegmentDay(days, 2, 2, 12345, rect)).toBe(days[2]);
+  });
+
+  it("a tap at the very left of a multi-day bar resolves to its first day", () => {
+    const rect = { left: 100, width: 500 };
+    expect(resolveMultiDaySegmentDay(days, 0, 4, 100, rect)).toBe(days[0]);
+  });
+
+  it("a tap at the very right of a multi-day bar resolves to its last day", () => {
+    const rect = { left: 100, width: 500 };
+    expect(resolveMultiDaySegmentDay(days, 0, 4, 599, rect)).toBe(days[4]);
+  });
+
+  it("a tap in the middle segment of a multi-day bar resolves to that middle day", () => {
+    // 5 days spanning x=100..600; the 3rd day (index 2, offset 0.4-0.6) is
+    // roughly x=300-400 — 350 sits inside it.
+    const rect = { left: 100, width: 500 };
+    expect(resolveMultiDaySegmentDay(days, 0, 4, 350, rect)).toBe(days[2]);
+  });
+
+  it("the tapped date, not the event's start date, is authoritative for each segment", () => {
+    // 30 Sept -> 4 Oct example from the task spec, generalised: a 5-day
+    // span where each of the 3 sampled taps must resolve to a distinct day.
+    const rect = { left: 0, width: 500 };
+    const first = resolveMultiDaySegmentDay(days, 0, 4, 10, rect);
+    const middle = resolveMultiDaySegmentDay(days, 0, 4, 250, rect);
+    const last = resolveMultiDaySegmentDay(days, 0, 4, 490, rect);
+    expect(new Set([first, middle, last]).size).toBe(3);
+  });
+
+  it("clamps a click before the bar's left edge to the first day, never a negative index", () => {
+    const rect = { left: 100, width: 500 };
+    expect(resolveMultiDaySegmentDay(days, 1, 3, 0, rect)).toBe(days[1]);
+  });
+
+  it("clamps a click past the bar's right edge to the last day", () => {
+    const rect = { left: 100, width: 500 };
+    expect(resolveMultiDaySegmentDay(days, 1, 3, 9999, rect)).toBe(days[3]);
+  });
+
+  it("a keyboard-triggered activation (synthetic click at clientX 0) defaults to the segment's first day", () => {
+    // Enter/Space on a focused button dispatches a click with clientX 0 in
+    // every major browser — this must resolve deterministically rather than
+    // throwing or picking an arbitrary day.
+    const rect = { left: 200, width: 400 };
+    expect(resolveMultiDaySegmentDay(days, 2, 5, 0, rect)).toBe(days[2]);
+  });
+
+  it("tolerates a zero-width rect (not yet laid out) without dividing by zero", () => {
+    const rect = { left: 0, width: 0 };
+    expect(() => resolveMultiDaySegmentDay(days, 0, 3, 50, rect)).not.toThrow();
   });
 });

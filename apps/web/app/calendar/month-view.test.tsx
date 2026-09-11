@@ -61,7 +61,6 @@ describe("MonthView — overflow threshold (MONTH_VISIBLE_ROW_CAP)", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     expect(container.querySelectorAll(".month-event")).toHaveLength(5);
@@ -76,7 +75,6 @@ describe("MonthView — overflow threshold (MONTH_VISIBLE_ROW_CAP)", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     expect(container.querySelectorAll(".month-event")).toHaveLength(5);
@@ -114,7 +112,6 @@ describe("MonthView — multi-day events occupy one lane, not one row per day", 
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     // 5 lanes total for the week (1 spanning + 4 single-day) — the spanning
@@ -148,7 +145,6 @@ describe("MonthView — multi-day events occupy one lane, not one row per day", 
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     // Still exactly one spanning bar for the multi-day event.
@@ -206,7 +202,6 @@ describe("MonthView — multi-day priority under the density/overflow cap", () =
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     // Total visible bars is still capped at 5 (unchanged density rule).
@@ -250,7 +245,6 @@ describe("MonthView — no blank rendered rows (corrective follow-up)", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     const mondayChip = Array.from(container.querySelectorAll(".month-event")).find(
@@ -275,7 +269,6 @@ describe("MonthView — dynamic 5-week vs 6-week row count", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     expect(container.querySelectorAll(".calendar-week")).toHaveLength(5);
@@ -293,7 +286,6 @@ describe("MonthView — dynamic 5-week vs 6-week row count", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     expect(container.querySelectorAll(".calendar-week")).toHaveLength(6);
@@ -327,7 +319,6 @@ describe("MonthView — solid Calendar Tag colouring", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     const chip = container.querySelector(".month-event") as HTMLElement;
@@ -346,7 +337,6 @@ describe("MonthView — solid Calendar Tag colouring", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     const chip = container.querySelector(".month-event") as HTMLElement;
@@ -379,7 +369,6 @@ describe("MonthView — solid Calendar Tag colouring", () => {
         focusDate={focusDate}
         timeZone="UTC"
         onDay={noop}
-        onEvent={noop}
       />,
     );
     const bar = container.querySelector(".month-event.month-event-span") as HTMLElement;
