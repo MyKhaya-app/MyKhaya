@@ -264,9 +264,11 @@ export default function ModulesPage() {
             </>
           }
           confirmLabel="Apply change"
-          onConfirm={(formData) =>
-            save(manageModule, String(formData.get("audit_reason") ?? ""))
-          }
+          onConfirm={(formData) => {
+            const rawReason = formData.get("audit_reason");
+            const reason = typeof rawReason === "string" ? rawReason : "";
+            return save(manageModule, reason);
+          }}
         />
       )}
 
