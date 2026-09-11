@@ -201,6 +201,177 @@ describe("pickAvatarFromGallery — native Choose from Photos", () => {
     await expect(pickAvatarFromGallery()).rejects.toMatchObject({ category: "read" });
   });
 
+  // Physical-device regression: a real trace showed the picker succeeding
+  // (native-picker-returned outcome=success) and then Filesystem.readFile
+  // rejecting with reason=plugin-rejected and no further detail — not
+  // diagnosable from that alone. These tests prove the richer diagnostic
+  // the fix adds, and that it never leaks the URI/path itself.
+  describe("Filesystem read failure — safe diagnostics", () => {
+    it("logs the error name, code, message and constructor, but never the raw error object or URI", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      setCameraProviderForTesting(cameraProvider());
+      const rejection = Object.assign(new Error("File does not exist"), { code: "OS-PLUG-FLST-0002" });
+      setFilesystemProviderForTesting({
+        readFile: async () => {
+          throw rejection;
+        },
+      });
+
+      await expect(pickAvatarFromGallery()).rejects.toBeInstanceOf(NativeAvatarPickerError);
+
+      const failedCall = debugSpy.mock.calls.find(([, details]) => {
+        const record = details as Record<string, unknown> | undefined;
+        return record?.reason === "plugin-rejected";
+      });
+      expect(failedCall).toBeDefined();
+      const details = failedCall![1] as Record<string, unknown>;
+      expect(details).toMatchObject({
+        stage: "filesystem-read",
+        reason: "plugin-rejected",
+        errorName: "Error",
+        errorMessage: "File does not exist",
+        errorCode: "OS-PLUG-FLST-0002",
+        errorConstructor: "Error",
+      });
+
+      debugSpy.mockRestore();
+    });
+
+    it("still classifies as read-failure and logs safely when the rejection is a plain non-Error value with no code", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      setCameraProviderForTesting(cameraProvider());
+      setFilesystemProviderForTesting({
+        // Some native bridges reject with a plain string/object rather than
+        // an Error — deliberately simulated here to prove the diagnostic's
+        // `cause instanceof Error ? ... : "UnknownError"` fallback actually
+        // works, not just its Error-typed happy path.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- intentional non-Error rejection under test
+        readFile: () => Promise.reject("native bridge failure"),
+      });
+
+      await expect(pickAvatarFromGallery()).rejects.toMatchObject({ category: "read" });
+
+      const failedCall = debugSpy.mock.calls.find(([, details]) => {
+        const record = details as Record<string, unknown> | undefined;
+        return record?.reason === "plugin-rejected";
+      });
+      expect(failedCall).toBeDefined();
+      const details = failedCall![1] as Record<string, unknown>;
+      expect(details).toMatchObject({
+        errorName: "UnknownError",
+        errorMessage: "native bridge failure",
+        errorCode: undefined,
+        errorConstructor: "string",
+      });
+
+      debugSpy.mockRestore();
+    });
+
+    it("never logs the raw result.uri (path) anywhere, even on a read failure", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const sensitiveUri =
+        "file:///var/mobile/Containers/Data/Application/SECRET-DEVICE-UUID/tmp/photo-1234.jpg";
+      setCameraProviderForTesting(
+        cameraProvider({
+          chooseFromGallery: async () => ({
+            results: [{ type: 0, saved: false, uri: sensitiveUri, metadata: { format: "heic", size: 1_392_265 } }],
+          }),
+        }),
+      );
+      setFilesystemProviderForTesting({
+        readFile: async () => {
+          throw new Error("plugin rejected");
+        },
+      });
+
+      await expect(pickAvatarFromGallery()).rejects.toBeInstanceOf(NativeAvatarPickerError);
+
+      const allLoggedText = JSON.stringify(debugSpy.mock.calls);
+      expect(allLoggedText).not.toContain(sensitiveUri);
+      expect(allLoggedText).not.toContain("SECRET-DEVICE-UUID");
+
+      debugSpy.mockRestore();
+    });
+
+    it("records uriScheme as 'file' for a file:// URI before attempting the read", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      setCameraProviderForTesting(
+        cameraProvider({
+          chooseFromGallery: async () => ({
+            results: [{ type: 0, saved: false, uri: "file:///var/mobile/tmp/photo.heic" }],
+          }),
+        }),
+      );
+      setFilesystemProviderForTesting(filesystemProvider());
+
+      await pickAvatarFromGallery();
+
+      const startedCall = debugSpy.mock.calls.find(([stage]) => stage === "[avatar-upload] native-uri-read-started");
+      expect(startedCall?.[1]).toMatchObject({ uriScheme: "file" });
+
+      debugSpy.mockRestore();
+    });
+
+    it("records uriScheme as 'unknown' for a ph:// (Photos-provider) URI, without leaking the identifier", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const phUri = "ph://1F3A2B9C-DEAD-BEEF-0000-ABCDEF123456/L0/001";
+      setCameraProviderForTesting(
+        cameraProvider({
+          chooseFromGallery: async () => ({
+            results: [{ type: 0, saved: false, uri: phUri, metadata: { format: "heic", size: 1_392_265 } }],
+          }),
+        }),
+      );
+      setFilesystemProviderForTesting({
+        readFile: async () => {
+          throw new Error("plugin rejected");
+        },
+      });
+
+      await expect(pickAvatarFromGallery()).rejects.toBeInstanceOf(NativeAvatarPickerError);
+
+      const startedCall = debugSpy.mock.calls.find(([stage]) => stage === "[avatar-upload] native-uri-read-started");
+      expect(startedCall?.[1]).toMatchObject({ uriScheme: "ph" });
+      const allLoggedText = JSON.stringify(debugSpy.mock.calls);
+      expect(allLoggedText).not.toContain(phUri);
+      expect(allLoggedText).not.toContain("1F3A2B9C-DEAD-BEEF-0000-ABCDEF123456");
+
+      debugSpy.mockRestore();
+    });
+
+    it("records uriScheme as 'unknown' for an unrecognised scheme, still without leaking the path", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      setCameraProviderForTesting(
+        cameraProvider({
+          chooseFromGallery: async () => ({
+            results: [{ type: 0, saved: false, uri: "content://media/external/images/media/9999" }],
+          }),
+        }),
+      );
+      setFilesystemProviderForTesting(filesystemProvider());
+
+      await pickAvatarFromGallery();
+
+      const startedCall = debugSpy.mock.calls.find(([stage]) => stage === "[avatar-upload] native-uri-read-started");
+      expect(startedCall?.[1]).toMatchObject({ uriScheme: "unknown" });
+
+      debugSpy.mockRestore();
+    });
+
+    it("the user-facing error message is unchanged by the richer diagnostics", async () => {
+      setCameraProviderForTesting(cameraProvider());
+      setFilesystemProviderForTesting({
+        readFile: async () => {
+          throw Object.assign(new Error("some native detail"), { code: "OS-PLUG-FLST-0002" });
+        },
+      });
+
+      await expect(pickAvatarFromGallery()).rejects.toMatchObject({
+        message: "We couldn’t read that photo. Please try another image.",
+      });
+    });
+  });
+
   it("a missing uri in the picker result gives the read-failure category without calling Filesystem", async () => {
     setCameraProviderForTesting(
       cameraProvider({

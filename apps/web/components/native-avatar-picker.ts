@@ -105,6 +105,37 @@ function nativeErrorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+// "Error type/constructor" for diagnostics — e.g. distinguishing a plain
+// rejected string/object (some native bridges reject with a plain object,
+// not an Error) from a real Error subclass, without ever touching message
+// content that might embed a path.
+function errorConstructorName(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    return error.constructor?.name ?? "Object";
+  }
+  return typeof error;
+}
+
+// Derived from the URI *scheme* only — e.g. "file" from
+// "file:///var/...", "ph" from "ph://<asset-id>" (the modern Photos
+// local-identifier scheme), "assets-library" from the legacy
+// assets-library:// scheme. Never the rest of the URI: the path/identifier
+// after the scheme can be sensitive (device filesystem layout, Photos
+// asset identifiers) and diagnosing *this* failure only needs to know
+// which kind of URI the Camera plugin handed back, not where it points —
+// see the physical-device trace this diagnostic was added to explain
+// (Filesystem.readFile rejecting a Photos-provider/security-scoped URI it
+// cannot directly open is the leading theory, and the scheme is exactly
+// what would confirm or rule that out).
+function nativeUriScheme(uri: string): "file" | "ph" | "assets-library" | "unknown" {
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(uri);
+  const scheme = match?.[1]?.toLowerCase();
+  if (scheme === "file") return "file";
+  if (scheme === "ph") return "ph";
+  if (scheme === "assets-library") return "assets-library";
+  return "unknown";
+}
+
 // The plugin's own structured CameraErrorCode (see @capacitor/camera's
 // README "Errors" table) — never a raw native message or filesystem path
 // surfaced to the user. Cancellation and permission denial are the two
@@ -195,12 +226,29 @@ async function nativeAssetToFile(result: MediaResult, filenamePrefix: string): P
     throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
   }
 
-  logAvatarDiagnostic("native-uri-read-started", { stage: "filesystem-read" });
+  logAvatarDiagnostic("native-uri-read-started", {
+    stage: "filesystem-read",
+    uriScheme: nativeUriScheme(result.uri),
+  });
   let data: string | Blob;
   try {
     ({ data } = await filesystemProvider.readFile(result.uri));
-  } catch {
-    logAvatarDiagnostic("native-uri-read-failed", { stage: "filesystem-read", reason: "plugin-rejected" });
+  } catch (cause) {
+    // Development-only diagnostic: enough to distinguish *why*
+    // Filesystem.readFile rejected (permission, unsupported URI scheme,
+    // missing file, plugin/bridge error, ...) without ever logging the
+    // URI/path itself, image bytes, base64, tokens, or EXIF/GPS. The
+    // user-facing message stays the same generic wording regardless of
+    // what's logged here — this is for developers reading device console
+    // output, never surfaced in the UI.
+    logAvatarDiagnostic("native-uri-read-failed", {
+      stage: "filesystem-read",
+      reason: "plugin-rejected",
+      errorName: cause instanceof Error ? cause.name : "UnknownError",
+      errorMessage: cause instanceof Error ? cause.message : String(cause),
+      errorCode: nativeErrorCode(cause),
+      errorConstructor: errorConstructorName(cause),
+    });
     throw new NativeAvatarPickerError("read", READ_FAILURE_MESSAGE);
   }
 
