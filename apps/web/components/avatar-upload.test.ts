@@ -48,6 +48,16 @@ describe("normalizeAvatarFile", () => {
     await expect(normalizeAvatarFile(file)).resolves.toBe(file);
   });
 
+  it("preserves a HEIC-sequence source (Live Photos/burst) for server-side processing", async () => {
+    const file = new File(["heic-sequence"], "IMG_5678.HEIC", { type: "image/heic-sequence" });
+    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+  });
+
+  it("preserves a HEIF-sequence source for server-side processing", async () => {
+    const file = new File(["heif-sequence"], "photo.heif", { type: "image/heif-sequence" });
+    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+  });
+
   it("leaves a large legitimate phone photo unchanged — no arbitrary client-side size ceiling", async () => {
     // Well over the retired 5 MB client limit; well under the API's 20 MiB
     // ceiling. The client must never reject on size — only the server does,

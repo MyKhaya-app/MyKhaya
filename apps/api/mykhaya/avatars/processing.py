@@ -40,6 +40,22 @@ class AvatarResourceError(Exception):
     """The upload exceeds safe decoded-image resource limits."""
 
 
+def _heif_mimetype_hint(raw: bytes) -> str:
+    """Best-effort diagnostic only — pillow_heif's own low-level container
+    sniffer (never Pillow's decode path, never the client's declared
+    Content-Type). Distinguishes image/heic, image/heif, and their
+    -sequence container variants (Live Photos, burst-style HEIC assets)
+    purely for troubleshooting; returns "" for non-HEIF bytes or if
+    unavailable. Never used to accept or reject an upload — see this
+    module's own docstring: format acceptance is decode-result-based only."""
+    if not HEIC_SUPPORTED:
+        return ""
+    try:
+        return pillow_heif.get_file_mimetype(io.BytesIO(raw)) or ""  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - diagnostics must never break processing
+        return ""
+
+
 def process_avatar_upload(raw: bytes) -> bytes:
     """Decode `raw`, strip all metadata (including EXIF/GPS), normalise orientation,
     crop to a square, resize to AVATAR_SIZE, and re-encode as WebP. Raises
@@ -56,6 +72,7 @@ def process_avatar_upload(raw: bytes) -> bytes:
             height=image.height,
             pixel_count=pixel_count,
             heic_supported=HEIC_SUPPORTED,
+            heif_mimetype_hint=_heif_mimetype_hint(raw) or "(none)",
         )
         if pixel_count > MAX_AVATAR_PIXELS:
             raise AvatarResourceError
@@ -78,6 +95,7 @@ def process_avatar_upload(raw: bytes) -> bytes:
             bytes=len(raw),
             exception_type=type(cause).__name__,
             exception_message=str(cause),
+            heif_mimetype_hint=_heif_mimetype_hint(raw) or "(none)",
         )
         raise UnsupportedImageError(
             "That file could not be read as an image. Please upload a JPEG, PNG or WebP photo."

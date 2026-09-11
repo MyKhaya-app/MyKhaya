@@ -47,6 +47,19 @@ resources while allowing ordinary high-resolution phone originals to be uploaded
 and reduced server-side. Exceeding the transport or decoded-pixel ceiling is a
 resource-limit error, not an unsupported-format error.
 
+The avatar file inputs use `accept="image/*"`, never an enumerated MIME list
+(not even `image/heic,image/heif` alongside it). WKWebView's iOS Photos-library
+transcoding behaviour is sensitive to which image MIME types `accept` declares
+— explicitly enumerating HEIC/HEIF has been observed to change whether iOS
+hands the picker the original bytes or a transcoded JPEG for a given asset, and
+that behaviour is not something MyKhaya controls or can rely on. `accept` is
+picker guidance only ("let the user choose an image"), never validation: the
+API decodes and validates the real bytes regardless of what the browser
+declares or what iOS did or didn't transcode, including the ISO-BMFF
+"sequence" container variants (`image/heic-sequence`, `image/heif-sequence`)
+a Live Photo or burst-style HEIC asset may report — acceptance is decode-result
+based (Pillow's own resolved `image.format`), never MIME-string based.
+
 ## Presentation families
 
 Mobile/native is app-like, stacked, touch-first and safe-area aware. Its current

@@ -82,6 +82,25 @@ async function selectFile(container: HTMLElement, input: HTMLInputElement, file:
 }
 
 describe("Profile — avatar upload", () => {
+  it("uses accept=\"image/*\" for the Photos-library picker, never an enumerated MIME list", async () => {
+    // WKWebView's Photos-library transcoding is sensitive to which image
+    // MIME types accept declares — explicitly listing image/heic,image/heif
+    // has been observed to change whether iOS hands back a transcoded JPEG
+    // or the original bytes. "Any image" is the only value that takes no
+    // position on that; the backend decodes/validates the real bytes.
+    const { container } = render(<Profile />);
+    await screen.findByRole("heading", { name: "Megan" });
+    expect(fileInputs(container).library).toHaveAttribute("accept", "image/*");
+  });
+
+  it("uses accept=\"image/*\" with capture=\"environment\" for the camera input", async () => {
+    const { container } = render(<Profile />);
+    await screen.findByRole("heading", { name: "Megan" });
+    const { camera } = fileInputs(container);
+    expect(camera).toHaveAttribute("accept", "image/*");
+    expect(camera).toHaveAttribute("capture", "environment");
+  });
+
   it("1. a Photos-library HEIC file is sent to the API unchanged, not rejected client-side", async () => {
     (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
       ...BASE_USER,

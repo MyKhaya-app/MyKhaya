@@ -1,6 +1,16 @@
 import { nativePlatform } from "./native-runtime";
 
-const HEIF_MIME_TYPES = new Set(["image/heic", "image/heif"]);
+// Includes the ISO-BMFF "sequence" container variants (Live Photos, burst-
+// style HEIC assets) pillow-heif's own get_file_mimetype() can report — see
+// mykhaya.avatars.processing, which never gates on any of these strings
+// (or the client's file.type at all): this set only feeds non-authoritative
+// diagnostics (heifDetected below), never accept/reject decisions.
+const HEIF_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
 
 export type AvatarFailureCategory = "unsupported" | "read" | "processing";
 

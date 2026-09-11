@@ -28,6 +28,7 @@ from mykhaya.avatars.processing import (
     OUTPUT_CONTENT_TYPE,
     AvatarResourceError,
     UnsupportedImageError,
+    _heif_mimetype_hint,
     process_avatar_upload,
 )
 from mykhaya.avatars.storage import LocalAvatarStorage
@@ -154,6 +155,15 @@ def test_process_avatar_upload_accepts_png_and_produces_square_output() -> None:
     processed = process_avatar_upload(make_png((400, 900)))
     image = Image.open(io.BytesIO(processed))
     assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_heif_mimetype_hint_is_diagnostic_only_and_never_raises() -> None:
+    # A real HEIF payload reports a real hint...
+    assert _heif_mimetype_hint(make_heif()) in ("image/heic", "image/heif")
+    # ...and non-HEIF/garbage bytes degrade to "" rather than raising, since
+    # this is only ever logged, never used to accept or reject an upload.
+    assert _heif_mimetype_hint(make_jpeg()) == ""
+    assert _heif_mimetype_hint(b"not an image") == ""
 
 
 def test_process_avatar_upload_accepts_heif_and_produces_webp() -> None:
@@ -375,6 +385,35 @@ async def test_heif_upload_endpoint_accepts_multipart_source_and_returns_avatar_
     served = await client.get(f"/api/v1/users/{user_id}/avatar")
     assert served.status_code == 200
     assert served.headers["content-type"].startswith(OUTPUT_CONTENT_TYPE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "declared_content_type",
+    ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"],
+)
+async def test_upload_endpoint_ignores_client_declared_heif_variant_mime(
+    client: AsyncClient, declared_content_type: str
+) -> None:
+    """The client's Content-Type header — including the ISO-BMFF "sequence"
+    container variants a genuine iPhone Live Photo/burst HEIC asset may
+    declare — is never part of the accept/reject decision (see
+    mykhaya.avatars.processing's own module docstring); only the decoded
+    bytes are. The same real HEIF bytes must succeed regardless of which of
+    these strings the multipart request declares."""
+    await create_verified_user(
+        client, unique_email(f"heifvariant{declared_content_type[-3:]}"), "HEIF Variant Upload"
+    )
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_1234.HEIC", make_heif(), declared_content_type)},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
 
 
 @pytest.mark.asyncio

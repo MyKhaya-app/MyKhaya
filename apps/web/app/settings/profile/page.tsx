@@ -264,18 +264,24 @@ export default function Profile() {
           <input
             ref={libraryInputRef}
             type="file"
-            // Keep the input broad enough for Photos and let the API inspect
-            // the bytes. The server owns image decoding and processing,
-            // including HEIC/HEIF when pillow-heif is available; the client
-            // must not depend on inconsistent WKWebView transcoding.
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            // "Allow the user to choose an image" — never an enumerated MIME
+            // list. WKWebView's Photos-library transcoding behaviour is
+            // sensitive to *which* image MIME types accept declares:
+            // explicitly listing image/heic,image/heif alongside others has
+            // been observed to change whether iOS hands the picker a
+            // transcoded JPEG or the original HEIC/HEIF bytes for a given
+            // asset. image/* asks for "any image" without taking a position
+            // on that, and the server owns real image decoding/validation
+            // regardless of what bytes actually arrive — see ADR 0013's
+            // "Shared binary upload processing" for the full rationale.
+            accept="image/*"
             style={{ display: "none" }}
             onChange={(event) => handleAvatarSelected(event, "photo-library")}
           />
           <input
             ref={cameraInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            accept="image/*"
             capture="environment"
             style={{ display: "none" }}
             onChange={(event) => handleAvatarSelected(event, "camera")}
