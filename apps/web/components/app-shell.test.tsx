@@ -165,6 +165,27 @@ describe("AppShell — content scroll region", () => {
 });
 
 describe("AppShell — authenticated navigation", () => {
+  it("mounts the browser wide-screen rail alongside the protected mobile nav", async () => {
+    nativeShell = false;
+    render(<AppShell>content</AppShell>);
+
+    await screen.findByText("content");
+
+    expect(document.querySelector(".desktop-nav")).not.toBeNull();
+    expect(document.querySelector(".bottom-nav")).not.toBeNull();
+    expect(document.querySelector(".app-shell")).not.toHaveClass("native-shell-app");
+  });
+
+  it("does not mount the browser wide-screen rail in the native shell", async () => {
+    nativeShell = true;
+    render(<AppShell>content</AppShell>);
+
+    await screen.findByText("content");
+
+    expect(document.querySelector(".desktop-nav")).toBeNull();
+    expect(document.querySelector(".app-shell")).toHaveClass("native-shell-app");
+  });
+
   it("keeps the authenticated shell mounted without a session bootstrap screen", async () => {
     render(<AppShell>content</AppShell>);
     expect(await screen.findByText("content")).toBeInTheDocument();

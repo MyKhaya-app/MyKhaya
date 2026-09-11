@@ -9066,3 +9066,161 @@ a.family-feed-row {
     padding-inline: 0.45rem;
   }
 }
+
+/* Hidden in the protected mobile/browser-phone presentation; the wide-screen
+   media block below opts it into the browser tablet/desktop shell. */
+.desktop-nav {
+  display: none;
+}
+
+/* --- Browser tablet/desktop shell (Phase 6) -------------------------------
+   The mobile rules remain the base presentation. This enhancement is scoped
+   to the browser shell marker rather than viewport width alone: a wide
+   Capacitor window keeps the protected native composition. The destination
+   list comes from primary-nav-destinations.ts, so this rail never grants
+   access to a module or invents a PCC link. */
+@media (min-width: 760px) {
+  .app-shell:not(.native-shell-app) {
+    min-height: 100vh;
+    padding-left: 224px;
+  }
+  .app-shell:not(.native-shell-app) .app-header {
+    border-radius: 0 0 var(--radius-hero) var(--radius-hero);
+    margin-left: -224px;
+    padding-left: 244px;
+  }
+  .desktop-nav {
+    align-items: stretch;
+    background: var(--colour-forest-dark);
+    color: var(--colour-white);
+    display: flex;
+    flex-direction: column;
+    gap: 1.8rem;
+    inset: 0 auto 0 0;
+    padding: 1.25rem 0.75rem;
+    position: fixed;
+    width: 224px;
+    z-index: 16;
+  }
+  .desktop-nav-brand {
+    align-items: center;
+    display: flex;
+    font-size: 1.05rem;
+    font-weight: 800;
+    gap: 0.65rem;
+    padding: 0.25rem 0.65rem;
+  }
+  .desktop-nav-brand-mark {
+    align-items: center;
+    background: var(--colour-cream-light);
+    border-radius: 0.55rem;
+    color: var(--colour-forest-dark);
+    display: inline-flex;
+    font-size: 1.2rem;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
+  }
+  .desktop-nav-links {
+    display: grid;
+    gap: 0.35rem;
+  }
+  .desktop-nav-link {
+    align-items: center;
+    border-radius: 0.75rem;
+    color: rgb(255 254 251 / 78%);
+    display: flex;
+    font-size: var(--font-small);
+    font-weight: 650;
+    gap: 0.75rem;
+    min-height: 44px;
+    padding: 0.65rem 0.75rem;
+  }
+  .desktop-nav-link:hover,
+  .desktop-nav-link:focus-visible {
+    background: rgb(255 254 251 / 12%);
+    box-shadow: none;
+    color: var(--colour-white);
+    transform: none;
+  }
+  .desktop-nav-link.active {
+    background: var(--colour-sage);
+    color: var(--colour-white);
+  }
+  .app-shell:not(.native-shell-app) .bottom-nav {
+    display: none;
+  }
+  .app-shell:not(.native-shell-app) .app-main {
+    padding-bottom: 2rem;
+  }
+  .app-shell:not(.native-shell-app) .app-content-scroll-region {
+    min-width: 0;
+  }
+  .app-shell:not(.native-shell-app) .home-hero {
+    margin: 0 auto;
+    max-width: 1180px;
+    padding: 2.25rem clamp(2rem, 5vw, 5rem) 5rem;
+  }
+  .app-shell:not(.native-shell-app) .home-page {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 1180px;
+    padding: 1rem clamp(1.25rem, 4vw, 4rem) 3rem;
+  }
+  .app-shell:not(.native-shell-app) .home-page > .notice,
+  .app-shell:not(.native-shell-app) .home-page > .birthday-banner,
+  .app-shell:not(.native-shell-app) .home-page > .home-around-house-card {
+    grid-column: 1 / -1;
+  }
+  .app-shell:not(.native-shell-app) .home-page > .home-section-overlap {
+    margin-top: -3rem;
+  }
+  .app-shell:not(.native-shell-app) .home-page > .home-summary-card {
+    margin: 0;
+  }
+  .app-shell:not(.native-shell-app) .standard-page.calendar-page {
+    max-width: 1320px;
+    padding: 2rem clamp(1.25rem, 4vw, 4rem) 3rem;
+  }
+  .app-shell:not(.native-shell-app) .calendar-toolbar-compact {
+    align-items: center;
+    display: grid;
+    gap: 0.75rem 1rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .app-shell:not(.native-shell-app) .calendar-month-row {
+    grid-column: 1 / -1;
+  }
+  .app-shell:not(.native-shell-app) .calendar-selectors-row {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .app-shell:not(.native-shell-app) .calendar-page .calendar-month {
+    width: 100%;
+  }
+  .app-shell:not(.native-shell-app) .calendar-weeks {
+    --month-day-number-h: 32px;
+    --month-event-row-h: 28px;
+  }
+  .app-shell:not(.native-shell-app) .calendar-week {
+    min-height: 112px;
+  }
+  .app-shell:not(.native-shell-app) .calendar-week .month-event {
+    font-size: 0.75rem;
+    min-height: 24px;
+    padding-inline: 0.45rem;
+  }
+}
+
+@media (min-width: 1100px) {
+  .app-shell:not(.native-shell-app) .home-page {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .app-shell:not(.native-shell-app) .home-page > .home-around-house-card {
+    grid-column: auto;
+  }
+  .app-shell:not(.native-shell-app) .home-page > .home-today-card {
+    grid-column: span 2;
+  }
+}

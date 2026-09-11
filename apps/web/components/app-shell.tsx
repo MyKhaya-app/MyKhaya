@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./auth-provider";
 import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
+import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
@@ -107,7 +108,7 @@ export function AppShell({
   if (status === "signed_out") return null;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
@@ -115,6 +116,9 @@ export function AppShell({
         onSwitchHome={setActiveHomeId}
         flush={Boolean(hero) || path === "/home" || path === "/settings"}
       />
+      {!isNativeShell() && (
+        <DesktopNav principalType={user?.principal_type} familyAccess={familyAccess} />
+      )}
       <div className="app-content-scroll-region">
         {hero}
         <main className="app-main"><NativeBiometricOffer />{children}</main>
