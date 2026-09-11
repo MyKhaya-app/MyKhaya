@@ -122,7 +122,6 @@ const MOCKUP_ROWS: Record<string, [string, string]> = {
     "/khaya-control-centre/feature-management",
   ],
   Security: ["Review account and session protection", "/settings/security"],
-  Devices: ["Manage your trusted devices", "/settings/security#devices"],
   "Help & Support": ["Knowledge base, support tickets and service status", "/help-support"],
   "About MyKhaya": ["Version information and useful links", "/about"],
 };
@@ -153,7 +152,6 @@ describe("More — mockup-specified rows", () => {
       "Calendar",
       "Features",
       "Plan & billing",
-      "Account & security",
       "Support",
     ]);
   });
@@ -166,6 +164,7 @@ describe("More — preserved existing destinations", () => {
 
     const expectations: [string, string][] = [
       ["Profile", "/settings/profile"],
+      ["Security", "/settings/security"],
       ["Notifications", "/settings/notifications"],
       ["Nudges", "/settings/routines-reminders"],
       ["Lists", "/lists"],
@@ -177,6 +176,39 @@ describe("More — preserved existing destinations", () => {
       const heading = screen.getByRole("heading", { name });
       expect(heading.closest("a")).toHaveAttribute("href", href);
     }
+  });
+});
+
+describe("More — Security lives in You, not a separate block", () => {
+  it("puts Security in the You group, between Profile and Notifications, with no separate Devices entry", async () => {
+    const { container } = render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+
+    const youGroup = Array.from(container.querySelectorAll(".more-group")).find(
+      (group) => group.querySelector(".more-group-label")?.textContent === "You",
+    )!;
+    const names = Array.from(youGroup.querySelectorAll(".more-row-text h2")).map(
+      (el) => el.textContent,
+    );
+    expect(names).toEqual(["Profile", "Security", "Notifications"]);
+
+    expect(screen.queryByRole("heading", { name: "Devices" })).not.toBeInTheDocument();
+    expect(
+      Array.from(container.querySelectorAll(".more-group-label")).some(
+        (el) => el.textContent === "Account & security",
+      ),
+    ).toBe(false);
+  });
+
+  it("hides Security from a managed Child, same as before", async () => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "child-1",
+      display_name: "Riley",
+      principal_type: "managed_child",
+    });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Help & Support" });
+    expect(screen.queryByRole("heading", { name: "Security" })).not.toBeInTheDocument();
   });
 });
 
@@ -237,7 +269,6 @@ describe("More — permission gating", () => {
       "Module management",
       "Plan & Billing",
       "Security",
-      "Devices",
     ]) {
       expect(screen.queryByRole("heading", { name })).not.toBeInTheDocument();
     }

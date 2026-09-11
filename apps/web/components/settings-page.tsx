@@ -17,7 +17,6 @@ import {
   Puzzle,
   Repeat,
   Shield,
-  Smartphone,
   Tag,
   UtensilsCrossed,
   Users,
@@ -73,6 +72,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
     label: "You",
     items: [
       { name: "Profile", detail: "Your name and account details", href: "/settings/profile", icon: CircleUserRound, tone: "sage", gate: "all" },
+      { name: "Security", detail: "Review account and session protection", href: "/settings/security", icon: Shield, tone: "blue", gate: "adult" },
       { name: "Notifications", detail: "Push, reminders and your daily briefing", href: "/settings/notifications", icon: Bell, tone: "cream", gate: "all" },
     ],
   },
@@ -150,13 +150,6 @@ const MORE_GROUPS: readonly MoreGroup[] = [
     label: "Plan & billing",
     items: [
       { name: "Plan & Billing", detail: "Your Home's plan, and payment status if applicable", href: "/settings/billing", icon: CreditCard, tone: "yellow", gate: "adult" },
-    ],
-  },
-  {
-    label: "Account & security",
-    items: [
-      { name: "Security", detail: "Review account and session protection", href: "/settings/security", icon: Shield, tone: "blue", gate: "adult" },
-      { name: "Devices", detail: "Manage your trusted devices", href: "/settings/security#devices", icon: Smartphone, tone: "lavender", gate: "adult" },
     ],
   },
   {

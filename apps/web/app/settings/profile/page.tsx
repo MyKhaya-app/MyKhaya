@@ -37,6 +37,16 @@ function roleLabel(relationship?: Member["relationship"]) {
   }
 }
 
+// "6 February" — day first, full month name, per the profile summary's
+// natural-language presentation (see profile-info-card below). Both fields
+// are required for a formatted date; a month or day saved on its own (the
+// two selects are independent) reads as "Not set" rather than a partial,
+// confusing date.
+function birthdayLabel(user: User | null) {
+  if (!user?.birth_month || !user?.birth_day) return "Not set";
+  return `${user.birth_day} ${MONTHS[user.birth_month - 1]}`;
+}
+
 export default function Profile() {
   const { activeHomeId, activeHome } = useActiveHome();
   const [user, setUser] = useState<User | null>(null);
@@ -49,6 +59,7 @@ export default function Profile() {
   const [colourBusy, setColourBusy] = useState(false);
   const [colourError, setColourError] = useState("");
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
+  const [editingBirthday, setEditingBirthday] = useState(false);
   const libraryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +106,7 @@ export default function Profile() {
       });
       setUser(updated);
       setMessage("Your birthday was saved.");
+      setEditingBirthday(false);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -314,7 +326,7 @@ export default function Profile() {
         </section>
       )}
 
-      <section className="card profile-info-card">
+      <section className="card details profile-info-card">
         <h2>Account details</h2>
         <dl>
           <div>
@@ -323,26 +335,36 @@ export default function Profile() {
           </div>
           <div>
             <dt>Email</dt>
-            <dd>{user?.email ?? "—"}</dd>
+            <dd className="profile-detail-value">
+              <span>{user?.email ?? "—"}</span>
+              {user && (
+                <span className={`profile-verified-pill${user.email_verified ? "" : " unverified"}`}>
+                  {user.email_verified ? "Verified" : "Verification needed"}
+                </span>
+              )}
+            </dd>
           </div>
           <div>
-            <dt>Email status</dt>
-            <dd>{user?.email_verified ? "Verified" : "Verification needed"}</dd>
+            <dt>Home role</dt>
+            <dd>{(membership && roleLabel(membership.relationship)) ?? "—"}</dd>
           </div>
-          {membership && roleLabel(membership.relationship) && (
-            <div>
-              <dt>Role</dt>
-              <dd>{roleLabel(membership.relationship)}</dd>
-            </div>
-          )}
+          <div>
+            <dt>Birthday</dt>
+            <dd className="profile-detail-value">
+              <span>{birthdayLabel(user)}</span>
+              {!editingBirthday && (
+                <button type="button" className="tertiary" onClick={() => setEditingBirthday(true)}>
+                  Edit
+                </button>
+              )}
+            </dd>
+          </div>
         </dl>
-        {user && (
-          <form className="profile-birthday-inline" onSubmit={saveBirthday}>
-            <div className="profile-inline-heading">
-              <h3>Birthday</h3>
-              <span className="muted">Optional</span>
-            </div>
-            <p className="muted">Shared with your household so they can wish you well.</p>
+        <p className="muted profile-birthday-hint">
+          Shared with your household so they can wish you well.
+        </p>
+        {editingBirthday && user && (
+          <form className="profile-birthday-edit" onSubmit={saveBirthday}>
             <div className="profile-birthday-fields">
               <label>
                 Month
@@ -358,7 +380,21 @@ export default function Profile() {
                 <input type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />
               </label>
             </div>
-            <button disabled={saving}>{saving ? "Saving…" : "Save birthday"}</button>
+            <div className="profile-birthday-edit-actions">
+              <button type="submit" disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="tertiary"
+                onClick={() => {
+                  setEditingBirthday(false);
+                  setError("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </form>
         )}
       </section>
@@ -381,13 +417,6 @@ export default function Profile() {
           {error}
         </p>
       )}
-      {/* Birthday editing is rendered inside Account details above. */}
-      {/*
-          <button disabled={saving}>{saving ? "Saving…" : "Save birthday"}</button>
-        </form>
-      )}
-
-      */}
       {photoSheetOpen && user && (
         <BottomSheet title="Change your photo" onDismiss={() => setPhotoSheetOpen(false)}>
           <div className="profile-photo-sheet">

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import Profile from "./page";
 import { useUserUpdatedListener } from "@/components/user-events";
 
@@ -35,6 +35,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       uploadAvatar: vi.fn(),
       removeAvatar: vi.fn(),
       updateMemberColour: vi.fn(),
+      updateMyBirthday: vi.fn(),
     },
   };
 });
@@ -44,6 +45,7 @@ const BASE_USER = {
   id: "u1",
   display_name: "Megan",
   email: "megan@example.com",
+  email_verified: true,
   principal_type: "adult" as const,
   avatar_version: null as string | null,
   birth_month: null,
@@ -289,5 +291,99 @@ describe("Profile — avatar upload", () => {
     await selectFile(container, fileInputs(container).library, heicFile());
 
     await waitFor(() => expect(received).toEqual(["broadcast-me.webp"]));
+  });
+});
+
+// Account details is a compact profile summary, not a form: Month/Day
+// controls and Save/Cancel are only ever present while explicitly editing
+// the birthday, never shown by default.
+describe("Profile — Account details summary", () => {
+  it("shows Name, Email with verified status, Home role and Birthday as plain read-only rows, with no Save/Cancel visible", async () => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      birth_month: 2,
+      birth_day: 6,
+    });
+    render(<Profile />);
+    const heading = await screen.findByRole("heading", { name: "Account details" });
+    const card = heading.closest("section")!;
+
+    expect(within(card).getByText("Megan", { selector: "dd" })).toBeInTheDocument();
+    expect(within(card).getByText("megan@example.com")).toBeInTheDocument();
+    expect(within(card).getByText("Verified")).toBeInTheDocument();
+    // "Home admin" also appears in the identity pill above this card — wait
+    // for it inside this card specifically, once membership has loaded.
+    expect(await within(card).findByText("Home admin")).toBeInTheDocument();
+    // "6 February" — day first, full month name.
+    expect(within(card).getByText("6 February")).toBeInTheDocument();
+    expect(
+      within(card).getByText("Shared with your household so they can wish you well."),
+    ).toBeInTheDocument();
+
+    expect(within(card).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(card).queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("shows 'Verification needed' when the email is not yet verified", async () => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ ...BASE_USER, email_verified: false });
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    expect(screen.getByText("Verification needed")).toBeInTheDocument();
+    expect(screen.queryByText("Verified")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Not set' for a birthday that has never been saved", async () => {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
+  it("reveals the Month/Day editing controls and Save/Cancel only after Edit is selected", async () => {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    await waitFor(() => expect(screen.getAllByText("Home admin").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByRole("combobox", { name: "Month" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Day" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("Cancel hides the editing controls again without saving", async () => {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    await waitFor(() => expect(screen.getAllByText("Home admin").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("combobox", { name: "Month" })).not.toBeInTheDocument();
+    expect(api.updateMyBirthday).not.toHaveBeenCalled();
+  });
+
+  it("Save updates the birthday and collapses back to the summary view", async () => {
+    (api.updateMyBirthday as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      birth_month: 2,
+      birth_day: 6,
+    });
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Month" }), { target: { value: "2" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Day" }), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(api.updateMyBirthday).toHaveBeenCalledWith({ birth_month: 2, birth_day: 6 }),
+    );
+    expect(await screen.findByText("6 February")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Month" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
   });
 });

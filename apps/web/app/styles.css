@@ -8874,8 +8874,7 @@ a.family-feed-row {
 }
 .profile-identity-card,
 .profile-colour-card,
-.profile-info-card,
-.profile-birthday-card {
+.profile-info-card {
   padding: 1rem;
 }
 .profile-identity-card {
@@ -8898,8 +8897,7 @@ a.family-feed-row {
 }
 .profile-identity-copy h2,
 .profile-colour-card h2,
-.profile-info-card h2,
-.profile-birthday-card h2 {
+.profile-info-card h2 {
   margin-top: 0;
 }
 .profile-identity-copy h2 {
@@ -8995,28 +8993,47 @@ a.family-feed-row {
   color: var(--colour-muted);
   margin-top: 0.2rem;
 }
-.profile-birthday-card {
-  display: grid;
-  gap: 0.75rem;
+/* Account details is a compact profile summary, not a form — see
+   .details dl > div (shared with Home settings/Members/Notifications/
+   Security) for the base label-left, value-right row. dt is kept from
+   shrinking so a long email/value only ever wraps on its own side. */
+.profile-info-card dt {
+  flex-shrink: 0;
 }
-.profile-birthday-inline {
+.profile-info-card dd {
+  min-width: 0;
+}
+.profile-detail-value {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-verified-pill {
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-sage-dark);
+  flex-shrink: 0;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+}
+.profile-verified-pill.unverified {
+  background: color-mix(in srgb, var(--colour-mustard) 22%, transparent);
+  color: var(--colour-slate);
+}
+.profile-birthday-hint {
+  margin: 0.6rem 0 0;
+}
+.profile-birthday-edit {
   border-top: 1px solid var(--colour-border);
   display: grid;
-  gap: 0.55rem;
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-}
-.profile-inline-heading {
-  align-items: baseline;
-  display: flex;
-  justify-content: space-between;
-}
-.profile-inline-heading h3 {
-  font-size: var(--font-small);
-  margin: 0;
-}
-.profile-birthday-inline p {
-  margin: 0;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
 }
 .profile-birthday-fields {
   display: grid;
@@ -9027,16 +9044,9 @@ a.family-feed-row {
   display: grid;
   gap: 0.3rem;
 }
-.legacy-birthday-card {
-  display: none;
-}
-.profile-birthday-card h2,
-.profile-birthday-card p {
-  margin-bottom: 0;
-}
-.profile-birthday-card > label {
-  display: grid;
-  gap: 0.35rem;
+.profile-birthday-edit-actions {
+  display: flex;
+  gap: 0.6rem;
 }
 .profile-photo-sheet {
   display: grid;
@@ -9088,6 +9098,9 @@ a.family-feed-row {
     border-radius: 0 0 var(--radius-hero) var(--radius-hero);
     margin-left: -224px;
     padding-left: 244px;
+  }
+  .app-shell:not(.native-shell-app) .app-header-logo {
+    display: none;
   }
   .desktop-nav {
     align-items: stretch;
@@ -9157,9 +9170,9 @@ a.family-feed-row {
     min-width: 0;
   }
   .app-shell:not(.native-shell-app) .home-hero {
-    margin: 0 auto;
-    max-width: 1180px;
-    padding: 2.25rem clamp(2rem, 5vw, 5rem) 5rem;
+    margin: 0;
+    max-width: none;
+    padding: 1.5rem clamp(2rem, 5vw, 5rem) 3.25rem;
   }
   .app-shell:not(.native-shell-app) .home-page {
     display: grid;
