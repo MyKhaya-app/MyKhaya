@@ -8,7 +8,7 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 import {
-  AvatarProcessingError,
+  classifyAvatarBackendFailure,
   isImageFormatRejection,
   normalizeAvatarFile,
 } from "./avatar-upload";
@@ -38,78 +38,20 @@ describe("normalizeAvatarFile", () => {
     await expect(normalizeAvatarFile(file)).resolves.toBe(file);
   });
 
-  it("recognises HEIC by filename when iOS omits the MIME type", async () => {
+  it("preserves a raw HEIC source for server-side processing", async () => {
     const file = new File(["heic"], "IMG_1234.HEIC", { type: "" });
-    await expect(normalizeAvatarFile(file)).rejects.toMatchObject({
-      name: "AvatarProcessingError",
-      category: "read",
-    });
+    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
   });
 
-  it("reports an unreadable HEIF source when the browser cannot decode it", async () => {
+  it("preserves a raw HEIF source for server-side processing", async () => {
     const file = new File(["heif"], "photo.heif", { type: "image/heif" });
-    await expect(normalizeAvatarFile(file)).rejects.toMatchObject({
-      name: "AvatarProcessingError",
+    await expect(normalizeAvatarFile(file)).resolves.toBe(file);
+  });
+
+  it("rejects an empty selected file before creating multipart data", async () => {
+    await expect(normalizeAvatarFile(new File([], "empty.jpg", { type: "image/jpeg" }))).rejects.toMatchObject({
       category: "read",
     });
-  });
-
-  it("reports a processing failure when decoding throws", async () => {
-    vi.stubGlobal(
-      "createImageBitmap",
-      vi.fn().mockRejectedValue(new Error("source could not be decoded")),
-    );
-    const file = new File(["heic"], "IMG_9999.HEIC", { type: "image/heic" });
-    await expect(normalizeAvatarFile(file)).rejects.toBeInstanceOf(AvatarProcessingError);
-  });
-
-  function stubDecodableCanvas() {
-    const close = vi.fn();
-    vi.stubGlobal(
-      "createImageBitmap",
-      vi.fn().mockResolvedValue({ width: 4000, height: 3000, close }),
-    );
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
-      callback(new Blob(["jpeg"], { type: "image/jpeg" }));
-    });
-    return close;
-  }
-
-  it("converts a decodable HEIC source (by MIME type) to a metadata-free JPEG", async () => {
-    const close = stubDecodableCanvas();
-    const result = await normalizeAvatarFile(
-      new File(["heic"], "IMG_1234.HEIC", { type: "image/heic" }),
-    );
-    expect(result.name).toBe("IMG_1234.jpg");
-    expect(result.type).toBe("image/jpeg");
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("converts a decodable HEIF source (by MIME type) to a metadata-free JPEG", async () => {
-    stubDecodableCanvas();
-    const result = await normalizeAvatarFile(
-      new File(["heif"], "photo.heif", { type: "image/heif" }),
-    );
-    expect(result.name).toBe("photo.jpg");
-    expect(result.type).toBe("image/jpeg");
-  });
-
-  it("converts a decodable HEIC source detected only by filename (empty MIME type)", async () => {
-    stubDecodableCanvas();
-    const result = await normalizeAvatarFile(new File(["heic"], "IMG_5555.heic", { type: "" }));
-    expect(result.type).toBe("image/jpeg");
-  });
-
-  it("this is the conversion-BEFORE-validation guarantee the caller relies on: the returned File is always JPEG/HEIC-free before it ever reaches api.uploadAvatar()", async () => {
-    stubDecodableCanvas();
-    const result = await normalizeAvatarFile(
-      new File(["heic"], "photo.HEIC", { type: "image/heic" }),
-    );
-    expect(result.type).not.toMatch(/heic|heif/i);
-    expect(["image/jpeg", "image/png", "image/webp"]).toContain(result.type);
   });
 });
 
@@ -123,22 +65,22 @@ describe("isImageFormatRejection", () => {
     ).toBe(true);
   });
 
-  it("recognises the backend's undecodable-file message", () => {
+  it("classifies the backend's undecodable-file message as a read failure", () => {
     expect(
-      isImageFormatRejection({
+      classifyAvatarBackendFailure({
         status: 422,
         message: "That file could not be read as an image. Please upload a JPEG, PNG or WebP photo.",
       }),
-    ).toBe(true);
+    ).toBe("read");
   });
 
-  it("recognises the backend's HEIC-unsupported-on-this-server message", () => {
+  it("classifies the backend's HEIC-unsupported message as unsupported", () => {
     expect(
-      isImageFormatRejection({
+      classifyAvatarBackendFailure({
         status: 422,
         message: "HEIC/HEIF photos are not supported on this server. Please use JPEG, PNG or WebP.",
       }),
-    ).toBe(true);
+    ).toBe("unsupported");
   });
 
   it("does not misclassify the unrelated 'no file was uploaded' 422", () => {

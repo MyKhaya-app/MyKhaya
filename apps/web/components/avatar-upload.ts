@@ -8,9 +8,8 @@ export class AvatarProcessingError extends Error {
   constructor(
     public readonly category: AvatarFailureCategory,
     message: string,
-    options?: { cause?: unknown },
   ) {
-    super(message, options);
+    super(message);
     this.name = "AvatarProcessingError";
   }
 }
@@ -31,7 +30,22 @@ function isHeifFile(file: File): boolean {
  * 422 is also used for the unrelated "no file was uploaded" case.
  */
 export function isImageFormatRejection(error: { status: number; message: string }): boolean {
-  return error.status === 422 && /JPEG, PNG or WebP/i.test(error.message);
+  return classifyAvatarBackendFailure(error) === "unsupported";
+}
+
+export type AvatarBackendFailureCategory = "unsupported" | "read" | "unknown";
+
+export function classifyAvatarBackendFailure(error: {
+  status: number;
+  message: string;
+}): AvatarBackendFailureCategory | null {
+  if (error.status !== 422) return null;
+  if (/no file was uploaded/i.test(error.message)) return "unknown";
+  if (/could not be read as an image/i.test(error.message)) return "read";
+  if (/format is not supported|HEIC\/HEIF photos are not supported|JPEG, PNG or WebP/i.test(error.message)) {
+    return "unsupported";
+  }
+  return "unknown";
 }
 
 // Deliberately not gated on NODE_ENV: the native iOS/TestFlight build is a
@@ -48,94 +62,43 @@ function sourceMetadata(file: File): Record<string, unknown> {
   return {
     constructor: file.constructor?.name || "unknown",
     isFile: typeof File !== "undefined" && file instanceof File,
-    name,
+    filename: name,
     extension: name.match(/\.([^.]+)$/)?.[1]?.toLowerCase() || "(none)",
-    type: file.type || "(empty)",
+    mimeType: file.type || "(empty)",
+    fileType: file.type || "(empty)",
     size: file.size,
-    hasObjectUrlSupport:
-      typeof URL !== "undefined" && typeof URL.createObjectURL === "function",
+    lastModified: file.lastModified || undefined,
+    heifDetected: isHeifFile(file),
   };
 }
 
 /**
- * HEIF is a normal source format on iOS, but it is not a useful long-term
- * browser upload format. When the current WebKit/browser can decode it, draw
- * it to a fresh JPEG so EXIF/GPS metadata cannot travel with the upload. Some
- * WKWebView versions cannot decode HEIF from JavaScript; in that case the
- * original bytes are deliberately returned and the API's pillow-heif path
- * remains the authoritative fallback.
+ * The API is the single image-processing authority. It decodes by content,
+ * accepts JPEG/PNG/WebP and HEIF when pillow-heif is available, strips EXIF,
+ * normalises orientation, crops, resizes, and stores WebP. Keeping the source
+ * File intact avoids fragile HEIF decoding differences between WebKit versions.
  */
 export async function normalizeAvatarFile(file: File): Promise<File> {
-  const heif = isHeifFile(file);
-  logAvatarDiagnostic("picker-returned", {
-    selectedAssetAvailable: true,
+  logAvatarDiagnostic("validation-started", {
     sourceType: "browser-file",
     uriScheme: "(not exposed by HTML file input)",
     ...sourceMetadata(file),
-    heifDetected: heif,
   });
-  if (!heif) return file;
-
-  let bitmap: CanvasImageSource | undefined;
-  let closableBitmap: ImageBitmap | undefined;
-  let objectUrl: string | undefined;
-  try {
-    logAvatarDiagnostic("image-decode-started", { sourceType: file.type || "(empty)" });
-    if (typeof createImageBitmap === "function") {
-      closableBitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-      bitmap = closableBitmap;
-    } else {
-      if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
-        throw new AvatarProcessingError("read", "The selected image has no readable browser URL.");
-      }
-      objectUrl = URL.createObjectURL(file);
-      const image = new Image();
-      image.src = objectUrl;
-      await image.decode();
-      bitmap = image;
-    }
-    logAvatarDiagnostic("image-decode-completed", { sourceType: file.type || "(empty)" });
-
-    const sourceWidth = "width" in bitmap ? bitmap.width : 0;
-    const sourceHeight = "height" in bitmap ? bitmap.height : 0;
-    if (!sourceWidth || !sourceHeight) {
-      throw new AvatarProcessingError("read", "The selected image has no readable dimensions.");
-    }
-    const maxDimension = 2048;
-    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-    logAvatarDiagnostic("resize-started", { width: canvas.width, height: canvas.height });
-    const context = canvas.getContext("2d");
-    if (!context) {
-      throw new AvatarProcessingError("processing", "The image canvas could not be created.");
-    }
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.9),
-    );
-    if (!blob) throw new AvatarProcessingError("processing", "The image could not be converted.");
-    logAvatarDiagnostic("resize-completed", { outputSize: blob.size });
-    const converted = new File([blob], file.name.replace(/\.(heic|heif)$/i, ".jpg"), {
-      type: "image/jpeg",
-      lastModified: file.lastModified,
-    });
-    logAvatarDiagnostic("file-created", {
-      outputType: converted.type,
-      outputSize: converted.size,
-    });
-    return converted;
-  } catch (cause) {
-    logAvatarDiagnostic("conversion-failed", {
-      errorName: cause instanceof Error ? cause.name : "UnknownError",
-      error: cause instanceof Error ? cause.message : String(cause),
-    });
-    if (cause instanceof AvatarProcessingError) throw cause;
-    throw new AvatarProcessingError("processing", "The selected image could not be prepared.", { cause });
-  } finally {
-    closableBitmap?.close();
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  if (!file.size) {
+    logAvatarDiagnostic("validation-failed", { category: "read", reason: "empty-file" });
+    throw new AvatarProcessingError("read", "The selected photo is empty.");
   }
+  logAvatarDiagnostic("validation-completed", {
+    filename: file.name,
+    mimeType: file.type || "(empty)",
+    size: file.size,
+    clientProcessing: "server-authoritative",
+  });
+  logAvatarDiagnostic("decode-deferred-to-backend", {
+    reason: "avoid WKWebView-specific HEIC conversion",
+    normalizedFilename: file.name,
+    normalizedMimeType: file.type || "(empty)",
+    normalizedSize: file.size,
+  });
+  return file;
 }

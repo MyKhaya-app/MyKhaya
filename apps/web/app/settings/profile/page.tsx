@@ -14,6 +14,7 @@ import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
 import {
   AvatarProcessingError,
+  classifyAvatarBackendFailure,
   isImageFormatRejection,
   logAvatarDiagnostic,
   normalizeAvatarFile,
@@ -103,7 +104,10 @@ export default function Profile() {
     }
   }
 
-  async function handleAvatarSelected(event: ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarSelected(
+    event: ChangeEvent<HTMLInputElement>,
+    source: "camera" | "photo-library",
+  ) {
     const file = event.target.files?.[0];
     // Reset so choosing the same file again (e.g. after fixing it) still fires onChange.
     event.target.value = "";
@@ -116,6 +120,7 @@ export default function Profile() {
 
     logAvatarDiagnostic("picker-returned-to-profile", {
       selectedAssetAvailable: true,
+      source,
       sourceType: "browser-file",
       uriScheme: "(not exposed by HTML file input)",
       constructor: file.constructor?.name || "unknown",
@@ -146,7 +151,12 @@ export default function Profile() {
       setMessage("Your photo was updated.");
     } catch (cause) {
       logAvatarDiagnostic("upload-failed", {
-        category: cause instanceof AvatarProcessingError ? cause.category : "upload",
+        category:
+          cause instanceof AvatarProcessingError
+            ? cause.category
+            : cause instanceof ApiError
+              ? classifyAvatarBackendFailure(cause) ?? (cause.status >= 500 ? "server" : "upload")
+              : "network",
         errorName: cause instanceof Error ? cause.name : "UnknownError",
         status: cause instanceof ApiError ? cause.status : undefined,
         message: cause instanceof Error ? cause.message : String(cause),
@@ -166,14 +176,18 @@ export default function Profile() {
         // PNG or WebP") is meant for troubleshooting, not an ordinary iPhone
         // photo owner who doesn't know (and shouldn't need to know) what
         // HEIC is.
-        setAvatarError("We couldn't process that photo. Please try another image.");
+        setAvatarError("This photo format isn’t supported. Please choose another photo.");
+      } else if (cause instanceof ApiError && classifyAvatarBackendFailure(cause) === "read") {
+        setAvatarError("We couldn’t read that photo from your device. Please try selecting it again.");
       } else if (cause instanceof ApiError) {
         // UPLOAD FAILURE with a specific, already user-appropriate reason
         // (rate limit, auth, etc.) — existing behaviour, unchanged.
         setAvatarError(
           cause.status >= 500
             ? "Your photo couldn’t be saved right now. Please try again shortly."
-            : cause.message,
+            : cause.status === 401 || cause.status === 403
+              ? "Please sign in again before changing your photo."
+              : "We couldn’t update your photo. Please try again.",
         );
       } else {
         setAvatarError("We couldn’t upload your photo. Please check your connection and try again.");
@@ -253,24 +267,13 @@ export default function Profile() {
           <input
             ref={libraryInputRef}
             type="file"
-            // Deliberately does NOT list image/heic or image/heif here. On iOS,
-            // WKWebView/Safari auto-transcodes a HEIC Photos-library asset to
-            // JPEG before handing it to the page ONLY when the input's accept
-            // list doesn't itself claim to accept HEIC/HEIF — declaring those
-            // types (as the previous version of this input did) tells iOS the
-            // page wants the original bytes, which suppresses that built-in
-            // conversion and is why real iPhone photos were arriving as raw
-            // HEIC and being rejected. Photos are not filtered out of the
-            // picker by this narrower list; iOS matches by broad image
-            // conformance and still offers HEIC-source photos, it just
-            // converts them for us on the way out. normalizeAvatarFile()
-            // below remains a client-side fallback for the rare case a raw
-            // HEIC/HEIF file still arrives (Files app, older iOS, non-Apple
-            // devices), and the server's pillow-heif decode is the final,
-            // authoritative fallback either way.
+            // Keep the input broad enough for Photos and let the API inspect
+            // the bytes. The server owns image decoding and processing,
+            // including HEIC/HEIF when pillow-heif is available; the client
+            // must not depend on inconsistent WKWebView transcoding.
             accept="image/jpeg,image/png,image/webp"
             style={{ display: "none" }}
-            onChange={handleAvatarSelected}
+            onChange={(event) => handleAvatarSelected(event, "photo-library")}
           />
           <input
             ref={cameraInputRef}
@@ -278,7 +281,7 @@ export default function Profile() {
             accept="image/jpeg,image/png,image/webp"
             capture="environment"
             style={{ display: "none" }}
-            onChange={handleAvatarSelected}
+            onChange={(event) => handleAvatarSelected(event, "camera")}
           />
           {avatarError && (
             <p className="notice error" role="alert">

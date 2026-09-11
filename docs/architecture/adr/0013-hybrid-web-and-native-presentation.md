@@ -27,6 +27,19 @@ leaving the one-frontend principle unchanged.
 The shell does not create a new hostname architecture, duplicate authentication
 or business logic, or require separate consumer feature implementations.
 
+## Shared binary upload processing
+
+Shared browser and native-shell uploads pass the selected browser `File` through
+the same `apps/web` API-client path. The native transport must preserve
+`FormData` as multipart and must not force a JSON content type. For profile
+avatars, the API is the single image-processing authority: it validates image
+bytes, supports the configured JPEG/PNG/WebP and HEIF formats, strips metadata,
+normalises orientation, crops, resizes, and stores WebP. The frontend does not
+attempt HEIC/HEIF decoding with `createImageBitmap`, `Image`, or canvas because
+WKWebView support varies between Photos-library assets; relying on that client
+conversion would make native and browser behaviour diverge. A failed upload
+must leave the existing avatar reference unchanged.
+
 ## Presentation families
 
 Mobile/native is app-like, stacked, touch-first and safe-area aware. Its current
