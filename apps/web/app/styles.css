@@ -5804,6 +5804,16 @@ button.danger,
 .cc-table-row:hover {
   background: #f7f9fa;
 }
+/* A short secondary line under a table cell's primary value (e.g. a
+   module's description under its name) — deliberately tighter than
+   .muted's own line-height so a row stays compact rather than growing
+   tall, matching the "compact desktop table, not repeated cards" density
+   this table replaces the Modules & Features cards with. */
+.cc-table-subtext {
+  margin: 0.15rem 0 0;
+  font-size: 0.78em;
+  line-height: 1.35;
+}
 
 .cc-dialog {
   display: flex;
