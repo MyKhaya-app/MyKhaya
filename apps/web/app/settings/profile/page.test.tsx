@@ -41,6 +41,39 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 });
 const { api, ApiError } = await import("@mykhaya/api-client");
 
+// isNativeShell is the single switch between the two avatar-selection paths
+// (ADR 0013) — false by default so the existing HTML-input suite above
+// keeps testing the web/PWA path unchanged; the native describe block below
+// sets it true per test.
+let nativeShell = false;
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+  nativePlatform: () => (nativeShell ? "ios" : "web"),
+}));
+
+// Avatar (rendered by this page) independently branches on isNativeShell()
+// to fetch the *displayed* avatar image via a bearer-authenticated native
+// request — unrelated to this file's concern (native *selection* of a new
+// photo), but exercised as a side effect of nativeShell=true above. Mocked
+// out so it fails softly (Avatar's own .catch() falls back to initials)
+// instead of throwing "No native API origin configured for web host" in a
+// jsdom test that has no real native session.
+vi.mock("@/components/native-auth", () => ({
+  fetchNativeImage: vi.fn().mockRejectedValue(new Error("not available in tests")),
+}));
+
+vi.mock("@/components/native-avatar-picker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/native-avatar-picker")>();
+  return {
+    ...actual,
+    pickAvatarFromCamera: vi.fn(),
+    pickAvatarFromGallery: vi.fn(),
+  };
+});
+const { NativeAvatarPickerError, pickAvatarFromCamera, pickAvatarFromGallery } = await import(
+  "@/components/native-avatar-picker"
+);
+
 const BASE_USER = {
   id: "u1",
   display_name: "Megan",
@@ -55,6 +88,7 @@ const BASE_USER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  nativeShell = false;
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ ...BASE_USER });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
     { user_id: "u1", relationship: "home_admin", colour: "sage" },
@@ -385,5 +419,204 @@ describe("Profile — Account details summary", () => {
     expect(await screen.findByText("6 February")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Month" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+});
+
+// Native iOS avatar selection (ADR 0013): inside the Capacitor shell, the
+// bottom sheet's Take photo/Choose from library actions must use the
+// Capacitor Camera plugin, never the hidden HTML file input — the
+// unreliable WKWebView Photos-library picker this replaces. isNativeShell
+// and the picker functions are both mocked (see top of file); the plugin's
+// own behaviour is covered separately in native-avatar-picker.test.ts.
+describe("Profile — native iOS avatar selection", () => {
+  function nativeFile(name = "photos-123.jpg") {
+    return new File([new Uint8Array(1024)], name, { type: "image/jpeg" });
+  }
+
+  async function openPhotoSheet() {
+    const { container } = render(<Profile />);
+    await screen.findByRole("heading", { name: "Megan" });
+    fireEvent.click(screen.getByRole("button", { name: /change photo/i }));
+    return container;
+  }
+
+  it("Choose from library uses the Capacitor Camera plugin, not the HTML file input", async () => {
+    nativeShell = true;
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(nativeFile());
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "native.webp",
+    });
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    await waitFor(() => expect(pickAvatarFromGallery).toHaveBeenCalledTimes(1));
+    expect(pickAvatarFromCamera).not.toHaveBeenCalled();
+  });
+
+  it("Take photo uses the Capacitor Camera plugin, not the HTML file input", async () => {
+    nativeShell = true;
+    (pickAvatarFromCamera as ReturnType<typeof vi.fn>).mockResolvedValue(nativeFile("camera-123.jpg"));
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "native.webp",
+    });
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: /take photo/i }));
+
+    await waitFor(() => expect(pickAvatarFromCamera).toHaveBeenCalledTimes(1));
+    expect(pickAvatarFromGallery).not.toHaveBeenCalled();
+  });
+
+  it("does not render the hidden HTML file inputs at all inside the native shell", async () => {
+    nativeShell = true;
+    const { container } = render(<Profile />);
+    await screen.findByRole("heading", { name: "Megan" });
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(0);
+  });
+
+  it("web/PWA (isNativeShell false) still uses the HTML file input, unaffected", async () => {
+    nativeShell = false;
+    const container = await openPhotoSheet();
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    expect(pickAvatarFromGallery).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(2);
+  });
+
+  it("picker cancellation (picker resolves null) produces no error message", async () => {
+    nativeShell = true;
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    await waitFor(() => expect(pickAvatarFromGallery).toHaveBeenCalled());
+    expect(api.uploadAvatar).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("permission denial shows the MyKhaya-worded permission message, not a raw native error", async () => {
+    nativeShell = true;
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new NativeAvatarPickerError(
+        "permission",
+        "MyKhaya doesn’t have permission to access your photos. You can allow access in iPhone Settings.",
+      ),
+    );
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "MyKhaya doesn’t have permission to access your photos. You can allow access in iPhone Settings.",
+    );
+  });
+
+  it("a picker read failure shows the 'couldn't read that photo' message", async () => {
+    nativeShell = true;
+    (pickAvatarFromCamera as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new NativeAvatarPickerError("read", "We couldn’t read that photo. Please try another image."),
+    );
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: /take photo/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "We couldn’t read that photo. Please try another image.",
+    );
+  });
+
+  it("the native asset becomes a valid File and reaches api.uploadAvatar", async () => {
+    nativeShell = true;
+    const file = nativeFile();
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(file);
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "native.webp",
+    });
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    await waitFor(() => expect(api.uploadAvatar).toHaveBeenCalledWith(file));
+  });
+
+  it("a large native phone photo is not rejected client-side", async () => {
+    nativeShell = true;
+    const file = new File([new Uint8Array(9_000_000)], "photos-large.jpg", { type: "image/jpeg" });
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(file);
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "native.webp",
+    });
+    await openPhotoSheet();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    await waitFor(() => expect(api.uploadAvatar).toHaveBeenCalledWith(file));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a successful native upload updates avatar state and broadcasts the header refresh", async () => {
+    nativeShell = true;
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(nativeFile());
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "native-broadcast.webp",
+    });
+    const received: string[] = [];
+    function Listener() {
+      useUserUpdatedListener((user) => received.push(user.avatar_version ?? ""));
+      return null;
+    }
+    render(
+      <>
+        <Listener />
+        <Profile />
+      </>,
+    );
+    await screen.findByRole("heading", { name: "Megan" });
+    fireEvent.click(screen.getByRole("button", { name: /change photo/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    expect(await screen.findByText("Your photo was updated.")).toBeInTheDocument();
+    await waitFor(() => expect(received).toEqual(["native-broadcast.webp"]));
+  });
+
+  it("a failed native upload preserves the existing avatar (backend error mapping still applies)", async () => {
+    nativeShell = true;
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...BASE_USER,
+      avatar_version: "existing.webp",
+    });
+    (pickAvatarFromGallery as ReturnType<typeof vi.fn>).mockResolvedValue(nativeFile());
+    (api.uploadAvatar as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(422, "That image format is not supported. Please upload a JPEG, PNG or WebP photo."),
+    );
+    const received: string[] = [];
+    function Listener() {
+      useUserUpdatedListener((user) => received.push(user.avatar_version ?? ""));
+      return null;
+    }
+    render(
+      <>
+        <Listener />
+        <Profile />
+      </>,
+    );
+    await screen.findByRole("heading", { name: "Megan" });
+    fireEvent.click(screen.getByRole("button", { name: /change photo/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This photo format isn’t supported. Please choose another photo.",
+    );
+    // Same backend-error-mapping path as the web suite above — the
+    // selection mechanism changed, the backend contract and its error
+    // mapping did not.
+    expect(received).toEqual([]);
   });
 });

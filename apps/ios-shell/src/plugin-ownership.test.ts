@@ -21,15 +21,17 @@ function readJson(relativePath: string): { dependencies: Record<string, string> 
 // This test guards against that regressing silently: every native
 // Capacitor plugin apps/web's components actually import at runtime
 // (components/keychain-native-session-store.ts, native-biometric.ts,
-// native-biometric-preference.ts, open-external-url.ts) must also be an
-// explicit apps/ios-shell dependency, matched exactly (never rely on
-// pnpm workspace hoisting to make a plugin "available").
+// native-biometric-preference.ts, open-external-url.ts,
+// native-avatar-picker.ts) must also be an explicit apps/ios-shell
+// dependency, matched exactly (never rely on pnpm workspace hoisting to
+// make a plugin "available").
 
 const REQUIRED_NATIVE_PLUGINS = [
   "@aparajita/capacitor-biometric-auth",
   "@aparajita/capacitor-secure-storage",
   "@capacitor/app",
   "@capacitor/browser",
+  "@capacitor/camera",
   "@capacitor/core",
   "@capacitor/ios",
   "@capacitor/push-notifications",

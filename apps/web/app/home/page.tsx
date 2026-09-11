@@ -30,6 +30,7 @@ import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
 import { canAddMember } from "@/components/member-entitlement-logic";
 import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
+import { HeroFlower } from "@/components/hero-flower";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -502,6 +503,7 @@ export default function HomePage() {
               ))}
             </div>
           )}
+          <HeroFlower />
         </div>
 
       <main className="home-page">

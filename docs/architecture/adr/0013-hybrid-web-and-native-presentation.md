@@ -27,18 +27,101 @@ leaving the one-frontend principle unchanged.
 The shell does not create a new hostname architecture, duplicate authentication
 or business logic, or require separate consumer feature implementations.
 
+## Avatar selection: native Capacitor picker vs. browser file input
+
+Profile-avatar photo *selection* uses a different mechanism per presentation
+family; everything downstream of getting a `File` is shared (see "Shared
+binary upload processing" below).
+
+- **Web/PWA/browser** (`isNativeShell()` false): the existing hidden HTML
+  `<input type="file" accept="image/*">` — one for "Take photo"
+  (`capture="environment"`), one for "Choose from library". Unchanged by this
+  decision.
+- **Native iOS shell** (`isNativeShell()` true): the official Capacitor
+  Camera plugin (`@capacitor/camera`, its current `takePhoto`/
+  `chooseFromGallery` API, not the deprecated `getPhoto({source: ...})` it
+  replaces), via `apps/web/components/native-avatar-picker.ts`. The native
+  shell never renders or invokes the hidden HTML input at all — the two
+  paths are a structural `if (isNativeShell()) { …Capacitor… } else { …HTML
+  input… }` branch in `app/settings/profile/page.tsx`, using the existing
+  `isNativeShell()` helper, not a new detection mechanism.
+
+**Why the change.** The HTML file input's iOS Photos-library selection proved
+unreliable in the native WKWebView shell specifically: taking a new photo
+worked, but selecting an existing Photos-library image did not, independent
+of `accept` permutations, and independent of the fact that backend HEIF
+decoding (`pillow-heif`) was already confirmed working. This reflects
+documented WebKit inconsistency in how a WKWebView-hosted file input
+represents/transcodes a Photos-library asset — behaviour MyKhaya does not
+control and, inside the native shell specifically, cannot reliably work
+around from the web layer. The native Capacitor Camera plugin uses Apple's
+own native pickers (`UIImagePickerController` for the camera,
+`PHPickerViewController` for the gallery) instead of a WKWebView form
+control, sidestepping that inconsistency entirely. **The web/PWA HTML input
+path is retained as-is** — this WebKit behaviour is specific to the native
+shell's WKWebView hosting a file input from a remote origin, not a general
+mobile-Safari/PWA defect, so there is no reason to change the browser path.
+
+**No client-side HEIC decoding, on either path.** The native picker result
+(`MediaResult.webPath`, fetched via `fetch()` and converted to a `Blob`/
+`File` — Capacitor's supported approach; a raw `uri`/`file://` path is not
+fetchable from WKWebView) is handed to the API exactly like an HTML-input
+`File` is. Any HEIC→JPEG conversion for a Photos-library asset happens
+inside the Camera plugin's own native (Swift/ImageIO) code when it writes
+out `webPath` — never in MyKhaya's JavaScript. `native-avatar-picker.ts`
+does not call `createImageBitmap`, `Image`, or canvas on the selected asset.
+
+**Native asset result type.** `takePhoto`/`chooseFromGallery` return a
+`MediaResult` (`{ webPath, uri, metadata: { format, size }, thumbnail }`).
+`thumbnail` is a low-resolution base64 preview and is never used as the
+upload source. `uri` is a native file reference not fetchable from web code
+and is only used for logging its presence, never its value. `webPath` is the
+one field used to build the uploaded `File`.
+
+**Native error handling.** The plugin returns a structured `CameraErrorCode`
+(e.g. `OS-PLUG-CAMR-0006` = take-photo cancelled, `OS-PLUG-CAMR-0003` =
+camera permission denied) — never a raw native message or filesystem path
+surfaced to the user. `native-avatar-picker.ts` maps these to: cancellation
+(no error shown, matching the HTML input's own silent-cancel behaviour),
+permission denial (a MyKhaya-worded message naming Settings), or a generic
+"couldn't read that photo" message for every other native failure. Upload
+failures after a valid `File` is obtained continue to use the existing
+backend error-mapping in `components/avatar-upload.ts`, unchanged.
+
+**Permissions.** `chooseFromGallery` presents `PHPickerViewController`,
+Apple's privacy-preserving picker — the OS runs it out-of-process and only
+hands the app the specific item(s) the user picks, without the app itself
+needing broad Photos-library authorization for that flow. `Info.plist`
+still declares `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription`
+(present since before this change, with MyKhaya-specific wording) because
+the Camera plugin's other, still-shipped legacy methods (`getPhoto`,
+`pickImages`, `pickLimitedLibraryPhotos`) and OS-level prompts can still
+reference them; no broader or additional permission was added for this
+change, and `NSPhotoLibraryAddUsageDescription` (needed only for saving
+*into* the library) was deliberately not added since MyKhaya never writes to
+the user's Camera Roll here (`saveToGallery: false`).
+
+**Plugin ownership.** `apps/ios-shell` loads the live `apps/web` origin
+remotely (see "Decision" above) rather than bundling it, so `npx cap sync
+ios` (run from `apps/ios-shell`) only discovers native plugins declared in
+*that* package's own `package.json` — a plugin declared only in `apps/web`'s
+dependencies (needed there so its TypeScript API can be imported/typechecked)
+is invisible to native auto-linking. This was the confirmed root cause of an
+earlier TestFlight build's persistent-login/biometric failures, and is now a
+regression test (`apps/ios-shell/src/plugin-ownership.test.ts`): every native
+plugin `apps/web` imports at runtime must also be an explicit `apps/ios-shell`
+dependency at a matching version, `@capacitor/camera` included.
+
 ## Shared binary upload processing
 
-Shared browser and native-shell uploads pass the selected browser `File` through
-the same `apps/web` API-client path. The native transport must preserve
-`FormData` as multipart and must not force a JSON content type. For profile
-avatars, the API is the single image-processing authority: it validates image
-bytes, supports the configured JPEG/PNG/WebP and HEIF formats, strips metadata,
-normalises orientation, crops, resizes, and stores WebP. The frontend does not
-attempt HEIC/HEIF decoding with `createImageBitmap`, `Image`, or canvas because
-WKWebView support varies between Photos-library assets; relying on that client
-conversion would make native and browser behaviour diverge. A failed upload
-must leave the existing avatar reference unchanged.
+Shared browser and native-shell uploads pass the resulting `File` through the
+same `apps/web` API-client path, regardless of which selection mechanism
+above produced it. The native transport must preserve `FormData` as
+multipart and must not force a JSON content type. For profile avatars, the
+API is the single image-processing authority: it validates image bytes,
+supports the configured JPEG/PNG/WebP and HEIF formats, strips metadata,
+normalises orientation, crops, resizes, and stores WebP. A failed upload must
+leave the existing avatar reference unchanged.
 
 Avatar upload resource limits are independent of the reduced stored output:
 the default multipart file ceiling is 20 MiB and decoded images are limited to
@@ -47,18 +130,19 @@ resources while allowing ordinary high-resolution phone originals to be uploaded
 and reduced server-side. Exceeding the transport or decoded-pixel ceiling is a
 resource-limit error, not an unsupported-format error.
 
-The avatar file inputs use `accept="image/*"`, never an enumerated MIME list
-(not even `image/heic,image/heif` alongside it). WKWebView's iOS Photos-library
-transcoding behaviour is sensitive to which image MIME types `accept` declares
-— explicitly enumerating HEIC/HEIF has been observed to change whether iOS
-hands the picker the original bytes or a transcoded JPEG for a given asset, and
-that behaviour is not something MyKhaya controls or can rely on. `accept` is
-picker guidance only ("let the user choose an image"), never validation: the
-API decodes and validates the real bytes regardless of what the browser
-declares or what iOS did or didn't transcode, including the ISO-BMFF
-"sequence" container variants (`image/heic-sequence`, `image/heif-sequence`)
-a Live Photo or burst-style HEIC asset may report — acceptance is decode-result
-based (Pillow's own resolved `image.format`), never MIME-string based.
+The web/PWA avatar file inputs use `accept="image/*"`, never an enumerated
+MIME list (not even `image/heic,image/heif` alongside it). WKWebView's iOS
+Photos-library transcoding behaviour is sensitive to which image MIME types
+`accept` declares — explicitly enumerating HEIC/HEIF has been observed to
+change whether iOS hands the picker the original bytes or a transcoded JPEG
+for a given asset, and that behaviour is not something MyKhaya controls or
+can rely on. `accept` is picker guidance only ("let the user choose an
+image"), never validation: the API decodes and validates the real bytes
+regardless of what the browser declares or what iOS did or didn't transcode,
+including the ISO-BMFF "sequence" container variants
+(`image/heic-sequence`, `image/heif-sequence`) a Live Photo or burst-style
+HEIC asset may report — acceptance is decode-result based (Pillow's own
+resolved `image.format`), never MIME-string based.
 
 ## Presentation families
 

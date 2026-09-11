@@ -12,6 +12,7 @@ import { SettingsPage } from "@/components/settings-page";
 import { Toast } from "@/components/toast";
 import { useActiveHome } from "@/components/use-active-home";
 import { emitUserUpdated } from "@/components/user-events";
+import { isNativeShell } from "@/components/native-runtime";
 import {
   AvatarProcessingError,
   classifyAvatarBackendFailure,
@@ -19,6 +20,11 @@ import {
   logAvatarDiagnostic,
   normalizeAvatarFile,
 } from "@/components/avatar-upload";
+import {
+  NativeAvatarPickerError,
+  pickAvatarFromCamera,
+  pickAvatarFromGallery,
+} from "@/components/native-avatar-picker";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -114,25 +120,19 @@ export default function Profile() {
     }
   }
 
-  async function handleAvatarSelected(
-    event: ChangeEvent<HTMLInputElement>,
-    source: "camera" | "photo-library",
+  // Shared by both selection paths (HTML file input for web/PWA, Capacitor
+  // Camera plugin for the native iOS shell — see native-avatar-picker.ts and
+  // ADR 0013's native/browser avatar selection boundary): once a File has
+  // been obtained by whichever path, everything from here on is identical —
+  // the backend is the single image-processing authority regardless of
+  // where the File came from.
+  async function uploadAvatarFile(
+    file: File,
+    meta: { source: string; sourceType: string; uriScheme: string },
   ) {
-    const file = event.target.files?.[0];
-    // Reset so choosing the same file again (e.g. after fixing it) still fires onChange.
-    event.target.value = "";
-    // No file: either the user cancelled the native picker (Photo Library or
-    // Take Photo) or, for the camera specifically, iOS denied/never granted
-    // camera permission — both surface identically here (no change event
-    // fires, or files is empty), and both should silently return rather than
-    // show an error, per the existing "cancel is not a failure" behaviour.
-    if (!file) return;
-
     logAvatarDiagnostic("picker-returned-to-profile", {
       selectedAssetAvailable: true,
-      source,
-      sourceType: "browser-file",
-      uriScheme: "(not exposed by HTML file input)",
+      ...meta,
       constructor: file.constructor?.name || "unknown",
       name: file.name,
       extension: file.name.match(/\.([^.]+)$/)?.[1]?.toLowerCase() || "(none)",
@@ -206,6 +206,52 @@ export default function Profile() {
     }
   }
 
+  // Web/PWA path only — the native iOS shell never invokes this hidden
+  // input (see the bottom-sheet buttons below and native-avatar-picker.ts).
+  async function handleAvatarSelected(
+    event: ChangeEvent<HTMLInputElement>,
+    source: "camera" | "photo-library",
+  ) {
+    const file = event.target.files?.[0];
+    // Reset so choosing the same file again (e.g. after fixing it) still fires onChange.
+    event.target.value = "";
+    // No file: the user cancelled the native OS picker (Photo Library or
+    // Take Photo) — silently return rather than show an error, matching the
+    // native Capacitor path's own cancel behaviour below.
+    if (!file) return;
+    await uploadAvatarFile(file, {
+      source,
+      sourceType: "browser-file",
+      uriScheme: "(not exposed by HTML file input)",
+    });
+  }
+
+  // Native iOS shell path only — uses the Capacitor Camera plugin's native
+  // Photos/Camera picker instead of the HTML file input (ADR 0013). Cancel
+  // returns null (no error, matching the HTML path); every other failure is
+  // a NativeAvatarPickerError with an already user-appropriate message.
+  async function handleNativeAvatarPick(source: "camera" | "photos") {
+    setAvatarError("");
+    let file: File | null;
+    try {
+      file = source === "camera" ? await pickAvatarFromCamera() : await pickAvatarFromGallery();
+    } catch (cause) {
+      setPhotoSheetOpen(false);
+      setAvatarError(
+        cause instanceof NativeAvatarPickerError
+          ? cause.message
+          : "We couldn’t upload your photo. Please check your connection and try again.",
+      );
+      return;
+    }
+    if (!file) return;
+    await uploadAvatarFile(file, {
+      source,
+      sourceType: "capacitor-camera-plugin",
+      uriScheme: "webPath (Capacitor local scheme, fetched then converted to Blob)",
+    });
+  }
+
   async function handleRemoveAvatar() {
     setAvatarError("");
     setAvatarBusy(true);
@@ -273,31 +319,42 @@ export default function Profile() {
                 </button>
               )}
           </div>
-          <input
-            ref={libraryInputRef}
-            type="file"
-            // "Allow the user to choose an image" — never an enumerated MIME
-            // list. WKWebView's Photos-library transcoding behaviour is
-            // sensitive to *which* image MIME types accept declares:
-            // explicitly listing image/heic,image/heif alongside others has
-            // been observed to change whether iOS hands the picker a
-            // transcoded JPEG or the original HEIC/HEIF bytes for a given
-            // asset. image/* asks for "any image" without taking a position
-            // on that, and the server owns real image decoding/validation
-            // regardless of what bytes actually arrive — see ADR 0013's
-            // "Shared binary upload processing" for the full rationale.
-            accept="image/*"
-            style={{ display: "none" }}
-            onChange={(event) => handleAvatarSelected(event, "photo-library")}
-          />
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            style={{ display: "none" }}
-            onChange={(event) => handleAvatarSelected(event, "camera")}
-          />
+          {/* Web/PWA only — the native iOS shell uses the Capacitor Camera
+              plugin's native picker instead (native-avatar-picker.ts) and
+              never renders or invokes this hidden input at all; the
+              unreliable WKWebView Photos-library <input type="file"> path
+              this replaced is exactly why that split exists — see ADR
+              0013's native/browser avatar selection boundary. */}
+          {!isNativeShell() && (
+            <>
+              <input
+                ref={libraryInputRef}
+                type="file"
+                // "Allow the user to choose an image" — never an enumerated
+                // MIME list. WKWebView's Photos-library transcoding
+                // behaviour is sensitive to *which* image MIME types accept
+                // declares: explicitly listing image/heic,image/heif
+                // alongside others has been observed to change whether iOS
+                // hands the picker a transcoded JPEG or the original
+                // HEIC/HEIF bytes for a given asset. image/* asks for "any
+                // image" without taking a position on that, and the server
+                // owns real image decoding/validation regardless of what
+                // bytes actually arrive — see ADR 0013's "Shared binary
+                // upload processing" for the full rationale.
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(event) => handleAvatarSelected(event, "photo-library")}
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: "none" }}
+                onChange={(event) => handleAvatarSelected(event, "camera")}
+              />
+            </>
+          )}
           {avatarError && (
             <p className="notice error" role="alert">
               {avatarError}
@@ -421,13 +478,25 @@ export default function Profile() {
         <BottomSheet title="Change your photo" onDismiss={() => setPhotoSheetOpen(false)}>
           <div className="profile-photo-sheet">
             <p className="muted">Choose a clear photo for your MyKhaya profile.</p>
+            {/* Structured selection logic (ADR 0013): native iOS uses the
+                Capacitor Camera plugin; web/PWA uses the hidden HTML file
+                input. Same two visible actions either way — only what
+                happens behind them differs. */}
             <button type="button" className="secondary" onClick={() => {
+              if (isNativeShell()) {
+                void handleNativeAvatarPick("camera");
+                return;
+              }
               logAvatarDiagnostic("picker-opened", { source: "camera" });
               cameraInputRef.current?.click();
             }}>
               <Camera size={18} aria-hidden="true" /> Take photo
             </button>
             <button type="button" className="secondary" onClick={() => {
+              if (isNativeShell()) {
+                void handleNativeAvatarPick("photos");
+                return;
+              }
               logAvatarDiagnostic("picker-opened", { source: "photo-library" });
               libraryInputRef.current?.click();
             }}>
