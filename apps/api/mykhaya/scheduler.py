@@ -6,6 +6,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from mykhaya.config import get_settings
+from mykhaya.calendar_highlights import sync_due_holiday_sources
 from mykhaya.db import SessionFactory
 from mykhaya.family_retention import scan_family_retention
 from mykhaya.managed_demo_homes import ManagedDemoService
@@ -46,6 +47,7 @@ async def run() -> None:
                 await scan_due_nudges(db, settings)
                 await scan_due_daily_nudge_summary(db, settings)
                 await scan_family_retention(db)
+                await sync_due_holiday_sources(db)
                 await db.commit()
             async with SessionFactory() as db:
                 rows = (

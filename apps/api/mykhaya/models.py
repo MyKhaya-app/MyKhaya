@@ -154,6 +154,17 @@ class ConsumerMfaPolicy(StrEnum):
     required = "required"
 
 
+class HolidaySyncStatus(StrEnum):
+    healthy = "healthy"
+    warning = "warning"
+    failed = "failed"
+
+
+class CalendarHighlightKind(StrEnum):
+    holiday = "holiday"
+    birthday = "birthday"
+
+
 class PlatformRole(StrEnum):
     owner = "platform_owner"
     administrator = "platform_administrator"
@@ -2671,6 +2682,68 @@ class HomeEntitlementGrant(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class PlatformHolidaySource(UuidTimeMixin, Base):
+    """Platform-owned holiday catalogue and its last-known-good cache."""
+
+    __tablename__ = "platform_holiday_sources"
+    __table_args__ = (
+        UniqueConstraint("country_code", "region_code", name="uq_holiday_source_country_region"),
+        Index("ix_holiday_source_enabled", "enabled"),
+    )
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    country_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    flag_emoji: Mapped[str] = mapped_column(String(8), nullable=False)
+    region_code: Mapped[str | None] = mapped_column(String(40))
+    region_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    sync_status: Mapped[str] = mapped_column(String(20), default=HolidaySyncStatus.warning.value, server_default=HolidaySyncStatus.warning.value)
+    last_successful_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_scheduled_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_error: Mapped[str | None] = mapped_column(String(500))
+    last_sync_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class PlatformHolidayDate(UuidTimeMixin, Base):
+    __tablename__ = "platform_holiday_dates"
+    __table_args__ = (
+        UniqueConstraint("source_id", "source_holiday_id", name="uq_holiday_date_source_key"),
+        Index("ix_holiday_date_source_date", "source_id", "holiday_date"),
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_holiday_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    source_holiday_id: Mapped[str] = mapped_column(String(180), nullable=False)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    observed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    source_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HomeCalendarHighlightSettings(UuidTimeMixin, Base):
+    __tablename__ = "home_calendar_highlight_settings"
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    birthdays_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class HomeHolidaySubscription(UuidTimeMixin, Base):
+    __tablename__ = "home_holiday_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("group_id", "source_id", name="uq_home_holiday_subscription"),
+        Index("ix_home_holiday_subscription_home_enabled", "group_id", "enabled"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_holiday_sources.id", ondelete="RESTRICT"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
 class HomeRetentionState(StrEnum):

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type {
   BirthdayEntry,
+  CalendarHighlight,
   CalendarShare,
   EventLabel,
   EventMutationScope,
@@ -113,6 +114,19 @@ function relativeDayHeading(key: string, timeZone: string) {
     `${key}T00:00:00Z`,
     { weekday: "long", day: "numeric", month: "long" },
     "UTC",
+  );
+}
+
+function CalendarHighlightSummary({ items }: { items: CalendarHighlight[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="calendar-highlight-inline" aria-label="Calendar highlights">
+      {items.slice(0, 3).map((item) => (
+        <span key={`${item.kind}-${item.date}-${item.label}`}>
+          {item.kind === "birthday" ? "🎂" : item.flag_emoji ?? "📅"} {item.label}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -1216,6 +1230,7 @@ export default function CalendarPage() {
   // filter client-side (see visibleEvents/filterByVisibleCalendars).
   const [homeCalendars, setHomeCalendars] = useState<HomeCalendar[]>([]);
   const [sharedCalendars, setSharedCalendars] = useState<CalendarShare[]>([]);
+  const [calendarHighlights, setCalendarHighlights] = useState<CalendarHighlight[]>([]);
   const [hiddenCalendarIds, setHiddenCalendarIds] = useState<Set<string>>(new Set());
   const [calendarSelectorOpen, setCalendarSelectorOpen] = useState(false);
   const agendaAnchorRef = useRef<HTMLElement | null>(null);
@@ -1324,7 +1339,7 @@ export default function CalendarPage() {
 
   const load = useCallback(async () => {
     if (!activeHomeId || !featureEnabled) return;
-    const [labelRows, eventRows, memberRows, calendarRows, shares] = await Promise.all([
+    const [labelRows, eventRows, memberRows, calendarRows, shares, highlightRows] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
         start_at: fetchRange.start.toISOString(),
@@ -1334,11 +1349,13 @@ export default function CalendarPage() {
       api.members(activeHomeId).catch(() => []),
       api.listCalendars(activeHomeId).catch(() => null),
       api.sharedCalendars().catch(() => ({ items: [] })),
+      api.calendarHighlightDates(activeHomeId, dateKey(fetchRange.start), dateKey(fetchRange.end)).catch(() => ({ items: [] })),
     ]);
     setLabels(labelRows);
     setMembers(memberRows);
     setHomeCalendars(calendarRows?.items ?? []);
     setSharedCalendars(shares.items);
+    setCalendarHighlights(highlightRows.items);
     const primaryCalendar = calendarRows?.items.find((row) => row.is_primary);
     if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
     setPersonalCalendarId(calendarRows?.personal_calendar?.id ?? null);
@@ -1922,6 +1939,7 @@ export default function CalendarPage() {
             timeZone={calendarTimezone}
             onDay={openDay}
             onNavigate={move}
+            highlights={calendarHighlights}
           />
         )}
 
@@ -1948,6 +1966,7 @@ export default function CalendarPage() {
                     <span>{displayDate(day, { weekday: "short" }, "UTC")}</span>
                     <strong>{day.getUTCDate()}</strong>
                   </button>
+                  <CalendarHighlightSummary items={calendarHighlights.filter((item) => item.date === dateKey(day))} />
                   <EventList
                     events={dayEvents}
                     members={members}
@@ -1964,6 +1983,7 @@ export default function CalendarPage() {
 
         {view === "day" && (
           <section className="day-view card" aria-label="Day view">
+            <CalendarHighlightSummary items={calendarHighlights.filter((item) => item.date === dateKey(focusDate))} />
             <EventList
               events={focusedEvents}
               members={members}
@@ -1988,6 +2008,7 @@ export default function CalendarPage() {
                     ref={key === agendaAnchorKey ? agendaAnchorRef : undefined}
                   >
                     <h2>{relativeDayHeading(key, calendarTimezone)}</h2>
+                    <CalendarHighlightSummary items={calendarHighlights.filter((item) => item.date === key)} />
                     <EventList
                       events={rows}
                       members={members}

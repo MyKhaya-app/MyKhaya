@@ -376,4 +376,26 @@ describe("MonthView — solid Calendar Tag colouring", () => {
     expect(bar.style.getPropertyValue("--event-color")).toBe(tagColour);
     expect(bar.style.getPropertyValue("--event-text-color")).toBe(contrastText(tagColour));
   });
+
+  it("renders highlights as secondary labels and keeps a normal event bar", () => {
+    const { container } = render(
+      <MonthView
+        cells={monthCells(focusDate)}
+        events={[occurrence({ occurrence_id: "event", title: "Christmas lunch", start_at: "2026-01-25T12:00:00Z", end_at: "2026-01-25T13:00:00Z" })]}
+        focusDate={focusDate}
+        timeZone="UTC"
+        onDay={noop}
+        highlights={[
+          { kind: "holiday", date: "2026-01-25", label: "Christmas Day", country_code: "GB", flag_emoji: "🇬🇧", source_id: "source" },
+          { kind: "birthday", date: "2026-01-25", label: "Alyssa's birthday", names: ["Alyssa"] },
+        ]}
+      />,
+    );
+    const day = container.querySelector(".calendar-day.has-calendar-highlight");
+    expect(day).not.toBeNull();
+    expect(day?.querySelector(".calendar-highlight-decoration")?.textContent).toBe("🎅");
+    expect(day?.textContent).toContain("Christmas Day");
+    expect(day?.textContent).toContain("Alyssa's birthday");
+    expect(container.querySelector(".month-event")?.textContent).toContain("Christmas lunch");
+  });
 });

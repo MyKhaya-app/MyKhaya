@@ -9300,6 +9300,76 @@ a.family-feed-row {
   }
 }
 
+/* Calendar Highlights are deliberately secondary to real event bars. They
+   decorate the existing day cell without creating another event track or
+   changing its geometry. */
+.calendar-day.has-calendar-highlight {
+  background: color-mix(in srgb, var(--cream, #f2ede3) 78%, var(--sage, #7d8f7a));
+}
+.calendar-highlight-decoration {
+  position: absolute;
+  top: -0.35rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+.calendar-highlight-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+  margin: 0.18rem 0.2rem 0;
+  color: var(--slate, #1f2933);
+  font-size: 0.62rem;
+  line-height: 1.15;
+  overflow: hidden;
+  pointer-events: none;
+}
+.calendar-highlight-labels span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-highlight-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0.75rem;
+  color: var(--muted, #66736b);
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+.calendar-highlight-inline span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-highlight-subscription {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--border, #e5ded1);
+}
+.calendar-highlight-subscription small {
+  display: block;
+  color: var(--muted, #66736b);
+}
+
+.platform-holiday-table { overflow-x: auto; }
+.platform-holiday-table-head, .platform-holiday-row {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1.25fr 1.5fr 0.7fr 0.9fr;
+  gap: 1rem;
+  align-items: center;
+  min-width: 900px;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--border, #e5ded1);
+}
+.platform-holiday-table-head { font-size: 0.78rem; font-weight: 700; color: var(--muted, #66736b); }
+.platform-holiday-row small { display: block; color: var(--muted, #66736b); margin-top: 0.2rem; }
+
 @media (min-width: 760px) {
   .app-shell:not(.native-shell-app) .around-house-dock {
     align-items: center;

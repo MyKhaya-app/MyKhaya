@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { CalendarShare, EventLabel, HomeCalendar } from "@mykhaya/shared-types";
+import type { CalendarHighlightSettings, CalendarShare, EventLabel, HomeCalendar } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -38,7 +38,8 @@ function shareCategorySummary(share: CalendarShare, labelsById: Map<string, Even
 // not here: they colour/tag events within a calendar, they are never a
 // calendar of their own — see app/settings/calendar-tags.
 export default function CalendarsPage() {
-  const { activeHomeId, loading: homeLoading } = useActiveHome();
+  const { activeHome, activeHomeId, loading: homeLoading } = useActiveHome();
+  const canEditHighlights = activeHome?.capabilities?.includes("calendar.edit_all") ?? false;
   const [items, setItems] = useState<HomeCalendar[]>([]);
   const [personalCalendar, setPersonalCalendar] = useState<HomeCalendar | null>(null);
   const [limit, setLimit] = useState<number | null>(null);
@@ -63,6 +64,8 @@ export default function CalendarsPage() {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareError, setShareError] = useState("");
   const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
+  const [highlights, setHighlights] = useState<CalendarHighlightSettings | null>(null);
+  const [highlightBusy, setHighlightBusy] = useState(false);
 
   const labelsById = new Map(labels.map((label) => [label.id, label]));
 
@@ -77,22 +80,56 @@ export default function CalendarsPage() {
   const load = useCallback(async () => {
     if (!activeHomeId) return;
     try {
-      const [calendars, labelRows, shared] = await Promise.all([
+      const [calendars, labelRows, shared, highlightRows] = await Promise.all([
         api.listCalendars(activeHomeId),
         api.listLabels(activeHomeId).catch(() => []),
         api.sharedCalendars().catch(() => ({ items: [] })),
+        api.calendarHighlights(activeHomeId).catch(() => null),
       ]);
       setItems(calendars.items);
       setLimit(calendars.limit);
       setPersonalCalendar(calendars.personal_calendar);
       setLabels(labelRows);
       setSharedWithYou(shared.items);
+      setHighlights(highlightRows);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load your calendars.");
     } finally {
       setLoaded(true);
     }
   }, [activeHomeId]);
+
+  async function setBirthdaysEnabled(enabled: boolean) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { setHighlights(await api.updateCalendarHighlights(activeHomeId, enabled)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not update calendar highlights."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function addHolidaySource(sourceId: string) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.addHolidayCalendar(activeHomeId, sourceId); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not add that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function toggleHolidaySource(subscriptionId: string, enabled: boolean) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.updateHolidayCalendar(activeHomeId, subscriptionId, enabled); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not update that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function removeHolidaySource(subscriptionId: string) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.removeHolidayCalendar(activeHomeId, subscriptionId); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not remove that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
 
   useEffect(() => {
     void load();
@@ -293,6 +330,33 @@ export default function CalendarsPage() {
                 );
               })}
             </div>
+
+            <section className="card details calendar-highlights-settings">
+              <h2>Calendar highlights</h2>
+              <p className="muted">Show useful Home and holiday dates directly in your calendar.</p>
+              <label className="check-row">
+                <input type="checkbox" checked={highlights?.birthdays_enabled ?? false} disabled={highlightBusy || !canEditHighlights} onChange={(event) => void setBirthdaysEnabled(event.target.checked)} />
+                🎂 Home birthdays
+              </label>
+              <p className="quiet-state">Show Home members&rsquo; birthdays using the birthday saved on their account.</p>
+              {highlights && highlights.subscriptions.map((subscription) => (
+                <div className="calendar-highlight-subscription" key={subscription.id}>
+                  <span aria-hidden="true">{subscription.source.flag_emoji}</span>
+                  <span><strong>{subscription.source.country_name}</strong><small>{subscription.source.region_name}</small></span>
+                  <input type="checkbox" aria-label={`${subscription.source.country_name} ${subscription.source.region_name}`} checked={subscription.enabled} disabled={highlightBusy || !canEditHighlights} onChange={(event) => void toggleHolidaySource(subscription.id, event.target.checked)} />
+                  <button type="button" className="danger-link" disabled={highlightBusy || !canEditHighlights} onClick={() => void removeHolidaySource(subscription.id)}>Remove</button>
+                </div>
+              ))}
+              {highlights && highlights.available_sources.filter((source) => !highlights.subscriptions.some((item) => item.source.id === source.id)).length > 0 && (
+                <label>
+                  Add holiday calendar
+                  <select defaultValue="" disabled={highlightBusy || !canEditHighlights} onChange={(event) => { if (event.target.value) void addHolidaySource(event.target.value); event.currentTarget.value = ""; }}>
+                    <option value="">Choose a country or region</option>
+                    {highlights.available_sources.filter((source) => !highlights.subscriptions.some((item) => item.source.id === source.id)).map((source) => <option key={source.id} value={source.id}>{source.flag_emoji} {source.country_name} — {source.region_name}</option>)}
+                  </select>
+                </label>
+              )}
+            </section>
 
             <section className="card details">
               <h2>Add a Home calendar</h2>

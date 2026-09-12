@@ -27,6 +27,7 @@ from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.calendar_provisioning import ensure_personal_calendar
+from mykhaya.calendar_highlights import sync_holiday_source
 from mykhaya.config import Settings, get_settings
 from mykhaya.consumer_mfa_policy import (
     CONSUMER_MFA_POLICY_SETTING_KEY,
@@ -99,6 +100,8 @@ from mykhaya.models import (
     PlatformSession,
     PlatformSessionStatus,
     PlatformSetting,
+    PlatformHolidayDate,
+    PlatformHolidaySource,
     PlatformSmtpSettings,
     PlatformStripeSettings,
     PublicIncident,
@@ -219,6 +222,7 @@ from mykhaya.platform_schemas import (
     RecoveryCodeVerifyRequest,
     RevokeComplimentaryRequest,
     SensitiveActionRequest,
+    HolidaySourceUpdate,
     SettingUpdate,
     SmtpSettingsUpdate,
     StripeBillingDiagnosticResponse,
@@ -5432,6 +5436,61 @@ async def settings_list(
             },
         ],
     }
+
+
+def _holiday_source_payload(source: PlatformHolidaySource, cached_count: int) -> dict[str, Any]:
+    return {
+        "id": source.id, "country_code": source.country_code, "country_name": source.country_name,
+        "flag_emoji": source.flag_emoji, "region_code": source.region_code, "region_name": source.region_name,
+        "provider": source.provider, "source_url": source.source_url, "enabled": source.enabled,
+        "sync_status": source.sync_status, "last_successful_sync": source.last_successful_sync,
+        "next_scheduled_sync": source.next_scheduled_sync, "last_sync_error": source.last_sync_error,
+        "cached_holiday_count": cached_count,
+    }
+
+
+@router.get("/calendar/holiday-calendars")
+async def holiday_calendars(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
+) -> list[dict[str, Any]]:
+    sources = (await db.scalars(select(PlatformHolidaySource).order_by(PlatformHolidaySource.country_name, PlatformHolidaySource.region_name))).all()
+    counts = dict((await db.execute(select(PlatformHolidayDate.source_id, func.count()).group_by(PlatformHolidayDate.source_id))).all())
+    return [_holiday_source_payload(source, counts.get(source.id, 0)) for source in sources]
+
+
+@router.put("/calendar/holiday-calendars/{source_id}")
+async def update_holiday_calendar_source(
+    source_id: uuid.UUID, body: HolidaySourceUpdate, request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)), db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    source = await db.scalar(select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update())
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
+    previous = source.enabled
+    source.enabled = body.enabled
+    platform_audit(db, request, context, "calendar_holiday_source.updated", "holiday_source", source.id, reason=body.reason, previous={"enabled": previous}, new={"enabled": body.enabled})
+    await db.commit()
+    count = await db.scalar(select(func.count()).select_from(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id))
+    return _holiday_source_payload(source, count or 0)
+
+
+@router.post("/calendar/holiday-calendars/{source_id}/sync")
+async def sync_holiday_calendar_source(
+    source_id: uuid.UUID, body: SensitiveActionRequest, request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)), db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    source = await db.scalar(select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update())
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
+    count = await sync_holiday_source(db, source)
+    platform_audit(db, request, context, "calendar_holiday_source.sync_requested", "holiday_source", source.id, reason=body.reason, new={"status": source.sync_status, "count": count})
+    await db.commit()
+    cached = await db.scalar(select(func.count()).select_from(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id))
+    return _holiday_source_payload(source, cached or 0)
 
 
 @router.put("/settings/{key}")

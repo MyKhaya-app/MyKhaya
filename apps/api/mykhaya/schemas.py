@@ -711,6 +711,67 @@ class CalendarListResponse(BaseModel):
     personal_calendar: HomeCalendarResponse | None
 
 
+class HolidaySourceResponse(BaseModel):
+    id: uuid.UUID
+    country_code: str
+    country_name: str
+    flag_emoji: str
+    region_code: str | None
+    region_name: str
+    provider: str
+    source_url: str | None
+    enabled: bool
+    sync_status: str
+    last_successful_sync: datetime | None
+    next_scheduled_sync: datetime | None
+    last_sync_error: str | None
+    cached_holiday_count: int = 0
+
+
+class HomeHolidaySubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    source: HolidaySourceResponse
+    enabled: bool
+
+
+class CalendarHighlightsSettingsResponse(BaseModel):
+    birthdays_enabled: bool
+    subscriptions: list[HomeHolidaySubscriptionResponse]
+    available_sources: list[HolidaySourceResponse]
+
+
+class CalendarHighlightsBirthday(BaseModel):
+    kind: Literal["birthday"]
+    date: date
+    label: str
+    names: list[str]
+
+
+class CalendarHighlightsHoliday(BaseModel):
+    kind: Literal["holiday"]
+    date: date
+    label: str
+    country_code: str
+    flag_emoji: str
+    source_id: uuid.UUID
+
+
+class CalendarHighlightsResponse(BaseModel):
+    items: list[CalendarHighlightsBirthday | CalendarHighlightsHoliday]
+
+
+class HomeCalendarHighlightsUpdate(StrictModel):
+    birthdays_enabled: bool
+
+
+class HomeHolidaySubscriptionCreate(StrictModel):
+    source_id: uuid.UUID
+
+
+class HomeHolidaySubscriptionUpdate(StrictModel):
+    enabled: bool
+
+
 class CalendarUsageResponse(BaseModel):
     """Generic current-usage-vs-plan-limit shape (count / limit / over_limit)
     — originally built for calendar.max_categories, now reused as-is for any

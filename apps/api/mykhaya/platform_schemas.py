@@ -66,6 +66,10 @@ class SensitiveActionRequest(StrictModel):
         return " ".join(value.strip().split())
 
 
+class HolidaySourceUpdate(SensitiveActionRequest):
+    enabled: bool
+
+
 class TotpSetupResponse(BaseModel):
     secret: str
     provisioning_uri: str

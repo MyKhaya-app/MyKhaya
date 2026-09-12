@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { Users } from "lucide-react";
-import type { EventOccurrence } from "@mykhaya/shared-types";
+import type { CalendarHighlight, EventOccurrence } from "@mykhaya/shared-types";
 import { contrastText, resolveColour } from "@mykhaya/design-tokens";
 import { usePrefersReducedMotion, useMonthSwipe } from "./use-month-swipe";
 import {
@@ -32,6 +32,7 @@ export function MonthSwipeView({
   timeZone,
   onDay,
   onNavigate,
+  highlights,
 }: {
   cells: Date[];
   events: EventOccurrence[];
@@ -39,6 +40,7 @@ export function MonthSwipeView({
   timeZone: string;
   onDay: (day: Date) => void;
   onNavigate: (direction: -1 | 1) => void;
+  highlights?: CalendarHighlight[];
 }) {
   const reducedMotion = usePrefersReducedMotion();
   const { trackRef, containerHandlers } = useMonthSwipe({
@@ -66,6 +68,7 @@ export function MonthSwipeView({
             focusDate={previousDate}
             timeZone={timeZone}
             onDay={onDay}
+            highlights={highlights}
           />
         </div>
         <div className="calendar-month-swipe-panel">
@@ -75,6 +78,7 @@ export function MonthSwipeView({
             focusDate={focusDate}
             timeZone={timeZone}
             onDay={onDay}
+            highlights={highlights}
           />
         </div>
         <div className="calendar-month-swipe-panel" aria-hidden="true">
@@ -84,6 +88,7 @@ export function MonthSwipeView({
             focusDate={nextDate}
             timeZone={timeZone}
             onDay={onDay}
+            highlights={highlights}
           />
         </div>
       </div>
@@ -105,13 +110,16 @@ export function MonthView({
   focusDate,
   timeZone,
   onDay,
+  highlights,
 }: {
   cells: Date[];
   events: EventOccurrence[];
   focusDate: Date;
   timeZone: string;
   onDay: (day: Date) => void;
+  highlights?: CalendarHighlight[];
 }) {
+  highlights = highlights ?? [];
   const todayKey = zonedDateKey(new Date(), timeZone);
   const bounds = useMemo(
     () => new Map(events.map((event) => [event.occurrence_id, eventDateBounds(event, timeZone)])),
@@ -161,6 +169,11 @@ export function MonthView({
             >
               {days.map((day, index) => {
                 const key = dateKey(day);
+                const dayHighlights = highlights.filter((item) => item.date === key);
+                const birthdays = dayHighlights.filter((item) => item.kind === "birthday");
+                const holidays = dayHighlights.filter((item) => item.kind === "holiday");
+                const christmas = holidays.some((item) => item.label.toLowerCase().includes("christmas"));
+                const decoration = christmas ? "🎅" : birthdays.length > 0 ? "🎂" : holidays.length > 0 ? holidays[0]?.flag_emoji : null;
                 const count = events.filter((event) => {
                   const { startKey, endKey } = bounds.get(event.occurrence_id)!;
                   return startKey <= key && endKey >= key;
@@ -177,7 +190,7 @@ export function MonthView({
                 // and no risk of a bubbled click firing onDay twice.
                 return (
                   <article
-                    className={`calendar-day${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
+                    className={`calendar-day${dayHighlights.length ? " has-calendar-highlight" : ""}${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
                     key={key}
                     style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
                     role="button"
@@ -189,11 +202,16 @@ export function MonthView({
                         onDay(day);
                       }
                     }}
-                    aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events`}
+                    aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events${dayHighlights.length ? `, ${dayHighlights.map((item) => item.label).join(", ")}` : ""}`}
                   >
                     <span className="day-number" aria-hidden="true">
+                      {decoration && <span className="calendar-highlight-decoration">{decoration}</span>}
                       <span>{day.getUTCDate()}</span>
                     </span>
+                    {dayHighlights.length > 0 && <span className="calendar-highlight-labels">
+                      {holidays.slice(0, 2).map((item) => <span key={`${item.source_id}-${item.label}`} title={item.label}>{item.label}</span>)}
+                      {birthdays.length > 0 && <span title={birthdays.map((item) => item.label).join(", ")}>{birthdays.length === 1 ? birthdays[0]?.label : `${birthdays.length} birthdays`}</span>}
+                    </span>}
                     {hidden > 0 && (
                       <span className="overflow-events" aria-hidden="true">
                         +{hidden} more

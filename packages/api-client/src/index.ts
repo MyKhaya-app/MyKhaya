@@ -442,6 +442,34 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").CalendarListResponse>(
       `/homes/${encodeURIComponent(homeId)}/calendars`,
     );
+  calendarHighlights = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").CalendarHighlightSettings>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights`,
+    );
+  updateCalendarHighlights = (homeId: string, birthdaysEnabled: boolean) =>
+    this.request<import("@mykhaya/shared-types").CalendarHighlightSettings>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights`,
+      { method: "PUT", body: JSON.stringify({ birthdays_enabled: birthdaysEnabled }) },
+    );
+  addHolidayCalendar = (homeId: string, sourceId: string) =>
+    this.request<import("@mykhaya/shared-types").CalendarHighlightSettings["subscriptions"][number]>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights/holiday-calendars`,
+      { method: "POST", body: JSON.stringify({ source_id: sourceId }) },
+    );
+  updateHolidayCalendar = (homeId: string, subscriptionId: string, enabled: boolean) =>
+    this.request<import("@mykhaya/shared-types").CalendarHighlightSettings["subscriptions"][number]>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights/holiday-calendars/${encodeURIComponent(subscriptionId)}`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    );
+  removeHolidayCalendar = (homeId: string, subscriptionId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights/holiday-calendars/${encodeURIComponent(subscriptionId)}`,
+      { method: "DELETE", body: "{}" },
+    );
+  calendarHighlightDates = (homeId: string, startDate: string, endDate: string) =>
+    this.request<{ items: import("@mykhaya/shared-types").CalendarHighlight[] }>(
+      `/homes/${encodeURIComponent(homeId)}/calendar-highlights/dates?${new URLSearchParams({ start_date: startDate, end_date: endDate })}`,
+    );
   createCalendar = (homeId: string, body: { name: string; timezone?: string | null }) =>
     this.request<import("@mykhaya/shared-types").HomeCalendar>(
       `/homes/${encodeURIComponent(homeId)}/calendars`,

@@ -937,6 +937,39 @@ export interface BirthdayListResponse {
   items: BirthdayEntry[];
 }
 
+export interface HolidaySource {
+  id: string;
+  country_code: string;
+  country_name: string;
+  flag_emoji: string;
+  region_code: string | null;
+  region_name: string;
+  provider: string;
+  source_url: string | null;
+  enabled: boolean;
+  sync_status: "healthy" | "warning" | "failed";
+  last_successful_sync: string | null;
+  next_scheduled_sync: string | null;
+  last_sync_error: string | null;
+  cached_holiday_count: number;
+}
+
+export interface CalendarHighlightSettings {
+  birthdays_enabled: boolean;
+  subscriptions: Array<{ id: string; source: HolidaySource; enabled: boolean }>;
+  available_sources: HolidaySource[];
+}
+
+export interface CalendarHighlight {
+  kind: "holiday" | "birthday";
+  date: string;
+  label: string;
+  names?: string[];
+  country_code?: string;
+  flag_emoji?: string;
+  source_id?: string;
+}
+
 // Commercial billing (Stripe, Phases 3–4) — mirrors mykhaya.billing_schemas.
 // See docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
 
