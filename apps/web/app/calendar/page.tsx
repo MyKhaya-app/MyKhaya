@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -2269,11 +2269,12 @@ export default function CalendarPage() {
               footer={
                 <div className="sheet-actions">
                   {editingSelected ? (
-                    <>
-                      <button type="submit" form="calendar-edit-event-form" disabled={busy}>
+                    <Fragment key="edit-mode-footer">
+                      <button key="save-event" type="submit" form="calendar-edit-event-form" disabled={busy}>
                         {busy ? "Saving…" : "Save changes"}
                       </button>
                       <button
+                        key="cancel-edit"
                         className="secondary"
                         type="button"
                         onClick={() => {
@@ -2283,13 +2284,15 @@ export default function CalendarPage() {
                       >
                         Cancel
                       </button>
-                    </>
+                    </Fragment>
                   ) : (
-                    <>
+                    <Fragment key="view-mode-footer">
                       <button
+                        key="enter-edit"
                         type="button"
                         disabled={!canEdit}
                         onClick={(event) => {
+                          event.preventDefault();
                           calendarDebugLog(debugEnabled, "EDIT pressed", {
                             target: event.target,
                             currentTarget: event.currentTarget,
@@ -2310,10 +2313,10 @@ export default function CalendarPage() {
                       >
                         Edit
                       </button>
-                      <button className="secondary" type="button" onClick={closeEventSheet}>
+                      <button key="close-event" className="secondary" type="button" onClick={closeEventSheet}>
                         Close
                       </button>
-                    </>
+                    </Fragment>
                   )}
                 </div>
               }
