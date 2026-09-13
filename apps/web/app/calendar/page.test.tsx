@@ -819,12 +819,21 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
 
   it("opens existing events in view mode with only Edit and Close actions", async () => {
     const dialog = await openViewEventSheet();
-    expect(within(dialog).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    const editButton = within(dialog).getByRole("button", { name: "Edit" });
+    expect(editButton).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: /Save changes/i })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "Close dialog" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "Edit event" })).toBeNull();
+
+    fireEvent.pointerDown(editButton);
+    fireEvent.pointerUp(editButton);
+    fireEvent.click(editButton);
+    expect(await screen.findByRole("dialog", { name: "Edit event" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save changes/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(api.updateEvent).not.toHaveBeenCalled();
   });
 
   it("enters edit mode without saving, and Cancel returns to the original view", async () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { BottomSheet } from "./bottom-sheet";
 
 let nativeShell = false;
@@ -31,6 +31,25 @@ describe("BottomSheet — scroll lock, browser/PWA", () => {
 
     expect(document.body.classList.contains("sheet-open")).toBe(false);
     expect(document.body.style.position).toBe("");
+  });
+
+  it("dismisses only from the backdrop, never from an interaction inside the panel", () => {
+    const onDismiss = vi.fn();
+    const { container } = render(
+      <BottomSheet title="Sheet" onDismiss={onDismiss}>
+        <button type="button">Inside</button>
+      </BottomSheet>,
+    );
+    const backdrop = container.querySelector(".sheet-backdrop") as HTMLElement;
+    const panel = container.querySelector(".bottom-sheet") as HTMLElement;
+    const inside = container.querySelector("button") as HTMLElement;
+
+    fireEvent.mouseDown(inside);
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireEvent.mouseDown(panel);
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireEvent.mouseDown(backdrop);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
 

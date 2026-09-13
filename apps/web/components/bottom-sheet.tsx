@@ -123,6 +123,8 @@ export function BottomSheet({
         aria-labelledby="sheet-title"
         tabIndex={-1}
         ref={dialog}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="sheet-handle" aria-hidden="true" />
         <header>
