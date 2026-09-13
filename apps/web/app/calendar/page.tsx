@@ -97,6 +97,28 @@ function calendarDebugLog(enabled: boolean, message: string, details?: unknown) 
   console.info(`[calendar-debug] ${message}`, details ?? "");
 }
 
+function viewportDebugSnapshot() {
+  if (typeof window === "undefined") return null;
+  const body = document.body;
+  return {
+    innerWidth: window.innerWidth,
+    clientWidth: document.documentElement.clientWidth,
+    visualViewportWidth: window.visualViewport?.width,
+    visualViewportScale: window.visualViewport?.scale,
+    devicePixelRatio: window.devicePixelRatio,
+    bodyWidth: body.getBoundingClientRect().width,
+    htmlWidth: document.documentElement.getBoundingClientRect().width,
+    bodyOverflow: body.style.overflow,
+    bodyPosition: body.style.position,
+    bodyTop: body.style.top,
+    bodyWidthStyle: body.style.width,
+    htmlOverflow: document.documentElement.style.overflow,
+    bodyTransform: body.style.transform,
+    bodyZoom: body.style.zoom,
+    nativeScrollOverflow: document.querySelector<HTMLElement>(".app-content-scroll-region")?.style.overflow,
+  };
+}
+
 function formText(data: FormData, name: string) {
   const value = data.get(name);
   return typeof value === "string" ? value : "";
@@ -317,8 +339,8 @@ function EventForm({
     formRef.current?.focus();
   }, []);
   useEffect(() => {
-    calendarDebugLog(debug, "EventForm MOUNT");
-    return () => calendarDebugLog(debug, "EventForm UNMOUNT");
+    calendarDebugLog(debug, "EventForm MOUNT", viewportDebugSnapshot());
+    return () => calendarDebugLog(debug, "EventForm UNMOUNT", viewportDebugSnapshot());
   }, [debug]);
   const [allDay, setAllDay] = useState(initialWhen.allDay);
   const [startDate, setStartDate] = useState(initialWhen.startDate);
@@ -1279,11 +1301,15 @@ export default function CalendarPage() {
       pathname: window.location.pathname,
       search: window.location.search,
       hash: window.location.hash,
+      viewport: viewportDebugSnapshot(),
     });
     return () => {
       for (const [eventName, handler] of handlers) window.removeEventListener(eventName, handler);
       visualViewport?.removeEventListener("resize", onVisualViewportResize);
-      calendarDebugLog(true, "CALENDAR PAGE UNMOUNT", { href: window.location.href });
+      calendarDebugLog(true, "CALENDAR PAGE UNMOUNT", {
+        href: window.location.href,
+        viewport: viewportDebugSnapshot(),
+      });
     };
   }, [debugEnabled]);
 
@@ -1295,6 +1321,7 @@ export default function CalendarPage() {
         : null,
       view,
       focusDate: focusDate.toISOString(),
+      viewport: viewportDebugSnapshot(),
     });
   }, [debugEnabled, editingSelected, selectedEvent, view, focusDate]);
 
@@ -2307,6 +2334,7 @@ export default function CalendarPage() {
                               occurrenceId: selectedEvent.occurrence_id,
                               start: selectedEvent.start_at,
                             },
+                            viewport: viewportDebugSnapshot(),
                           });
                           setEditingSelected(true);
                         }}

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, within } from "@testing-library/react";
+import { useState } from "react";
 import { BottomSheet } from "./bottom-sheet";
 
 let nativeShell = false;
@@ -82,6 +83,34 @@ describe("BottomSheet — scroll lock, native shell", () => {
     expect(document.body.style.position).toBe("fixed");
 
     unmount();
+  });
+
+  it("restores the native scroll region exactly across repeated open/close cycles", () => {
+    nativeShell = true;
+    const region = document.createElement("div");
+    region.className = "app-content-scroll-region";
+    region.style.overflow = "auto";
+    document.body.appendChild(region);
+
+    function ToggleSheet() {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <BottomSheet title="Sheet" onDismiss={() => setOpen(false)} children="x" />
+      ) : (
+        <button type="button" onClick={() => setOpen(true)}>Reopen</button>
+      );
+    }
+
+    const { getByRole, rerender } = render(<ToggleSheet />);
+    expect(region.style.overflow).toBe("hidden");
+    fireEvent.click(getByRole("button", { name: "Close dialog" }));
+    expect(region.style.overflow).toBe("auto");
+
+    fireEvent.click(getByRole("button", { name: "Reopen" }));
+    expect(region.style.overflow).toBe("hidden");
+    rerender(<ToggleSheet />);
+    fireEvent.click(getByRole("button", { name: "Close dialog" }));
+    expect(region.style.overflow).toBe("auto");
   });
 });
 

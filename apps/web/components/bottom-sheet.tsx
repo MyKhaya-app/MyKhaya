@@ -39,6 +39,7 @@ export function BottomSheet({
     const element = dialog.current;
     const scrollY = window.scrollY;
     const initialFocus = element?.querySelector<HTMLElement>(".bottom-sheet-close");
+    const hadSheetOpenClass = document.body.classList.contains("sheet-open");
     // Focus the sheet control, never a form field. iOS Safari zooms when it
     // programmatically focuses a small input as a sheet opens.
     (initialFocus ?? element)?.focus();
@@ -51,6 +52,12 @@ export function BottomSheet({
     const nativeScrollRegion = isNativeShell()
       ? document.querySelector<HTMLElement>(".app-content-scroll-region")
       : null;
+    const previousNativeOverflow = nativeScrollRegion?.style.overflow ?? "";
+    const previousBodyStyles = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+    };
     if (nativeScrollRegion) {
       nativeScrollRegion.style.overflow = "hidden";
     } else {
@@ -94,13 +101,13 @@ export function BottomSheet({
         (document.activeElement as HTMLElement | null)?.blur();
       }
       document.removeEventListener("keydown", keydown);
-      document.body.classList.remove("sheet-open");
+      if (!hadSheetOpenClass) document.body.classList.remove("sheet-open");
       if (nativeScrollRegion) {
-        nativeScrollRegion.style.overflow = "";
+        nativeScrollRegion.style.overflow = previousNativeOverflow;
       } else {
-        document.body.style.position = "";
-        document.body.style.top = "";
-        document.body.style.width = "";
+        document.body.style.position = previousBodyStyles.position;
+        document.body.style.top = previousBodyStyles.top;
+        document.body.style.width = previousBodyStyles.width;
         window.scrollTo(0, scrollY);
       }
       // preventScroll: restoring focus must not itself scroll/jump the page
