@@ -310,6 +310,11 @@ describe("Home — Nudges shortcut", () => {
     expect(screen.queryByRole("link", { name: /nudges/i })).not.toBeInTheDocument();
   });
 
+  // Mobile/native default: window.matchMedia is polyfilled in
+  // vitest.setup.ts to always report "no match", so useDesktopShellActive()
+  // resolves to false here exactly as it does on a real phone — this test
+  // is the mobile/native half of "Around the House is shown on exactly one
+  // surface at a time" (see docs/design/layout-and-navigation.md).
   it("renders Around the House beneath Coming up with its existing shortcut rows", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
       billing({
@@ -340,6 +345,50 @@ describe("Home — Nudges shortcut", () => {
     expect(around?.querySelectorAll(".quick-actions-row")).toHaveLength(2);
     expect(around?.querySelectorAll(".quick-action")).toHaveLength(5);
     expect(container.querySelector(".quick-action-placeholder")).toBeNull();
+  });
+
+  // Desktop/web half of the same rule: Around the House is a permanent
+  // capability, but its presentation is responsive — on the browser
+  // desktop/tablet shell (the same >=760px breakpoint AroundHouseDock's own
+  // CSS uses to appear, via useDesktopShellActive), the persistent dock
+  // (mounted separately by AppShell, not by this page) is the one surface
+  // for these shortcuts, so this duplicate Home card must not also render.
+  it("hides the Around the House Home card on the desktop/web shell, where the persistent dock is shown instead", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      billing({
+        meals_enabled: true,
+        lists_enabled: true,
+        nudges_enabled: true,
+        member_usage: { count: 1, limit: 4, over_limit: false },
+      }),
+    );
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [
+        { feature: "calendar", enabled: true },
+        { feature: "meals", enabled: true },
+        { feature: "shopping", enabled: true },
+        { feature: "nudges", enabled: true },
+      ],
+    });
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("min-width: 760px"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      const { container } = render(<HomePage />);
+      await screen.findByRole("heading", { name: "Megan" });
+      expect(container.querySelector(".home-around-house-card")).toBeNull();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it("shrinks the feature row to match however many shortcuts are actually entitled/released", async () => {

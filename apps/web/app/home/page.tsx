@@ -28,6 +28,7 @@ import { AppShellContent } from "@/components/app-shell";
 import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
+import { useDesktopShellActive } from "@/components/use-desktop-shell";
 import { canAddMember } from "@/components/member-entitlement-logic";
 import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
 import { subscribeToPush } from "@/components/push-subscribe";
@@ -241,6 +242,12 @@ function QuickActionsRow({ children }: { children: React.ReactNode }) {
 }
 
 export default function HomePage() {
+  // Around the House is a permanent Home capability presented on exactly
+  // one surface at a time: this Home card on mobile/native, or the
+  // persistent desktop Around the House dock (AroundHouseDock, mounted by
+  // AppShell) on the browser desktop/tablet shell — never both, to avoid
+  // duplicating the same shortcuts. See docs/design/layout-and-navigation.md.
+  const desktopShellActive = useDesktopShellActive();
   const [user, setUser] = useState<User | null>(null);
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
@@ -690,6 +697,7 @@ export default function HomePage() {
           </section>
         )}
 
+        {!desktopShellActive && (
         <section className="card home-section home-summary-card home-around-house-card">
           <div className="section-heading">
             <img className="home-card-image" src="/images/home-around-house.svg" alt="" aria-hidden="true" />
@@ -770,6 +778,7 @@ export default function HomePage() {
             </QuickActionsRow>
           </div>
         </section>
+        )}
 
         {showNotificationPrompt && (
           <section className="card notify-panel">

@@ -48,29 +48,52 @@ it rather than document around the problem. Full rationale in
 
 ## Home screen section invariants
 
-**Around the House is a permanent Home-screen section.** The Home screen must
-retain the Around the House card beneath the primary Home content sections.
+**Around the House is a permanent Home capability, but its presentation is
+responsive.** The underlying capability — the same shortcuts, the same
+entitlement/permission rules, the same navigation targets — must always be
+reachable; which surface presents it depends on layout:
 
-Moving, duplicating, surfacing or exposing Around the House shortcuts elsewhere
-in the product — including browser docks, navigation areas, menus or other
-shortcut surfaces — must not be interpreted as permission to remove the Home
-card unless removal is explicitly requested as a product requirement.
+- **Mobile/native:** render the Around the House Home card beneath the
+  primary Home content sections, exactly as today.
+- **Desktop/web, where the persistent Around the House dock is present**
+  (the browser desktop/tablet shell — see `useDesktopShellActive` in
+  `apps/web/components/use-desktop-shell.ts`, reusing the same `>=760px`
+  breakpoint the dock's own CSS uses to appear): hide the Home card. The
+  dock is the one surface for these shortcuts there; showing both would
+  duplicate the same actions on screen at once.
+
+The Home card and the desktop dock are mutually exclusive *presentations* of
+one capability, not two independent features — hiding the card on desktop
+must never mean removing, disabling or diverging the underlying capability
+itself. The dock and the mobile Home card must keep using the same
+entitlement checks, permission checks and navigation targets; if one needs to
+change, check whether the other should change identically before assuming it
+is unaffected.
+
+Moving, duplicating, surfacing or exposing Around the House shortcuts
+elsewhere in the product must not be interpreted as permission to remove the
+capability from any surface, or to let the two surfaces drift onto different
+rules, unless that is explicitly requested as a product requirement.
 
 Changes to Home cards such as Nudges, Meals, Coming up, Today or other Home
 content must preserve unrelated Home sections. When refactoring the Home
 render tree, preserve Around the House and its existing entitlement/feature
 visibility behaviour, permissions and invitation-related access rules,
-navigation targets, desktop placement and responsive behaviour unless those
-are explicitly being changed. Do not replace the Home card with another
+navigation targets, and this mobile-card/desktop-dock responsive split unless
+those are explicitly being changed. Do not replace the Home card with another
 shortcut surface without an explicit requirement.
 
-Home tests should protect the expected section structure and ordering, rather
-than only asserting the sections being actively modified.
+Home tests should protect the expected section structure and ordering on both
+presentations (mobile card shown/desktop card hidden), rather than only
+asserting the sections being actively modified.
 
-The regression identified in `e62efdc` is an example of this rule: Around the
-House was removed when its shortcuts moved into a separate browser dock, and
-the tests were changed to expect the card's absence. Moving a shortcut surface
-must not implicitly remove the underlying Home section.
+The regression identified in `e62efdc` is an example of the failure mode this
+rule guards against: Around the House was removed outright when its
+shortcuts moved into a separate browser dock, and the tests were changed to
+expect the card's absence on every layout, not just the desktop one where the
+dock now covers it. Moving or adding a shortcut surface must not implicitly
+remove the underlying capability from the layouts that still need their own
+surface for it.
 
 ### Scope protection for Home changes
 
