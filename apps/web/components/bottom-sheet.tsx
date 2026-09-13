@@ -112,7 +112,14 @@ export function BottomSheet({
   return (
     <div
       className="sheet-backdrop"
-      onMouseDown={(event) =>
+      // Dismiss from a genuine backdrop interaction only.  Using click here
+      // is intentional: on iOS a state change caused by a button's click can
+      // replace the sheet contents before the synthetic mouse sequence has
+      // finished.  A mousedown handler can then observe the backdrop as the
+      // target and dismiss a sheet whose control was just pressed.  Click
+      // target identity preserves backdrop dismissal while making internal
+      // view/edit transitions inert to the dismiss path.
+      onClick={(event) =>
         event.target === event.currentTarget && onDismiss()
       }
     >

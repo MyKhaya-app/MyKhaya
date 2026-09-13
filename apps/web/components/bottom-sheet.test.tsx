@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, within } from "@testing-library/react";
 import { BottomSheet } from "./bottom-sheet";
 
 let nativeShell = false;
@@ -42,13 +42,13 @@ describe("BottomSheet — scroll lock, browser/PWA", () => {
     );
     const backdrop = container.querySelector(".sheet-backdrop") as HTMLElement;
     const panel = container.querySelector(".bottom-sheet") as HTMLElement;
-    const inside = container.querySelector("button") as HTMLElement;
+    const inside = within(panel).getByRole("button", { name: "Inside" });
 
-    fireEvent.mouseDown(inside);
+    fireEvent.click(inside);
     expect(onDismiss).not.toHaveBeenCalled();
-    fireEvent.mouseDown(panel);
+    fireEvent.click(panel);
     expect(onDismiss).not.toHaveBeenCalled();
-    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

@@ -830,7 +830,25 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     fireEvent.pointerDown(editButton);
     fireEvent.pointerUp(editButton);
     fireEvent.click(editButton);
-    expect(await screen.findByRole("dialog", { name: "Edit event" })).toBeInTheDocument();
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    // The view/edit transition changes only the contents and title of the
+    // existing sheet.  This catches the iOS regression where the editor
+    // appeared briefly and the outer dialog was then dismissed/unmounted.
+    expect(editDialog).toBe(dialog);
+    expect(screen.getByRole("button", { name: /Save changes/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(api.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same event sheet open after Edit through a delayed refresh window", async () => {
+    const dialog = await openViewEventSheet();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Edit" }));
+
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    await new Promise((resolve) => window.setTimeout(resolve, 1100));
+
+    expect(editDialog).toBeInTheDocument();
+    expect(editDialog).toBe(dialog);
     expect(screen.getByRole("button", { name: /Save changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(api.updateEvent).not.toHaveBeenCalled();
