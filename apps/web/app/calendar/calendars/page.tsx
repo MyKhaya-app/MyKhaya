@@ -303,7 +303,7 @@ export default function CalendarsPage() {
         {!loaded || homeLoading ? (
           <p role="status">Loading your calendars…</p>
         ) : (
-          <>
+          <div className="card-stack">
             <div className="settings-list">
               {items.map((calendar) => {
                 const badge = calendarBadgeLabel(calendar);
@@ -432,7 +432,7 @@ export default function CalendarsPage() {
                 <Link href="/calendar/shared">Manage notification &amp; briefing preferences</Link>
               </p>
             </section>
-          </>
+          </div>
         )}
 
         {activeCalendar && (

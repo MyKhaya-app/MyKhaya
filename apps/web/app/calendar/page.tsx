@@ -2190,26 +2190,36 @@ export default function CalendarPage() {
             <BottomSheet
               title={editingSelected ? "Edit event" : selectedEvent.title}
               onDismiss={closeEventSheet}
-              headerAction={
-                !editingSelected && canEdit ? (
-                  <button
-                    className="tertiary"
-                    type="button"
-                    onClick={() => setEditingSelected(true)}
-                  >
-                    Edit
-                  </button>
-                ) : undefined
-              }
+              showCloseButton={false}
               fullHeight
               footer={
                 <div className="sheet-actions">
-                  <button form="calendar-edit-event-form" disabled={busy}>
-                    {busy ? "Saving…" : "Save changes"}
-                  </button>
-                  <button className="secondary" type="button" onClick={() => setEditingSelected(false)}>
-                    Cancel
-                  </button>
+                  {editingSelected ? (
+                    <>
+                      <button type="submit" form="calendar-edit-event-form" disabled={busy}>
+                        {busy ? "Saving…" : "Save changes"}
+                      </button>
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => {
+                          setEditingSelected(false);
+                          setError("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" disabled={!canEdit} onClick={() => setEditingSelected(true)}>
+                        Edit
+                      </button>
+                      <button className="secondary" type="button" onClick={closeEventSheet}>
+                        Close
+                      </button>
+                    </>
+                  )}
                 </div>
               }
             >

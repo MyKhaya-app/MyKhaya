@@ -110,6 +110,51 @@ async function openSharingSheet(name = "Hales Home") {
   return screen.findByRole("dialog", { name });
 }
 
+// Spacing fix: the calendar-list cards and the Calendar highlights card
+// (plus every other top-level section on this page) previously sat outside
+// a shared spacing container — the calendar cards got their gap from
+// .settings-list's own grid, but Calendar highlights was a sibling of that
+// list rather than a member of it, so it had no shared-gap rule at all and
+// visually touched the last calendar card. Fixing the structure (wrapping
+// everything in the existing .card-stack utility, already used for exactly
+// this purpose in app/help-support/page.tsx) means every current and future
+// top-level card shares the same `gap: var(--space-card-stack)` rule.
+describe("Calendars page — top-level card spacing", () => {
+  it("puts every top-level card in the same spacing stack, so one shared gap rule covers all of them", async () => {
+    render(<CalendarsPage />);
+    await screen.findByRole("heading", { name: "Home calendars" });
+
+    const primaryCard = screen.getByRole("heading", { name: /Hales Home/ }).closest(".calendar-list-card");
+    const secondCard = screen.getByRole("heading", { name: "Football Club" }).closest(".calendar-list-card");
+    const highlightsSection = screen.getByRole("heading", { name: "Calendar highlights" }).closest("section");
+    expect(primaryCard).not.toBeNull();
+    expect(secondCard).not.toBeNull();
+    expect(highlightsSection).not.toBeNull();
+
+    const stack = primaryCard!.closest(".card-stack");
+    expect(stack).not.toBeNull();
+    expect(stack).toContainElement(secondCard as HTMLElement);
+    expect(stack).toContainElement(highlightsSection as HTMLElement);
+  });
+
+  it("a third Home calendar automatically joins the same spacing stack — no per-card spacing needed", async () => {
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [primaryCalendar, secondCalendar, { ...secondCalendar, id: "cal-3", name: "Book Club" }],
+      limit: 3,
+      personal_calendar: null,
+    });
+    render(<CalendarsPage />);
+    await screen.findByRole("heading", { name: "Home calendars" });
+
+    const thirdCard = screen.getByRole("heading", { name: "Book Club" }).closest(".calendar-list-card");
+    const stack = screen
+      .getByRole("heading", { name: "Calendar highlights" })
+      .closest("section")!
+      .closest(".card-stack");
+    expect(stack).toContainElement(thirdCard as HTMLElement);
+  });
+});
+
 describe("Calendars page — Manage sharing sheet", () => {
   it("keeps Home calendars highlights in the established compact settings card structure", async () => {
     render(<CalendarsPage />);

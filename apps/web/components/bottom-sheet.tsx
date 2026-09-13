@@ -10,6 +10,7 @@ export function BottomSheet({
   children,
   fullHeight = false,
   headerAction,
+  showCloseButton = true,
   footer,
 }: {
   title: string;
@@ -20,6 +21,8 @@ export function BottomSheet({
    *  e.g. the "Edit" action on a read-only event detail sheet. Kept generic
    *  (not calendar-specific) so any sheet can use it. */
   headerAction?: React.ReactNode;
+  /** Some focused flows provide their own footer close action. */
+  showCloseButton?: boolean;
   /** Actions rendered outside the scrollable body, attached to the sheet footer. */
   footer?: React.ReactNode;
 }) {
@@ -126,14 +129,16 @@ export function BottomSheet({
           <h2 id="sheet-title">{title}</h2>
           <div className="sheet-header-actions">
             {headerAction}
-            <button
-              className="icon-button secondary bottom-sheet-close"
-              type="button"
-              onClick={onDismiss}
-              aria-label="Close dialog"
-            >
-              <X size={18} aria-hidden="true" />
-            </button>
+            {showCloseButton && (
+              <button
+                className="icon-button secondary bottom-sheet-close"
+                type="button"
+                onClick={onDismiss}
+                aria-label="Close dialog"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            )}
           </div>
         </header>
         <div className="sheet-content">{children}</div>

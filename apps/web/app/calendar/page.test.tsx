@@ -668,15 +668,19 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
   // this helper follows the same two-step path a real user takes, rather
   // than reaching into the event view dialog in one click as it used to.
   async function openEditEventSheet() {
+    const viewDialog = await openViewEventSheet();
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    return screen.findByRole("dialog", { name: "Edit event" });
+  }
+
+  async function openViewEventSheet() {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText("Football"));
     const daySheet = await screen.findByRole("dialog");
     fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
-    const viewDialog = await screen.findByRole("dialog", { name: "Football" });
-    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
-    return screen.findByRole("dialog", { name: "Edit event" });
+    return screen.findByRole("dialog", { name: "Football" });
   }
 
   it("shows separate Calendar and Calendar Tag fields when adding an event", async () => {
@@ -811,6 +815,43 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     ];
     expect(payload).toMatchObject({ label_id: null });
     expect(payload).not.toHaveProperty("calendar_id");
+  });
+
+  it("opens existing events in view mode with only Edit and Close actions", async () => {
+    const dialog = await openViewEventSheet();
+    expect(within(dialog).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Save changes/i })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Close dialog" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Edit event" })).toBeNull();
+  });
+
+  it("enters edit mode without saving, and Cancel returns to the original view", async () => {
+    const viewDialog = await openViewEventSheet();
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.change(within(editDialog).getByLabelText("Title"), { target: { value: "Unsaved title" } });
+    expect(api.updateEvent).not.toHaveBeenCalled();
+    expect(within(editDialog).getByRole("button", { name: /Save changes/i })).toBeInTheDocument();
+    expect(within(editDialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(editDialog).queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(within(editDialog).queryByRole("button", { name: "Close" })).toBeNull();
+
+    fireEvent.click(within(editDialog).getByRole("button", { name: "Cancel" }));
+    const returnedDialog = await screen.findByRole("dialog", { name: "Football" });
+    expect(within(returnedDialog).getByText("Football")).toBeInTheDocument();
+    expect(within(returnedDialog).queryByDisplayValue("Unsaved title")).toBeNull();
+    expect(within(returnedDialog).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(within(returnedDialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(api.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("closes the view sheet without saving when Close is pressed", async () => {
+    const dialog = await openViewEventSheet();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(api.updateEvent).not.toHaveBeenCalled();
   });
 
   it("the event chip's colour comes from its Calendar Tag, not the calendar it lives on", async () => {
