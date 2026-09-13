@@ -19,10 +19,17 @@ import { SETTLE_DURATION_MS } from "./use-month-swipe";
 // unrelated re-render — including the focusDate updates this file's tests
 // are asserting on — silently swapping in a brand-new heading DOM node.
 const mockRouter = { replace: vi.fn(), push: vi.fn() };
+const { syncWidgetSnapshotMock } = vi.hoisted(() => ({
+  syncWidgetSnapshotMock: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({
   useRouter: () => mockRouter,
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/calendar",
+}));
+
+vi.mock("@/components/widget-bridge", () => ({
+  syncWidgetSnapshot: syncWidgetSnapshotMock,
 }));
 
 vi.mock("@/components/use-active-home", () => ({
@@ -852,6 +859,17 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     expect(screen.getByRole("button", { name: /Save changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(api.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger the native widget refresh when the Calendar is read or Edit is pressed", async () => {
+    const dialog = await openViewEventSheet();
+    expect(syncWidgetSnapshotMock).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Edit" }));
+    await screen.findByRole("dialog", { name: "Edit event" });
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    expect(syncWidgetSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("enters edit mode without saving, and Cancel returns to the original view", async () => {

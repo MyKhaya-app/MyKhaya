@@ -92,6 +92,11 @@ const MEMBER_STORAGE_PREFIX = "mykhaya.calendar.member.";
 // to any one Home, so this key is global to the signed-in browser profile.
 const HIDDEN_CALENDARS_STORAGE = "mykhaya.calendar.hidden-calendars";
 
+function calendarDebugLog(enabled: boolean, message: string, details?: unknown) {
+  if (!enabled) return;
+  console.info(`[calendar-debug] ${message}`, details ?? "");
+}
+
 function formText(data: FormData, name: string) {
   const value = data.get(name);
   return typeof value === "string" ? value : "";
@@ -255,6 +260,7 @@ function EventForm({
   onSubmit,
   onSubmitShared,
   onDelete,
+  debug = false,
 }: {
   formId: string;
   /** Calendar Tags (CalendarEventLabel) — a colour/category tag, entirely
@@ -295,6 +301,7 @@ function EventForm({
    *  the target for a *new* event — only relevant during creation. */
   onSubmitShared?: (shareId: string, payload: SharedEventPayload) => Promise<void>;
   onDelete?: () => Promise<void>;
+  debug?: boolean;
 }) {
   const eventTimeZone = initial?.timezone || timeZone;
   const [initialWhen] = useState(() =>
@@ -309,6 +316,10 @@ function EventForm({
   useEffect(() => {
     formRef.current?.focus();
   }, []);
+  useEffect(() => {
+    calendarDebugLog(debug, "EventForm MOUNT");
+    return () => calendarDebugLog(debug, "EventForm UNMOUNT");
+  }, [debug]);
   const [allDay, setAllDay] = useState(initialWhen.allDay);
   const [startDate, setStartDate] = useState(initialWhen.startDate);
   const [startTime, setStartTime] = useState(initialWhen.startTime);
@@ -1169,6 +1180,7 @@ function RecurrenceScopeSheet({
 export default function CalendarPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const debugEnabled = searchParams.get("calendarDebug") === "1";
   const { activeHome, activeHomeId } = useActiveHome();
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [featureChecked, setFeatureChecked] = useState(false);
@@ -1234,6 +1246,57 @@ export default function CalendarPage() {
   const agendaAnchorRef = useRef<HTMLElement | null>(null);
   const agendaEntryToken = useRef(0);
   const positionedAgendaToken = useRef(-1);
+
+  useEffect(() => {
+    if (!debugEnabled) return;
+    const lifecycleEvents = ["beforeunload", "pagehide", "popstate", "resize", "focusin", "visibilitychange"] as const;
+    const handlers = new Map<string, EventListener>();
+    for (const eventName of lifecycleEvents) {
+      const handler: EventListener = (event) => {
+        calendarDebugLog(true, `window ${eventName}`, {
+          event,
+          href: window.location.href,
+          pathname: window.location.pathname,
+          search: window.location.search,
+          hash: window.location.hash,
+          visibilityState: document.visibilityState,
+        });
+      };
+      handlers.set(eventName, handler);
+      window.addEventListener(eventName, handler);
+    }
+    const visualViewport = window.visualViewport;
+    const onVisualViewportResize = () => {
+      calendarDebugLog(true, "visualViewport.resize", {
+        height: visualViewport?.height,
+        width: visualViewport?.width,
+        scale: visualViewport?.scale,
+      });
+    };
+    visualViewport?.addEventListener("resize", onVisualViewportResize);
+    calendarDebugLog(debugEnabled, "CALENDAR PAGE MOUNT", {
+      href: window.location.href,
+      pathname: window.location.pathname,
+      search: window.location.search,
+      hash: window.location.hash,
+    });
+    return () => {
+      for (const [eventName, handler] of handlers) window.removeEventListener(eventName, handler);
+      visualViewport?.removeEventListener("resize", onVisualViewportResize);
+      calendarDebugLog(true, "CALENDAR PAGE UNMOUNT", { href: window.location.href });
+    };
+  }, [debugEnabled]);
+
+  useEffect(() => {
+    calendarDebugLog(debugEnabled, "calendar state", {
+      editingSelected,
+      selectedEvent: selectedEvent
+        ? { occurrenceId: selectedEvent.occurrence_id, start: selectedEvent.start_at }
+        : null,
+      view,
+      focusDate: focusDate.toISOString(),
+    });
+  }, [debugEnabled, editingSelected, selectedEvent, view, focusDate]);
 
   useEffect(() => {
     setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
@@ -1335,8 +1398,17 @@ export default function CalendarPage() {
     return { start, end };
   }, [view, range, cells]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ syncWidget = false }: { syncWidget?: boolean } = {}) => {
     if (!activeHomeId || !featureEnabled) return;
+    calendarDebugLog(debugEnabled, "calendar loader fired", {
+      activeHomeId,
+      featureEnabled,
+      view,
+      focusDate: focusDate.toISOString(),
+      rangeStart: fetchRange.start.toISOString(),
+      rangeEnd: fetchRange.end.toISOString(),
+      syncWidget,
+    });
     const [labelRows, eventRows, memberRows, calendarRows, shares, highlightRows] = await Promise.all([
       api.listLabels(activeHomeId),
       api.listEvents(activeHomeId, {
@@ -1386,11 +1458,13 @@ export default function CalendarPage() {
       ),
     );
     setEvents([...eventRows.items, ...sharedEventLists.flat()]);
-    // Widget event data may be stale after any create/update/delete that
-    // routes through this loader (see widget-bridge.ts's own fetch, which
-    // covers a wider date range than this page's visible window).
-    void syncWidgetSnapshot();
-  }, [activeHomeId, featureEnabled, fetchRange.end, fetchRange.start]);
+    // Widget data is deliberately refreshed only after a successful mutation.
+    // A normal Calendar read must not fan out into native /groups, a second
+    // broad /events request, /routines and /reminders calls. In the iOS shell
+    // that background fan-out can overlap a view/edit transition and look like
+    // the Calendar page has reloaded, even though selectedEvent is unchanged.
+    if (syncWidget) void syncWidgetSnapshot();
+  }, [activeHomeId, debugEnabled, featureEnabled, fetchRange.end, fetchRange.start, focusDate, view]);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -1546,7 +1620,7 @@ export default function CalendarPage() {
       await api.createEvent(activeHomeId, payload);
       setEditorDay(null);
       setSelectedDay(null);
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       setError(
         cause instanceof ApiError
@@ -1569,7 +1643,7 @@ export default function CalendarPage() {
       await api.createSharedEvent(shareId, payload);
       setEditorDay(null);
       setSelectedDay(null);
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "We could not save your event.");
     } finally {
@@ -1622,7 +1696,7 @@ export default function CalendarPage() {
       // and review. The refreshed event reaches Month/Day/Agenda via load()
       // below, same as every other successful mutation on this page.
       closeEventSheet();
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       setError(
         cause instanceof ApiError
@@ -1661,7 +1735,7 @@ export default function CalendarPage() {
       // chooser layered on top of it.
       setPendingEditPayload(null);
       closeEventSheet();
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       // Keep pendingEditPayload set so the chooser stays open with the
       // user's edits intact and they can retry — never silently fall back
@@ -1691,7 +1765,7 @@ export default function CalendarPage() {
         await api.deleteEvent(activeHomeId, selectedEvent.event_id);
       }
       closeEventSheet();
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       setError(
         cause instanceof ApiError
@@ -1716,7 +1790,7 @@ export default function CalendarPage() {
       );
       setPendingDelete(false);
       closeEventSheet();
-      await load();
+      await load({ syncWidget: true });
     } catch (cause) {
       // Keep the event open/recoverable — pendingDelete stays true so the
       // chooser stays open and the user can retry.
@@ -2212,7 +2286,28 @@ export default function CalendarPage() {
                     </>
                   ) : (
                     <>
-                      <button type="button" disabled={!canEdit} onClick={() => setEditingSelected(true)}>
+                      <button
+                        type="button"
+                        disabled={!canEdit}
+                        onClick={(event) => {
+                          calendarDebugLog(debugEnabled, "EDIT pressed", {
+                            target: event.target,
+                            currentTarget: event.currentTarget,
+                            defaultPrevented: event.defaultPrevented,
+                            href: window.location.href,
+                            pathname: window.location.pathname,
+                            search: window.location.search,
+                            hash: window.location.hash,
+                            rangeStart: fetchRange.start.toISOString(),
+                            rangeEnd: fetchRange.end.toISOString(),
+                            selectedEvent: {
+                              occurrenceId: selectedEvent.occurrence_id,
+                              start: selectedEvent.start_at,
+                            },
+                          });
+                          setEditingSelected(true);
+                        }}
+                      >
                         Edit
                       </button>
                       <button className="secondary" type="button" onClick={closeEventSheet}>
@@ -2237,6 +2332,7 @@ export default function CalendarPage() {
                   sharedEventsEnabled={sharedEventsEnabled}
                   onSubmit={update}
                   onDelete={canDelete ? remove : undefined}
+                  debug={debugEnabled}
                 />
               ) : (
                 <EventDetails
