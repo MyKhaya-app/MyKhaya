@@ -613,11 +613,16 @@ describe("Routines & Reminders — To-do categories", () => {
     render(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "To-dos" }));
-    expect(screen.getByText("Sign school trip form")).toBeInTheDocument();
-    expect(screen.getByText("School")).toBeInTheDocument();
-    expect(screen.getByText("Uncategorised")).toBeInTheDocument();
+    // The desktop/tablet "Categories" side panel (browser-only, hidden via
+    // CSS on mobile — not applied in jsdom) also renders each category
+    // name, so scope these to the main list to avoid ambiguity with it.
+    const main = document.querySelector(".rr-main") as HTMLElement;
+    expect(within(main).getByText("Sign school trip form")).toBeInTheDocument();
+    expect(within(main).getByText("School")).toBeInTheDocument();
+    expect(within(main).getByText("Uncategorised")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Category: All categories/i }));
-    await user.click(screen.getByRole("button", { name: "School" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose category" });
+    await user.click(within(picker).getByRole("button", { name: "School" }));
     expect(screen.queryByText("Buy stamps")).not.toBeInTheDocument();
   });
 
@@ -777,5 +782,99 @@ describe("Routines & Reminders — Upcoming cards", () => {
     await user.click(card);
     expect(screen.getByRole("heading", { name: "Edit reminder" })).toBeInTheDocument();
     expect(screen.getByLabelText(/title/i)).toHaveValue("Gym Session");
+  });
+});
+
+// Browser desktop/tablet presentation (this module's content only — the
+// outer shell, dock and mobile/native layout are untouched). .rr-side is
+// hidden entirely on mobile/native via CSS (`display: none`, not applied by
+// jsdom), so its presence here proves the structure exists and reuses the
+// existing create/manage flows, not that it's visible at every width.
+describe("Routines & Reminders — desktop/tablet supporting panels", () => {
+  it("places the main list and the supporting panels inside one shared two-column layout", async () => {
+    render(<RoutinesRemindersPage />);
+    await screen.findByRole("heading", { name: "Nudges" });
+
+    const layout = document.querySelector(".rr-layout");
+    const main = layout?.querySelector(".rr-main");
+    const side = layout?.querySelector(".rr-side");
+    expect(layout).not.toBeNull();
+    expect(main).not.toBeNull();
+    expect(side).not.toBeNull();
+    // The real search/filter/list content lives in the main column...
+    expect(within(main as HTMLElement).getByLabelText("Search nudges")).toBeInTheDocument();
+    // ...and Quick add / Categories / Nudge settings in the side column.
+    expect(within(side as HTMLElement).getByRole("heading", { name: "Quick add" })).toBeInTheDocument();
+    expect(within(side as HTMLElement).getByRole("heading", { name: "Categories" })).toBeInTheDocument();
+    expect(within(side as HTMLElement).getByRole("heading", { name: "Nudge settings" })).toBeInTheDocument();
+  });
+
+  it("Quick add's Add routine launches the existing New routine create flow, not a duplicate", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add routine" }));
+
+    expect(await screen.findByRole("heading", { name: "New routine" })).toBeInTheDocument();
+    expect(api.createRoutine).not.toHaveBeenCalled();
+  });
+
+  it("Quick add's Add reminder launches the existing New reminder create flow", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add reminder" }));
+
+    expect(await screen.findByRole("heading", { name: "New reminder" })).toBeInTheDocument();
+  });
+
+  it("Quick add's Add to-do launches the existing New to-do create flow", async () => {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add to-do" }));
+
+    expect(await screen.findByRole("heading", { name: "New To-do" })).toBeInTheDocument();
+  });
+
+  it("Categories panel shows real categories with a real item count derived from loaded data, not fabricated", async () => {
+    (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [todoCategory()] });
+    (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [todo({ category: todoCategory() }), todo({ id: "todo-2", title: "Buy stamps" })],
+    });
+    render(<RoutinesRemindersPage />);
+    await screen.findByRole("heading", { name: "Nudges" });
+
+    const side = document.querySelector(".rr-side") as HTMLElement;
+    const row = within(side).getByRole("button", { name: /School/ });
+    // Exactly one item (Sign school trip form) carries this category — the
+    // uncategorised "Buy stamps" todo must not inflate the count.
+    expect(within(row).getByText("1")).toBeInTheDocument();
+  });
+
+  it("Categories panel omits counts/rows gracefully when there are no categories yet, rather than inventing any", async () => {
+    render(<RoutinesRemindersPage />);
+    await screen.findByRole("heading", { name: "Nudges" });
+
+    const side = document.querySelector(".rr-side") as HTMLElement;
+    expect(within(side).getByText("No categories yet.")).toBeInTheDocument();
+  });
+
+  it("Categories panel's Manage action opens the existing Manage categories flow, not a new one", async () => {
+    (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [todoCategory()] });
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Nudges" });
+
+    const side = document.querySelector(".rr-side") as HTMLElement;
+    await user.click(within(side).getByRole("button", { name: "Manage" }));
+
+    expect(await screen.findByRole("dialog", { name: "Manage categories" })).toBeInTheDocument();
+  });
+
+  it("Nudge settings routes to the existing Notifications settings destination", async () => {
+    render(<RoutinesRemindersPage />);
+    await screen.findByRole("heading", { name: "Nudges" });
+
+    const side = document.querySelector(".rr-side") as HTMLElement;
+    const link = within(side).getByRole("link", { name: /Notification settings/ });
+    expect(link).toHaveAttribute("href", "/settings/notifications");
   });
 });

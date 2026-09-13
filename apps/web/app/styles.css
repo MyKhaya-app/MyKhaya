@@ -8012,6 +8012,77 @@ select.plan-meal-field-input {
   display: grid;
   gap: 1rem;
 }
+/* Desktop/tablet browser two-column composition (see the browser-shell
+   media block further down for the actual grid). On mobile/native these
+   three wrappers must cost nothing: .rr-layout/.rr-main use `display:
+   contents` so their children lay out exactly as direct children of
+   .rr-page (identical gap, identical stacking) — not merely visually
+   similar, structurally the same box tree mobile already had. .rr-side
+   (Quick add / Categories / Nudge settings) is a browser-desktop-only
+   addition with nothing equivalent on mobile today, so it is hidden
+   entirely there, not just visually collapsed. */
+.rr-layout,
+.rr-main {
+  display: contents;
+}
+.rr-side {
+  display: none;
+}
+.rr-side-card h2 {
+  margin-top: 0;
+}
+.rr-quick-add-actions {
+  display: grid;
+  gap: 0.55rem;
+}
+.rr-quick-add-action {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.6rem;
+}
+.rr-categories-panel-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+.rr-categories-panel-heading h2 {
+  margin: 0;
+}
+.rr-categories-panel-list {
+  display: grid;
+  gap: 0.3rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rr-categories-panel-row {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-button, 0.75rem);
+  box-shadow: none;
+  color: var(--colour-forest-dark, #102c2a);
+  display: flex;
+  font-weight: 600;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0.4rem 0.6rem;
+  width: 100%;
+}
+.rr-categories-panel-row:hover {
+  background: var(--colour-cream);
+  box-shadow: none;
+  transform: none;
+}
+.rr-categories-panel-count {
+  color: var(--colour-muted, #65777b);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.rr-settings-link {
+  margin: 0 -0.5rem -0.25rem;
+}
 .rr-intro {
   color: var(--colour-muted);
   margin: -0.4rem 0 0;
@@ -9298,6 +9369,52 @@ a.family-feed-row {
     min-height: 24px;
     padding-inline: 0.45rem;
   }
+
+  /* Nudges (routines-reminders): same browser desktop/tablet shell as
+     Calendar above, applied to this module's own content instead of a new
+     outer frame. Below the 1100px side-by-side threshold further down,
+     tablet gets a single dominant column with Quick add/Categories/Nudge
+     settings stacked beneath it, full width — not squeezed side-by-side
+     into a phone-width sliver (see the 1100px block for why: at typical
+     tablet-landscape widths there isn't yet room for a real supporting
+     column without starving the main list). */
+  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
+    max-width: 900px;
+    padding: 2rem clamp(1.25rem, 4vw, 4rem) 3rem;
+  }
+  .app-shell:not(.native-shell-app) .rr-layout {
+    display: grid;
+    gap: 1.5rem;
+  }
+  .app-shell:not(.native-shell-app) .rr-main {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+  }
+  .app-shell:not(.native-shell-app) .rr-side {
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+  }
+  .app-shell:not(.native-shell-app) .rr-intro-art {
+    height: 72px;
+  }
+}
+
+/* Below 1100px the Around-the-house dock's own actions row wraps onto a
+   second (or third) line — see its plain `flex-wrap` further up, only
+   forced to `nowrap` at 1100px+ — making the dock taller than .rr-fab's
+   default bottom offset (tuned for the dock's single-row height) accounts
+   for. Verified by measurement: at 768–1024px with a full 6-action dock,
+   the dock's top edge can sit above .rr-fab's default position, i.e. they
+   visually collide. Nudges-specific (.rr-fab is not shared with Calendar,
+   whose own equivalent FAB is desktop-hidden entirely — see .calendar-fab),
+   so this raises only this module's own floating button, only in the width
+   range where the taller wrapped dock is actually possible. */
+@media (min-width: 760px) and (max-width: 1099px) {
+  .app-shell:not(.native-shell-app) .rr-fab {
+    bottom: calc(var(--safe-bottom) + 13rem);
+  }
 }
 
 /* Calendar Highlights are deliberately secondary to real event bars. They
@@ -9485,5 +9602,19 @@ a.family-feed-row {
   }
   .app-shell:not(.native-shell-app) .around-house-dock-actions {
     flex-wrap: nowrap;
+  }
+  /* Nudges side-by-side threshold: below this, the 760px block above keeps
+     Quick add/Categories/Nudge settings stacked full-width beneath the
+     main list — there isn't reliably enough room for a real supporting
+     column without starving it (tablet landscape at ~1024px, minus the
+     224px rail and page padding, leaves too little for both). From here
+     up there is, so the main list (minmax(0, 1fr)) and the fixed-width
+     supporting column sit side by side, main still clearly dominant. */
+  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
+    max-width: 1180px;
+  }
+  .app-shell:not(.native-shell-app) .rr-layout {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
 }

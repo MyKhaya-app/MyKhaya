@@ -2,7 +2,9 @@
 
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
+  Bell,
   CalendarCheck2,
   ClipboardCheck,
   ChevronDown,
@@ -639,6 +641,21 @@ export default function RoutinesRemindersPage() {
     [selectedCategoryId, typeFiltered],
   );
 
+  // Desktop/tablet Categories panel (see rr-categories-panel below): a real
+  // per-category count, derived from the same data already loaded for
+  // filtering above — not a new endpoint, and not shown at all if it were
+  // ever unavailable.
+  const categoryCounts = useMemo(
+    () =>
+      new Map(
+        todoCategories.map((category) => [
+          category.id,
+          allItems.filter((item) => item.data.category?.id === category.id).length,
+        ]),
+      ),
+    [todoCategories, allItems],
+  );
+
   // Client-side only, on top of the type/scope filters above — the data is
   // already loaded in full for this Home, so there's no need for a backend
   // search endpoint here.
@@ -842,7 +859,7 @@ export default function RoutinesRemindersPage() {
   }
 
   return (
-    <SettingsPage title="Nudges" hideHeading className="module-page">
+    <SettingsPage title="Nudges" hideHeading className="module-page nudges-page">
       <div className="rr-page">
         <div className="rr-intro">
           <div className="rr-intro-text">
@@ -867,6 +884,8 @@ export default function RoutinesRemindersPage() {
         )}
         <Toast message={message} onDismiss={dismissMessage} />
 
+      <div className="rr-layout">
+        <div className="rr-main">
         <div className="rr-search-row">
           <div className="calendar-search">
             <Search size={16} aria-hidden="true" />
@@ -999,6 +1018,81 @@ export default function RoutinesRemindersPage() {
             </p>
           </div>
         )}
+        </div>
+
+        <aside className="rr-side" aria-label="Nudges tools">
+          {canManageAny && (
+            <section className="card details rr-side-card rr-quick-add">
+              <h2>Quick add</h2>
+              <div className="rr-quick-add-actions">
+                {canManageRoutines && (
+                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewRoutine}>
+                    <Repeat size={17} aria-hidden="true" />
+                    Add routine
+                  </button>
+                )}
+                {canManageReminders && (
+                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewReminder}>
+                    <Clock size={17} aria-hidden="true" />
+                    Add reminder
+                  </button>
+                )}
+                {canManageReminders && (
+                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewTodo}>
+                    <ClipboardCheck size={17} aria-hidden="true" />
+                    Add to-do
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          <section className="card details rr-side-card rr-categories-panel">
+            <div className="rr-categories-panel-heading">
+              <h2>Categories</h2>
+              {canManageReminders && (
+                <button
+                  type="button"
+                  className="tertiary"
+                  onClick={() => { setShowCategoryManager(true); setEditingCategoryId(null); setCategoryDraft(""); }}
+                >
+                  Manage
+                </button>
+              )}
+            </div>
+            {todoCategories.length === 0 ? (
+              <p className="quiet-state">No categories yet.</p>
+            ) : (
+              <ul className="rr-categories-panel-list">
+                {todoCategories.map((category) => (
+                  <li key={category.id}>
+                    <button
+                      type="button"
+                      className={`rr-categories-panel-row${selectedCategoryId === category.id ? " rr-category-option-active" : ""}`}
+                      onClick={() =>
+                        setSelectedCategoryId(selectedCategoryId === category.id ? null : category.id)
+                      }
+                    >
+                      <span>{category.name}</span>
+                      <span className="rr-categories-panel-count">{categoryCounts.get(category.id) ?? 0}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="card details rr-side-card rr-settings-panel">
+            <h2>Nudge settings</h2>
+            <p className="muted">Reminders, routines and your daily Nudge summary.</p>
+            <Link className="profile-settings-row rr-settings-link" href="/settings/notifications">
+              <span className="profile-settings-icon"><Bell size={19} aria-hidden="true" /></span>
+              <span><strong>Notification settings</strong><small>Choose how MyKhaya keeps you informed</small></span>
+              <ChevronRight size={19} aria-hidden="true" />
+            </Link>
+          </section>
+        </aside>
+      </div>
 
         {canManageAny && formKind === null && (
           <>
