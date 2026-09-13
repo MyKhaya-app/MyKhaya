@@ -56,6 +56,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       revokeCalendarShare: vi.fn(),
       createCalendar: vi.fn(),
       deleteCalendar: vi.fn(),
+      calendarHighlights: vi.fn(),
     },
   };
 });
@@ -94,6 +95,7 @@ beforeEach(() => {
     { id: "l2", name: "Football Club", color: "sage", is_active: true, sort_order: 20, commercial_access: "normal" },
   ]);
   (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.calendarHighlights as ReturnType<typeof vi.fn>).mockResolvedValue(null);
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
     external_invites_enabled: true,
   });
@@ -109,6 +111,15 @@ async function openSharingSheet(name = "Hales Home") {
 }
 
 describe("Calendars page — Manage sharing sheet", () => {
+  it("keeps Home calendars highlights in the established compact settings card structure", async () => {
+    render(<CalendarsPage />);
+    expect(await screen.findByRole("heading", { name: "Home calendars" })).toBeInTheDocument();
+    const section = screen.getByRole("heading", { name: "Calendar highlights" }).closest("section");
+    expect(section).toHaveClass("card", "details", "calendar-highlights-settings");
+    expect(within(section as HTMLElement).getByText("Home birthdays")).toBeInTheDocument();
+    expect(within(section as HTMLElement).getByLabelText("Home birthdays")).toBeInTheDocument();
+  });
+
   it("opens a BottomSheet (not an inline-expanding card) with the calendar's name as its title", async () => {
     const dialog = await openSharingSheet();
     expect(dialog).toBeInTheDocument();

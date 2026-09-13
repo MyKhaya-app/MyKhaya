@@ -9322,6 +9322,7 @@ a.family-feed-row {
   color: var(--slate, #1f2933);
   font-size: 0.62rem;
   line-height: 1.15;
+  max-height: 2.3em;
   overflow: hidden;
   pointer-events: none;
 }
@@ -9351,6 +9352,70 @@ a.family-feed-row {
   align-items: center;
   padding: 0.65rem 0;
   border-top: 1px solid var(--border, #e5ded1);
+}
+.calendar-highlights-settings {
+  display: grid;
+  gap: 0.2rem;
+}
+.calendar-highlights-settings > h2,
+.calendar-highlights-settings > p {
+  margin-block: 0.2rem;
+}
+.calendar-highlight-setting-row {
+  align-items: center;
+  border-top: 1px solid var(--border, #e5ded1);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-height: 48px;
+  padding: 0.45rem 0;
+}
+.calendar-highlight-setting-row.check-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.calendar-highlight-setting-icon {
+  align-items: center;
+  color: var(--sage, #52705b);
+  display: inline-flex;
+}
+.calendar-highlight-setting-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.calendar-highlight-setting-copy small {
+  color: var(--muted, #66736b);
+  font-size: 0.8rem;
+}
+.calendar-highlight-add {
+  border-top: 1px solid var(--border, #e5ded1);
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.75rem;
+}
+.calendar-day-highlights {
+  border-bottom: 1px solid var(--border, #e5ded1);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.calendar-day-highlights h3,
+.calendar-day-events-heading {
+  font-size: 0.85rem;
+  margin: 0 0 0.45rem;
+}
+.calendar-day-highlights ul {
+  color: var(--muted, #66736b);
+  display: grid;
+  gap: 0.3rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.calendar-day-highlights li {
+  line-height: 1.3;
+}
+.calendar-day-events-heading {
+  color: var(--muted, #66736b);
 }
 .calendar-highlight-subscription small {
   display: block;

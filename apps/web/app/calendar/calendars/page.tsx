@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { Cake, Globe2, X } from "lucide-react";
 import type { CalendarHighlightSettings, CalendarShare, EventLabel, HomeCalendar } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -334,17 +335,18 @@ export default function CalendarsPage() {
             <section className="card details calendar-highlights-settings">
               <h2>Calendar highlights</h2>
               <p className="muted">Show useful Home and holiday dates directly in your calendar.</p>
-              <label className="check-row">
-                <input type="checkbox" checked={highlights?.birthdays_enabled ?? false} disabled={highlightBusy || !canEditHighlights} onChange={(event) => void setBirthdaysEnabled(event.target.checked)} />
-                🎂 Home birthdays
+              <label className="check-row calendar-highlight-setting-row">
+                <span className="calendar-highlight-setting-icon" aria-hidden="true"><Cake size={18} /></span>
+                <span className="calendar-highlight-setting-copy"><strong>Home birthdays</strong><small>Show birthdays saved for Home members.</small></span>
+                <input type="checkbox" checked={highlights?.birthdays_enabled ?? false} aria-label="Home birthdays" disabled={highlightBusy || !canEditHighlights} onChange={(event) => void setBirthdaysEnabled(event.target.checked)} />
               </label>
               <p className="quiet-state">Show Home members&rsquo; birthdays using the birthday saved on their account.</p>
               {highlights && highlights.subscriptions.map((subscription) => (
                 <div className="calendar-highlight-subscription" key={subscription.id}>
-                  <span aria-hidden="true">{subscription.source.flag_emoji}</span>
-                  <span><strong>{subscription.source.country_name}</strong><small>{subscription.source.region_name}</small></span>
+                  <span className="calendar-highlight-setting-icon" aria-hidden="true"><Globe2 size={18} /></span>
+                  <span className="calendar-highlight-setting-copy"><strong>{subscription.source.flag_emoji} {subscription.source.country_name}</strong><small>{subscription.source.region_name}</small></span>
                   <input type="checkbox" aria-label={`${subscription.source.country_name} ${subscription.source.region_name}`} checked={subscription.enabled} disabled={highlightBusy || !canEditHighlights} onChange={(event) => void toggleHolidaySource(subscription.id, event.target.checked)} />
-                  <button type="button" className="danger-link" disabled={highlightBusy || !canEditHighlights} onClick={() => void removeHolidaySource(subscription.id)}>Remove</button>
+                  <button type="button" className="icon-button secondary" aria-label={`Remove ${subscription.source.country_name} ${subscription.source.region_name}`} disabled={highlightBusy || !canEditHighlights} onClick={() => void removeHolidaySource(subscription.id)}><X size={17} aria-hidden="true" /></button>
                 </div>
               ))}
               {highlights && highlights.available_sources.filter((source) => !highlights.subscriptions.some((item) => item.source.id === source.id)).length > 0 && (

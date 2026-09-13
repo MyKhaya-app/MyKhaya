@@ -54,6 +54,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       listLabels: vi.fn(),
       members: vi.fn(),
       listCalendars: vi.fn(),
+      calendarHighlightDates: vi.fn(),
       billingStatus: vi.fn(),
       birthdays: vi.fn(),
       sharedCalendars: vi.fn(),
@@ -84,6 +85,7 @@ beforeEach(() => {
   });
   (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.calendarHighlightDates as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
 });
 
 describe("Calendar — Month view navigation", () => {
@@ -269,6 +271,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
     const daySheet = await screen.findByRole("dialog");
     expect(within(daySheet).getByText("No events")).toBeInTheDocument();
+    expect(within(daySheet).queryByRole("heading", { name: "Calendar highlights" })).toBeNull();
   });
 
   it("7. Add event on this day uses the selected Day List date", async () => {
@@ -295,6 +298,27 @@ describe("Calendar — Month view opens Day List first", () => {
 
     const daySheet = await screen.findByRole("dialog");
     expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+  });
+
+  it("shows date highlights above unchanged events and removes the old month banner", async () => {
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
+    (api.calendarHighlightDates as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        { kind: "birthday", date: "2026-01-15", label: "Alyssa's birthday", names: ["Alyssa"] },
+        { kind: "holiday", date: "2026-01-15", label: "Summer bank holiday", flag_emoji: "🇬🇧" },
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+
+    expect(document.querySelector(".calendar-birthday-banner")).toBeNull();
+    fireEvent.click(dayArticleFor(/15 January 2026/));
+    const daySheet = await screen.findByRole("dialog");
+    expect(within(daySheet).getByRole("heading", { name: "Calendar highlights" })).toBeInTheDocument();
+    expect(within(daySheet).getByText("Alyssa's birthday")).toBeInTheDocument();
+    expect(within(daySheet).getByText("Summer bank holiday")).toBeInTheDocument();
+    expect(within(daySheet).getByRole("button", { name: /Sample event/ })).toBeInTheDocument();
+
   });
 
   it("9. tapping an adjacent-month date resolves the full correct date, not just the displayed day number", async () => {
@@ -800,6 +824,67 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     expect(eventColour).toBe(resolveColour(activityTag.color));
     expect(eventColour).not.toBe(resolveColour(secondaryCalendar.color));
   });
+
+  // Standard MyKhaya sheet-action behaviour (see components/bottom-sheet.tsx
+  // usage across the app): a successful Save dismisses the sheet
+  // immediately and refreshes the underlying view — the user should never
+  // need to tap Cancel/X/swipe after a save that already succeeded. This is
+  // the regression the Calendar edit sheet previously had (it returned to a
+  // read-only View of the freshly saved event instead of closing).
+  describe("Save changes — sheet dismissal", () => {
+    it("a successful save dismisses the Edit event sheet automatically and refreshes the calendar", async () => {
+      (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(existingEvent());
+      const dialog = await openEditEventSheet();
+      const listEventsCallsBefore = (api.listEvents as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
+
+      // Gone entirely — not lingering as a read-only View of the same event.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // The underlying Month view is refreshed, not left showing stale data.
+      await waitFor(() =>
+        expect((api.listEvents as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+          listEventsCallsBefore,
+        ),
+      );
+    });
+
+    it("Save changes is disabled and shows the loading label while the request is in flight, preventing duplicate submissions", async () => {
+      let resolveUpdate!: (value: unknown) => void;
+      (api.updateEvent as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+      );
+      const dialog = await openEditEventSheet();
+      const saveButton = within(dialog).getByRole("button", { name: /save changes/i });
+
+      fireEvent.click(saveButton);
+      await waitFor(() => expect(saveButton).toBeDisabled());
+      expect(saveButton).toHaveTextContent(/saving/i);
+
+      // A second tap while disabled must not fire a second request.
+      fireEvent.click(saveButton);
+      expect(api.updateEvent).toHaveBeenCalledTimes(1);
+
+      resolveUpdate(existingEvent());
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("a failed save keeps the sheet open, shows the error, and preserves the entered data", async () => {
+      (api.updateEvent as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+      const dialog = await openEditEventSheet();
+      fireEvent.change(within(dialog).getByLabelText("Calendar Tag"), { target: { value: "" } });
+
+      fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
+
+      // Still open — the fix must never close before the mutation actually succeeds.
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Edit event" })).toBeInTheDocument();
+      // The user's in-progress edit (clearing the Calendar Tag) is untouched.
+      expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar Tag").value).toBe("");
+    });
+  });
 });
 
 // Phase 2D: the Calendar picker must never offer a calendar the backend has
@@ -1156,6 +1241,24 @@ describe("Calendar — Recurring event scope chooser", () => {
     // no scope field at all is a correct payload for this choice.
     expect(payload.scope === undefined || payload.scope === "series").toBe(true);
     expect(payload).not.toHaveProperty("occurrence_start");
+  });
+
+  it("a successful scoped save dismisses the whole event sheet, not just the scope chooser", async () => {
+    (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(movedOccurrence());
+    const viewDialog = await openEventDialog(movedOccurrence());
+    fireEvent.click(within(viewDialog).getByRole("button", { name: "Edit" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+
+    const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+    fireEvent.click(within(chooser).getByRole("button", { name: "This occurrence only" }));
+
+    await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+    // Both the scope chooser and the underlying Edit/View event sheet are
+    // gone — the standard "successful save closes the sheet" behaviour
+    // applies once the user has also confirmed which occurrences it covers,
+    // not just to the chooser layered on top.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("Delete on a recurring occurrence opens a matching delete chooser, no request before a choice, and Cancel sends none", async () => {

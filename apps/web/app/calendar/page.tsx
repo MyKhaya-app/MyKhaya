@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import type {
-  BirthdayEntry,
   CalendarHighlight,
   CalendarShare,
   EventLabel,
@@ -1182,7 +1181,6 @@ export default function CalendarPage() {
   // the wrong calendar date for their Home's actual timezone.
   const hasNavigated = useRef(false);
   const [events, setEvents] = useState<EventOccurrence[]>([]);
-  const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [labels, setLabels] = useState<EventLabel[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [sharedEventsEnabled, setSharedEventsEnabled] = useState(false);
@@ -1360,11 +1358,6 @@ export default function CalendarPage() {
     if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
     setPersonalCalendarId(calendarRows?.personal_calendar?.id ?? null);
     setPersonalCalendar(calendarRows?.personal_calendar ?? null);
-    api
-      .birthdays(activeHomeId)
-      .then((response) => setBirthdays(response.items))
-      .catch(() => setBirthdays([]));
-
     // Merge in every accepted external share's events for the same visible
     // range, tagged with where they came from — see EventOccurrence's
     // share_id/share_permission/shared_by_home_name docstring in
@@ -1610,31 +1603,25 @@ export default function CalendarPage() {
       // (see routers.calendar_sharing.update_shared_event); canEdit already
       // hid the Edit action entirely for a "view"-only share, this is the
       // request-shape branch, not a second permission check.
-      const updated = selectedEvent.share_id
-        ? await api.updateSharedEvent(
-            selectedEvent.share_id,
-            selectedEvent.event_id,
-            toSharedEventUpdatePayload(payload, selectedEvent.updated_at),
-          )
-        : await api.updateEvent(
-            activeHomeId,
-            selectedEvent.event_id,
-            toEventUpdatePayload(payload, selectedEvent.updated_at),
-          );
-      // Return to View mode showing the newly persisted values, rather than
-      // closing the sheet — the freshly returned event (not a stale local
-      // copy) is what View then renders.
-      setSelectedEvent(
-        selectedEvent.share_id
-          ? {
-              ...updated,
-              share_id: selectedEvent.share_id,
-              share_permission: selectedEvent.share_permission,
-              shared_by_home_name: selectedEvent.shared_by_home_name,
-            }
-          : updated,
-      );
-      setEditingSelected(false);
+      if (selectedEvent.share_id) {
+        await api.updateSharedEvent(
+          selectedEvent.share_id,
+          selectedEvent.event_id,
+          toSharedEventUpdatePayload(payload, selectedEvent.updated_at),
+        );
+      } else {
+        await api.updateEvent(
+          activeHomeId,
+          selectedEvent.event_id,
+          toEventUpdatePayload(payload, selectedEvent.updated_at),
+        );
+      }
+      // Standard sheet-action behaviour: a successful Save dismisses the
+      // sheet immediately rather than lingering on a View-mode readout of
+      // the just-saved event — the user asked to save and close, not save
+      // and review. The refreshed event reaches Month/Day/Agenda via load()
+      // below, same as every other successful mutation on this page.
+      closeEventSheet();
       await load();
     } catch (cause) {
       setError(
@@ -1658,7 +1645,7 @@ export default function CalendarPage() {
     setError("");
     setScopeBusy(true);
     try {
-      const updated = await api.updateEvent(
+      await api.updateEvent(
         activeHomeId,
         selectedEvent.event_id,
         toEventUpdatePayload(
@@ -1668,9 +1655,12 @@ export default function CalendarPage() {
           selectedEvent.occurrence_start,
         ),
       );
-      setSelectedEvent(updated);
-      setEditingSelected(false);
+      // Same standard as the non-recurring edit path above: a successful
+      // save (once the user has also confirmed which occurrences it
+      // applies to) dismisses the whole event sheet, not just the scope
+      // chooser layered on top of it.
       setPendingEditPayload(null);
+      closeEventSheet();
       await load();
     } catch (cause) {
       // Keep pendingEditPayload set so the chooser stays open with the
@@ -1757,11 +1747,6 @@ export default function CalendarPage() {
   }
 
   const focusedEvents = eventsForDay(visibleEvents, focusDate, calendarTimezone);
-  const birthdaysInRange = birthdays.filter((entry) => {
-    const occurrence = new Date(entry.next_occurrence_date);
-    return occurrence >= range.start && occurrence < range.end;
-  });
-
   return (
     <AppShellContent>
       <main className="standard-page calendar-page">
@@ -1868,20 +1853,6 @@ export default function CalendarPage() {
               <ChevronDown size={14} aria-hidden="true" />
             </label>
           </div>
-
-          {birthdaysInRange.length > 0 && (
-            <p className="notice calendar-birthday-banner">
-              🎂{" "}
-              {birthdaysInRange
-                .map(
-                  (entry) =>
-                    `${entry.display_name}'s birthday (${new Date(
-                      entry.next_occurrence_date,
-                    ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`,
-                )
-                .join(" · ")}
-            </p>
-          )}
 
           {searchOpen && (
             <>
@@ -2040,6 +2011,29 @@ export default function CalendarPage() {
             )}
             onDismiss={() => setSelectedDay(null)}
           >
+            {(() => {
+              const dayHighlights = calendarHighlights.filter(
+                (item) => item.date === dateKey(selectedDay),
+              );
+              return dayHighlights.length > 0 ? (
+                <section className="calendar-day-highlights" aria-labelledby="calendar-day-highlights-title">
+                  <h3 id="calendar-day-highlights-title">Calendar highlights</h3>
+                  <ul>
+                    {dayHighlights.map((item) => (
+                      <li key={`${item.kind}-${item.date}-${item.label}`}>
+                        <span aria-hidden="true">
+                          {item.kind === "birthday" ? "🎂" : item.flag_emoji ?? "📅"}
+                        </span>{" "}
+                        {item.label}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null;
+            })()}
+            {calendarHighlights.some((item) => item.date === dateKey(selectedDay)) && (
+              <h3 className="calendar-day-events-heading">Events</h3>
+            )}
             <EventList
               events={eventsForDay(visibleEvents, selectedDay, calendarTimezone)}
               members={members}
