@@ -326,7 +326,8 @@ textarea {
      .auth-page/.platform-login/the authenticated .app-header, never this
      page). Same shared-variable approach, applied here for the first time —
      a no-op in an ordinary browser tab. */
-  padding: max(1rem, var(--safe-top)) max(4vw, var(--safe-right)) 1rem max(4vw, var(--safe-left));
+  padding: max(1rem, var(--safe-top)) max(4vw, var(--safe-right)) 1rem
+    max(4vw, var(--safe-left));
   position: sticky;
   top: 0;
   z-index: 20;
@@ -504,7 +505,11 @@ textarea {
   width: 100%;
 }
 .mk-lifestyle-panel {
-  background: linear-gradient(120deg, var(--colour-forest), var(--colour-forest-dark));
+  background: linear-gradient(
+    120deg,
+    var(--colour-forest),
+    var(--colour-forest-dark)
+  );
   border-radius: var(--radius-shell);
   color: var(--colour-cream-light);
   margin: 0 auto;
@@ -746,7 +751,9 @@ textarea {
 .mk-plan-free .mk-plan-price span {
   color: var(--colour-muted);
 }
-.mk-plan-family .mk-plan-price span { color: var(--colour-muted); }
+.mk-plan-family .mk-plan-price span {
+  color: var(--colour-muted);
+}
 .mk-plan-hint {
   color: var(--colour-muted);
   font-size: 0.85rem;
@@ -1365,9 +1372,7 @@ textarea {
 .app-main {
   flex: 1;
   min-width: 0;
-  padding-bottom: calc(
-    var(--bottom-nav-height) + var(--safe-bottom) + 1rem
-  );
+  padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 1rem);
 }
 .bottom-nav {
   align-items: stretch;
@@ -1765,7 +1770,10 @@ html.native-shell .home-section-overlap {
   display: inline-flex;
   height: 16px;
   justify-content: center;
-  transition: background 0.15s ease, height 0.15s ease, width 0.15s ease;
+  transition:
+    background 0.15s ease,
+    height 0.15s ease,
+    width 0.15s ease;
   width: 16px;
 }
 .home-routine-check:hover .home-routine-check-dot,
@@ -2773,8 +2781,7 @@ html.native-shell .home-section-overlap {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: max(2rem, var(--safe-top)) 0
-      max(2rem, var(--safe-bottom));
+    padding: max(2rem, var(--safe-top)) 0 max(2rem, var(--safe-bottom));
   }
   .auth-brand {
     display: none;
@@ -3420,9 +3427,7 @@ html.native-shell .home-section-overlap {
 }
 .calendar-fab {
   border-radius: 50%;
-  bottom: calc(
-    var(--bottom-nav-height) + var(--safe-bottom) + 0.75rem
-  );
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 0.75rem);
   box-shadow: 0 12px 28px rgb(31 41 51 / 25%);
   display: none;
   font-size: 1.8rem;
@@ -4375,10 +4380,7 @@ select.icon-row-control {
     min-height: clamp(
       88px,
       calc(
-        (
-            100dvh - 270px - var(--safe-top) -
-              var(--safe-bottom)
-          ) /
+        (100dvh - 270px - var(--safe-top) - var(--safe-bottom)) /
           var(--calendar-week-count, 6)
       ),
       160px
@@ -4487,8 +4489,8 @@ select.icon-row-control {
   justify-content: center;
   min-height: 100vh;
   /* See the shared safe-area strategy comment above `.standard-page`. */
-  padding: max(2rem, var(--safe-top)) max(2rem, var(--safe-right)) max(2rem, var(--safe-bottom))
-    max(2rem, var(--safe-left));
+  padding: max(2rem, var(--safe-top)) max(2rem, var(--safe-right))
+    max(2rem, var(--safe-bottom)) max(2rem, var(--safe-left));
 }
 .platform-login section {
   background: white;
@@ -6014,7 +6016,8 @@ button.danger,
   margin: 0;
   width: 100%;
 }
-.cc-service-grid-row:not(:has(.cc-service-checkbox input:checked)) .cc-service-impact {
+.cc-service-grid-row:not(:has(.cc-service-checkbox input:checked))
+  .cc-service-impact {
   opacity: 0.58;
 }
 
@@ -6031,6 +6034,45 @@ button.danger,
 }
 .cc-toolbar button {
   flex: 0 0 auto;
+}
+.cc-list-toolbar-form {
+  align-items: end;
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.cc-list-toolbar-form label {
+  flex: 1 1 180px;
+}
+.cc-list-toolbar-form label:has(select) {
+  flex: 0 1 160px;
+}
+.cc-list-toolbar-form input,
+.cc-list-toolbar-form select {
+  margin-top: 0.3rem;
+  width: 100%;
+}
+.cc-inline-control {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+.cc-inline-control input {
+  margin: 0;
+  width: auto;
+}
+.cc-pagination {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+.cc-pagination span {
+  color: var(--cc-text-muted);
+  font-size: 0.8rem;
 }
 
 .cc-field {
@@ -7608,7 +7650,8 @@ select.plan-meal-field-input {
   animation: wishlists-image-skeleton-pulse 1.1s ease-in-out infinite;
 }
 @keyframes wishlists-image-skeleton-pulse {
-  0%, 100% {
+  0%,
+  100% {
     background-color: var(--colour-cream-light);
   }
   50% {
@@ -7809,8 +7852,7 @@ select.plan-meal-field-input {
 .guest-wishlist-page {
   margin: 0 auto;
   max-width: 640px;
-  padding: max(1.5rem, var(--safe-top)) 1.1rem
-    calc(2rem + var(--safe-bottom));
+  padding: max(1.5rem, var(--safe-top)) 1.1rem calc(2rem + var(--safe-bottom));
 }
 .guest-wishlist-verify {
   display: grid;
@@ -8065,15 +8107,27 @@ select.plan-meal-field-input {
   width: 34px;
 }
 .rr-quick-add-action-routine .rr-quick-add-icon {
-  background: color-mix(in srgb, var(--colour-palette-emerald, #3f7a5c) 20%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--colour-palette-emerald, #3f7a5c) 20%,
+    transparent
+  );
   color: var(--colour-palette-emerald, #3f7a5c);
 }
 .rr-quick-add-action-reminder .rr-quick-add-icon {
-  background: color-mix(in srgb, var(--colour-palette-sky, #4c7fa6) 20%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--colour-palette-sky, #4c7fa6) 20%,
+    transparent
+  );
   color: var(--colour-palette-sky, #4c7fa6);
 }
 .rr-quick-add-action-todo .rr-quick-add-icon {
-  background: color-mix(in srgb, var(--colour-palette-violet, #8b6ba8) 20%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--colour-palette-violet, #8b6ba8) 20%,
+    transparent
+  );
   color: var(--colour-palette-violet, #8b6ba8);
 }
 .rr-quick-add-label {
@@ -8215,7 +8269,9 @@ select.plan-meal-field-input {
   text-align: left;
 }
 
-.rr-category-filter-control span { color: var(--colour-muted, #65777b); }
+.rr-category-filter-control span {
+  color: var(--colour-muted, #65777b);
+}
 
 .rr-category-filter-control strong {
   overflow: hidden;
@@ -8223,10 +8279,15 @@ select.plan-meal-field-input {
   white-space: nowrap;
 }
 
-.rr-category-manage { flex: 0 0 auto; }
+.rr-category-manage {
+  flex: 0 0 auto;
+}
 
 .rr-category-picker,
-.rr-category-manager { display: grid; gap: 0.65rem; }
+.rr-category-manager {
+  display: grid;
+  gap: 0.65rem;
+}
 
 .rr-category-option {
   background: var(--surface, #fffdf9);
@@ -8251,9 +8312,15 @@ select.plan-meal-field-input {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.rr-category-create label { display: grid; gap: 0.25rem; }
+.rr-category-create label {
+  display: grid;
+  gap: 0.25rem;
+}
 
-.rr-category-manager-list { display: grid; gap: 0.45rem; }
+.rr-category-manager-list {
+  display: grid;
+  gap: 0.45rem;
+}
 
 .rr-category-manager-row {
   align-items: center;
@@ -8264,12 +8331,24 @@ select.plan-meal-field-input {
   padding-top: 0.5rem;
 }
 
-.rr-category-manager-actions { display: flex; gap: 0.35rem; }
+.rr-category-manager-actions {
+  display: flex;
+  gap: 0.35rem;
+}
 
-.rr-category-manager-actions button { min-height: 36px; padding: 0.4rem 0.6rem; }
+.rr-category-manager-actions button {
+  min-height: 36px;
+  padding: 0.4rem 0.6rem;
+}
 
-.rr-category-groups { display: grid; gap: 0.85rem; }
-.rr-category-group { display: grid; gap: 0.5rem; }
+.rr-category-groups {
+  display: grid;
+  gap: 0.85rem;
+}
+.rr-category-group {
+  display: grid;
+  gap: 0.5rem;
+}
 
 .rr-category-heading {
   align-items: center;
@@ -8279,7 +8358,11 @@ select.plan-meal-field-input {
   min-height: 32px;
 }
 
-.rr-category-heading-line { background: var(--border-subtle, #e5e3dd); flex: 1; height: 1px; }
+.rr-category-heading-line {
+  background: var(--border-subtle, #e5e3dd);
+  flex: 1;
+  height: 1px;
+}
 
 .rr-category-heading-count {
   color: var(--colour-muted, #65777b);
@@ -8551,7 +8634,8 @@ select.plan-meal-field-input {
      group cards immediately below it. */
   gap: 0.25rem;
   overflow: hidden;
-  padding: 14px max(1.25rem, var(--safe-right)) 40px max(1.25rem, var(--safe-left));
+  padding: 14px max(1.25rem, var(--safe-right)) 40px
+    max(1.25rem, var(--safe-left));
   position: relative;
 }
 .more-hero-text {
@@ -8721,7 +8805,8 @@ select.plan-meal-field-input {
   color: #a9791a;
 }
 html.native-shell .more-hero {
-  padding: 12px max(1.25rem, var(--safe-right)) 32px max(1.25rem, var(--safe-left));
+  padding: 12px max(1.25rem, var(--safe-right)) 32px
+    max(1.25rem, var(--safe-left));
 }
 
 /* --- MyKhaya module-page spacing standard ---------------------------------
@@ -9515,7 +9600,11 @@ a.family-feed-row {
    decorate the existing day cell without creating another event track or
    changing its geometry. */
 .calendar-day.has-calendar-highlight {
-  background: color-mix(in srgb, var(--cream, #f2ede3) 78%, var(--sage, #7d8f7a));
+  background: color-mix(
+    in srgb,
+    var(--cream, #f2ede3) 78%,
+    var(--sage, #7d8f7a)
+  );
 }
 .calendar-highlight-decoration {
   position: absolute;
@@ -9633,8 +9722,11 @@ a.family-feed-row {
   color: var(--muted, #66736b);
 }
 
-.platform-holiday-table { overflow-x: auto; }
-.platform-holiday-table-head, .platform-holiday-row {
+.platform-holiday-table {
+  overflow-x: auto;
+}
+.platform-holiday-table-head,
+.platform-holiday-row {
   display: grid;
   grid-template-columns: 1.35fr 1fr 1.25fr 1.5fr 0.7fr 0.9fr;
   gap: 1rem;
@@ -9643,8 +9735,16 @@ a.family-feed-row {
   padding: 0.85rem 0;
   border-bottom: 1px solid var(--border, #e5ded1);
 }
-.platform-holiday-table-head { font-size: 0.78rem; font-weight: 700; color: var(--muted, #66736b); }
-.platform-holiday-row small { display: block; color: var(--muted, #66736b); margin-top: 0.2rem; }
+.platform-holiday-table-head {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted, #66736b);
+}
+.platform-holiday-row small {
+  display: block;
+  color: var(--muted, #66736b);
+  margin-top: 0.2rem;
+}
 
 @media (min-width: 760px) {
   .app-shell:not(.native-shell-app) .around-house-dock {
