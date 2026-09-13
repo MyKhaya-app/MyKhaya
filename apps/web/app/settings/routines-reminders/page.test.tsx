@@ -804,9 +804,12 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
     // The real search/filter/list content lives in the main column...
     expect(within(main as HTMLElement).getByLabelText("Search nudges")).toBeInTheDocument();
     // ...and Quick add / Categories / Nudge settings in the side column.
+    // Nudge settings is a single clickable link row (icon + title + chevron),
+    // not a heading — matching the approved mockup's compact settings-row
+    // treatment, same as the other single-row settings links elsewhere.
     expect(within(side as HTMLElement).getByRole("heading", { name: "Quick add" })).toBeInTheDocument();
     expect(within(side as HTMLElement).getByRole("heading", { name: "Categories" })).toBeInTheDocument();
-    expect(within(side as HTMLElement).getByRole("heading", { name: "Nudge settings" })).toBeInTheDocument();
+    expect(within(side as HTMLElement).getByRole("link", { name: /Nudge settings/ })).toBeInTheDocument();
   });
 
   it("Quick add's Add routine launches the existing New routine create flow, not a duplicate", async () => {
@@ -874,7 +877,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
     await screen.findByRole("heading", { name: "Nudges" });
 
     const side = document.querySelector(".rr-side") as HTMLElement;
-    const link = within(side).getByRole("link", { name: /Notification settings/ });
+    const link = within(side).getByRole("link", { name: /Nudge settings/ });
     expect(link).toHaveAttribute("href", "/settings/notifications");
   });
 });

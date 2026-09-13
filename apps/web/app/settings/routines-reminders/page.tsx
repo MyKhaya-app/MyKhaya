@@ -886,6 +886,7 @@ export default function RoutinesRemindersPage() {
 
       <div className="rr-layout">
         <div className="rr-main">
+        <div className="rr-controls">
         <div className="rr-search-row">
           <div className="calendar-search">
             <Search size={16} aria-hidden="true" />
@@ -910,7 +911,7 @@ export default function RoutinesRemindersPage() {
 
         {filtersVisible && (
           <>
-            <div className="rr-segmented" role="group" aria-label="Filter by type">
+            <div className="rr-segmented rr-segmented-type" role="group" aria-label="Filter by type">
               {(["all", "routines", "reminders", "todos"] as TypeFilter[]).map((value) => (
                 <button
                   key={value}
@@ -948,7 +949,7 @@ export default function RoutinesRemindersPage() {
               )}
             </div>
 
-            <div className="rr-segmented" role="group" aria-label="Personal or household">
+            <div className="rr-segmented rr-segmented-scope" role="group" aria-label="Personal or household">
               <button
                 type="button"
                 aria-pressed={scopeTab === "personal"}
@@ -970,6 +971,7 @@ export default function RoutinesRemindersPage() {
             </div>
           </>
         )}
+        </div>
 
         {(["overdue", "today"] as Section[]).map((section) =>
           sections[section].length > 0 ? (
@@ -1026,21 +1028,36 @@ export default function RoutinesRemindersPage() {
               <h2>Quick add</h2>
               <div className="rr-quick-add-actions">
                 {canManageRoutines && (
-                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewRoutine}>
-                    <Repeat size={17} aria-hidden="true" />
-                    Add routine
+                  <button
+                    type="button"
+                    className="rr-quick-add-action rr-quick-add-action-routine"
+                    onClick={openNewRoutine}
+                  >
+                    <span className="rr-quick-add-icon" aria-hidden="true"><Repeat size={17} /></span>
+                    <span className="rr-quick-add-label">Add routine</span>
+                    <ChevronRight size={16} aria-hidden="true" className="rr-quick-add-chevron" />
                   </button>
                 )}
                 {canManageReminders && (
-                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewReminder}>
-                    <Clock size={17} aria-hidden="true" />
-                    Add reminder
+                  <button
+                    type="button"
+                    className="rr-quick-add-action rr-quick-add-action-reminder"
+                    onClick={openNewReminder}
+                  >
+                    <span className="rr-quick-add-icon" aria-hidden="true"><Clock size={17} /></span>
+                    <span className="rr-quick-add-label">Add reminder</span>
+                    <ChevronRight size={16} aria-hidden="true" className="rr-quick-add-chevron" />
                   </button>
                 )}
                 {canManageReminders && (
-                  <button type="button" className="secondary rr-quick-add-action" onClick={openNewTodo}>
-                    <ClipboardCheck size={17} aria-hidden="true" />
-                    Add to-do
+                  <button
+                    type="button"
+                    className="rr-quick-add-action rr-quick-add-action-todo"
+                    onClick={openNewTodo}
+                  >
+                    <span className="rr-quick-add-icon" aria-hidden="true"><ClipboardCheck size={17} /></span>
+                    <span className="rr-quick-add-label">Add to-do</span>
+                    <ChevronRight size={16} aria-hidden="true" className="rr-quick-add-chevron" />
                   </button>
                 )}
               </div>
@@ -1082,15 +1099,17 @@ export default function RoutinesRemindersPage() {
             )}
           </section>
 
-          <section className="card details rr-side-card rr-settings-panel">
-            <h2>Nudge settings</h2>
-            <p className="muted">Reminders, routines and your daily Nudge summary.</p>
-            <Link className="profile-settings-row rr-settings-link" href="/settings/notifications">
-              <span className="profile-settings-icon"><Bell size={19} aria-hidden="true" /></span>
-              <span><strong>Notification settings</strong><small>Choose how MyKhaya keeps you informed</small></span>
-              <ChevronRight size={19} aria-hidden="true" />
-            </Link>
-          </section>
+          <Link
+            className="card details rr-side-card rr-settings-panel rr-settings-link"
+            href="/settings/notifications"
+          >
+            <span className="profile-settings-icon"><Bell size={19} aria-hidden="true" /></span>
+            <span className="rr-settings-panel-copy">
+              <strong>Nudge settings</strong>
+              <small>Reminders, routines and your daily Nudge summary.</small>
+            </span>
+            <ChevronRight size={19} aria-hidden="true" />
+          </Link>
         </aside>
       </div>
 

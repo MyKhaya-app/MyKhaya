@@ -8022,7 +8022,8 @@ select.plan-meal-field-input {
    addition with nothing equivalent on mobile today, so it is hidden
    entirely there, not just visually collapsed. */
 .rr-layout,
-.rr-main {
+.rr-main,
+.rr-controls {
   display: contents;
 }
 .rr-side {
@@ -8037,8 +8038,52 @@ select.plan-meal-field-input {
 }
 .rr-quick-add-action {
   align-items: center;
+  background: var(--colour-cream-light, #faf7f1);
+  border: 1px solid var(--border, #e5ded1);
+  border-radius: var(--radius-card);
+  box-shadow: none;
+  color: var(--colour-forest-dark, #102c2a);
+  display: flex;
+  gap: 0.7rem;
   justify-content: flex-start;
-  gap: 0.6rem;
+  min-height: 52px;
+  padding: 0.6rem 0.85rem;
+  text-align: left;
+}
+.rr-quick-add-action:hover {
+  background: var(--colour-cream);
+  box-shadow: none;
+  transform: none;
+}
+.rr-quick-add-icon {
+  align-items: center;
+  border-radius: 50%;
+  display: inline-flex;
+  flex: none;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+.rr-quick-add-action-routine .rr-quick-add-icon {
+  background: color-mix(in srgb, var(--colour-palette-emerald, #3f7a5c) 20%, transparent);
+  color: var(--colour-palette-emerald, #3f7a5c);
+}
+.rr-quick-add-action-reminder .rr-quick-add-icon {
+  background: color-mix(in srgb, var(--colour-palette-sky, #4c7fa6) 20%, transparent);
+  color: var(--colour-palette-sky, #4c7fa6);
+}
+.rr-quick-add-action-todo .rr-quick-add-icon {
+  background: color-mix(in srgb, var(--colour-palette-violet, #8b6ba8) 20%, transparent);
+  color: var(--colour-palette-violet, #8b6ba8);
+}
+.rr-quick-add-label {
+  flex: 1;
+  font-weight: 700;
+  min-width: 0;
+}
+.rr-quick-add-chevron {
+  color: var(--colour-muted);
+  flex: none;
 }
 .rr-categories-panel-heading {
   align-items: center;
@@ -8081,7 +8126,20 @@ select.plan-meal-field-input {
   font-weight: 700;
 }
 .rr-settings-link {
-  margin: 0 -0.5rem -0.25rem;
+  align-items: center;
+  color: inherit;
+  display: flex;
+  gap: 0.75rem;
+  text-decoration: none;
+}
+.rr-settings-panel-copy {
+  display: grid;
+  flex: 1;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.rr-settings-panel-copy small {
+  color: var(--colour-muted);
 }
 .rr-intro {
   color: var(--colour-muted);
@@ -9396,8 +9454,38 @@ a.family-feed-row {
     align-content: start;
     gap: 1rem;
   }
+  .app-shell:not(.native-shell-app) .rr-intro {
+    gap: 1rem;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
   .app-shell:not(.native-shell-app) .rr-intro-art {
-    height: 72px;
+    background: var(--colour-sage-soft);
+    border-radius: 50%;
+    box-sizing: border-box;
+    height: 64px;
+    order: -1;
+    padding: 0.9rem;
+    width: 64px;
+  }
+  .app-shell:not(.native-shell-app) .rr-controls {
+    align-items: center;
+    display: grid;
+    gap: 0.75rem 1.25rem;
+    grid-template-areas: "search type" "category scope";
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .app-shell:not(.native-shell-app) .rr-search-row {
+    grid-area: search;
+  }
+  .app-shell:not(.native-shell-app) .rr-segmented-type {
+    grid-area: type;
+  }
+  .app-shell:not(.native-shell-app) .rr-category-control-row {
+    grid-area: category;
+    margin: 0;
+  }
+  .app-shell:not(.native-shell-app) .rr-segmented-scope {
+    grid-area: scope;
   }
 }
 
@@ -9600,6 +9688,10 @@ a.family-feed-row {
     grid-column: 1 / 3;
     grid-row: 2;
   }
+  .app-shell:not(.native-shell-app) .home-page > .home-around-house-card {
+    grid-column: 3;
+    grid-row: 3;
+  }
   .app-shell:not(.native-shell-app) .around-house-dock-actions {
     flex-wrap: nowrap;
   }
@@ -9615,6 +9707,6 @@ a.family-feed-row {
   }
   .app-shell:not(.native-shell-app) .rr-layout {
     align-items: start;
-    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 }

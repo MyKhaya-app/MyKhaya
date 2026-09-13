@@ -1,21 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import HomePageBase from "./page";
-import { AroundHouseDock } from "@/components/around-house-dock";
-
-// The Home page now deliberately delegates household shortcuts to the shared
-// browser shell dock. Keep the Home regression suite exercising that real
-// composition so the old Home-only shortcut coverage does not drift away from
-// the production presentation.
-function HomePage() {
-  return (
-    <>
-      <HomePageBase />
-      <AroundHouseDock />
-    </>
-  );
-}
+import HomePage from "./page";
 
 // Coverage for the Home screen's "Around the house" Meal Plans shortcut —
 // see docs/architecture/meal-plans.md. The shortcut always links to
@@ -324,7 +310,7 @@ describe("Home — Nudges shortcut", () => {
     expect(screen.queryByRole("link", { name: /nudges/i })).not.toBeInTheDocument();
   });
 
-  it("groups Add event/Invite family into a 2-tile row and Nudges/Meal plans/Lists into a 3-tile row, with no empty placeholder tile", async () => {
+  it("renders Around the House beneath Coming up with its existing shortcut rows", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
       billing({
         meals_enabled: true,
@@ -345,12 +331,14 @@ describe("Home — Nudges shortcut", () => {
     const { container } = render(<HomePage />);
 
     await screen.findByRole("link", { name: /add event/i });
-    expect(container.querySelector('img[src="/images/home-around-house.svg"]')).not.toBeInTheDocument();
-    expect(container.querySelector(".home-around-house-card")).toBeNull();
-
-    const dock = container.querySelector(".around-house-dock");
-    expect(dock).not.toBeNull();
-    expect(dock?.querySelectorAll(".around-house-dock-action")).toHaveLength(5);
+    const around = container.querySelector(".home-around-house-card");
+    const comingUp = container.querySelector(".home-coming-up-card");
+    expect(around).not.toBeNull();
+    expect(comingUp).not.toBeNull();
+    expect(comingUp!.compareDocumentPosition(around!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(around?.querySelector('img[src="/images/home-around-house.svg"]')).toBeInTheDocument();
+    expect(around?.querySelectorAll(".quick-actions-row")).toHaveLength(2);
+    expect(around?.querySelectorAll(".quick-action")).toHaveLength(5);
     expect(container.querySelector(".quick-action-placeholder")).toBeNull();
   });
 
@@ -370,9 +358,9 @@ describe("Home — Nudges shortcut", () => {
     const { container } = render(<HomePage />);
 
     await screen.findByRole("link", { name: /nudges/i });
-    const actions = container.querySelector(".around-house-dock-actions");
+    const actions = container.querySelector(".home-around-house-card .quick-actions");
     expect(actions).not.toBeNull();
-    expect(actions?.children).toHaveLength(1);
+    expect(actions?.querySelectorAll(".quick-action")).toHaveLength(1);
     expect(screen.queryByRole("link", { name: /meal plans/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^lists$/i })).not.toBeInTheDocument();
   });
