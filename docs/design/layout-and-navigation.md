@@ -46,6 +46,38 @@ change? If a screen needs several sentences to explain its purpose, redesign
 it rather than document around the problem. Full rationale in
 `visual-identity.md`.
 
+## Home screen section invariants
+
+**Around the House is a permanent Home-screen section.** The Home screen must
+retain the Around the House card beneath the primary Home content sections.
+
+Moving, duplicating, surfacing or exposing Around the House shortcuts elsewhere
+in the product — including browser docks, navigation areas, menus or other
+shortcut surfaces — must not be interpreted as permission to remove the Home
+card unless removal is explicitly requested as a product requirement.
+
+Changes to Home cards such as Nudges, Meals, Coming up, Today or other Home
+content must preserve unrelated Home sections. When refactoring the Home
+render tree, preserve Around the House and its existing entitlement/feature
+visibility behaviour, permissions and invitation-related access rules,
+navigation targets, desktop placement and responsive behaviour unless those
+are explicitly being changed. Do not replace the Home card with another
+shortcut surface without an explicit requirement.
+
+Home tests should protect the expected section structure and ordering, rather
+than only asserting the sections being actively modified.
+
+The regression identified in `e62efdc` is an example of this rule: Around the
+House was removed when its shortcuts moved into a separate browser dock, and
+the tests were changed to expect the card's absence. Moving a shortcut surface
+must not implicitly remove the underlying Home section.
+
+### Scope protection for Home changes
+
+When a task explicitly scopes changes to particular Home cards or sections,
+all other Home sections are protected and must remain unchanged unless the
+requirement says otherwise.
+
 ## Terminology
 
 The main screen is Home. Do not use Dashboard, Workspace, Overview or Control Panel. Avoid tenant, RBAC, module and group ID in user-facing copy. Prefer "Your family" over "Household members" and "Manage your home" over "Control Centre" in household-facing copy — see `tone-and-copy.md`.

@@ -9479,6 +9479,12 @@ a.family-feed-row {
   }
   .app-shell:not(.native-shell-app) .rr-segmented-type {
     grid-area: type;
+    /* The shared "auto" column (see grid-template-columns above) sizes
+       itself against both rows that use it — this row's 4 segments and the
+       Personal/Household row's 2 — and a flex segmented control's reported
+       max-content width under-counts what 4 non-wrapping segments actually
+       need. Pin it explicitly rather than let "To-dos" wrap to two lines. */
+    min-width: 320px;
   }
   .app-shell:not(.native-shell-app) .rr-category-control-row {
     grid-area: category;
