@@ -4,12 +4,22 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "0072_list_templates"
 down_revision: str | None = "0071_calendar_highlights"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+# `routine_scope` is created by migration 0024 and reused by later routines,
+# reminders, and Lists.  PostgreSQL's ENUM implementation must be used here:
+# its create_type=False flag prevents SQLAlchemy from emitting CREATE TYPE when
+# this table is created.
+routine_scope = postgresql.ENUM(
+    "personal", "household", name="routine_scope", create_type=False
+)
 
 
 def upgrade() -> None:
@@ -22,7 +32,7 @@ def upgrade() -> None:
         sa.Column("owner_user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("name", sa.String(160), nullable=False),
         sa.Column("description", sa.String(500)),
-        sa.Column("scope", sa.Enum("personal", "household", name="routine_scope", create_type=False), nullable=False),
+        sa.Column("scope", routine_scope, nullable=False),
         sa.Column("archived_at", sa.DateTime(timezone=True)),
         sa.CheckConstraint("char_length(name) >= 1", name="ck_list_template_name_nonempty"),
     )
