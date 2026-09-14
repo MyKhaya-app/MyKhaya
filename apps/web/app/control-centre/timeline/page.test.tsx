@@ -88,4 +88,15 @@ describe("Timeline", () => {
     render(<TimelinePage />);
     expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
   });
+
+  it("allows the operator to switch live refresh on and off", async () => {
+    render(<TimelinePage />);
+    await screen.findByText("Event reminder sent");
+    const liveToggle = screen.getByRole("checkbox");
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+    await userEvent.click(liveToggle);
+    expect(screen.getByText("Live")).toBeInTheDocument();
+    await userEvent.click(liveToggle);
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+  });
 });

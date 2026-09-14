@@ -14,7 +14,8 @@ import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcNotice } from "@/components/control-centre/status-message";
 import { CcBadge, toneFromStateClass } from "@/components/control-centre/badge";
-import { CcSection } from "@/components/control-centre/section";
+import { CcColumns, CcSection } from "@/components/control-centre/section";
+import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 
 type SecretField = "test_secret_key" | "test_webhook_secret" | "live_secret_key" | "live_webhook_secret";
@@ -162,6 +163,7 @@ export default function PaymentsPage() {
             : "Sandbox Stripe credentials, safe to experiment with."
         }
       >
+        <CcColumns ratio="1-1">
         <label>
           Publishable key
           <input name={`${mode}_publishable_key`} defaultValue={settings.publishable_key ?? ""} maxLength={200} />
@@ -226,6 +228,7 @@ export default function PaymentsPage() {
             maxLength={200}
           />
         </label>
+        </CcColumns>
       </CcSection>
     );
   }
@@ -255,6 +258,17 @@ export default function PaymentsPage() {
           <p role="status">Loading Stripe configuration…</p>
         ) : (
           <>
+            <CcStatusCard
+              tone={data.enabled ? "success" : "warning"}
+              status={data.enabled ? "Stripe enabled" : "Stripe disabled"}
+              description="Current billing integration state"
+              items={[
+                { label: "Mode", value: <CcBadge tone={data.mode === "live" ? "danger" : "info"}>{data.mode === "live" ? "Live" : "Test"}</CcBadge> },
+                { label: "New subscriptions", value: data.acquisition_enabled ? "Allowed" : "Paused" },
+                { label: "Configuration source", value: titleCase(data.source) },
+                { label: "Credentials", value: data.configured ? "Configured" : "Incomplete" },
+              ]}
+            />
             <CcSection title="Status">
               <dl>
                 <div>

@@ -289,7 +289,7 @@ export default function PlatformHomeDetail() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <p>
           <a href="/homes">&larr; Homes</a>
         </p>

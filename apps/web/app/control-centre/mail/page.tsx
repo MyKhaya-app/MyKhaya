@@ -8,7 +8,8 @@ import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { readableDate, relativeTime, titleCase } from "@/components/platform-format";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcCard, CcColumns, CcSection } from "@/components/control-centre/section";
+import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcBadge } from "@/components/control-centre/badge";
 import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
 import { CcField } from "@/components/control-centre/form-field";
@@ -16,6 +17,7 @@ import { CcActionBar } from "@/components/control-centre/action-bar";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
+import { CcToggle } from "@/components/control-centre/toggle";
 
 type SmtpSettings = {
   enabled: boolean;
@@ -201,6 +203,17 @@ export default function MailPage() {
           <CcLoadingState label="Loading email delivery state…" />
         ) : (
           <>
+            <CcStatusCard
+              tone={data.configured ? "success" : "warning"}
+              status={data.configured ? "Email transport ready" : "Email transport not configured"}
+              description="Operational state is summarised here; editable SMTP settings are kept below."
+              items={[
+                { label: "Transport", value: data.transport ?? "Not configured" },
+                { label: "Managed by", value: titleCase(data.managed_by) },
+                { label: "Queue depth", value: data.queue_depth },
+                { label: "Last successful delivery", value: data.last_successful_delivery ? relativeTime(data.last_successful_delivery) : "None recorded" },
+              ]}
+            />
             <CcColumns ratio="1-1">
               <CcCard
                 title="Transport"
@@ -224,7 +237,8 @@ export default function MailPage() {
               </CcCard>
             </CcColumns>
 
-            <CcCard title="SMTP configuration">
+            <CcSection title="SMTP configuration" description="Connection, authentication and sender settings. Deployment-managed fields are read-only.">
+            <div className="cc-config-panel">
               {!settings?.editable && (
                 <CcNotice tone="warning">
                   Managed by the deployment environment (MYKHAYA_SMTP_HOST). These fields cannot be
@@ -233,9 +247,8 @@ export default function MailPage() {
               )}
               <form onSubmit={saveSmtpSettings}>
                 <fieldset disabled={!settings?.editable}>
-                  <CcField label="Enabled">
-                    <input type="checkbox" name="enabled" defaultChecked={settings?.enabled} />
-                  </CcField>
+                  <CcToggle label="Email delivery enabled" name="enabled" defaultChecked={settings?.enabled} disabled={!settings?.editable} />
+                  <div className="cc-form-grid">
                   <CcField label="Host">
                     <input name="host" defaultValue={settings?.host} maxLength={255} />
                   </CcField>
@@ -249,9 +262,10 @@ export default function MailPage() {
                       <option value="none">None (development only)</option>
                     </select>
                   </CcField>
-                  <CcField label="Authentication enabled">
-                    <input type="checkbox" name="auth_enabled" defaultChecked={settings?.auth_enabled} />
-                  </CcField>
+                  </div>
+                  <h3>Authentication and sender identity</h3>
+                  <div className="cc-form-grid">
+                  <CcToggle label="SMTP authentication enabled" name="auth_enabled" defaultChecked={settings?.auth_enabled} disabled={!settings?.editable} />
                   <CcField label="Username">
                     <input name="username" defaultValue={settings?.username ?? ""} maxLength={320} />
                   </CcField>
@@ -290,6 +304,8 @@ export default function MailPage() {
                   <CcField label="Connection timeout (seconds)">
                     <input name="timeout_seconds" type="number" min={1} max={60} defaultValue={settings?.timeout_seconds ?? 10} />
                   </CcField>
+                  </div>
+                  <div className="cc-form-grid">
                   <CcField label="Reason for change">
                     <input name="reason" minLength={10} maxLength={500} required />
                   </CcField>
@@ -298,13 +314,16 @@ export default function MailPage() {
                       { key: "save", label: saving ? "Saving…" : "Save SMTP settings", variant: "primary", type: "submit", disabled: saving },
                     ]}
                   />
+                  </div>
                 </fieldset>
               </form>
               {settings?.updated_at && <p className="cc-technical-value">Last updated {relativeTime(settings.updated_at)}.</p>}
-            </CcCard>
+            </div>
+            </CcSection>
 
             {data.configured && (
-              <CcCard title="Send a test email" icon={Send} description="The recipient address is not written to the audit log; the action and recipient domain are audited. Defaults to your own address — a successful result means the SMTP server accepted the message, not that it reached the recipient's inbox.">
+              <CcSection title="Delivery testing" description="The recipient address is not written to the audit log; only the action and recipient domain are audited.">
+              <CcCard title="Send a test email" icon={Send} description="A successful result means the SMTP server accepted the message, not that it reached the recipient's inbox.">
                 <form onSubmit={testEmail}>
                   <CcField label="Recipient">
                     <input name="recipient" type="email" required value={recipient} onChange={(event) => setRecipient(event.target.value)} />
@@ -319,8 +338,10 @@ export default function MailPage() {
                   />
                 </form>
               </CcCard>
+              </CcSection>
             )}
 
+            <CcSection title="Delivery history" description="Recent failures with safe, non-secret error details.">
             <CcCard title="Recent delivery failures">
               <CcTable
                 columns={failureColumns}
@@ -330,6 +351,7 @@ export default function MailPage() {
                 caption="Recent email delivery failures"
               />
             </CcCard>
+            </CcSection>
           </>
         )}
       </CcPage>

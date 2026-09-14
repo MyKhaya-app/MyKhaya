@@ -50,18 +50,18 @@ beforeEach(() => {
 });
 
 describe("PushPage", () => {
-  it("renders the VAPID public key and delivery summary", async () => {
+  it("renders a masked VAPID key summary and delivery summary", async () => {
     mockRoutes();
     render(<PushPage />);
-    expect(await screen.findByText("BExamplePublicKey")).toBeInTheDocument();
-    expect(screen.getByText("4")).toBeInTheDocument();
+    expect((await screen.findAllByText("Configured · ending ublicKey")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("4")).length).toBeGreaterThan(0);
     expect(screen.getByText("Configured")).toBeInTheDocument();
   });
 
   it("never renders the private key value", async () => {
     mockRoutes();
     render(<PushPage />);
-    await screen.findByText("BExamplePublicKey");
+    await screen.findAllByText("Configured · ending ublicKey");
     const bodyText = document.body.textContent ?? "";
     expect(bodyText).not.toMatch(/-----BEGIN/);
     expect(bodyText.toLowerCase()).not.toMatch(/private[_-]?key.{0,3}:.*[a-z0-9]{20,}/);

@@ -585,6 +585,264 @@ describe("Calendar — Calendars visibility sheet", () => {
   });
 });
 
+// The Tags filter (Everyone / Month.../ Tags pill row) — a third pill added
+// alongside the pre-existing member/view selectors, reusing the same
+// bottom-sheet multi-select pattern as the Calendars sheet above (coloured
+// dot + switch per row) rather than a bespoke dropdown, per the visibility
+// sheet's own established convention.
+describe("Calendar — Tags filter", () => {
+  // Fixture events below are dated 15 Jan 2026 — pin "today" there so Month
+  // view's displayed grid actually spans that date (otherwise the real
+  // system date would render a September 2026 grid these events fall
+  // outside of, and none of them would ever appear as a chip).
+  const TODAY = new Date("2026-01-15T09:00:00Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(TODAY);
+    // Selected tags persist to localStorage (mirrors member-filter
+    // persistence) — cleared per test so one test's selection never leaks
+    // into the next test's initial render.
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const schoolTag = {
+    id: "label-school",
+    name: "School",
+    color: "amber",
+    is_active: true,
+    sort_order: 0,
+    commercial_access: "normal" as const,
+  };
+  const clubsTag = {
+    id: "label-clubs",
+    name: "Clubs",
+    color: "violet",
+    is_active: true,
+    sort_order: 1,
+    commercial_access: "normal" as const,
+  };
+
+  function taggedEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      occurrence_id: "occ-1",
+      event_id: "occ-1",
+      calendar_id: "cal-1",
+      title: "Event",
+      start_at: "2026-01-15T09:00:00Z",
+      end_at: "2026-01-15T10:00:00Z",
+      is_all_day: false,
+      timezone: "UTC",
+      description: null,
+      location_text: null,
+      label: null,
+      calendar_color: "teal",
+      member_ids: [],
+      recurrence: "none",
+      reminder_minutes: null,
+      created_by: "u1",
+      updated_at: "2026-01-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  async function openTagsSheet() {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
+    return screen.findByRole("dialog", { name: "Tags" });
+  }
+
+  it("shows the plain 'Tags' label as its own pill, matching Everyone/Month, when no tag is selected", async () => {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    const trigger = screen.getByRole("button", { name: "Filter by Calendar Tags" });
+    expect(trigger).toHaveTextContent("Tags");
+    expect(trigger.className).toContain("calendar-selector");
+  });
+
+  it("opens the same bottom-sheet multi-select pattern as Calendars: coloured dot + switch per tag", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag, clubsTag]);
+    const dialog = await openTagsSheet();
+    const schoolRow = within(dialog).getByText("School").closest("label") as HTMLElement;
+    expect(schoolRow.className).toContain("calendar-visibility-row");
+    expect(schoolRow.querySelector(".calendar-visibility-dot")).not.toBeNull();
+    const toggle = within(schoolRow).getByRole("switch");
+    expect(toggle).toHaveClass("switch");
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("selecting one tag reads 'Tags · 1' and filters events down to that tag", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag, clubsTag]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        taggedEvent({ title: "Maths class", label: schoolTag }),
+        taggedEvent({ occurrence_id: "occ-2", event_id: "occ-2", title: "Football club", label: clubsTag }),
+      ],
+    });
+    const dialog = await openTagsSheet();
+    await screen.findByText("Maths class");
+
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 1");
+    expect(screen.getByText("Maths class")).toBeInTheDocument();
+    expect(screen.queryByText("Football club")).not.toBeInTheDocument();
+  });
+
+  it("selecting multiple tags matches events under ANY of them (OR) and reads 'Tags · 2'", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag, clubsTag]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        taggedEvent({ title: "Maths class", label: schoolTag }),
+        taggedEvent({ occurrence_id: "occ-2", event_id: "occ-2", title: "Football club", label: clubsTag }),
+        taggedEvent({ occurrence_id: "occ-3", event_id: "occ-3", title: "Untagged errand", label: null }),
+      ],
+    });
+    const dialog = await openTagsSheet();
+    await screen.findByText("Maths class");
+
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by Clubs" }));
+
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 2");
+    expect(screen.getByText("Maths class")).toBeInTheDocument();
+    expect(screen.getByText("Football club")).toBeInTheDocument();
+    expect(screen.queryByText("Untagged errand")).not.toBeInTheDocument();
+  });
+
+  it("composes with the member filter: Alyssa + School shows only her School-tagged event", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-alyssa", display_name: "Alyssa", colour: null, avatar_version: null },
+    ]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        taggedEvent({
+          title: "Alyssa's maths class",
+          label: schoolTag,
+          member_ids: ["member-alyssa"],
+        }),
+        taggedEvent({
+          occurrence_id: "occ-2",
+          event_id: "occ-2",
+          title: "Someone else's maths class",
+          label: schoolTag,
+          member_ids: [],
+        }),
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Alyssa's maths class");
+
+    fireEvent.change(screen.getByLabelText("Filter by household member"), {
+      target: { value: "member-alyssa" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Someone else's maths class")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Alyssa's maths class")).toBeInTheDocument();
+  });
+
+  it("Clear tag filter removes only the tag filter — the member filter stays applied", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-alyssa", display_name: "Alyssa", colour: null, avatar_version: null },
+    ]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        taggedEvent({ title: "Alyssa's maths class", label: schoolTag, member_ids: ["member-alyssa"] }),
+        taggedEvent({
+          occurrence_id: "occ-2",
+          event_id: "occ-2",
+          title: "Alyssa's football club",
+          label: null,
+          member_ids: ["member-alyssa"],
+        }),
+      ],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Alyssa's maths class");
+    fireEvent.change(screen.getByLabelText("Filter by household member"), {
+      target: { value: "member-alyssa" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    await waitFor(() => expect(screen.queryByText("Alyssa's football club")).not.toBeInTheDocument());
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear tag filter" }));
+
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags");
+    expect(screen.getByText("Alyssa's maths class")).toBeInTheDocument();
+    expect(screen.getByText("Alyssa's football club")).toBeInTheDocument();
+  });
+
+  it("switching the Calendar view (Month -> Schedule) does not clear the selected tags", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag]);
+    const dialog = await openTagsSheet();
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 1");
+
+    fireEvent.change(screen.getByLabelText("Calendar view"), { target: { value: "agenda" } });
+
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 1");
+  });
+
+  it("switching the member selector does not clear the selected tags", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag]);
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { user_id: "member-alyssa", display_name: "Alyssa", colour: null, avatar_version: null },
+    ]);
+    const dialog = await openTagsSheet();
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 1");
+
+    fireEvent.change(screen.getByLabelText("Filter by household member"), {
+      target: { value: "member-alyssa" },
+    });
+
+    expect(screen.getByRole("button", { name: "Filter by Calendar Tags" })).toHaveTextContent("Tags · 1");
+  });
+
+  it("an empty filtered result uses the existing Schedule empty-state styling, not a bespoke one", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([schoolTag]);
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [taggedEvent({ title: "Football club", label: clubsTag })],
+    });
+    const dialog = await openTagsSheet();
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Filter by School" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+
+    fireEvent.change(screen.getByLabelText("Calendar view"), { target: { value: "agenda" } });
+
+    const empty = await screen.findByText("No upcoming events in School.");
+    expect(empty).toHaveClass("hint");
+  });
+
+  it("selecting a tag with commercial_access omitted still filters correctly when Calendar Tags list is empty", async () => {
+    (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    expect(within(dialog).getByText("No Calendar Tags yet.")).toBeInTheDocument();
+  });
+});
+
 // Calendar vs Calendar Tag on Add/Edit Event — regression coverage for the
 // terminology/UI split: "Calendar" (where the event lives — Home Calendar,
 // a secondary Home calendar like GFOAT, Personal calendar, a writable

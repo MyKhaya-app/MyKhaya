@@ -570,22 +570,28 @@ export function eventsForDay(
 //   event-membership relationship, EventOccurrence.member_ids, backed by
 //   CalendarEventMember) — "who is this event for", independent of who
 //   created it. Empty string means no member filter ("Everyone").
-// - `labelFilter` is a household-defined CalendarEventLabel id (a free-form
-//   category/tag, e.g. "Family", "Work", or a personal label someone
-//   named after a household member such as "Megan") — a category filter, NOT
-//   a participant/member filter, even when its name happens to match a
-//   person's name. Empty string means no category filter.
+// - `labelFilters` is a set of household-defined CalendarEventLabel ids
+//   (free-form categories/tags, e.g. "Family", "Work", or a personal label
+//   someone named after a household member such as "Megan") — a category
+//   filter, NOT a participant/member filter, even when a tag's name happens
+//   to match a person's name. An event carries at most one label
+//   (EventOccurrence.label), so multiple selected tags are combined with OR
+//   — matching any one of them, per the "Everyone + School" /
+//   "Alyssa + School + Clubs" composition the Tags filter is specified
+//   against — there is no existing multi-value-same-facet convention
+//   elsewhere in the app to instead follow. An empty array means no tag
+//   filter (every event passes this clause).
 export function filterVisibleEvents(
   events: EventOccurrence[],
   memberFilter: string,
-  labelFilter: string,
+  labelFilters: string[],
   query: string,
 ): EventOccurrence[] {
   let filtered = memberFilter
     ? events.filter((event) => event.member_ids.includes(memberFilter))
     : events;
-  filtered = labelFilter
-    ? filtered.filter((event) => (event.label?.id ?? "") === labelFilter)
+  filtered = labelFilters.length
+    ? filtered.filter((event) => labelFilters.includes(event.label?.id ?? ""))
     : filtered;
   const needle = query.trim().toLowerCase();
   if (!needle) return filtered;
@@ -608,14 +614,15 @@ export function resolveMemberFilter(
 
 // Empty-state copy for a filtered, otherwise-empty list. Deliberately simple
 // (member clause, then category clause) rather than generating full
-// sentences for every combination.
+// sentences for every combination. Multiple selected tag names are joined
+// with "or", matching the OR semantics filterVisibleEvents applies to them.
 export function emptyStateMessage(
   memberName: string | null,
-  labelName: string | null,
+  labelNames: string[],
 ): string {
   const clauses = [
     memberName ? `for ${memberName}` : "",
-    labelName ? `in ${labelName}` : "",
+    labelNames.length ? `in ${labelNames.join(" or ")}` : "",
   ].filter(Boolean);
   if (clauses.length === 0) return "No upcoming events.";
   return `No upcoming events ${clauses.join(" ")}.`;

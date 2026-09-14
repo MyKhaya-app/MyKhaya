@@ -349,7 +349,7 @@ describe("Category (label) filter", () => {
   const allEvents = [eyeAppointment, otherHouseholdEvent];
 
   it("Month's per-day list and Schedule's grouped list agree for the same category selection", () => {
-    const visible = filterVisibleEvents(allEvents, "", "label-megan", "");
+    const visible = filterVisibleEvents(allEvents, "", ["label-megan"], "");
     expect(visible).toEqual([eyeAppointment]);
 
     // Month view derives its per-day list via eventsForDay(visibleEvents, day);
@@ -365,21 +365,50 @@ describe("Category (label) filter", () => {
   });
 
   it("excludes events under a different category from both Month and Schedule", () => {
-    const visible = filterVisibleEvents(allEvents, "", "label-megan", "");
+    const visible = filterVisibleEvents(allEvents, "", ["label-megan"], "");
     expect(visible.some((row) => row.title === "Bin collection")).toBe(false);
   });
 
   it("shows every event when no category is selected (the default/all state)", () => {
-    const visible = filterVisibleEvents(allEvents, "", "", "");
+    const visible = filterVisibleEvents(allEvents, "", [], "");
     expect(visible).toHaveLength(2);
   });
 
   it("combines category selection with an active search query", () => {
-    const visible = filterVisibleEvents(allEvents, "", "label-megan", "eye");
+    const visible = filterVisibleEvents(allEvents, "", ["label-megan"], "eye");
     expect(visible.map((row) => row.title)).toEqual(["Eye Appointment"]);
-    expect(filterVisibleEvents(allEvents, "", "label-megan", "bin")).toEqual(
+    expect(filterVisibleEvents(allEvents, "", ["label-megan"], "bin")).toEqual(
       [],
     );
+  });
+
+  it("multi-select: matches events under ANY of the selected tags (OR)", () => {
+    const visible = filterVisibleEvents(
+      allEvents,
+      "",
+      ["label-megan", "label-chores"],
+      "",
+    );
+    expect(visible.map((row) => row.title).sort()).toEqual([
+      "Bin collection",
+      "Eye Appointment",
+    ]);
+  });
+
+  it("an event with no tag never matches a non-empty tag selection", () => {
+    const untagged = event({
+      title: "Untagged event",
+      start_at: "2026-08-15T12:00:00+00:00",
+      end_at: "2026-08-15T12:30:00+00:00",
+      label: null,
+    });
+    const visible = filterVisibleEvents(
+      [...allEvents, untagged],
+      "",
+      ["label-megan", "label-chores"],
+      "",
+    );
+    expect(visible.map((row) => row.title)).not.toContain("Untagged event");
   });
 });
 
@@ -441,7 +470,7 @@ describe("Household member filter", () => {
   const allEvents = [eyeAppointment, familyDinner, anthonysWorkMeeting];
 
   it("1. Everyone shows events for multiple members", () => {
-    const visible = filterVisibleEvents(allEvents, "", "", "");
+    const visible = filterVisibleEvents(allEvents, "", [], "");
     expect(visible.map((row) => row.title)).toEqual([
       "Eye Appointment",
       "Family Dinner",
@@ -450,14 +479,14 @@ describe("Household member filter", () => {
   });
 
   it("2. selecting Megan includes an event assigned to her", () => {
-    const visible = filterVisibleEvents(allEvents, megan.user_id, "", "");
+    const visible = filterVisibleEvents(allEvents, megan.user_id, [], "");
     expect(visible.map((row) => row.title)).toContain("Eye Appointment");
   });
 
   it("3. creator identity is irrelevant — Anthony created it, only Megan is assigned", () => {
     // eyeAppointment.created_by === anthony.user_id, but member_ids is
     // [megan.user_id] only. The filter must key off member_ids, not created_by.
-    const visible = filterVisibleEvents(allEvents, megan.user_id, "", "");
+    const visible = filterVisibleEvents(allEvents, megan.user_id, [], "");
     expect(visible).toContainEqual(eyeAppointment);
     expect(eyeAppointment.created_by).toBe(anthony.user_id);
   });
@@ -466,13 +495,13 @@ describe("Household member filter", () => {
     // The Eye Appointment is assigned only to Megan (not Anthony), even
     // though Anthony created it — Anthony's own filtered view must not
     // include it.
-    const visible = filterVisibleEvents(allEvents, anthony.user_id, "", "");
+    const visible = filterVisibleEvents(allEvents, anthony.user_id, [], "");
     expect(visible.map((row) => row.title)).not.toContain("Eye Appointment");
   });
 
   it("5. an event with multiple participants appears for each of them and for Everyone", () => {
     for (const selected of ["", anthony.user_id, megan.user_id, alyssa.user_id]) {
-      const visible = filterVisibleEvents(allEvents, selected, "", "");
+      const visible = filterVisibleEvents(allEvents, selected, [], "");
       expect(visible.map((row) => row.title)).toContain("Family Dinner");
     }
   });
@@ -481,7 +510,7 @@ describe("Household member filter", () => {
     const meganAppointments = filterVisibleEvents(
       allEvents,
       megan.user_id,
-      "label-appointment",
+      ["label-appointment"],
       "",
     );
     expect(meganAppointments.map((row) => row.title)).toEqual([
@@ -491,27 +520,43 @@ describe("Household member filter", () => {
     const meganWork = filterVisibleEvents(
       allEvents,
       megan.user_id,
-      "label-work",
+      ["label-work"],
       "",
     );
     expect(meganWork).toEqual([]);
+  });
+
+  it("6b. member + multiple tags compose with OR across the tags: Anthony + Family or Work includes both his events", () => {
+    // Mirrors the spec's "Anthony + Police", "Alyssa + School + Clubs"
+    // compositions: member filter narrows to the person, tag filter then
+    // matches ANY of the selected tags among that person's events.
+    const visible = filterVisibleEvents(
+      allEvents,
+      anthony.user_id,
+      ["label-family", "label-work"],
+      "",
+    );
+    expect(visible.map((row) => row.title).sort()).toEqual([
+      "Family Dinner",
+      "Work meeting",
+    ]);
   });
 
   it("7. member + category + search compose together", () => {
     const visible = filterVisibleEvents(
       allEvents,
       megan.user_id,
-      "label-appointment",
+      ["label-appointment"],
       "eye",
     );
     expect(visible.map((row) => row.title)).toEqual(["Eye Appointment"]);
     expect(
-      filterVisibleEvents(allEvents, megan.user_id, "label-appointment", "dinner"),
+      filterVisibleEvents(allEvents, megan.user_id, ["label-appointment"], "dinner"),
     ).toEqual([]);
   });
 
   it("8. Month and Schedule consume the same filtered set for a given member/date", () => {
-    const visible = filterVisibleEvents(allEvents, megan.user_id, "", "");
+    const visible = filterVisibleEvents(allEvents, megan.user_id, [], "");
     const monthDayList = eventsForDay(visible, "2026-08-15", "Europe/London");
     const scheduleByDay = groupEventsByDay(visible, "Europe/London");
     expect(monthDayList.map((row) => row.title)).toEqual(["Eye Appointment"]);
@@ -535,7 +580,7 @@ describe("Household member filter", () => {
     const visible = filterVisibleEvents(
       [...allEvents, recurringOccurrence],
       megan.user_id,
-      "",
+      [],
       "",
     );
     expect(visible.map((row) => row.title)).toContain("Weekly swimming");
@@ -572,24 +617,33 @@ describe("Household member filter", () => {
 
 describe("emptyStateMessage", () => {
   it("gives a plain message with no filters applied", () => {
-    expect(emptyStateMessage(null, null)).toBe("No upcoming events.");
+    expect(emptyStateMessage(null, [])).toBe("No upcoming events.");
   });
 
   it("names the selected member", () => {
-    expect(emptyStateMessage("Megan", null)).toBe(
+    expect(emptyStateMessage("Megan", [])).toBe(
       "No upcoming events for Megan.",
     );
   });
 
   it("names the selected category", () => {
-    expect(emptyStateMessage(null, "Appointment")).toBe(
+    expect(emptyStateMessage(null, ["Appointment"])).toBe(
       "No upcoming events in Appointment.",
     );
   });
 
   it("combines member and category", () => {
-    expect(emptyStateMessage("Megan", "Appointment")).toBe(
+    expect(emptyStateMessage("Megan", ["Appointment"])).toBe(
       "No upcoming events for Megan in Appointment.",
+    );
+  });
+
+  it("joins multiple selected tag names with 'or', matching the OR filter semantics", () => {
+    expect(emptyStateMessage(null, ["School", "Clubs"])).toBe(
+      "No upcoming events in School or Clubs.",
+    );
+    expect(emptyStateMessage("Alyssa", ["School", "Clubs"])).toBe(
+      "No upcoming events for Alyssa in School or Clubs.",
     );
   });
 });

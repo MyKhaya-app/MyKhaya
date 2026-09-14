@@ -2961,6 +2961,17 @@ html.native-shell .home-section-overlap {
 }
 
 @media (max-width: 400px) {
+  /* Three pills (Everyone/Month.../Tags) must stay on one row down to a
+     393px iPhone width — tighten the row gap and each pill's own padding
+     rather than shrinking the shared pill height/radius/typography (the
+     Tags selector is required to look identical to Everyone/Month). */
+  .calendar-page .calendar-selectors-row {
+    gap: 0.3rem;
+  }
+  .calendar-page .calendar-selector select,
+  .calendar-page .calendar-selector-button {
+    padding: 0.4rem 1.5rem 0.4rem 0.6rem;
+  }
   .calendar-page .calendar-month-row {
     gap: 3px;
   }
@@ -3040,6 +3051,7 @@ html.native-shell .home-section-overlap {
 }
 .calendar-selectors-row {
   display: flex;
+  flex-wrap: nowrap;
   gap: 0.4rem;
 }
 /* Self-sufficient on the *shape* properties only — deliberately no
@@ -3128,6 +3140,26 @@ html.native-shell .home-section-overlap {
 }
 .calendar-view-selector select {
   color: var(--colour-slate);
+}
+/* The Tags filter trigger (opens the multi-select bottom sheet below,
+   see calendar/page.tsx) is a real <button>, not a <select> — reuses the
+   exact pill visual language above (same background/radius/typography/
+   chevron treatment via .calendar-selector svg) so it reads as the same
+   control family as Everyone/Month rather than a bespoke third style. */
+.calendar-selector-button {
+  appearance: none;
+  background: var(--colour-sage-soft);
+  border: 0;
+  border-radius: 999px;
+  color: var(--colour-sage-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0.4rem 1.8rem 0.4rem 0.75rem;
+  white-space: nowrap;
+  width: auto;
 }
 .calendar-selector svg {
   pointer-events: none;
@@ -5824,6 +5856,17 @@ button.danger,
   flex-shrink: 0;
   gap: 0.5rem;
 }
+.cc-config-panel {
+  background: var(--cc-surface);
+  border-top: 1px solid var(--cc-border);
+  padding: 1rem 0 0;
+}
+.cc-config-panel h3 {
+  border-top: 1px solid var(--cc-border);
+  font-size: 0.95rem;
+  margin: 1rem 0 0.8rem;
+  padding-top: 1rem;
+}
 
 .cc-card {
   background: var(--cc-surface);
@@ -6063,6 +6106,46 @@ button.danger,
   margin: 0;
   width: auto;
 }
+.cc-toggle {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  width: min(100%, 24rem);
+}
+.cc-toggle input {
+  height: 1px;
+  margin: -1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+.cc-toggle-track {
+  align-items: center;
+  background: var(--cc-border);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  padding: 0.15rem;
+  transition: background 120ms ease;
+  width: 2.25rem;
+}
+.cc-toggle-thumb {
+  background: var(--cc-surface);
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
+  height: 0.95rem;
+  transform: translateX(0);
+  transition: transform 120ms ease;
+  width: 0.95rem;
+}
+.cc-toggle input:checked + .cc-toggle-track { background: var(--cc-primary); }
+.cc-toggle input:checked + .cc-toggle-track .cc-toggle-thumb { transform: translateX(1rem); }
+.cc-toggle input:focus-visible + .cc-toggle-track { outline: 2px solid var(--cc-primary); outline-offset: 2px; }
+.cc-toggle input:disabled + .cc-toggle-track { opacity: 0.55; }
 .cc-pagination {
   align-items: center;
   display: flex;

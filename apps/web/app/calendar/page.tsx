@@ -1243,7 +1243,8 @@ export default function CalendarPage() {
   const [busy, setBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [labelFilter, setLabelFilter] = useState("");
+  const [labelFilters, setLabelFilters] = useState<string[]>([]);
+  const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
   const [memberFilter, setMemberFilter] = useState("");
   // The Home's primary calendar's IANA timezone — the default/shared
   // timezone for household calendar events (never the server's or the
@@ -1326,12 +1327,31 @@ export default function CalendarPage() {
   }, [debugEnabled, editingSelected, selectedEvent, view, focusDate]);
 
   useEffect(() => {
-    setLabelFilter(window.localStorage.getItem(LABEL_STORAGE) ?? "");
+    const stored = window.localStorage.getItem(LABEL_STORAGE);
+    if (!stored) return;
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed)) setLabelFilters(parsed.map(String));
+    } catch {
+      // Legacy value from the single-select Calendar Tag filter this
+      // replaced (a bare label id, not JSON) — fall back to "no tag filter"
+      // rather than crashing on it.
+    }
   }, []);
 
-  function chooseLabel(next: string) {
-    setLabelFilter(next);
-    window.localStorage.setItem(LABEL_STORAGE, next);
+  function toggleLabelFilter(id: string) {
+    setLabelFilters((current) => {
+      const next = current.includes(id)
+        ? current.filter((existing) => existing !== id)
+        : [...current, id];
+      window.localStorage.setItem(LABEL_STORAGE, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function clearLabelFilters() {
+    setLabelFilters([]);
+    window.localStorage.setItem(LABEL_STORAGE, JSON.stringify([]));
   }
 
   useEffect(() => {
@@ -1577,10 +1597,10 @@ export default function CalendarPage() {
   const visibleEvents = useMemo(
     () =>
       filterByVisibleCalendars(
-        filterVisibleEvents(events, memberFilter, labelFilter, query),
+        filterVisibleEvents(events, memberFilter, labelFilters, query),
         hiddenCalendarIds,
       ),
-    [events, memberFilter, labelFilter, query, hiddenCalendarIds],
+    [events, memberFilter, labelFilters, query, hiddenCalendarIds],
   );
   const byDay = useMemo(
     () => groupEventsByDay(visibleEvents, calendarTimezone),
@@ -1594,12 +1614,12 @@ export default function CalendarPage() {
   const selectedMemberName = memberFilter
     ? (memberNames.get(memberFilter) ?? null)
     : null;
-  const selectedLabelName = labelFilter
-    ? (labels.find((label) => label.id === labelFilter)?.name ?? null)
-    : null;
+  const selectedLabelNames = labelFilters
+    .map((id) => labels.find((label) => label.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
   const scheduleEmptyMessage = emptyStateMessage(
     selectedMemberName,
-    selectedLabelName,
+    selectedLabelNames,
   );
 
   const agendaKeys = useMemo(
@@ -1953,47 +1973,48 @@ export default function CalendarPage() {
               </select>
               <ChevronDown size={14} aria-hidden="true" />
             </label>
+            {/* Filters by CalendarEventLabel, user-facing "Calendar Tag" — a
+                free-form, unlimited tag (Family/School/Work/...), not a Calendar
+                (HomeCalendar) itself, and not the household-member filter above
+                even when a tag happens to share a member's name — see
+                docs/architecture/commercial-entitlements.md#commercial-plan-cleanup.
+                Multi-select (see toggleLabelFilter), opened as the same
+                bottom-sheet pattern as the Calendars selector below rather than
+                a native <select>, since more than one tag can be active at once. */}
+            <button
+              type="button"
+              className="calendar-selector calendar-selector-button"
+              onClick={() => setTagSelectorOpen(true)}
+              aria-haspopup="dialog"
+              aria-label="Filter by Calendar Tags"
+            >
+              <span>{labelFilters.length ? `Tags · ${labelFilters.length}` : "Tags"}</span>
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
           </div>
 
           {searchOpen && (
-            <>
-              <div className="calendar-search">
-                <Search size={16} aria-hidden="true" />
-                <input
-                  type="search"
-                  placeholder="Search events"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  autoFocus
-                  aria-label="Search events by title"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    className="icon-button secondary"
-                    onClick={() => setQuery("")}
-                    aria-label="Clear search"
-                  >
-                    <X size={16} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-              <div className="calendar-selectors-row">
-                <label className="calendar-selector">
-                  {/* This filters by CalendarEventLabel, user-facing "Calendar Tag" — a
-                      free-form, unlimited tag (Family/School/Work/...), not a Calendar
-                      (HomeCalendar) itself, and not the household-member filter above
-                      even when a tag happens to share a member's name — see
-                      docs/architecture/commercial-entitlements.md#commercial-plan-cleanup. */}
-                  <span className="sr-only">Filter by Calendar Tag</span>
-                  <select value={labelFilter} onChange={(event) => chooseLabel(event.target.value)} aria-label="Filter by Calendar Tag">
-                    <option value="">{activeHome?.name ?? "Household"} calendar</option>
-                    {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
-                  </select>
-                  <ChevronDown size={14} aria-hidden="true" />
-                </label>
-              </div>
-            </>
+            <div className="calendar-search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                placeholder="Search events"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                autoFocus
+                aria-label="Search events by title"
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="icon-button secondary"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                >
+                  <X size={16} aria-hidden="true" />
+                </button>
+              )}
+            </div>
           )}
         </header>
 
@@ -2238,6 +2259,52 @@ export default function CalendarPage() {
               >
                 Manage sharing
               </Link>
+            </div>
+          </BottomSheet>
+        )}
+
+        {tagSelectorOpen && (
+          <BottomSheet title="Tags" onDismiss={() => setTagSelectorOpen(false)}>
+            <div className="calendar-visibility-list">
+              <div className="calendar-visibility-group">
+                {labels.length === 0 && (
+                  <p className="hint">No Calendar Tags yet.</p>
+                )}
+                {labels.map((label) => {
+                  const checked = labelFilters.includes(label.id);
+                  return (
+                    <label className="calendar-visibility-row" key={label.id}>
+                      <span
+                        className="colour-dot calendar-visibility-dot"
+                        style={
+                          { "--swatch-colour": resolveColour(label.color) } as React.CSSProperties
+                        }
+                        aria-hidden="true"
+                      />
+                      <span className="calendar-visibility-name">
+                        <span className="calendar-visibility-name-primary">{label.name}</span>
+                      </span>
+                      <input
+                        className="switch"
+                        type="checkbox"
+                        role="switch"
+                        checked={checked}
+                        aria-checked={checked}
+                        onChange={() => toggleLabelFilter(label.id)}
+                        aria-label={`Filter by ${label.name}`}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                className="button secondary calendar-visibility-manage-link"
+                onClick={clearLabelFilters}
+                disabled={labelFilters.length === 0}
+              >
+                Clear tag filter
+              </button>
             </div>
           </BottomSheet>
         )}

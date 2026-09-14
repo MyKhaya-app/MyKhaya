@@ -8,7 +8,8 @@ import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { readableDate, relativeTime, titleCase } from "@/components/platform-format";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcCard, CcColumns } from "@/components/control-centre/section";
+import { CcCard, CcColumns, CcSection } from "@/components/control-centre/section";
+import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcBadge } from "@/components/control-centre/badge";
 import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
 import { CcField } from "@/components/control-centre/form-field";
@@ -16,6 +17,7 @@ import { CcActionBar } from "@/components/control-centre/action-bar";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
+import { CcToggle } from "@/components/control-centre/toggle";
 
 type PushSettings = {
   enabled: boolean;
@@ -37,6 +39,10 @@ type PushState = {
 
 function safeError(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
+}
+
+function publicKeySummary(key: string | null): string {
+  return key ? `Configured · ending ${key.slice(-8)}` : "Not generated";
 }
 
 export default function PushPage() {
@@ -184,6 +190,17 @@ export default function PushPage() {
           <CcLoadingState label="Loading push delivery state…" />
         ) : (
           <>
+            <CcStatusCard
+              tone={data.configured ? "success" : "warning"}
+              status={data.configured ? "Push transport ready" : "Push transport not configured"}
+              description="Operational state is summarised here; service configuration and key actions are separated below."
+              items={[
+                { label: "Managed by", value: titleCase(data.managed_by) },
+                { label: "Active devices", value: data.active_subscriptions },
+                { label: "Recent failures", value: data.recent_failures.length },
+                { label: "Public key", value: publicKeySummary(data.public_key) },
+              ]}
+            />
             <CcColumns ratio="1-1">
               <CcCard
                 title="Transport"
@@ -193,7 +210,7 @@ export default function PushPage() {
                 <CcMetadataGrid>
                   <CcMetadataItem label="Managed by">{titleCase(data.managed_by)}</CcMetadataItem>
                   <CcMetadataItem label="VAPID public key">
-                    {data.public_key ? <code>{data.public_key}</code> : "Not generated"}
+                    {publicKeySummary(data.public_key)}
                   </CcMetadataItem>
                 </CcMetadataGrid>
               </CcCard>
@@ -205,6 +222,7 @@ export default function PushPage() {
               </CcCard>
             </CcColumns>
 
+            <CcSection title="Credentials and high-impact actions" description="Public key status is summarised; private material is never displayed. Rotation invalidates current device registrations.">
             <CcCard
               title="VAPID key pair"
               icon={KeyRound}
@@ -238,19 +256,21 @@ export default function PushPage() {
                 />
               )}
             </CcCard>
+            </CcSection>
 
-            <CcCard title="Push configuration">
+            <CcSection title="Push configuration" description="Service settings and the contact address used by the push provider.">
+            <div className="cc-config-panel">
               <form onSubmit={saveSettings}>
                 <fieldset disabled={!settings?.editable}>
-                  <CcField label="Enabled">
-                    <input type="checkbox" name="enabled" defaultChecked={settings?.enabled} />
-                  </CcField>
+                  <CcToggle label="Push delivery enabled" name="enabled" defaultChecked={settings?.enabled} disabled={!settings?.editable} />
+                  <div className="cc-form-grid">
                   <CcField label="Contact address (mailto: or https://)">
                     <input name="subject" defaultValue={settings?.subject ?? ""} placeholder="mailto:ops@mykhaya.example" maxLength={320} />
                   </CcField>
                   <CcField label="Reason for change">
                     <input name="reason" minLength={10} maxLength={500} required />
                   </CcField>
+                  </div>
                   <CcActionBar
                     actions={[
                       { key: "save", label: saving ? "Saving…" : "Save push settings", variant: "primary", type: "submit", disabled: saving },
@@ -259,9 +279,11 @@ export default function PushPage() {
                 </fieldset>
               </form>
               {settings?.updated_at && <p className="cc-technical-value">Last updated {relativeTime(settings.updated_at)}.</p>}
-            </CcCard>
+            </div>
+            </CcSection>
 
             {data.configured && (
+              <CcSection title="Delivery testing" description="Test tools are separated from service configuration and send only to the selected registered recipient.">
               <CcCard
                 title="Send a test push"
                 icon={Send}
@@ -281,8 +303,10 @@ export default function PushPage() {
                   />
                 </form>
               </CcCard>
+              </CcSection>
             )}
 
+            <CcSection title="Delivery history" description="Recent failures with safe, non-secret error details.">
             <CcCard title="Recent delivery failures">
               <CcTable
                 columns={failureColumns}
@@ -292,6 +316,7 @@ export default function PushPage() {
                 caption="Recent push delivery failures"
               />
             </CcCard>
+            </CcSection>
           </>
         )}
       </CcPage>

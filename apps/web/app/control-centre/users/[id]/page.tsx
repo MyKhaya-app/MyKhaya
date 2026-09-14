@@ -322,7 +322,7 @@ export default function PlatformUserDetail() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <p>
           <a href="/users">&larr; Users</a>
         </p>

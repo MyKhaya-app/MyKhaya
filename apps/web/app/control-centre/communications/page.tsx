@@ -72,7 +72,7 @@ export default function CommunicationsHealthPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Communications"
           title="Health"

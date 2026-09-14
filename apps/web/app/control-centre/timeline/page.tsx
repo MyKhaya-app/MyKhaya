@@ -55,6 +55,7 @@ export default function TimelinePage() {
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [live, setLive] = useState(false);
 
   const load = useCallback(async (targetPage: number, append: boolean) => {
     setLoading(true);
@@ -76,6 +77,12 @@ export default function TimelinePage() {
     void load(1, false);
   }, [load]);
 
+  useEffect(() => {
+    if (!live) return;
+    const interval = window.setInterval(() => void load(1, false), 15_000);
+    return () => window.clearInterval(interval);
+  }, [live, load]);
+
   let lastDay = "";
 
   return (
@@ -86,9 +93,15 @@ export default function TimelinePage() {
           title="Timeline"
           description={`What actually happened, told chronologically — for "why", see Diagnostics.`}
           secondaryActions={
-            <button className="secondary" onClick={() => load(1, false)}>
-              Refresh
-            </button>
+            <div className="cc-action-bar">
+              <label className="cc-inline-control">
+                <input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} />
+                <span>{live ? "Live" : "Paused"}</span>
+              </label>
+              <button className="secondary" onClick={() => void load(1, false)}>
+                Refresh
+              </button>
+            </div>
           }
         />
         {error && <CcNotice tone="error">{error}</CcNotice>}

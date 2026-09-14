@@ -237,7 +237,7 @@ export default function PlatformSettingsPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader eyebrow="Control Centre" title="Settings" />
         {error && <CcNotice tone="error">{error}</CcNotice>}
         {!data && !error ? (
