@@ -9785,17 +9785,19 @@ a.family-feed-row {
     gap: 1rem;
   }
   .app-shell:not(.native-shell-app) .rr-intro {
+    align-items: center;
+    display: flex;
     gap: 1rem;
-    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .app-shell:not(.native-shell-app) .rr-intro-text {
+    flex: 1;
+    min-width: 0;
   }
   .app-shell:not(.native-shell-app) .rr-intro-art {
-    background: var(--colour-sage-soft);
-    border-radius: 50%;
-    box-sizing: border-box;
-    height: 64px;
-    order: -1;
-    padding: 0.9rem;
-    width: 64px;
+    height: 88px;
+    order: 0;
+    padding: 0;
+    width: auto;
   }
   .app-shell:not(.native-shell-app) .rr-controls {
     align-items: center;
