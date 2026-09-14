@@ -6843,6 +6843,30 @@ button.danger,
   flex: none;
   gap: 0.4rem;
 }
+.meal-plans-controls-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  min-width: 0;
+}
+.meal-plans-controls-left {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.meal-filter-control {
+  display: block;
+  min-width: 0;
+}
+.meal-filter-control select {
+  font-size: var(--font-small);
+  min-height: 44px;
+  padding: 0.5rem 0.7rem;
+  width: auto;
+}
 .meal-plans-today-button {
   font-size: var(--font-small);
   padding: 0 0.15rem;
@@ -6887,6 +6911,15 @@ button.danger,
   }
   .meal-plans-toolbar-right {
     gap: 0.25rem;
+  }
+  .meal-plans-controls-row {
+    gap: 0.4rem;
+  }
+  .meal-plans-controls-left {
+    gap: 0.25rem;
+  }
+  .meal-filter-control select {
+    padding-inline: 0.55rem;
   }
 }
 /* Today's Plan — one Lists-style row per meal period (Breakfast/Lunch/

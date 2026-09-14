@@ -518,7 +518,6 @@ function PlannerTab({
               Week
             </button>
           </div>
-            </div>
           </div>
 
           {view === "day" ? (

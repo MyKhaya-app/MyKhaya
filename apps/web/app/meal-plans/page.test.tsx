@@ -319,6 +319,75 @@ describe("Meal Plans — Family plan access", () => {
     expect(api.mealPlanWeek).toHaveBeenCalled();
   });
 
+  it("filters Week rows by meal type without removing days or empty selected slots", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+    (api.mealPlanWeek as ReturnType<typeof vi.fn>).mockResolvedValue({
+      days: [
+        {
+          date: "2026-08-17",
+          entries: [
+            {
+              id: "breakfast-entry",
+              date: "2026-08-17",
+              meal_slot: "breakfast",
+              meal_name: "Breakfast meal",
+              quick_meal_name: null,
+              meal_image_url: null,
+              time: null,
+              member_ids: [],
+              cook_member_id: null,
+              makes_leftovers: false,
+              is_favourite: false,
+            },
+          ],
+        },
+        { date: "2026-08-18", entries: [] },
+      ],
+    });
+
+    render(<MealPlansPage />);
+    const user = userEvent.setup();
+    await screen.findByRole("tab", { name: "Plan" });
+
+    expect(screen.getByLabelText("Filter meals")).toHaveValue("all");
+    await user.click(screen.getByRole("tab", { name: "Week" }));
+    await screen.findByText("Breakfast meal");
+
+    expect(document.querySelectorAll(".meal-week-slot")).toHaveLength(6);
+    expect(screen.getAllByRole("tab", { name: "Day" })).toHaveLength(1);
+    expect(screen.getAllByRole("tab", { name: "Week" })).toHaveLength(1);
+
+    await user.selectOptions(screen.getByLabelText("Filter meals"), "dinner");
+
+    expect(screen.getByLabelText("Filter meals")).toHaveValue("dinner");
+    expect(document.querySelectorAll(".meal-week-day")).toHaveLength(2);
+    expect(document.querySelectorAll(".meal-week-slot")).toHaveLength(2);
+    expect(
+      [...document.querySelectorAll(".meal-week-slot")].every(
+        (slot) => slot.textContent === "Dinner",
+      ),
+    ).toBe(true);
+    expect(screen.getByText("+ Add")).toBeInTheDocument();
+    expect(screen.queryByText("Breakfast meal")).not.toBeInTheDocument();
+  });
+
+  it("preserves the meal filter while moving between weeks", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      meals_enabled: true,
+    });
+
+    render(<MealPlansPage />);
+    const user = userEvent.setup();
+    await screen.findByRole("tab", { name: "Plan" });
+    await user.click(screen.getByRole("tab", { name: "Week" }));
+    await user.selectOptions(screen.getByLabelText("Filter meals"), "lunch");
+    await user.click(screen.getByRole("button", { name: /next week/i }));
+
+    expect(screen.getByLabelText("Filter meals")).toHaveValue("lunch");
+  });
+
   it("handles left and right swipes on the rendered Day content surface", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,
