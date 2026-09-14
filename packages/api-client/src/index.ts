@@ -903,6 +903,35 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/lists${search}`,
     );
   };
+  listTemplates = (homeId: string, params?: { q?: string }) => {
+    const search = params?.q ? `?q=${encodeURIComponent(params.q)}` : "";
+    return this.request<import("@mykhaya/shared-types").ListTemplateListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/list-templates${search}`,
+    );
+  };
+  listTemplate = (homeId: string, templateId: string) =>
+    this.request<import("@mykhaya/shared-types").ListTemplate>(
+      `/homes/${encodeURIComponent(homeId)}/list-templates/${encodeURIComponent(templateId)}`,
+    );
+  createListTemplate = (homeId: string, body: import("@mykhaya/shared-types").ListTemplateCreatePayload) =>
+    this.request<import("@mykhaya/shared-types").ListTemplate>(
+      `/homes/${encodeURIComponent(homeId)}/list-templates`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateListTemplate = (homeId: string, templateId: string, body: import("@mykhaya/shared-types").ListTemplateUpdatePayload) =>
+    this.request<import("@mykhaya/shared-types").ListTemplate>(
+      `/homes/${encodeURIComponent(homeId)}/list-templates/${encodeURIComponent(templateId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  duplicateListTemplate = (homeId: string, templateId: string, body: import("@mykhaya/shared-types").ListTemplateCreatePayload) =>
+    this.request<import("@mykhaya/shared-types").ListTemplate>(
+      `/homes/${encodeURIComponent(homeId)}/list-templates/${encodeURIComponent(templateId)}/duplicate`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  archiveListTemplate = (homeId: string, templateId: string) =>
+    this.request<void>(`/homes/${encodeURIComponent(homeId)}/list-templates/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+    });
   list = (homeId: string, listId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}`,

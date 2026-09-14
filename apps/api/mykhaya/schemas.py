@@ -1437,6 +1437,7 @@ LIST_ICONS = (
 class ListCreate(StrictModel):
     name: str = Field(min_length=1, max_length=160)
     icon: str | None = Field(default=None, max_length=20)
+    template_id: uuid.UUID | None = None
 
     @field_validator("icon")
     @classmethod
@@ -1460,6 +1461,7 @@ class ListItemInput(StrictModel):
 class ListItemResponse(BaseModel):
     id: uuid.UUID
     position: int
+    section_id: uuid.UUID | None
     text: str
     quantity: str | None
     note: str | None
@@ -1517,10 +1519,63 @@ class ListDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     commercial_access: Literal["normal", "read_only_due_to_plan"]
+    sections: list["ListSectionResponse"] = Field(default_factory=list)
+    source_template_id: uuid.UUID | None = None
+    source_template_name: str | None = None
 
 
 class ListListResponse(BaseModel):
     items: list[ListResponse]
+
+
+class TemplateItemInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+
+
+class TemplateSectionInput(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    items: list[TemplateItemInput] = Field(default_factory=list, max_length=500)
+
+
+class ListTemplateCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=500)
+    scope: RoutineScope = RoutineScope.personal
+    sections: list[TemplateSectionInput] = Field(default_factory=list, max_length=100)
+
+
+class ListTemplateUpdate(ListTemplateCreate):
+    expected_updated_at: datetime
+
+
+class ListTemplateItemResponse(BaseModel):
+    id: uuid.UUID
+    text: str
+    position: int
+
+
+class ListSectionResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    position: int
+    items: list[ListTemplateItemResponse] = Field(default_factory=list)
+
+
+class ListTemplateResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID
+    group_id: uuid.UUID
+    archived: bool
+    created_at: datetime
+    updated_at: datetime
+    sections: list[ListSectionResponse]
+
+
+class ListTemplateListResponse(BaseModel):
+    items: list[ListTemplateResponse]
 
 
 class NotificationPreferencesResponse(BaseModel):

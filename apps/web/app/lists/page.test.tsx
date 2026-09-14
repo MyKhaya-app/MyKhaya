@@ -33,6 +33,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       members: vi.fn(),
       featureMatrix: vi.fn(),
       lists: vi.fn(),
+      listTemplates: vi.fn(),
       createList: vi.fn(),
       renameList: vi.fn(),
       deleteList: vi.fn(),
@@ -51,6 +52,7 @@ beforeEach(() => {
   });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
     features: [{ feature: "shopping", enabled: true }],
   });

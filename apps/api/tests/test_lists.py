@@ -136,6 +136,77 @@ async def create_list(
     return response.json()
 
 
+@pytest.mark.asyncio
+async def test_templates_copy_ordered_sections_and_defaults_without_live_coupling(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("template-owner"), "Template Owner")
+    home_id = await create_home(client, "Template Home")
+    template = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/list-templates",
+        json={
+            "name": "ALDI route",
+            "scope": "personal",
+            "sections": [
+                {"name": "Fresh & Fridge", "items": [{"text": "Milk"}]},
+                {"name": "Cupboard", "items": [{"text": "Pasta"}]},
+            ],
+        },
+    )
+    assert template.status_code == 201, template.text
+    template_body = template.json()
+    assert [section["name"] for section in template_body["sections"]] == ["Fresh & Fridge", "Cupboard"]
+    assert template_body["sections"][0]["items"][0]["text"] == "Milk"
+
+    created = await create_list(client, home_id, name="Saturday shopping", template_id=template_body["id"])
+    assert [section["name"] for section in created["sections"]] == ["Fresh & Fridge", "Cupboard"]
+    assert [item["text"] for item in created["items"]] == ["Milk", "Pasta"]
+    assert created["source_template_id"] == template_body["id"]
+
+    item_id = created["items"][0]["id"]
+    changed = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"text": "Oat milk"},
+    )
+    assert changed.status_code == 200, changed.text
+    original = await client.get(f"/api/v1/homes/{home_id}/list-templates/{template_body['id']}")
+    assert original.json()["sections"][0]["items"][0]["text"] == "Milk"
+
+
+@pytest.mark.asyncio
+async def test_personal_template_is_not_visible_to_another_home_member(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("template-private"), "Template Owner")
+    home_id = await create_home(client, "Private Template Home")
+    template = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/list-templates",
+        json={"name": "Private", "scope": "personal", "sections": []},
+    )
+    assert template.status_code == 201, template.text
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        partner_id = await create_verified_user(partner_client, unique_email("template-partner"), "Template Partner")
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=partner_id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+        response = await partner_client.get(
+            f"/api/v1/homes/{home_id}/list-templates/{template.json()['id']}"
+        )
+        assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Entitlement / feature gate
 # ---------------------------------------------------------------------------

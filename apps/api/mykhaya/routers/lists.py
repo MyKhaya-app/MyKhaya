@@ -40,7 +40,17 @@ from mykhaya.entitlements import (
 )
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
-from mykhaya.models import FeatureKey, HouseholdList, HouseholdListItem, Membership
+from mykhaya.models import (
+    FeatureKey,
+    HouseholdList,
+    HouseholdListItem,
+    HouseholdListSection,
+    ListTemplate,
+    ListTemplateItem,
+    ListTemplateSection,
+    Membership,
+    RoutineScope,
+)
 from mykhaya.notifications.lists_wishlists import notify_list_assignment
 from mykhaya.schemas import (
     ListCreate,
@@ -52,6 +62,12 @@ from mykhaya.schemas import (
     ListListResponse,
     ListRenameRequest,
     ListResponse,
+    ListSectionResponse,
+    ListTemplateCreate,
+    ListTemplateItemResponse,
+    ListTemplateListResponse,
+    ListTemplateResponse,
+    ListTemplateUpdate,
 )
 
 LISTS_LIMIT_KEY = "lists.max_lists"
@@ -192,6 +208,7 @@ def _item_response(row: HouseholdListItem) -> ListItemResponse:
     return ListItemResponse(
         id=row.id,
         position=row.position,
+        section_id=row.section_id,
         text=row.text,
         quantity=row.quantity,
         note=row.note,
@@ -206,6 +223,30 @@ async def _detail_response(
     db: AsyncSession, row: HouseholdList, access: dict[uuid.UUID, bool]
 ) -> ListDetailResponse:
     items = await _list_items(db, row.id)
+    sections = list(
+        (
+            await db.scalars(
+                select(HouseholdListSection)
+                .where(HouseholdListSection.list_id == row.id)
+                .order_by(HouseholdListSection.position, HouseholdListSection.id)
+            )
+        ).all()
+    )
+    section_items: dict[uuid.UUID, list[ListTemplateItemResponse]] = {}
+    if sections:
+        list_section_ids = [section.id for section in sections]
+        copied_items = (
+            await db.scalars(
+                select(HouseholdListItem)
+                .where(HouseholdListItem.section_id.in_(list_section_ids))
+                .order_by(HouseholdListItem.position, HouseholdListItem.id)
+            )
+        ).all()
+        for item in copied_items:
+            if item.section_id is not None:
+                section_items.setdefault(item.section_id, []).append(
+                    ListTemplateItemResponse(id=item.id, text=item.text, position=item.position)
+                )
     remaining = sum(1 for item in items if not item.is_checked)
     return ListDetailResponse(
         id=row.id,
@@ -218,6 +259,17 @@ async def _detail_response(
         created_at=row.created_at,
         updated_at=row.updated_at,
         commercial_access=_access_state(access, row.id),
+        sections=[
+            ListSectionResponse(
+                id=section.id,
+                name=section.name,
+                position=section.position,
+                items=section_items.get(section.id, []),
+            )
+            for section in sections
+        ],
+        source_template_id=row.source_template_id,
+        source_template_name=row.source_template_name,
     )
 
 
@@ -235,6 +287,232 @@ async def _next_position(db: AsyncSession, list_id: uuid.UUID) -> int:
 # ---------------------------------------------------------------------------
 # Lists
 # ---------------------------------------------------------------------------
+
+
+async def _template_sections(db: AsyncSession, template_id: uuid.UUID) -> list[ListTemplateSection]:
+    return list(
+        (
+            await db.scalars(
+                select(ListTemplateSection)
+                .where(ListTemplateSection.template_id == template_id)
+                .order_by(ListTemplateSection.position, ListTemplateSection.id)
+            )
+        ).all()
+    )
+
+
+async def _template_response(db: AsyncSession, row: ListTemplate) -> ListTemplateResponse:
+    sections = await _template_sections(db, row.id)
+    item_rows = list(
+        (
+            await db.scalars(
+                select(ListTemplateItem)
+                .join(ListTemplateSection)
+                .where(ListTemplateSection.template_id == row.id)
+                .order_by(ListTemplateItem.position, ListTemplateItem.id)
+            )
+        ).all()
+    )
+    items_by_section: dict[uuid.UUID, list[ListTemplateItemResponse]] = {}
+    for item in item_rows:
+        items_by_section.setdefault(item.section_id, []).append(
+            ListTemplateItemResponse(id=item.id, text=item.text, position=item.position)
+        )
+    return ListTemplateResponse(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        scope=row.scope,
+        owner_user_id=row.owner_user_id,
+        group_id=row.group_id,
+        archived=row.archived_at is not None,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        sections=[
+            ListSectionResponse(
+                id=section.id,
+                name=section.name,
+                position=section.position,
+                items=items_by_section.get(section.id, []),
+            )
+            for section in sections
+        ],
+    )
+
+
+async def _get_template(
+    db: AsyncSession, home_id: uuid.UUID, template_id: uuid.UUID, *, for_update: bool = False
+) -> ListTemplate:
+    query = select(ListTemplate).where(
+        ListTemplate.id == template_id,
+        ListTemplate.group_id == home_id,
+        ListTemplate.archived_at.is_(None),
+    )
+    if for_update:
+        query = query.with_for_update()
+    row = await db.scalar(query)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template could not be found")
+    return row
+
+
+async def _require_template_owner_or_household_manage(
+    db: AsyncSession, home_id: uuid.UUID, row: ListTemplate, auth: AuthContext
+) -> None:
+    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to edit that template.")
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+
+
+@router.get("/{home_id}/list-templates", response_model=ListTemplateListResponse)
+async def list_templates(
+    home_id: uuid.UUID,
+    q: str | None = None,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListTemplateListResponse:
+    await require_capability(home_id, Capability.lists_view, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    filters = [ListTemplate.group_id == home_id, ListTemplate.archived_at.is_(None)]
+    filters.append(
+        (ListTemplate.scope == RoutineScope.household)
+        | ((ListTemplate.scope == RoutineScope.personal) & (ListTemplate.owner_user_id == auth.user.id))
+    )
+    if q and q.strip():
+        filters.append(ListTemplate.name.ilike(f"%{q.strip()}%"))
+    rows = (
+        await db.scalars(select(ListTemplate).where(*filters).order_by(ListTemplate.updated_at.desc()))
+    ).all()
+    return ListTemplateListResponse(items=[await _template_response(db, row) for row in rows])
+
+
+@router.post("/{home_id}/list-templates", response_model=ListTemplateResponse, status_code=201)
+async def create_template(
+    home_id: uuid.UUID,
+    body: ListTemplateCreate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListTemplateResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = ListTemplate(
+        group_id=home_id,
+        owner_user_id=auth.user.id,
+        name=" ".join(body.name.strip().split()),
+        description=body.description.strip() if body.description else None,
+        scope=body.scope,
+    )
+    db.add(row)
+    await db.flush()
+    for section_position, section_input in enumerate(body.sections):
+        section = ListTemplateSection(template_id=row.id, name=section_input.name.strip(), position=section_position)
+        db.add(section)
+        await db.flush()
+        for item_position, item_input in enumerate(section_input.items):
+            db.add(ListTemplateItem(section_id=section.id, text=item_input.text.strip(), position=item_position))
+    audit(db, request, "lists.template.created", auth.user.id, home_id, "list_template", row.id)
+    await db.commit()
+    await db.refresh(row)
+    return await _template_response(db, row)
+
+
+@router.get("/{home_id}/list-templates/{template_id}", response_model=ListTemplateResponse)
+async def get_template(
+    home_id: uuid.UUID,
+    template_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListTemplateResponse:
+    await require_capability(home_id, Capability.lists_view, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_template(db, home_id, template_id)
+    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template could not be found")
+    return await _template_response(db, row)
+
+
+@router.patch("/{home_id}/list-templates/{template_id}", response_model=ListTemplateResponse)
+async def update_template(
+    home_id: uuid.UUID,
+    template_id: uuid.UUID,
+    body: ListTemplateUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListTemplateResponse:
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_template(db, home_id, template_id, for_update=True)
+    await _require_template_owner_or_household_manage(db, home_id, row, auth)
+    if row.updated_at != body.expected_updated_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This template changed. Reload and try again.")
+    row.name = " ".join(body.name.strip().split())
+    row.description = body.description.strip() if body.description else None
+    row.scope = body.scope
+    old_sections = await _template_sections(db, row.id)
+    if old_sections:
+        await db.execute(delete(ListTemplateSection).where(ListTemplateSection.template_id == row.id))
+    for section_position, section_input in enumerate(body.sections):
+        section = ListTemplateSection(template_id=row.id, name=section_input.name.strip(), position=section_position)
+        db.add(section)
+        await db.flush()
+        for item_position, item_input in enumerate(section_input.items):
+            db.add(ListTemplateItem(section_id=section.id, text=item_input.text.strip(), position=item_position))
+    audit(db, request, "lists.template.updated", auth.user.id, home_id, "list_template", row.id)
+    await db.commit()
+    await db.refresh(row)
+    return await _template_response(db, row)
+
+
+@router.post("/{home_id}/list-templates/{template_id}/duplicate", response_model=ListTemplateResponse, status_code=201)
+async def duplicate_template(
+    home_id: uuid.UUID,
+    template_id: uuid.UUID,
+    body: ListTemplateCreate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListTemplateResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    source = await _get_template(db, home_id, template_id)
+    if source.scope == RoutineScope.personal and source.owner_user_id != auth.user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template could not be found")
+    row = ListTemplate(
+        group_id=home_id, owner_user_id=auth.user.id, name=" ".join(body.name.strip().split()),
+        description=body.description, scope=body.scope,
+    )
+    db.add(row)
+    await db.flush()
+    for source_section in await _template_sections(db, source.id):
+        section = ListTemplateSection(template_id=row.id, name=source_section.name, position=source_section.position)
+        db.add(section)
+        await db.flush()
+        items = (
+            await db.scalars(select(ListTemplateItem).where(ListTemplateItem.section_id == source_section.id).order_by(ListTemplateItem.position))
+        ).all()
+        for item in items:
+            db.add(ListTemplateItem(section_id=section.id, text=item.text, position=item.position))
+    audit(db, request, "lists.template.duplicated", auth.user.id, home_id, "list_template", row.id)
+    await db.commit()
+    await db.refresh(row)
+    return await _template_response(db, row)
+
+
+@router.delete("/{home_id}/list-templates/{template_id}", status_code=204)
+async def archive_template(
+    home_id: uuid.UUID,
+    template_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_template(db, home_id, template_id, for_update=True)
+    await _require_template_owner_or_household_manage(db, home_id, row, auth)
+    row.archived_at = datetime.now(tz=row.created_at.tzinfo)
+    audit(db, request, "lists.template.archived", auth.user.id, home_id, "list_template", row.id)
+    await db.commit()
 
 
 @router.post("/{home_id}/lists", response_model=ListDetailResponse, status_code=201)
@@ -263,14 +541,47 @@ async def create_list(
     )
     await require_within_limit(db, home_id, LISTS_LIMIT_KEY, current_count or 0)
 
+    template = None
+    if body.template_id is not None:
+        template = await _get_template(db, home_id, body.template_id)
+        if template.scope == RoutineScope.personal and template.owner_user_id != auth.user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That template could not be found")
+
     row = HouseholdList(
         group_id=home_id,
         name=" ".join(body.name.strip().split()),
         icon=body.icon,
         created_by=auth.user.id,
+        source_template_id=template.id if template else None,
+        source_template_name=template.name if template else None,
     )
     db.add(row)
     await db.flush()
+    if template:
+        template_sections = await _template_sections(db, template.id)
+        for section_position, template_section in enumerate(template_sections):
+            section = HouseholdListSection(
+                list_id=row.id, name=template_section.name, position=section_position
+            )
+            db.add(section)
+            await db.flush()
+            template_items = (
+                await db.scalars(
+                    select(ListTemplateItem)
+                    .where(ListTemplateItem.section_id == template_section.id)
+                    .order_by(ListTemplateItem.position, ListTemplateItem.id)
+                )
+            ).all()
+            for item_position, template_item in enumerate(template_items):
+                db.add(
+                    HouseholdListItem(
+                        list_id=row.id,
+                        section_id=section.id,
+                        position=item_position,
+                        text=template_item.text,
+                        created_by=auth.user.id,
+                    )
+                )
     audit(db, request, "lists.list.created", auth.user.id, home_id, "list", row.id)
     await db.commit()
     return await _detail_response(db, row, {row.id: True})

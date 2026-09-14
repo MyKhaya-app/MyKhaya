@@ -2151,6 +2151,58 @@ class HouseholdList(UuidTimeMixin, Base):
     icon: Mapped[str | None] = mapped_column(String(20))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("list_templates.id", ondelete="SET NULL"), index=True
+    )
+    source_template_name: Mapped[str | None] = mapped_column(String(160))
+
+
+class ListTemplate(UuidTimeMixin, Base):
+    """A reusable, Home-scoped definition for creating independent Lists."""
+
+    __tablename__ = "list_templates"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_list_template_name_nonempty"),
+        Index("ix_list_template_home_scope_active", "group_id", "scope", "archived_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(500))
+    scope: Mapped[RoutineScope] = mapped_column(Enum(RoutineScope, name="routine_scope", create_type=False))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ListTemplateSection(UuidTimeMixin, Base):
+    __tablename__ = "list_template_sections"
+    __table_args__ = (Index("ix_list_template_section_template_position", "template_id", "position"),)
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("list_templates.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class ListTemplateItem(UuidTimeMixin, Base):
+    __tablename__ = "list_template_items"
+    __table_args__ = (Index("ix_list_template_item_section_position", "section_id", "position"),)
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("list_template_sections.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(String(200))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class HouseholdListSection(UuidTimeMixin, Base):
+    """A copied section on a generated List; nullable for legacy Lists."""
+
+    __tablename__ = "household_list_sections"
+    __table_args__ = (Index("ix_household_list_section_list_position", "list_id", "position"),)
+    list_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class HouseholdListItem(UuidTimeMixin, Base):
@@ -2172,6 +2224,9 @@ class HouseholdListItem(UuidTimeMixin, Base):
     )
     list_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
+    )
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("household_list_sections.id", ondelete="SET NULL"), index=True
     )
     position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     text: Mapped[str] = mapped_column(String(200))

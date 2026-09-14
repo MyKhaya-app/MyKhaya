@@ -2,8 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ListChecks, MoreVertical, Plus, Search } from "lucide-react";
-import type { BillingStatus, HouseholdList, ListIcon } from "@mykhaya/shared-types";
+import { ArrowDown, ArrowUp, ChevronRight, ListChecks, MoreVertical, Plus, Search, Trash2 } from "lucide-react";
+import type { BillingStatus, HouseholdList, ListIcon, ListTemplate, ListTemplateScope } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -34,15 +34,19 @@ export default function ListsPage() {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [moduleReleased, setModuleReleased] = useState<boolean | null>(null);
   const [lists, setLists] = useState<HouseholdList[]>([]);
+  const [templates, setTemplates] = useState<ListTemplate[]>([]);
   // "Templates" doesn't exist as a real feature yet (no backend concept of a
   // list template) — this tab is a visual placeholder only, matching the
   // approved mockup's segmented control, never a fake/hard-coded template
   // list. See the redesign completion report for the full gap.
   const [tab, setTab] = useState<"mine" | "templates">("mine");
   const [query, setQuery] = useState("");
+  const [templateQuery, setTemplateQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [actionsFor, setActionsFor] = useState<HouseholdList | null>(null);
   const [renaming, setRenaming] = useState<HouseholdList | null>(null);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<ListTemplate | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -66,10 +70,26 @@ export default function ListsPage() {
     }
   }
 
+  async function loadTemplates() {
+    if (!activeHomeId) return;
+    try {
+      const result = await api.listTemplates(activeHomeId, { q: templateQuery || undefined });
+      setTemplates(result.items);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not load templates.");
+    }
+  }
+
   useEffect(() => {
     const timeout = setTimeout(() => void load(), 200);
     return () => clearTimeout(timeout);
   }, [activeHomeId, query]);
+
+  useEffect(() => {
+    if (moduleReleased !== true) return;
+    const timeout = setTimeout(() => void loadTemplates(), 200);
+    return () => clearTimeout(timeout);
+  }, [activeHomeId, templateQuery, moduleReleased]);
 
   async function removeList(list: HouseholdList) {
     if (!activeHomeId) return;
@@ -80,6 +100,34 @@ export default function ListsPage() {
       await load();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not delete that list.");
+    }
+  }
+
+  async function archiveTemplate(template: ListTemplate) {
+    if (!activeHomeId || !window.confirm(`Archive “${template.name}”?`)) return;
+    try {
+      await api.archiveListTemplate(activeHomeId, template.id);
+      await loadTemplates();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not archive this template.");
+    }
+  }
+
+  async function duplicateTemplate(template: ListTemplate) {
+    if (!activeHomeId) return;
+    try {
+      await api.duplicateListTemplate(activeHomeId, template.id, {
+        name: `${template.name} copy`,
+        description: template.description,
+        scope: template.scope,
+        sections: template.sections.map((section) => ({
+          name: section.name,
+          items: section.items.map((item) => ({ text: item.text })),
+        })),
+      });
+      await loadTemplates();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not duplicate this template.");
     }
   }
 
@@ -154,7 +202,49 @@ export default function ListsPage() {
         </div>
 
         {tab === "templates" ? (
-          <p className="empty-mini">List templates are coming soon.</p>
+          <>
+            <div className="lists-toolbar">
+              <div className="module-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search templates…"
+                  value={templateQuery}
+                  onChange={(event) => setTemplateQuery(event.target.value)}
+                  aria-label="Search templates"
+                />
+              </div>
+            </div>
+            {templates.length === 0 ? (
+              <div className="meal-empty-state">
+                <p><strong>No templates yet</strong></p>
+                <p className="muted">Save a list structure for the next time you need it.</p>
+              </div>
+            ) : (
+              <div className="lists-grid">
+                {templates.map((template) => (
+                  <article className="card lists-card lists-template-card" key={template.id}>
+                    <div className="lists-card-body">
+                      <ListChecks size={22} aria-hidden="true" />
+                      <span className="lists-card-copy">
+                        <strong>{template.name}</strong>
+                        <span className="lists-card-status">
+                          {template.scope === "household" ? "Household" : "Personal"} · {template.sections.length} section{template.sections.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </div>
+                    <span className="lists-template-actions">
+                      <button type="button" className="tertiary" onClick={() => setEditingTemplate(template)}>Edit</button>
+                      <button type="button" className="tertiary" onClick={() => void duplicateTemplate(template)}>Duplicate</button>
+                      <button type="button" className="icon-button secondary" aria-label={`Archive ${template.name}`} onClick={() => void archiveTemplate(template)}>
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </span>
+                  </article>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <>
             <div className="lists-toolbar">
@@ -261,7 +351,7 @@ export default function ListsPage() {
         {billing.list_usage && !canCreateList(billing.list_usage) && (
           <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
         )}
-        <button type="button" className="rr-fab" aria-label="Add" onClick={() => setCreating(true)}>
+        <button type="button" className="rr-fab" aria-label="Add" onClick={() => tab === "templates" ? setCreatingTemplate(true) : setCreating(true)}>
           <Plus size={22} aria-hidden="true" />
           <span aria-hidden="true">Add</span>
         </button>
@@ -289,12 +379,34 @@ export default function ListsPage() {
         {creating && (
           <CreateListSheet
             homeId={activeHomeId}
+            templates={templates}
             atLimit={Boolean(billing.list_usage && !canCreateList(billing.list_usage))}
             limitMessage={billing.list_usage ? atListLimitMessage(billing.list_usage) : null}
             onClose={() => setCreating(false)}
             onCreated={async () => {
               setCreating(false);
               await load();
+            }}
+          />
+        )}
+        {creatingTemplate && (
+          <CreateTemplateSheet
+            homeId={activeHomeId}
+            onClose={() => setCreatingTemplate(false)}
+            onCreated={async () => {
+              setCreatingTemplate(false);
+              await loadTemplates();
+            }}
+          />
+        )}
+        {editingTemplate && (
+          <CreateTemplateSheet
+            homeId={activeHomeId}
+            template={editingTemplate}
+            onClose={() => setEditingTemplate(null)}
+            onCreated={async () => {
+              setEditingTemplate(null);
+              await loadTemplates();
             }}
           />
         )}
@@ -316,12 +428,14 @@ export default function ListsPage() {
 
 function CreateListSheet({
   homeId,
+  templates,
   atLimit,
   limitMessage,
   onClose,
   onCreated,
 }: {
   homeId: string;
+  templates: ListTemplate[];
   /** Known client-side, from the same billing.list_usage the passive
    * near-FAB banner already reads — when true, the limit is reflected here
    * instead of the create form, and no create request is ever attempted
@@ -335,6 +449,7 @@ function CreateListSheet({
 }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<ListIcon | "">("");
+  const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -347,7 +462,7 @@ function CreateListSheet({
     setBusy(true);
     setError("");
     try {
-      await api.createList(homeId, { name: name.trim(), icon: icon || null });
+      await api.createList(homeId, { name: name.trim(), icon: icon || null, template_id: templateId || null });
       await onCreated();
     } catch (cause) {
       // A stale client-side atLimit=false (raced by another tab/device)
@@ -415,10 +530,110 @@ function CreateListSheet({
             ))}
           </select>
         </label>
+        {templates.length > 0 && (
+          <label>
+            Start from a template (optional)
+            <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+              <option value="">Blank list</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <FormStatus error={error} />
         <button className="sheet-primary" disabled={busy}>
           {busy ? "Creating…" : "Create list"}
         </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function CreateTemplateSheet({
+  homeId,
+  template,
+  onClose,
+  onCreated,
+}: {
+  homeId: string;
+  template?: ListTemplate;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const [name, setName] = useState(template?.name ?? "");
+  const [description, setDescription] = useState(template?.description ?? "");
+  const [scope, setScope] = useState<ListTemplateScope>(template?.scope ?? "personal");
+  const [sections, setSections] = useState(() => template?.sections.map((section) => ({
+    name: section.name,
+    items: section.items.map((item) => item.text),
+  })) ?? [{ name: "", items: [""] }]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) return setError("Give this template a name.");
+    const payloadSections = sections
+      .filter((section) => section.name.trim())
+      .map((section) => ({
+        name: section.name.trim(),
+        items: section.items.filter((item) => item.trim()).map((item) => ({ text: item.trim() })),
+      }));
+    setBusy(true);
+    setError("");
+    try {
+      if (template) {
+        await api.updateListTemplate(homeId, template.id, {
+          name: name.trim(), description: description.trim() || null, scope,
+          sections: payloadSections, expected_updated_at: template.updated_at,
+        });
+      } else {
+        await api.createListTemplate(homeId, { name: name.trim(), description: description.trim() || null, scope, sections: payloadSections });
+      }
+      await onCreated();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not create this template.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function moveSection(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= sections.length) return;
+    setSections((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target]!, next[index]!];
+      return next;
+    });
+  }
+
+  return (
+    <BottomSheet title={template ? "Edit template" : "New template"} onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>Template name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoFocus required /></label>
+        <label>Description (optional)<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} /></label>
+        <label>Scope<select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}><option value="personal">Personal</option><option value="household">Household</option></select></label>
+        <fieldset className="lists-template-sections">
+          <legend>Sections</legend>
+          {sections.map((section, index) => (
+            <div className="lists-template-section-editor" key={index}>
+              <div className="lists-template-section-heading">
+                <input value={section.name} placeholder={`Section ${index + 1}`} maxLength={160} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, name: event.target.value } : value))} />
+                <button type="button" className="icon-button secondary" aria-label="Move section up" disabled={index === 0} onClick={() => moveSection(index, -1)}><ArrowUp size={15} aria-hidden="true" /></button>
+                <button type="button" className="icon-button secondary" aria-label="Move section down" disabled={index === sections.length - 1} onClick={() => moveSection(index, 1)}><ArrowDown size={15} aria-hidden="true" /></button>
+              </div>
+              {section.items.map((item, itemIndex) => (
+                <input key={itemIndex} value={item} placeholder="Default item (optional)" maxLength={200} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, items: value.items.map((entry, entryIndex) => entryIndex === itemIndex ? event.target.value : entry) } : value))} />
+              ))}
+              <button type="button" className="tertiary" onClick={() => setSections((current) => current.map((value, position) => position === index ? { ...value, items: [...value.items, ""] } : value))}>Add default item</button>
+            </div>
+          ))}
+          <button type="button" className="tertiary" onClick={() => setSections((current) => [...current, { name: "", items: [""] }])}>Add section</button>
+        </fieldset>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>{busy ? "Saving…" : template ? "Save template" : "Create template"}</button>
       </form>
     </BottomSheet>
   );

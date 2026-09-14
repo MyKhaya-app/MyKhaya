@@ -839,6 +839,7 @@ export type ListIcon =
 export interface HouseholdListItem {
   id: string;
   position: number;
+  section_id: string | null;
   text: string;
   quantity: string | null;
   note: string | null;
@@ -875,6 +876,41 @@ export interface HouseholdListDetail {
   created_at: string;
   updated_at: string;
   commercial_access: CalendarCommercialAccess;
+  sections: ListSection[];
+  source_template_id: string | null;
+  source_template_name: string | null;
+}
+
+export type ListTemplateScope = "personal" | "household";
+
+export interface ListTemplateItem {
+  id: string;
+  text: string;
+  position: number;
+}
+
+export interface ListSection {
+  id: string;
+  name: string;
+  position: number;
+  items: ListTemplateItem[];
+}
+
+export interface ListTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  scope: ListTemplateScope;
+  owner_user_id: string;
+  group_id: string;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  sections: ListSection[];
+}
+
+export interface ListTemplateListResponse {
+  items: ListTemplate[];
 }
 
 export interface HouseholdListListResponse {
@@ -884,6 +920,23 @@ export interface HouseholdListListResponse {
 export interface ListCreatePayload {
   name: string;
   icon?: ListIcon | null;
+  template_id?: string | null;
+}
+
+export interface ListTemplateSectionInput {
+  name: string;
+  items?: { text: string }[];
+}
+
+export interface ListTemplateCreatePayload {
+  name: string;
+  description?: string | null;
+  scope: ListTemplateScope;
+  sections?: ListTemplateSectionInput[];
+}
+
+export interface ListTemplateUpdatePayload extends ListTemplateCreatePayload {
+  expected_updated_at: string;
 }
 
 export interface ListRenamePayload {
