@@ -861,7 +861,7 @@ export default function RoutinesRemindersPage() {
   return (
     <SettingsPage title="Nudges" hideHeading className="module-page nudges-page">
       <div className="rr-page">
-        <div className="rr-intro">
+        <div className="rr-intro browser-module-header">
           <div className="rr-intro-text">
             <span className="rr-module-label">NUDGES</span>
             <h1>Nudges</h1>

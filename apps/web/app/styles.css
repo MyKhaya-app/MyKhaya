@@ -5622,8 +5622,15 @@ select.icon-row-control {
 }
 button.danger,
 .danger-zone button.danger {
-  background: var(--cc-danger-strong);
-  color: var(--cc-surface);
+  /* --cc-danger-strong/--cc-surface are scoped to .platform-login/
+     .platform-shell (the PCC admin surface, see the PCC design tokens
+     comment above). button.danger is also used outside PCC — e.g. the
+     consumer Calendar's recurring-event delete sheet
+     (.recurrence-delete-menu below) — where those tokens are unset,
+     which was leaving the button transparent/white-on-white. Fall back
+     to the original hardcoded colours so non-PCC usage keeps working. */
+  background: var(--cc-danger-strong, #8c3d35);
+  color: var(--cc-surface, white);
 }
 
 .platform-modal-backdrop {
@@ -7152,9 +7159,24 @@ button.danger,
 }
 
 @media (min-width: 760px) {
-  .app-shell:not(.native-shell-app) .standard-page.meal-plans-page {
+  .app-shell:not(.native-shell-app) .standard-page.meal-plans-page,
+  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
     max-width: 1320px;
     padding: 1.5rem clamp(1.25rem, 4vw, 4rem) 3rem;
+  }
+  .app-shell:not(.native-shell-app) .browser-module-header {
+    align-items: center;
+    margin: 0 0 1rem;
+  }
+  .app-shell:not(.native-shell-app) .browser-module-header h1 {
+    font-size: 2.1rem;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: var(--line-tight);
+    margin: 0.25rem 0;
+  }
+  .app-shell:not(.native-shell-app) .browser-module-header p {
+    margin: 0.35rem 0;
   }
   .app-shell:not(.native-shell-app) .meal-plans-hero {
     margin-bottom: 1rem;
@@ -9766,10 +9788,6 @@ a.family-feed-row {
      into a phone-width sliver (see the 1100px block for why: at typical
      tablet-landscape widths there isn't yet room for a real supporting
      column without starving the main list). */
-  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
-    max-width: 900px;
-    padding: 2rem clamp(1.25rem, 4vw, 4rem) 3rem;
-  }
   .app-shell:not(.native-shell-app) .rr-layout {
     display: grid;
     gap: 1.5rem;
@@ -10055,9 +10073,6 @@ a.family-feed-row {
      224px rail and page padding, leaves too little for both). From here
      up there is, so the main list (minmax(0, 1fr)) and the fixed-width
      supporting column sit side by side, main still clearly dominant. */
-  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
-    max-width: 1180px;
-  }
   .app-shell:not(.native-shell-app) .rr-layout {
     align-items: start;
     grid-template-columns: minmax(0, 1fr) 320px;

@@ -270,7 +270,7 @@ export default function MealPlansPage() {
   return (
     <AppShellContent>
       <main className="standard-page module-page meal-plans-page">
-        <div className="page-heading meal-plans-hero">
+        <div className="page-heading meal-plans-hero browser-module-header">
           <div className="meal-plans-hero-text">
             <p className="eyebrow">
               <UtensilsCrossed size={14} aria-hidden="true" /> Meal Plans
@@ -341,6 +341,7 @@ function PlannerTab({
   onError: (message: string) => void;
 }) {
   const [view, setView] = useState<"day" | "week">("day");
+  const [mealFilter, setMealFilter] = useState<MealSlot | "all">("all");
   const [focusDate, setFocusDate] = useState(isoToday());
   const [dayEntries, setDayEntries] = useState<MealPlanEntry[]>([]);
   const [weekDays, setWeekDays] = useState<
@@ -424,52 +425,77 @@ function PlannerTab({
     onSwipeRight: () => setFocusDate((current) => addDays(current, -1)),
     disabled: view !== "day",
   });
+  const visibleSlots =
+    mealFilter === "all"
+      ? SLOTS
+      : SLOTS.filter((slot) => slot.key === mealFilter);
 
   return (
     <section>
       <div className="meal-plans-layout">
         <div className="meal-plans-main">
           <header className="meal-plans-toolbar">
-        <div className="meal-plans-date-nav">
-          <button
-            className="icon-button secondary"
-            type="button"
-            onClick={() =>
-              setFocusDate(addDays(focusDate, view === "day" ? -1 : -7))
-            }
-            aria-label={view === "day" ? "Previous day" : "Previous week"}
-          >
-            <ChevronLeft size={18} aria-hidden="true" />
-          </button>
-          <strong className="meal-plan-date-pill">
-            <CalendarDays size={15} aria-hidden="true" />
-            {view === "day"
-              ? dayHeading(focusDate)
-              : `Week of ${dayHeading(week[0]!)}`}
-          </strong>
-          <button
-            className="icon-button secondary"
-            type="button"
-            onClick={() =>
-              setFocusDate(addDays(focusDate, view === "day" ? 1 : 7))
-            }
-            aria-label={view === "day" ? "Next day" : "Next week"}
-          >
-            <ChevronRight size={18} aria-hidden="true" />
-          </button>
-        </div>
-        <div className="meal-plans-toolbar-right">
-          {focusDate !== isoToday() && (
-            <button
-              type="button"
-              className="tertiary meal-plans-today-button"
-              onClick={() => setFocusDate(isoToday())}
-            >
-              Today
-            </button>
-          )}
-          <div
-            className="meal-view-toggle meal-plans-view-toggle"
+            <div className="meal-plans-date-nav">
+              <button
+                className="icon-button secondary"
+                type="button"
+                onClick={() =>
+                  setFocusDate(addDays(focusDate, view === "day" ? -1 : -7))
+                }
+                aria-label={view === "day" ? "Previous day" : "Previous week"}
+              >
+                <ChevronLeft size={18} aria-hidden="true" />
+              </button>
+              <strong className="meal-plan-date-pill">
+                <CalendarDays size={15} aria-hidden="true" />
+                {view === "day"
+                  ? dayHeading(focusDate)
+                  : `Week of ${dayHeading(week[0]!)}`}
+              </strong>
+              <button
+                className="icon-button secondary"
+                type="button"
+                onClick={() =>
+                  setFocusDate(addDays(focusDate, view === "day" ? 1 : 7))
+                }
+                aria-label={view === "day" ? "Next day" : "Next week"}
+              >
+                <ChevronRight size={18} aria-hidden="true" />
+              </button>
+            </div>
+          </header>
+
+          <div className="meal-plans-controls-row">
+            <div className="meal-plans-controls-left">
+              <label className="meal-filter-control">
+                <span className="visually-hidden">Filter meals</span>
+                <select
+                  aria-label="Filter meals"
+                  value={mealFilter}
+                  onChange={(event) =>
+                    setMealFilter(event.target.value as MealSlot | "all")
+                  }
+                >
+                  <option value="all">All meals</option>
+                  {SLOTS.map((slot) => (
+                    <option value={slot.key} key={slot.key}>
+                      {slot.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {focusDate !== isoToday() && (
+                <button
+                  type="button"
+                  className="tertiary meal-plans-today-button"
+                  onClick={() => setFocusDate(isoToday())}
+                >
+                  Today
+                </button>
+              )}
+            </div>
+            <div
+              className="meal-view-toggle meal-plans-view-toggle"
             role="tablist"
             aria-label="Choose view"
           >
@@ -492,15 +518,15 @@ function PlannerTab({
               Week
             </button>
           </div>
-        </div>
-          </header>
+            </div>
+          </div>
 
           {view === "day" ? (
         <>
           <h2 className="mealplan-section-title">Today&rsquo;s Plan</h2>
           <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
             <div className="meal-slot-list">
-              {SLOTS.map((slot) => (
+              {visibleSlots.map((slot) => (
                 <MealSlotCard
                   key={slot.key}
                   slot={slot}
@@ -532,7 +558,7 @@ function PlannerTab({
             {weekDays.map((day) => (
               <div className="card meal-week-day" key={day.date}>
                 <h2>{dayHeading(day.date)}</h2>
-                {SLOTS.map((slot) => {
+                {visibleSlots.map((slot) => {
                   const entry = day.entries.find(
                     (row) => row.meal_slot === slot.key,
                   );
