@@ -140,7 +140,7 @@ describe("Family — page intro and status row", () => {
     render(<Family />);
 
     expect(await screen.findByRole("heading", { name: "Family", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("HALES HOME")).toBeInTheDocument();
+    expect(screen.getByText("FAMILY")).toBeInTheDocument();
     expect(screen.getByText("What's happening with your people".replace("'", "’"))).toBeInTheDocument();
   });
 

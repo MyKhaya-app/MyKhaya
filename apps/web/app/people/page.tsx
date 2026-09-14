@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Users } from "lucide-react";
+import { ChevronRight, UserPlus, Users } from "lucide-react";
 import type {
   BirthdayEntry,
   EventOccurrence,
@@ -291,7 +291,7 @@ export default function Family() {
 
   return (
     <AppShellContent>
-      <main className="standard-page module-page">
+      <main className="standard-page module-page family-page">
         {familyAccess === false ? (
           <>
             <div className="page-heading family-page-heading">
@@ -308,12 +308,20 @@ export default function Family() {
           </>
         ) : (
         <>
-        <div className="page-heading family-page-heading">
-          <div>
-            <p className="eyebrow">{(activeHome?.name ?? "Your Home").toUpperCase()}</p>
+        <div className="page-heading module-hero browser-module-header family-page-heading">
+          <div className="module-hero-text">
+            <p className="eyebrow">FAMILY</p>
             <h1>Family</h1>
             <p className="muted">What&rsquo;s happening with your people</p>
           </div>
+          <img
+            className="module-hero-art family-module-art"
+            src="/images/family_home_together_badge.png"
+            alt=""
+            aria-hidden="true"
+            width={640}
+            height={410}
+          />
         </div>
 
         {error && (
@@ -322,6 +330,8 @@ export default function Family() {
           </p>
         )}
 
+        <div className="family-desktop-layout">
+        <div className="family-main-content">
         <div className="family-page-stack">
           <div className="family-status-row" role="list" aria-label="Household members">
             {members.map((member) => (
@@ -462,6 +472,19 @@ export default function Family() {
               </div>
             </section>
           )}
+        </div>
+        </div>
+
+        <aside className="family-support" aria-label="Family tools">
+          <section className="card details family-support-card family-quick-add">
+            <h2>Quick add</h2>
+            <Link className="family-quick-add-action" href="/settings/members">
+              <span className="family-quick-add-icon" aria-hidden="true"><UserPlus size={17} /></span>
+              <span className="family-quick-add-label">Invite member</span>
+              <ChevronRight size={16} aria-hidden="true" className="family-quick-add-chevron" />
+            </Link>
+          </section>
+        </aside>
         </div>
         </>
         )}

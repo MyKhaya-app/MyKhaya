@@ -7194,7 +7194,8 @@ button.danger,
 @media (min-width: 760px) {
   .app-shell:not(.native-shell-app) .standard-page.meal-plans-page,
   .app-shell:not(.native-shell-app) .standard-page.nudges-page,
-  .app-shell:not(.native-shell-app) .standard-page.lists-page {
+  .app-shell:not(.native-shell-app) .standard-page.lists-page,
+  .app-shell:not(.native-shell-app) .standard-page.family-page {
     max-width: 1320px;
     padding: 1.5rem clamp(1.25rem, 4vw, 4rem) 3rem;
   }
@@ -7238,6 +7239,22 @@ button.danger,
     align-content: start;
     display: grid;
     gap: 1rem;
+  }
+  .app-shell:not(.native-shell-app) .family-desktop-layout {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell:not(.native-shell-app) .family-main-content {
+    min-width: 0;
+  }
+  .app-shell:not(.native-shell-app) .family-support {
+    align-content: start;
+    display: grid;
+    gap: 1rem;
+  }
+  .app-shell:not(.native-shell-app) .family-module-art {
+    height: 88px;
   }
   .app-shell:not(.native-shell-app) .meal-plans-support {
     align-content: start;
@@ -7293,6 +7310,9 @@ button.danger,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .app-shell:not(.native-shell-app) .lists-layout {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+  .app-shell:not(.native-shell-app) .family-desktop-layout {
     grid-template-columns: minmax(0, 1fr) 320px;
   }
 }
@@ -9293,6 +9313,54 @@ html.native-shell .more-hero {
 .family-page-stack {
   display: grid;
   gap: 12px;
+}
+.family-desktop-layout {
+  display: contents;
+}
+.family-support {
+  display: none;
+}
+.family-support-card {
+  margin: 0;
+}
+.family-support-card h2 {
+  font-size: var(--font-small);
+  margin: 0 0 0.65rem;
+}
+.family-quick-add-action {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border: 1px solid #e7e0d2;
+  border-radius: var(--radius-card);
+  color: var(--colour-forest-dark);
+  display: flex;
+  gap: 0.65rem;
+  min-height: 48px;
+  padding: 0.5rem 0.65rem;
+}
+.family-quick-add-action:hover,
+.family-quick-add-action:focus-visible {
+  background: var(--colour-sage-soft);
+  box-shadow: none;
+  transform: none;
+}
+.family-quick-add-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  display: inline-flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.family-quick-add-label {
+  flex: 1;
+  font-weight: 700;
+}
+.family-quick-add-chevron {
+  color: var(--colour-muted);
+  flex: none;
 }
 /* Horizontally-scrolling member strip — avatar + name + a real (never
    fabricated) status label underneath. Scrolls rather than wrapping so a
