@@ -1,17 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity } from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { relativeTime } from "@/components/platform-format";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcCard } from "@/components/control-centre/section";
 import { CcBadge, toneFromStateClass, type CcBadgeTone } from "@/components/control-centre/badge";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
-import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 
 type HealthCheck = {
   service: string;
@@ -51,9 +49,47 @@ export default function HealthPage() {
     void load();
   }, [load]);
 
+  const columns: CcTableColumn<HealthCheck>[] = [
+    {
+      key: "service",
+      header: "Service / dependency",
+      render: (check) => (
+        <span className="cc-table-primary-cell">
+          <strong>{check.service}</strong>
+          <small className="cc-table-subtext">{check.explanation}</small>
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (check) => <CcBadge tone={stateTone(check.state)}>{check.state}</CcBadge>,
+    },
+    {
+      key: "checked",
+      header: "Last checked",
+      render: (check) => relativeTime(check.last_checked),
+    },
+    {
+      key: "history",
+      header: "Recent history",
+      render: (check) => (
+        <span className="cc-table-primary-cell">
+          <small className="cc-table-subtext">Success: {check.last_success ? relativeTime(check.last_success) : "Never"}</small>
+          <small className="cc-table-subtext">Failure: {check.last_failure ? relativeTime(check.last_failure) : "None"}</small>
+        </span>
+      ),
+    },
+    {
+      key: "action",
+      header: "Operator action",
+      render: (check) => check.recommended_action ?? "None required",
+    },
+  ];
+
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Live diagnostics"
           title="Health"
@@ -73,32 +109,13 @@ export default function HealthPage() {
               status={data.overall}
               description={`Checked ${relativeTime(data.checked_at)}`}
             />
-            {data.services.map((check) => (
-              <CcCard
-                key={check.service}
-                title={
-                  <>
-                    {check.service} <CcBadge tone={stateTone(check.state)}>{check.state}</CcBadge>
-                  </>
-                }
-                description={check.explanation}
-                icon={Activity}
-              >
-                <CcMetadataGrid>
-                  {check.last_success && (
-                    <CcMetadataItem label="Last successful check">{relativeTime(check.last_success)}</CcMetadataItem>
-                  )}
-                  {check.last_failure && (
-                    <CcMetadataItem label="Last failure">{relativeTime(check.last_failure)}</CcMetadataItem>
-                  )}
-                </CcMetadataGrid>
-                {check.recommended_action && (
-                  <p className="operator-action">
-                    <strong>Operator action:</strong> {check.recommended_action}
-                  </p>
-                )}
-              </CcCard>
-            ))}
+            <CcTable
+              columns={columns}
+              rows={data.services}
+              rowKey={(check) => check.service}
+              caption="Platform health checks"
+              emptyMessage="No health checks returned."
+            />
           </>
         )}
       </CcPage>

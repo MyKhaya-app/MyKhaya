@@ -278,7 +278,7 @@ export default function ManagedDemoHomeDetailPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <p>
           <Link href="/demo-test-homes">← Demo &amp; Test Homes</Link>
         </p>

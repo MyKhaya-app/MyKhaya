@@ -184,7 +184,7 @@ export default function MailPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Delivery operations"
           title="Email"

@@ -62,7 +62,7 @@ describe("Calendar & Dates", () => {
     const table = await screen.findByRole("table", {
       name: "Supported holiday calendars",
     });
-    const row = within(table).getAllByRole("row")[1];
+    const row = within(table).getAllByRole("row")[1]!;
     expect(within(row).getByText(/South Africa$/)).toBeInTheDocument();
     expect(within(table).getByText("Healthy")).toBeInTheDocument();
 

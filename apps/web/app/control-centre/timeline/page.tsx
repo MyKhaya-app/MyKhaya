@@ -80,7 +80,7 @@ export default function TimelinePage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Communications"
           title="Timeline"

@@ -103,7 +103,7 @@ export default function NotificationTestCentrePage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader eyebrow="Notifications" title="Test Centre" />
         <NotificationsSubNav />
         <p>

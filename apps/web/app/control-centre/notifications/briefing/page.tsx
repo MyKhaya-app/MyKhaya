@@ -123,7 +123,7 @@ export default function DailyBriefingPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Notifications"
           title="Daily Briefing"

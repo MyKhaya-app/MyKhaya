@@ -107,7 +107,7 @@ export default function NotificationChannelsPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Notifications"
           title="Channels"

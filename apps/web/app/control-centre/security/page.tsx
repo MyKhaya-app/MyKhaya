@@ -150,7 +150,7 @@ export default function GlobalSecurityPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Global platform security policy"
           title="Security"

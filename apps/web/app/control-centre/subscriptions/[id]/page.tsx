@@ -323,7 +323,7 @@ export default function SubscriptionDetailPage({
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Commercial detail"
           title={data?.name ?? "Home"}

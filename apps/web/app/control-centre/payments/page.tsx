@@ -232,7 +232,7 @@ export default function PaymentsPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Payments"
           title="Stripe"

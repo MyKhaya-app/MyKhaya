@@ -167,7 +167,7 @@ export default function PushPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Delivery operations"
           title="Push"

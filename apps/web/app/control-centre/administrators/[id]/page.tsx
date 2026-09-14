@@ -156,7 +156,7 @@ export default function AdministratorDetailPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow={isSelf ? "Your administrator account" : "Administrator"}
           title={

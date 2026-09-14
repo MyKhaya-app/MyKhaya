@@ -119,7 +119,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Status incident"
           title={data?.title ?? "Incident"}

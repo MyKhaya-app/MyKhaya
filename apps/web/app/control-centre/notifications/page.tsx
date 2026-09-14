@@ -67,7 +67,7 @@ export default function NotificationsOverviewPage() {
 
   return (
     <PlatformShell>
-      <CcPage>
+      <CcPage wide>
         <CcPageHeader
           eyebrow="Notifications"
           title="Overview"
