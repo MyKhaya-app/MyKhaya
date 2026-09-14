@@ -106,14 +106,14 @@ function ManagedList({ section }: { section: "users" | "homes" }) {
     section === "users"
       ? [
           {
-            key: "identity",
-            header: "User",
-            render: (row) => (
-              <>
-                <strong>{String(row.display_name)}</strong>
-                <small className="cc-table-subtext">{String(row.email)}</small>
-              </>
-            ),
+            key: "name",
+            header: "Name",
+            render: (row) => <strong>{String(row.display_name)}</strong>,
+          },
+          {
+            key: "email",
+            header: "Email",
+            render: (row) => <span className="cc-table-truncate" title={String(row.email)}>{String(row.email)}</span>,
           },
           {
             key: "lifecycle",
@@ -163,16 +163,12 @@ function ManagedList({ section }: { section: "users" | "homes" }) {
           {
             key: "name",
             header: "Home",
-            render: (row) => (
-              <>
-                <Link className="table-link" href={`/homes/${String(row.id)}`}>
-                  {String(row.name)}
-                </Link>
-                <small className="cc-table-subtext">
-                  Created {displayValue(row.created_at)}
-                </small>
-              </>
-            ),
+            render: (row) => <Link className="table-link" href={`/homes/${String(row.id)}`}>{String(row.name)}</Link>,
+          },
+          {
+            key: "created",
+            header: "Created",
+            render: (row) => displayValue(row.created_at),
           },
           {
             key: "owner",
@@ -180,15 +176,18 @@ function ManagedList({ section }: { section: "users" | "homes" }) {
             render: (row) => {
               const owner = row.owner as Record<string, unknown> | null;
               return owner ? (
-                <>
-                  <strong>{String(owner.display_name)}</strong>
-                  <small className="cc-table-subtext">
-                    {String(owner.email)}
-                  </small>
-                </>
+                <strong>{String(owner.display_name)}</strong>
               ) : (
                 "Unassigned"
               );
+            },
+          },
+          {
+            key: "admin_email",
+            header: "Admin Email",
+            render: (row) => {
+              const owner = row.owner as Record<string, unknown> | null;
+              return owner ? <span className="cc-table-truncate" title={String(owner.email)}>{String(owner.email)}</span> : "—";
             },
           },
           {

@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, XCircle } from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
 import { CcNotice, CcEmptyState, CcLoadingState } from "@/components/control-centre/status-message";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
+import { CcToggle } from "@/components/control-centre/toggle";
 
 type TimelineEntry = {
   id: string;
@@ -28,22 +29,12 @@ const statusTone: Record<string, CcBadgeTone> = {
   queued: "warning",
 };
 
-const statusIcon: Record<string, typeof CheckCircle2> = {
-  sent: CheckCircle2,
-  failed: XCircle,
-  cancelled: XCircle,
-};
-
 function statusToneFor(status: string): CcBadgeTone {
   return statusTone[status] ?? "warning";
 }
 
 function timeOf(value: string) {
   return new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(value));
-}
-
-function dayOf(value: string) {
-  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date(value));
 }
 
 function safeError(cause: unknown, fallback: string): string {
@@ -56,6 +47,9 @@ export default function TimelinePage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState(false);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = useCallback(async (targetPage: number, append: boolean) => {
     setLoading(true);
@@ -83,7 +77,20 @@ export default function TimelinePage() {
     return () => window.clearInterval(interval);
   }, [live, load]);
 
-  let lastDay = "";
+  const filteredItems = items.filter((entry) => {
+    const haystack = `${entry.label} ${entry.notification_type} ${entry.channel} ${entry.recipient_display_name ?? ""}`.toLowerCase();
+    return (!search.trim() || haystack.includes(search.trim().toLowerCase())) &&
+      (typeFilter === "all" || entry.notification_type === typeFilter) &&
+      (statusFilter === "all" || entry.status === statusFilter);
+  });
+  const timelineColumns: CcTableColumn<TimelineEntry>[] = [
+    { key: "time", header: "Time", render: (entry) => <time dateTime={entry.occurred_at}>{timeOf(entry.occurred_at)}</time> },
+    { key: "event", header: "Event", render: (entry) => <strong>{entry.label}</strong> },
+    { key: "status", header: "Status", render: (entry) => <CcBadge tone={statusToneFor(entry.status)}>{entry.friendly_status}</CcBadge> },
+    { key: "user-home", header: "User / Home", render: (entry) => entry.recipient_display_name ?? "System" },
+    { key: "source", header: "Source / Module", render: (entry) => `${entry.channel} · ${entry.notification_type}` },
+    { key: "actions", header: "Actions", render: () => "—" },
+  ];
 
   return (
     <PlatformShell>
@@ -94,10 +101,7 @@ export default function TimelinePage() {
           description={`What actually happened, told chronologically — for "why", see Diagnostics.`}
           secondaryActions={
             <div className="cc-action-bar">
-              <label className="cc-inline-control">
-                <input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} />
-                <span>{live ? "Live" : "Paused"}</span>
-              </label>
+              <CcToggle label={live ? "Live" : "Paused"} name="timeline-live" defaultChecked={live} onChange={(event) => setLive(event.target.checked)} />
               <button className="secondary" onClick={() => void load(1, false)}>
                 Refresh
               </button>
@@ -110,32 +114,20 @@ export default function TimelinePage() {
         ) : items.length === 0 ? (
           <CcEmptyState>Nothing has been sent yet.</CcEmptyState>
         ) : (
-          <ol className="timeline-list">
-            {items.map((entry) => {
-              const day = dayOf(entry.occurred_at);
-              const showDay = day !== lastDay;
-              lastDay = day;
-              const Icon = statusIcon[entry.status] ?? Clock;
-              return (
-                <li key={entry.id} className="timeline-entry">
-                  {showDay && <div className="timeline-day">{day}</div>}
-                  <div className="timeline-row">
-                    <span className="timeline-time">{timeOf(entry.occurred_at)}</span>
-                    <span className="timeline-icon" aria-hidden="true">
-                      <Icon size={16} strokeWidth={2} />
-                    </span>
-                    <span className="timeline-copy">
-                      <strong>{entry.label}</strong>
-                      <span>
-                        <CcBadge tone={statusToneFor(entry.status)}>{entry.friendly_status}</CcBadge>
-                        {entry.recipient_display_name && ` · ${entry.recipient_display_name}`}
-                      </span>
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <>
+            <div className="cc-toolbar">
+              <input aria-label="Search timeline" placeholder="Search event, user or module" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <select aria-label="Timeline type filter" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+                <option value="all">All types</option>
+                {Array.from(new Set(items.map((entry) => entry.notification_type))).map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <select aria-label="Timeline status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">All statuses</option>
+                {Array.from(new Set(items.map((entry) => entry.status))).map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </div>
+            <CcTable columns={timelineColumns} rows={filteredItems} rowKey={(entry) => entry.id} emptyMessage="No timeline events match these filters." caption="Communications timeline" />
+          </>
         )}
         {nextPage && (
           <button className="secondary" onClick={() => load(nextPage, true)} disabled={loading}>

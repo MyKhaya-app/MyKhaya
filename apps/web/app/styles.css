@@ -5963,6 +5963,22 @@ button.danger,
   font-size: 0.78em;
   line-height: 1.35;
 }
+.cc-table-truncate {
+  display: block;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-table-checkbox {
+  accent-color: var(--cc-primary);
+  block-size: 1.15rem;
+  cursor: pointer;
+  inline-size: 1.15rem;
+  margin: 0;
+  padding: 0.35rem;
+  vertical-align: middle;
+}
 
 .cc-dialog {
   display: flex;

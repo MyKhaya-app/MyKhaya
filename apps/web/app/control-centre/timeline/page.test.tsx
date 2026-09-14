@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TimelinePage from "./page";
 
@@ -51,7 +51,8 @@ beforeEach(() => {
 describe("Timeline", () => {
   it("renders entries in the order returned by the API with status badges", async () => {
     render(<TimelinePage />);
-    const items = await screen.findAllByRole("listitem");
+    const table = await screen.findByRole("table", { name: "Communications timeline" });
+    const items = within(table).getAllByRole("row").slice(1);
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Event reminder sent");
     expect(items[1]).toHaveTextContent("Push reminder failed");

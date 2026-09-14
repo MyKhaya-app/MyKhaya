@@ -220,6 +220,7 @@ export default function CleanupPage() {
       header: (
         <input
           type="checkbox"
+          className="cc-table-checkbox"
           aria-label="Select all Homes in this list"
           checked={homes.rows !== null && homes.rows.length > 0 && homes.selected.size === homes.rows.length}
           onChange={homes.toggleAll}
@@ -228,6 +229,7 @@ export default function CleanupPage() {
       render: (row) => (
         <input
           type="checkbox"
+          className="cc-table-checkbox"
           aria-label={`Select ${row.name}`}
           checked={homes.selected.has(row.id)}
           onChange={() => homes.toggle(row.id)}
@@ -247,6 +249,7 @@ export default function CleanupPage() {
       header: (
         <input
           type="checkbox"
+          className="cc-table-checkbox"
           aria-label="Select all users in this list"
           checked={users.rows !== null && users.rows.length > 0 && users.selected.size === users.rows.length}
           onChange={users.toggleAll}
@@ -255,6 +258,7 @@ export default function CleanupPage() {
       render: (row) => (
         <input
           type="checkbox"
+          className="cc-table-checkbox"
           aria-label={`Select ${row.display_name}`}
           checked={users.selected.has(row.id)}
           onChange={() => users.toggle(row.id)}
