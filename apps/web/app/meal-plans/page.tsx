@@ -427,7 +427,9 @@ function PlannerTab({
 
   return (
     <section>
-      <header className="meal-plans-toolbar">
+      <div className="meal-plans-layout">
+        <div className="meal-plans-main">
+          <header className="meal-plans-toolbar">
         <div className="meal-plans-date-nav">
           <button
             className="icon-button secondary"
@@ -491,9 +493,9 @@ function PlannerTab({
             </button>
           </div>
         </div>
-      </header>
+          </header>
 
-      {view === "day" ? (
+          {view === "day" ? (
         <>
           <h2 className="mealplan-section-title">Today&rsquo;s Plan</h2>
           <div className="meal-day-swipe-surface" {...daySwipeHandlers}>
@@ -564,7 +566,47 @@ function PlannerTab({
             ))}
           </div>
         </>
-      )}
+          )}
+        </div>
+
+        <aside className="meal-plans-support" aria-label="Meal planning shortcuts">
+          <section className="card meal-plans-support-card meal-plans-quick-add">
+            <div className="meal-plans-support-heading">
+              <Plus size={19} aria-hidden="true" />
+              <h2>Quick add</h2>
+            </div>
+            <div className="meal-plans-support-actions">
+              <button
+                type="button"
+                className="meal-plans-support-action"
+                onClick={() =>
+                  setSheet({ mode: "create", date: focusDate, slot: "dinner" })
+                }
+              >
+                <UtensilsCrossed size={20} aria-hidden="true" />
+                <span>Add meal</span>
+              </button>
+              <button
+                type="button"
+                className="meal-plans-support-action"
+                onClick={() => setCopyingWeek(true)}
+              >
+                <Copy size={20} aria-hidden="true" />
+                <span>Copy from week</span>
+              </button>
+            </div>
+          </section>
+
+          <Link href="/lists" className="card meal-plans-support-card meal-plans-link-card">
+            <ListPlus size={22} aria-hidden="true" />
+            <span className="meal-plans-support-copy">
+              <strong>Shopping list</strong>
+              <small>Open your household lists</small>
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </Link>
+        </aside>
+      </div>
 
       {sheet && (
         <MealEntrySheet
