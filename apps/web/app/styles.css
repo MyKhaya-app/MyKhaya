@@ -7193,7 +7193,8 @@ button.danger,
 
 @media (min-width: 760px) {
   .app-shell:not(.native-shell-app) .standard-page.meal-plans-page,
-  .app-shell:not(.native-shell-app) .standard-page.nudges-page {
+  .app-shell:not(.native-shell-app) .standard-page.nudges-page,
+  .app-shell:not(.native-shell-app) .standard-page.lists-page {
     max-width: 1320px;
     padding: 1.5rem clamp(1.25rem, 4vw, 4rem) 3rem;
   }
@@ -7224,6 +7225,19 @@ button.danger,
   }
   .app-shell:not(.native-shell-app) .meal-plans-main {
     min-width: 0;
+  }
+  .app-shell:not(.native-shell-app) .lists-layout {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell:not(.native-shell-app) .lists-main {
+    min-width: 0;
+  }
+  .app-shell:not(.native-shell-app) .lists-support {
+    align-content: start;
+    display: grid;
+    gap: 1rem;
   }
   .app-shell:not(.native-shell-app) .meal-plans-support {
     align-content: start;
@@ -7277,6 +7291,9 @@ button.danger,
   }
   .app-shell:not(.native-shell-app) .meal-plans-support-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .app-shell:not(.native-shell-app) .lists-layout {
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 }
 
@@ -7650,6 +7667,11 @@ select.plan-meal-field-input {
     height: 96px;
   }
 }
+@media (min-width: 760px) {
+  .app-shell:not(.native-shell-app) .lists-page .module-hero-art {
+    height: 88px;
+  }
+}
 
 .lists-toolbar {
   align-items: center;
@@ -7715,6 +7737,101 @@ select.plan-meal-field-input {
 .lists-card-chevron {
   color: var(--colour-muted);
   flex: none;
+}
+
+/* Browser-only Lists composition. The mobile presentation remains a direct
+   single-column flow; the supporting column is an additive browser surface. */
+.lists-layout {
+  display: contents;
+}
+.lists-support {
+  display: none;
+}
+.lists-support-card {
+  margin: 0;
+}
+.lists-support-card h2 {
+  font-size: var(--font-small);
+  margin: 0 0 0.65rem;
+}
+.lists-quick-add-action {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border: 1px solid #e7e0d2;
+  border-radius: var(--radius-card);
+  color: var(--colour-forest-dark);
+  display: flex;
+  gap: 0.65rem;
+  min-height: 48px;
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+  width: 100%;
+}
+.lists-quick-add-action:hover,
+.lists-quick-add-action:focus-visible {
+  background: var(--colour-sage-soft);
+  box-shadow: none;
+  transform: none;
+}
+.lists-quick-add-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-forest-dark);
+  display: inline-flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.lists-quick-add-label {
+  flex: 1;
+  font-weight: 700;
+}
+.lists-quick-add-chevron {
+  color: var(--colour-muted);
+  flex: none;
+}
+.lists-recent-list {
+  display: grid;
+  gap: 0.25rem;
+}
+.lists-recent-row {
+  align-items: center;
+  border-radius: var(--radius-small);
+  color: var(--colour-slate);
+  display: flex;
+  gap: 0.6rem;
+  min-height: 48px;
+  padding: 0.3rem 0.2rem;
+}
+.lists-recent-row:hover,
+.lists-recent-row:focus-visible {
+  background: var(--colour-cream-light);
+  box-shadow: none;
+  transform: none;
+}
+.lists-recent-row img {
+  border-radius: 50%;
+  flex: none;
+  height: 34px;
+  object-fit: cover;
+  width: 34px;
+}
+.lists-recent-row > span {
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.lists-recent-row strong,
+.lists-recent-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lists-recent-row small {
+  color: var(--colour-muted);
 }
 
 /* --- Lists: individual list --- */

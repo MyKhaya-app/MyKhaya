@@ -253,6 +253,15 @@ describe("Lists — Family plan overview", () => {
     expect(main).toHaveClass("module-page");
   });
 
+  it("opens the existing create flow from the browser Quick add panel", async () => {
+    render(<ListsPage />);
+
+    await screen.findByText(/no lists yet/i);
+    await userEvent.click(screen.getByRole("button", { name: "New list" }));
+
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+  });
+
   it("keeps the existing My Lists view functional and shows a calm, non-fabricated placeholder for Templates", async () => {
     (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [

@@ -112,7 +112,7 @@ export default function ListsPage() {
   return (
     <AppShellContent>
       <main className="standard-page module-page lists-page">
-        <div className="page-heading module-hero">
+        <div className="page-heading module-hero browser-module-header">
           <div className="module-hero-text">
             <p className="eyebrow">
               <ListChecks size={14} aria-hidden="true" /> Lists
@@ -130,6 +130,8 @@ export default function ListsPage() {
         </div>
         <FormStatus error={error} />
 
+        <div className="lists-layout">
+        <div className="lists-main">
         <div className="rr-segmented" role="tablist" aria-label="Lists sections">
           <button
             type="button"
@@ -221,6 +223,37 @@ export default function ListsPage() {
             )}
           </>
         )}
+        </div>
+
+        <aside className="lists-support" aria-label="Lists tools">
+          <section className="card details lists-support-card lists-quick-add">
+            <h2>Quick add</h2>
+            <button type="button" className="lists-quick-add-action" onClick={() => setCreating(true)}>
+              <span className="lists-quick-add-icon" aria-hidden="true"><Plus size={17} /></span>
+              <span className="lists-quick-add-label">New list</span>
+              <ChevronRight size={16} aria-hidden="true" className="lists-quick-add-chevron" />
+            </button>
+          </section>
+
+          {lists.length > 0 && (
+            <section className="card details lists-support-card lists-recent-panel">
+              <h2>Recent lists</h2>
+              <div className="lists-recent-list">
+                {lists.slice(0, 3).map((list) => (
+                  <Link className="lists-recent-row" href={`/lists/${list.id}`} key={list.id}>
+                    <img src={listIconImage(list.icon)} alt="" aria-hidden="true" />
+                    <span>
+                      <strong>{list.name}</strong>
+                      <small>{list.item_count} item{list.item_count === 1 ? "" : "s"}</small>
+                    </span>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+        </aside>
+        </div>
 
         {billing.list_usage && !canCreateList(billing.list_usage) && (
           <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
