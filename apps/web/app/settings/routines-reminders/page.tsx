@@ -888,7 +888,7 @@ export default function RoutinesRemindersPage() {
         <div className="rr-main">
         <div className="rr-controls">
         <div className="rr-search-row">
-          <div className="calendar-search">
+          <div className="module-search calendar-search">
             <Search size={16} aria-hidden="true" />
             <input
               type="search"

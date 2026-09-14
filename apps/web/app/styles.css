@@ -3027,6 +3027,7 @@ html.native-shell .home-section-overlap {
   display: inline-flex;
   gap: 0.35rem;
 }
+.module-search,
 .calendar-search {
   align-items: center;
   background: var(--colour-white);
@@ -3035,14 +3036,22 @@ html.native-shell .home-section-overlap {
   color: var(--colour-muted);
   display: flex;
   gap: 0.6rem;
+  min-height: 44px;
   padding: 0.6rem 0.9rem;
 }
+.module-search input,
 .calendar-search input {
   background: none;
   border: 0;
   flex: 1;
+  font-size: 16px;
   min-height: auto;
   padding: 0;
+}
+.module-search input::placeholder,
+.calendar-search input::placeholder {
+  color: var(--colour-muted);
+  opacity: 1;
 }
 .calendar-search .icon-button {
   min-height: 32px;
@@ -7700,7 +7709,7 @@ select.plan-meal-field-input {
   gap: 0.7rem;
   margin-bottom: 0.75rem;
 }
-.lists-toolbar input[type="search"] {
+.lists-toolbar .module-search {
   flex: 1;
   min-width: 160px;
 }

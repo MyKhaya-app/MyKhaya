@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ListChecks, MoreVertical, Plus } from "lucide-react";
+import { ChevronRight, ListChecks, MoreVertical, Plus, Search } from "lucide-react";
 import type { BillingStatus, HouseholdList, ListIcon } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -158,13 +158,16 @@ export default function ListsPage() {
         ) : (
           <>
             <div className="lists-toolbar">
-              <input
-                type="search"
-                placeholder="Search lists…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                aria-label="Search lists"
-              />
+              <div className="module-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search lists…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  aria-label="Search lists"
+                />
+              </div>
             </div>
 
             <div className="section-heading">
