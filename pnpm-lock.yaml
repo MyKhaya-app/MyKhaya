@@ -19,6 +19,28 @@ importers:
         specifier: 3.6.2
         version: 3.6.2
 
+  apps/android-shell:
+    dependencies:
+      '@capacitor/android':
+        specifier: 8.5.0
+        version: 8.5.0(@capacitor/core@8.5.0)
+      '@capacitor/core':
+        specifier: 8.5.0
+        version: 8.5.0
+    devDependencies:
+      '@capacitor/cli':
+        specifier: 8.5.0
+        version: 8.5.0
+      '@mykhaya/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      typescript:
+        specifier: 5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.17.0)(jsdom@25.0.1)(lightningcss@1.33.0)(terser@5.49.0)(yaml@2.9.0)
+
   apps/ios-shell:
     dependencies:
       '@aparajita/capacitor-biometric-auth':

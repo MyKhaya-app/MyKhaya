@@ -1,0 +1,22 @@
+{
+  "name": "@mykhaya/android-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capacitor native Android shell for MyKhaya. Loads the live MyKhaya web frontend (apps/web, deployed) inside a Capacitor WebView. This is NOT a second frontend — see docs/architecture/adr/0014-capacitor-android-shell.md, ADR 0012 (the equivalent iOS decision), and ADR 0011.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "cap:doctor": "cap doctor",
+    "cap:sync:android": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.0",
+    "@capacitor/core": "8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.0",
+    "@mykhaya/typescript-config": "workspace:*",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  }
+}
