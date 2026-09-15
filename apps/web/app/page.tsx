@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PublicBenefits } from "@/components/marketing/public-benefits";
 import { PublicFeatures } from "@/components/marketing/public-features";
@@ -64,5 +64,21 @@ function NativeRootGate() {
 }
 
 export default function Welcome() {
-  return isNativeShell() ? <NativeRootGate /> : <PublicWelcome />;
+  // isNativeShell() always reads false during SSR (no window/Capacitor
+  // there) but can read true on the very first client render inside the
+  // native shell — branching on it directly, here, produced a root-level
+  // hydration mismatch (React error #418: server rendered <PublicWelcome/>,
+  // client attempted to hydrate <NativeRootGate/>), confirmed via Android
+  // emulator testing (Android Phase 2). React recovers from this by
+  // discarding and re-rendering the whole subtree, which is wasteful at
+  // best on every native cold load of "/" and was a contributing factor to
+  // an Android WebView renderer crash observed in that testing. Match the
+  // SSR-safe pattern used elsewhere (e.g. native-biometric-offer.tsx):
+  // render the SSR-identical branch first, flip to the native branch only
+  // after mount, once isNativeShell() is safe to read.
+  const [native, setNative] = useState(false);
+  useEffect(() => {
+    setNative(isNativeShell());
+  }, []);
+  return native ? <NativeRootGate /> : <PublicWelcome />;
 }

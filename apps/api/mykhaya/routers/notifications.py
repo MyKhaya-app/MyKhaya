@@ -1,6 +1,8 @@
 import uuid
 from datetime import UTC, datetime, time
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,7 @@ from mykhaya.schemas import (
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 PAGE_SIZE = 30
+MAX_PAGE_SIZE = 50
 
 
 def native_device_response(row: NativePushDevice) -> NativePushDeviceResponse:
@@ -177,26 +180,35 @@ async def update_preferences(
 @router.get("")
 async def list_notifications(
     page: int = Query(default=1, ge=1, le=1000),
+    filter: Literal["all", "unread"] = Query(default="all"),
+    limit: int = Query(default=PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationListResponse:
-    offset = (page - 1) * PAGE_SIZE
+    offset = (page - 1) * limit
+    predicates = [
+        Notification.recipient_user_id == auth.user.id,
+        Notification.cleared_at.is_(None),
+    ]
+    if filter == "unread":
+        predicates.append(Notification.read_at.is_(None))
     rows = (
         await db.scalars(
             select(Notification)
-            .where(Notification.recipient_user_id == auth.user.id)
+            .where(*predicates)
             .order_by(Notification.created_at.desc())
             .offset(offset)
-            .limit(PAGE_SIZE + 1)
+            .limit(limit + 1)
         )
     ).all()
-    has_more = len(rows) > PAGE_SIZE
-    rows = rows[:PAGE_SIZE]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     unread_count = (
         await db.scalar(
             select(func.count(Notification.id)).where(
                 Notification.recipient_user_id == auth.user.id,
                 Notification.read_at.is_(None),
+                Notification.cleared_at.is_(None),
             )
         )
         or 0
@@ -241,6 +253,44 @@ async def mark_notification_read(
     return {"message": "Marked as read."}
 
 
+@router.get("/unread-count")
+async def unread_notification_count(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    unread_count = (
+        await db.scalar(
+            select(func.count(Notification.id)).where(
+                Notification.recipient_user_id == auth.user.id,
+                Notification.read_at.is_(None),
+                Notification.cleared_at.is_(None),
+            )
+        )
+        or 0
+    )
+    return {"unread_count": unread_count}
+
+
+@router.post("/{notification_id}/clear")
+async def clear_notification(
+    notification_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    notification = await db.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.recipient_user_id == auth.user.id,
+        )
+    )
+    if notification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found.")
+    if notification.cleared_at is None:
+        notification.cleared_at = datetime.now(UTC)
+        await db.commit()
+    return {"message": "Notification cleared."}
+
+
 @router.post("/read-all")
 async def mark_all_notifications_read(
     auth: AuthContext = Depends(auth_context),
@@ -251,11 +301,29 @@ async def mark_all_notifications_read(
         .where(
             Notification.recipient_user_id == auth.user.id,
             Notification.read_at.is_(None),
+            Notification.cleared_at.is_(None),
         )
         .values(read_at=func.now())
     )
     await db.commit()
     return {"message": "All notifications marked as read."}
+
+
+@router.post("/clear-all")
+async def clear_all_notifications(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    await db.execute(
+        update(Notification)
+        .where(
+            Notification.recipient_user_id == auth.user.id,
+            Notification.cleared_at.is_(None),
+        )
+        .values(cleared_at=func.now())
+    )
+    await db.commit()
+    return {"message": "All notifications cleared."}
 
 
 @router.get("/push/public-key")

@@ -465,6 +465,35 @@ recipient selection (co-members of the birthday person's household, or of a chil
 guardian's household), the `birthday_visible` visibility gate, and deep links are all
 unchanged.
 
+## Notification Centre persistence and retention decision
+
+`Notification` is the canonical per-user in-app record. Phase 2 adds nullable
+`cleared_at`: `NULL` means visible and a timestamp means hidden by that user.
+Clearing must never delete the notification or its `NotificationDelivery`
+diagnostics. Read state (`read_at`) remains independent of clear state.
+
+Recommended retention policy for the future consumer Notification Centre:
+
+- Visible notifications: retain for 90 days, subject to the final product
+  decision and bounded pagination.
+- Cleared notifications: retain for 30 days, then purge in scheduled batches;
+  clearing is a hide action, not permanent deletion.
+- Unread notifications: retain until read or account deletion, but cap the
+  maximum age at 12 months so an abandoned unread record cannot live forever.
+- Account deletion: cascade/delete the user's notification records with the
+  account, while retaining only separately governed, sanitised delivery/audit
+  diagnostics where required by policy.
+- The eventual cleanup job must use bounded, indexed deletes and must not run
+  in Phase 2. It should preserve delivery diagnostics for the separately
+  approved operational retention period.
+
+The consumer Notification Centre must not use the existing top-level
+`/notifications` namespace because it is used by the Platform Control Centre.
+`/settings/notifications` remains the Notification Settings/preferences page.
+The future consumer history should use a dedicated personal route, preferably
+`/me/notifications` or the closest established consumer convention, with the
+final route chosen before Phase 6.
+
 ## Known limitation: repeated enqueueing of already-pending work
 
 Found during Stage 6 (household routines) live verification, 2026-08-06.

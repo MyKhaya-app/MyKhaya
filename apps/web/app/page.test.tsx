@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import Welcome from "./page";
@@ -149,6 +151,31 @@ describe("Welcome (public marketing homepage)", () => {
         "/",
       ]).toContain(link.getAttribute("href"));
     }
+  });
+
+  it("never calls isNativeShell() synchronously in Welcome's render body (SSR-hydration-safety contract)", () => {
+    // Regression guard for Android Phase 2's finding: isNativeShell() reads
+    // false during SSR (no window there) but can read true on the client's
+    // very first render inside a native shell. Welcome() used to branch on
+    // it directly in the render body, so the client's first render produced
+    // a totally different tree (<NativeRootGate/>) than what was
+    // server-rendered (<PublicWelcome/>) — a root-level React hydration
+    // mismatch (error #418), reproduced on a real Android build. React
+    // Testing Library's render() is act-wrapped and flushes the fix's
+    // useEffect synchronously, so a DOM-content assertion can't distinguish
+    // "checked after mount" from "checked during render" here — this
+    // asserts the actual structural contract by inspecting the source
+    // directly: the fix (`useState` + `useEffect`) must still be in place,
+    // and Welcome's body must not call isNativeShell() outside that effect.
+    const source = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
+    const welcomeBody = source
+      .slice(source.indexOf("export default function Welcome"))
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    const outsideEffect = welcomeBody.replace(/useEffect\(\s*\(\)\s*=>\s*\{[\s\S]*?\},\s*\[\]\);/, "");
+    expect(outsideEffect).not.toMatch(/isNativeShell\(\)/);
+    expect(welcomeBody).toMatch(/useState\(false\)/);
   });
 
   it("gates the native root while restoring and redirects to authenticated Home after restore", async () => {

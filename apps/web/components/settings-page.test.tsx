@@ -158,14 +158,15 @@ describe("More — mockup-specified rows", () => {
 });
 
 describe("More — preserved existing destinations", () => {
-  it("still reaches Profile, Notifications, Nudges, Lists, Meal Plans and Plan & Billing", async () => {
+  it("still reaches Profile, Notifications, notification settings, Nudges, Lists, Meal Plans and Plan & Billing", async () => {
     render(<SettingsPage />);
     await screen.findByRole("heading", { name: "Home settings" });
 
     const expectations: [string, string][] = [
       ["Profile", "/settings/profile"],
       ["Security", "/settings/security"],
-      ["Notifications", "/settings/notifications"],
+      ["Notifications", "/me/notifications"],
+      ["Notification settings", "/settings/notifications"],
       ["Nudges", "/settings/routines-reminders"],
       ["Lists", "/lists"],
       ["Meal Plans", "/meal-plans"],
@@ -190,7 +191,7 @@ describe("More — Security lives in You, not a separate block", () => {
     const names = Array.from(youGroup.querySelectorAll(".more-row-text h2")).map(
       (el) => el.textContent,
     );
-    expect(names).toEqual(["Profile", "Security", "Notifications"]);
+    expect(names).toEqual(["Profile", "Security", "Notifications", "Notification settings"]);
 
     expect(screen.queryByRole("heading", { name: "Devices" })).not.toBeInTheDocument();
     expect(
@@ -465,7 +466,8 @@ describe("More — Wishlists module state", () => {
     await screen.findByRole("heading", { name: "Home settings" });
     // Notifications legitimately has its own settings row — this checks it
     // never grows a *second*, module-styled entry alongside it.
-    expect(screen.getAllByRole("heading", { name: "Notifications" })).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Notification settings" })).toBeInTheDocument();
     for (const nonModule of ["External sharing", "External Sharing", "Tasks", "Plans"]) {
       expect(screen.queryByRole("heading", { name: nonModule })).not.toBeInTheDocument();
     }

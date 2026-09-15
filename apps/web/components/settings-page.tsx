@@ -73,7 +73,8 @@ const MORE_GROUPS: readonly MoreGroup[] = [
     items: [
       { name: "Profile", detail: "Your name and account details", href: "/settings/profile", icon: CircleUserRound, tone: "sage", gate: "all" },
       { name: "Security", detail: "Review account and session protection", href: "/settings/security", icon: Shield, tone: "blue", gate: "adult" },
-      { name: "Notifications", detail: "Push, reminders and your daily briefing", href: "/settings/notifications", icon: Bell, tone: "cream", gate: "all" },
+      { name: "Notifications", detail: "See what has happened in your home", href: "/me/notifications", icon: Bell, tone: "cream", gate: "all" },
+      { name: "Notification settings", detail: "Push, reminders and your daily briefing", href: "/settings/notifications", icon: Bell, tone: "sage", gate: "all" },
     ],
   },
   {

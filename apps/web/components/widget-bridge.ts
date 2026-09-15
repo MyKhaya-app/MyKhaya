@@ -1,6 +1,6 @@
 import { registerPlugin } from "@capacitor/core";
 import { api } from "@mykhaya/api-client";
-import { isNativeShell } from "./native-runtime";
+import { nativePlatform } from "./native-runtime";
 import {
   type WidgetSnapshot,
   buildWidgetSnapshot,
@@ -12,11 +12,18 @@ import {
  * TS-side contract for the native `WidgetBridgePlugin` (Swift source in
  * apps/ios-shell/native/plugin/WidgetBridgePlugin.swift, installed into the
  * generated ios/ project by scripts/install-widget-sources.sh — see
- * docs/mobile/ios-widgets.md). This is a repo-local plugin, not an npm
- * package: outside the real native shell (an ordinary browser tab, Vitest,
- * a native shell build where the plugin hasn't been installed yet)
- * Capacitor's web fallback throws "not implemented" for every method, which
- * is why every export below is guarded by `isNativeShell()` first.
+ * docs/mobile/ios-widgets.md). This is a repo-local plugin with no Android
+ * counterpart (Home Screen widgets are iOS WidgetKit-specific and
+ * explicitly out of scope for Android per that doc) and not an npm
+ * package: outside a real iOS native shell (an ordinary browser tab,
+ * Vitest, Android, or an iOS build where the plugin hasn't been installed
+ * yet) Capacitor's web fallback throws "not implemented" for every method,
+ * which is why every export below is guarded by `nativePlatform() === "ios"`
+ * rather than the more general `isNativeShell()` — confirmed necessary by a
+ * real Android logout hang: `clearWidgetSnapshot()` throwing inside
+ * `nativeLogout()`'s `finally` block aborted the caller's subsequent
+ * `router.push("/login")`, leaving the UI on the authenticated page even
+ * though the native session had already been cleared (Android Phase 2B).
  */
 export interface WidgetBridgePlugin {
   /** Atomically replaces the shared App Group snapshot with `json` (the
@@ -33,7 +40,7 @@ const WidgetBridge = registerPlugin<WidgetBridgePlugin>("WidgetBridge");
 let inFlight: Promise<void> | null = null;
 
 async function writeSnapshot(snapshot: WidgetSnapshot): Promise<void> {
-  if (!isNativeShell()) return;
+  if (nativePlatform() !== "ios") return;
   await WidgetBridge.setSnapshot({ json: JSON.stringify(snapshot) });
 }
 
@@ -51,7 +58,7 @@ async function writeSnapshot(snapshot: WidgetSnapshot): Promise<void> {
  * followed immediately by its own reload) don't race two writes.
  */
 export function syncWidgetSnapshot(): Promise<void> {
-  if (!isNativeShell()) return Promise.resolve();
+  if (nativePlatform() !== "ios") return Promise.resolve();
   // Best-effort background refresh: a broken/mocked api-client, a network
   // failure, or a native-plugin error must never surface as an unhandled
   // rejection to a caller that fires this with `void` (every call site
@@ -103,7 +110,7 @@ export function syncWidgetSnapshot(): Promise<void> {
 /** Explicit logout path — must win over any in-flight sync so a slow
  * pre-logout fetch can never overwrite the cleared state afterwards. */
 export async function clearWidgetSnapshot(): Promise<void> {
-  if (!isNativeShell()) return;
+  if (nativePlatform() !== "ios") return;
   inFlight = (inFlight ?? Promise.resolve()).catch(() => undefined).then(async () => {
     await WidgetBridge.clearSnapshot();
   });

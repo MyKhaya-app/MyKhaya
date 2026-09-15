@@ -12,6 +12,7 @@ import { NativeBiometricOffer } from "./native-biometric-offer";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { api } from "@mykhaya/api-client";
+import { NotificationProvider } from "./notification-state";
 
 export function AppShell({
   children,
@@ -116,7 +117,8 @@ export function AppShell({
   if (status === "signed_out") return null;
 
   return (
-    <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}`}>
+    <NotificationProvider>
+      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
@@ -137,7 +139,8 @@ export function AppShell({
       </div>
       <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />
       {!isNativeShell() && <AroundHouseDock />}
-    </div>
+      </div>
+    </NotificationProvider>
   );
 }
 

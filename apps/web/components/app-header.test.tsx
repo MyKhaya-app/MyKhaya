@@ -29,6 +29,10 @@ vi.mock("./native-auth", () => ({
   nativeLogout: () => nativeLogout(),
 }));
 
+vi.mock("./notification-state", () => ({
+  useNotifications: () => ({ unreadCount: 0 }),
+}));
+
 const { api } = await import("@mykhaya/api-client");
 
 const user = {

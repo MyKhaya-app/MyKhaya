@@ -5,7 +5,7 @@ stages and are not exercised here.
 
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -112,6 +112,11 @@ async def test_preferences_update_round_trips(client: AsyncClient) -> None:
             "briefing_time": "08:15",
             "briefing_days": "weekdays",
             "empty_day_briefing_enabled": False,
+            "daily_nudge_summary_enabled": True,
+            "daily_nudge_summary_time": "07:30",
+            "nudges_evening_cleanup_enabled": True,
+            "nudges_evening_time": "20:30",
+            "nudges_day_complete_enabled": True,
             "lock_screen_preview_level": "hidden",
             "quiet_hours_start": "22:00",
             "quiet_hours_end": "07:00",
@@ -318,6 +323,56 @@ async def test_list_read_and_mark_all_read(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_notification_clear_state_is_nullable_and_independent_from_read_state(
+    client: AsyncClient,
+) -> None:
+    first_user_id = await create_verified_user(client, unique_email("clear-first"), "First User")
+    second_user_id = await create_verified_user(client, unique_email("clear-second"), "Second User")
+
+    async with SessionFactory() as db:
+        await notify(
+            db,
+            settings=get_settings(),
+            recipient_user_id=first_user_id,
+            notification_type="test",
+            title="First",
+            body="Body one",
+            idempotency_key=f"clear-first:{uuid.uuid4()}",
+        )
+        await notify(
+            db,
+            settings=get_settings(),
+            recipient_user_id=second_user_id,
+            notification_type="test",
+            title="Second",
+            body="Body two",
+            idempotency_key=f"clear-second:{uuid.uuid4()}",
+        )
+        await db.commit()
+        first = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == first_user_id)
+        )
+        second = await db.scalar(
+            select(Notification).where(Notification.recipient_user_id == second_user_id)
+        )
+        assert first is not None and second is not None
+        assert first.cleared_at is None
+        assert second.cleared_at is None
+
+        now = datetime.now(UTC)
+        first.read_at = now
+        first.cleared_at = now
+        await db.commit()
+        await db.refresh(first)
+        await db.refresh(second)
+
+        assert first.read_at is not None
+        assert first.cleared_at is not None
+        assert second.read_at is None
+        assert second.cleared_at is None
+
+
+@pytest.mark.asyncio
 async def test_cannot_read_another_users_notification(client: AsyncClient) -> None:
     other_user_id = await create_verified_user(client, unique_email("owner"), "Owner User")
     async with SessionFactory() as db:
@@ -348,3 +403,93 @@ async def test_cannot_read_another_users_notification(client: AsyncClient) -> No
             second_client, "POST", f"/api/v1/notifications/{other_notification.id}/read"
         )
         assert denied.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_notification_listing_filters_and_clear_actions_are_user_scoped(
+    client: AsyncClient,
+) -> None:
+    first_user_id = await create_verified_user(client, unique_email("centre-first"), "First User")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as second_client:
+        second_user_id = await create_verified_user(
+            second_client, unique_email("centre-second"), "Second User"
+        )
+
+        async with SessionFactory() as db:
+            notifications: list[Notification] = []
+            for user_id, title in (
+                (first_user_id, "Unread one"),
+                (first_user_id, "Unread two"),
+                (first_user_id, "Already read"),
+                (second_user_id, "Other user"),
+            ):
+                row = await notify(
+                    db,
+                    settings=get_settings(),
+                    recipient_user_id=user_id,
+                    notification_type="test",
+                    title=title,
+                    body="Body",
+                    idempotency_key=f"centre:{uuid.uuid4()}",
+                )
+                assert row is not None
+                notifications.append(row)
+            timestamp = datetime.now(UTC)
+            notifications[0].created_at = timestamp
+            notifications[1].created_at = timestamp + timedelta(seconds=1)
+            notifications[2].created_at = timestamp - timedelta(seconds=1)
+            notifications[2].read_at = timestamp
+            await db.commit()
+
+        listed = await client.get("/api/v1/notifications?limit=2")
+        assert listed.status_code == 200
+        assert len(listed.json()["items"]) == 2
+        assert listed.json()["unread_count"] == 2
+        assert listed.json()["next_page"] == 2
+
+        second_page = await client.get("/api/v1/notifications?page=2&limit=2")
+        assert second_page.status_code == 200
+        assert len(second_page.json()["items"]) == 1
+
+        unread = await client.get("/api/v1/notifications?filter=unread")
+        assert [item["title"] for item in unread.json()["items"]] == ["Unread two", "Unread one"]
+
+        cleared = await unsafe(
+            client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear"
+        )
+        assert cleared.status_code == 200
+        repeated = await unsafe(
+            client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear"
+        )
+        assert repeated.status_code == 200
+        after_clear = await client.get("/api/v1/notifications?filter=unread")
+        assert [item["title"] for item in after_clear.json()["items"]] == ["Unread two"]
+        assert after_clear.json()["unread_count"] == 1
+
+        marked_all = await unsafe(client, "POST", "/api/v1/notifications/read-all")
+        assert marked_all.status_code == 200
+        assert (await client.get("/api/v1/notifications/unread-count")).json() == {"unread_count": 0}
+
+        cleared_all = await unsafe(client, "POST", "/api/v1/notifications/clear-all")
+        assert cleared_all.status_code == 200
+        assert (await client.get("/api/v1/notifications")).json()["items"] == []
+
+        async with SessionFactory() as db:
+            stored = (
+                await db.scalars(
+                    select(Notification).where(Notification.recipient_user_id == first_user_id)
+                )
+            ).all()
+            assert len(stored) == 3
+            assert all(row.cleared_at is not None for row in stored)
+            assert stored[0].read_at is None
+
+        other_user_list = await second_client.get("/api/v1/notifications")
+        assert [item["title"] for item in other_user_list.json()["items"]] == ["Other user"]
+        assert other_user_list.json()["unread_count"] == 1
+        denied_clear = await unsafe(
+            second_client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear"
+        )
+        assert denied_clear.status_code == 404

@@ -12,6 +12,7 @@ import { BottomSheet } from "./bottom-sheet";
 import { HeaderBotanical } from "./header-botanical";
 import { nativeLogout } from "./native-auth";
 import { isNativeShell } from "./native-runtime";
+import { NotificationBell, NotificationTray } from "./notification-tray";
 
 export function AppHeader({
   user,
@@ -29,6 +30,7 @@ export function AppHeader({
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   async function logout() {
     setMenuOpen(false);
@@ -58,19 +60,24 @@ export function AppHeader({
         <span>{activeHome?.name ?? "Your Home"}</span>
         {homes.length > 1 && <ChevronDown size={17} aria-hidden="true" />}
       </button>
-      <button
-        type="button"
-        className="app-header-avatar"
-        onClick={() => setMenuOpen(true)}
-        aria-label="Open profile menu"
-      >
-        <Avatar
-          id={user?.id ?? "?"}
-          name={user?.display_name ?? "?"}
-          avatarVersion={user?.avatar_version}
-          size="md"
-        />
-      </button>
+      <div className="app-header-actions">
+        {user ? <NotificationBell onOpen={() => setNotificationsOpen(true)} /> : null}
+        <button
+          type="button"
+          className="app-header-avatar"
+          onClick={() => setMenuOpen(true)}
+          aria-label="Open profile menu"
+        >
+          <Avatar
+            id={user?.id ?? "?"}
+            name={user?.display_name ?? "?"}
+            avatarVersion={user?.avatar_version}
+            size="md"
+          />
+        </button>
+      </div>
+
+      {notificationsOpen && <NotificationTray onDismiss={() => setNotificationsOpen(false)} />}
 
       {menuOpen && (
         <BottomSheet title="Profile" onDismiss={() => setMenuOpen(false)}>

@@ -1587,6 +1587,7 @@ class Notification(UuidTimeMixin, Base):
     related_entity_id: Mapped[uuid.UUID | None]
     deep_link: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class NotificationDelivery(Base):

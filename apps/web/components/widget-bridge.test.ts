@@ -10,9 +10,9 @@ vi.mock("@capacitor/core", () => ({
   }),
 }));
 
-const isNativeShellMock = vi.fn(() => true);
+const nativePlatformMock = vi.fn<() => "ios" | "android" | "web">(() => "ios");
 vi.mock("./native-runtime", () => ({
-  isNativeShell: () => isNativeShellMock(),
+  nativePlatform: () => nativePlatformMock(),
 }));
 
 interface MockHome {
@@ -49,7 +49,7 @@ function lastSnapshotPayload(): MockSnapshotPayload {
 describe("widget-bridge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isNativeShellMock.mockReturnValue(true);
+    nativePlatformMock.mockReturnValue("ios");
     homesMock.mockResolvedValue([HOME]);
     listEventsMock.mockResolvedValue({ items: [] });
     routinesMock.mockResolvedValue({ items: [] });
@@ -62,11 +62,21 @@ describe("widget-bridge", () => {
   });
 
   it("is a no-op outside the native shell", async () => {
-    isNativeShellMock.mockReturnValue(false);
+    nativePlatformMock.mockReturnValue("web");
     const { syncWidgetSnapshot } = await import("./widget-bridge");
     await syncWidgetSnapshot();
     expect(homesMock).not.toHaveBeenCalled();
     expect(setSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op on Android — no WidgetBridge plugin exists there (regression: Android Phase 2B found this throwing uncaught inside nativeLogout(), silently aborting the post-logout redirect)", async () => {
+    nativePlatformMock.mockReturnValue("android");
+    const { syncWidgetSnapshot, clearWidgetSnapshot } = await import("./widget-bridge");
+    await expect(syncWidgetSnapshot()).resolves.toBeUndefined();
+    await expect(clearWidgetSnapshot()).resolves.toBeUndefined();
+    expect(homesMock).not.toHaveBeenCalled();
+    expect(setSnapshot).not.toHaveBeenCalled();
+    expect(clearSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("writes an empty-home snapshot when there is no Home yet", async () => {
@@ -106,7 +116,7 @@ describe("widget-bridge", () => {
   });
 
   it("clearWidgetSnapshot is a no-op outside the native shell", async () => {
-    isNativeShellMock.mockReturnValue(false);
+    nativePlatformMock.mockReturnValue("web");
     const { clearWidgetSnapshot } = await import("./widget-bridge");
     await clearWidgetSnapshot();
     expect(clearSnapshotMock).not.toHaveBeenCalled();

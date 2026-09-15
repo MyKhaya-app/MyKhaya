@@ -495,6 +495,24 @@ export interface NotificationPreferences {
   quiet_hours_critical_only: boolean;
 }
 
+export interface Notification {
+  id: string;
+  notification_type: string;
+  title: string;
+  body: string;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  deep_link_path: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: Notification[];
+  unread_count: number;
+  next_page: number | null;
+}
+
 export interface PushSubscriptionSummary {
   id: string;
   device_label: string | null;

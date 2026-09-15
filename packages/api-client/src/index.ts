@@ -664,6 +664,36 @@ export class MyKhayaClient {
       "/notifications/preferences",
       { method: "PUT", body: JSON.stringify(body) },
     );
+  notifications = (params?: {
+    page?: number;
+    filter?: "all" | "unread";
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.page !== undefined) query.set("page", String(params.page));
+    if (params?.filter) query.set("filter", params.filter);
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.request<import("@mykhaya/shared-types").NotificationListResponse>(
+      `/notifications${suffix}`,
+    );
+  };
+  notificationUnreadCount = () =>
+    this.request<{ unread_count: number }>("/notifications/unread-count");
+  markNotificationRead = (notificationId: string) =>
+    this.request<{ message: string }>(
+      `/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: "POST" },
+    );
+  clearNotification = (notificationId: string) =>
+    this.request<{ message: string }>(
+      `/notifications/${encodeURIComponent(notificationId)}/clear`,
+      { method: "POST" },
+    );
+  markAllNotificationsRead = () =>
+    this.request<{ message: string }>("/notifications/read-all", { method: "POST" });
+  clearAllNotifications = () =>
+    this.request<{ message: string }>("/notifications/clear-all", { method: "POST" });
   routines = (homeId: string, params?: { home?: boolean }) =>
     this.request<import("@mykhaya/shared-types").RoutineListResponse>(
       `/homes/${encodeURIComponent(homeId)}/routines${params?.home ? "?home=true" : ""}`,
