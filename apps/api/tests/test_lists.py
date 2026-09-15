@@ -839,6 +839,61 @@ async def test_cross_home_list_and_item_operations_are_rejected(client: AsyncCli
         ).status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("scope-owner"), "Scope Owner")
+    home_id = await create_home(client, "List Scope Home")
+    personal = await create_list(client, home_id, name="Private errands", scope="personal")
+    household = await create_list(client, home_id, name="Shared groceries", scope="household")
+    assert personal["scope"] == "personal"
+    assert household["scope"] == "household"
+
+    personal_items = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{personal['id']}/items",
+        json={"text": "Private item"},
+    )
+    assert personal_items.status_code == 201
+
+    owner_personal = await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")
+    assert [row["id"] for row in owner_personal.json()["items"]] == [personal["id"]]
+    owner_household = await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")
+    assert [row["id"] for row in owner_household.json()["items"]] == [household["id"]]
+
+    partner_email = unique_email("scope-partner")
+    await add_partner(client, home_id, partner_email, "Scope Partner")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        login = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/auth/login",
+            json={"email": partner_email, "password": PASSWORD},
+        )
+        assert login.status_code == 200
+        partner_lists = await partner_client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")
+        assert partner_lists.status_code == 200
+        assert partner_lists.json()["items"] == []
+        assert (
+            await partner_client.get(f"/api/v1/homes/{home_id}/lists/{personal['id']}")
+        ).status_code == 404
+        partner_household = await partner_client.get(
+            f"/api/v1/homes/{home_id}/lists?scope=household"
+        )
+        assert [row["id"] for row in partner_household.json()["items"]] == [household["id"]]
+        shared_item = await unsafe(
+            partner_client,
+            "POST",
+            f"/api/v1/homes/{home_id}/lists/{household['id']}/items",
+            json={"text": "Shared item"},
+        )
+        assert shared_item.status_code == 201
+
+    assert uuid.UUID(personal["created_by"]) == owner_id
+
+
 # ---------------------------------------------------------------------------
 # Capability: standard_partner has full manage rights (documented V1 matrix)
 # ---------------------------------------------------------------------------

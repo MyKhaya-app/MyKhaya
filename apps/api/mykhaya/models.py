@@ -2150,6 +2150,12 @@ class HouseholdList(UuidTimeMixin, Base):
     # change, not a data migration.
     icon: Mapped[str | None] = mapped_column(String(20))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    scope: Mapped[str] = mapped_column(
+        Enum("personal", "household", name="routine_scope", create_type=False),
+        default="household",
+        server_default="household",
+        nullable=False,
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source_template_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("list_templates.id", ondelete="SET NULL"), index=True

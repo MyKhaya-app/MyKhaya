@@ -132,7 +132,12 @@ def _access_state(access: dict[uuid.UUID, bool], list_id: uuid.UUID) -> str:
 
 
 async def _get_active_list(
-    db: AsyncSession, home_id: uuid.UUID, list_id: uuid.UUID, *, for_update: bool = False
+    db: AsyncSession,
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    *,
+    viewer_id: uuid.UUID | None = None,
+    for_update: bool = False,
 ) -> HouseholdList:
     query = select(HouseholdList).where(
         HouseholdList.id == list_id,
@@ -142,7 +147,7 @@ async def _get_active_list(
     if for_update:
         query = query.with_for_update()
     row = await db.scalar(query)
-    if row is None:
+    if row is None or (row.scope == RoutineScope.personal and row.created_by != viewer_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That list could not be found")
     return row
 
@@ -189,6 +194,7 @@ def _list_response(
         item_count=total,
         remaining_count=remaining,
         created_by=row.created_by,
+        scope=row.scope,
         created_at=row.created_at,
         updated_at=row.updated_at,
         commercial_access=_access_state(access, row.id),
@@ -259,6 +265,7 @@ async def _detail_response(
         item_count=len(items),
         remaining_count=remaining,
         created_by=row.created_by,
+        scope=row.scope,
         created_at=row.created_at,
         updated_at=row.updated_at,
         commercial_access=_access_state(access, row.id),
@@ -571,6 +578,7 @@ async def create_list(
         name=" ".join(body.name.strip().split()),
         icon=body.icon,
         created_by=auth.user.id,
+        scope=body.scope,
         source_template_id=template.id if template else None,
         source_template_name=template.name if template else None,
     )
@@ -610,13 +618,20 @@ async def create_list(
 async def list_lists(
     home_id: uuid.UUID,
     q: str | None = None,
+    scope: RoutineScope = RoutineScope.household,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> ListListResponse:
     await require_capability(home_id, Capability.lists_view, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
 
-    filters = [HouseholdList.group_id == home_id, HouseholdList.deleted_at.is_(None)]
+    filters = [
+        HouseholdList.group_id == home_id,
+        HouseholdList.deleted_at.is_(None),
+        HouseholdList.scope == scope,
+    ]
+    if scope == RoutineScope.personal:
+        filters.append(HouseholdList.created_by == auth.user.id)
     if q:
         filters.append(HouseholdList.name.ilike(f"%{q.strip()}%"))
     rows = (
@@ -643,7 +658,7 @@ async def get_list(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_view, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     return await _detail_response(db, row, access)
 
@@ -659,7 +674,7 @@ async def rename_list(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id, for_update=True)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id, for_update=True)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     if row.updated_at != body.expected_updated_at:
@@ -682,7 +697,7 @@ async def delete_list(
 ) -> None:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     # Soft delete only — a deleted List simply stops resolving via
     # _get_active_list, so Meal Plans can never add ingredients into it
     # again (see add_ingredients_to_list, which looks the List up the same
@@ -704,7 +719,7 @@ async def add_list_section(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     position = int(await db.scalar(select(func.count()).where(HouseholdListSection.list_id == row.id)) or 0)
@@ -721,7 +736,7 @@ async def rename_list_section(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     section = await _get_active_section(db, row.id, section_id, for_update=True)
@@ -740,7 +755,7 @@ async def remove_list_section(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     section = await _get_active_section(db, row.id, section_id)
@@ -760,7 +775,7 @@ async def reorder_list_sections(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id, for_update=True)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id, for_update=True)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     sections = list(
@@ -791,13 +806,18 @@ async def add_list_item(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     if body.section_id is not None:
         await _get_active_section(db, row.id, body.section_id)
     if body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
+        if row.scope == RoutineScope.personal and body.assigned_member_id != auth.user.id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Personal list items can only be assigned to the owner",
+            )
     next_position = await _next_position(db, row.id)
     item = HouseholdListItem(
         list_id=row.id,
@@ -838,7 +858,7 @@ async def update_list_item(
     the item's text/quantity/note just to leave them unchanged."""
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     item = await db.scalar(
@@ -853,6 +873,11 @@ async def update_list_item(
     previous_assignee = item.assigned_member_id
     if "assigned_member_id" in fields and body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
+        if row.scope == RoutineScope.personal and body.assigned_member_id != auth.user.id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Personal list items can only be assigned to the owner",
+            )
     if "text" in fields and body.text is not None:
         item.text = body.text.strip()
     if "quantity" in fields:
@@ -896,7 +921,7 @@ async def remove_list_item(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     await db.execute(
@@ -926,7 +951,7 @@ async def reorder_list_items(
     add/delete, gets a 409 rather than silently corrupting order."""
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id, for_update=True)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id, for_update=True)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     items = await _list_items(db, row.id)
@@ -954,7 +979,7 @@ async def clear_completed_items(
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
-    row = await _get_active_list(db, home_id, list_id)
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
     await db.execute(

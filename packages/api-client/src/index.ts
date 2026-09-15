@@ -897,8 +897,11 @@ export class MyKhayaClient {
       { method: "POST", body: JSON.stringify(body) },
     );
   // --- Household Lists -----------------------------------------------------
-  lists = (homeId: string, params?: { q?: string }) => {
-    const search = params?.q ? `?q=${encodeURIComponent(params.q)}` : "";
+  lists = (homeId: string, params?: { q?: string; scope?: import("@mykhaya/shared-types").ListTemplateScope }) => {
+    const query = new URLSearchParams();
+    if (params?.q) query.set("q", params.q);
+    if (params?.scope) query.set("scope", params.scope);
+    const search = query.toString() ? `?${query.toString()}` : "";
     return this.request<import("@mykhaya/shared-types").HouseholdListListResponse>(
       `/homes/${encodeURIComponent(homeId)}/lists${search}`,
     );

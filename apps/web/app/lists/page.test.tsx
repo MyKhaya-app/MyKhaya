@@ -264,7 +264,7 @@ describe("Lists — Family plan overview", () => {
     expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
   });
 
-  it("keeps the existing My Lists view functional and shows a calm, non-fabricated placeholder for Templates", async () => {
+  it("keeps the existing Lists view functional and opens Templates from the secondary action", async () => {
     (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [
         {
@@ -283,7 +283,7 @@ describe("Lists — Family plan overview", () => {
     const user = userEvent.setup();
 
     expect(await screen.findAllByRole("link", { name: /groceries/i })).not.toHaveLength(0);
-    await user.click(screen.getByRole("tab", { name: "Templates" }));
+    await user.click(screen.getByRole("button", { name: /templates/i }));
 
     expect(screen.getByText(/no templates yet/i)).toBeInTheDocument();
     expect(document.querySelector(".lists-grid")).toBeNull();
@@ -392,16 +392,16 @@ describe("Lists — Family plan overview", () => {
     render(<ListsPage />);
     const user = userEvent.setup();
     const add = await screen.findByRole("button", { name: "Add" });
-    const segmented = screen.getByRole("tablist", { name: "Lists sections" });
+    const segmented = screen.getByRole("tablist", { name: "Lists scope" });
     expect(segmented).toHaveClass("rr-segmented");
-    expect(screen.getByRole("tab", { name: "My Lists" })).toHaveClass("rr-segment-active");
+    expect(screen.getByRole("tab", { name: "Personal" })).toHaveClass("rr-segment-active");
 
     expect(add).toHaveClass("rr-fab");
     await user.click(add);
     await user.type(screen.getByLabelText(/list name/i), "Packing");
     await user.click(screen.getByRole("button", { name: /create list/i }));
 
-    expect(api.createList).toHaveBeenCalledWith("home-1", { name: "Packing", icon: null });
+    expect(api.createList).toHaveBeenCalledWith("home-1", { name: "Packing", icon: null, scope: "personal" });
   });
 
   it("filters lists by search", async () => {
@@ -412,9 +412,25 @@ describe("Lists — Family plan overview", () => {
 
     await waitFor(
       () => {
-        expect(api.lists).toHaveBeenCalledWith("home-1", { q: "pack" });
+        expect(api.lists).toHaveBeenCalledWith("home-1", { q: "pack", scope: "personal" });
       },
       { timeout: 3000 },
     );
+  });
+
+  it("scopes the list query to the selected Personal or Household segment", async () => {
+    render(<ListsPage />);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Add" });
+
+    await user.click(screen.getByRole("tab", { name: "Household" }));
+
+    await waitFor(
+      () => {
+        expect(api.lists).toHaveBeenCalledWith("home-1", { scope: "household" });
+      },
+      { timeout: 3000 },
+    );
+    expect(screen.getByRole("heading", { name: "Household Lists" })).toBeInTheDocument();
   });
 });

@@ -39,7 +39,8 @@ export default function ListsPage() {
   // list template) — this tab is a visual placeholder only, matching the
   // approved mockup's segmented control, never a fake/hard-coded template
   // list. See the redesign completion report for the full gap.
-  const [tab, setTab] = useState<"mine" | "templates">("mine");
+  const [scope, setScope] = useState<ListTemplateScope>("personal");
+  const [showTemplates, setShowTemplates] = useState(false);
   const [query, setQuery] = useState("");
   const [templateQuery, setTemplateQuery] = useState("");
   const [creating, setCreating] = useState(false);
@@ -63,7 +64,7 @@ export default function ListsPage() {
   async function load() {
     if (!activeHomeId) return;
     try {
-      const result = await api.lists(activeHomeId, { q: query || undefined });
+      const result = await api.lists(activeHomeId, { q: query || undefined, scope });
       setLists(result.items);
     } catch (cause) {
       setError(loadErrorMessage(cause, "Could not load your lists."));
@@ -83,7 +84,7 @@ export default function ListsPage() {
   useEffect(() => {
     const timeout = setTimeout(() => void load(), 200);
     return () => clearTimeout(timeout);
-  }, [activeHomeId, query]);
+  }, [activeHomeId, query, scope]);
 
   useEffect(() => {
     if (moduleReleased !== true) return;
@@ -180,28 +181,7 @@ export default function ListsPage() {
 
         <div className="lists-layout">
         <div className="lists-main">
-        <div className="rr-segmented" role="tablist" aria-label="Lists sections">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "mine"}
-            className={`rr-segment${tab === "mine" ? " rr-segment-active" : ""}`}
-            onClick={() => setTab("mine")}
-          >
-            My Lists
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "templates"}
-            className={`rr-segment${tab === "templates" ? " rr-segment-active" : ""}`}
-            onClick={() => setTab("templates")}
-          >
-            Templates
-          </button>
-        </div>
-
-        {tab === "templates" ? (
+        {showTemplates ? (
           <>
             <div className="lists-toolbar">
               <div className="module-search">
@@ -214,6 +194,9 @@ export default function ListsPage() {
                   aria-label="Search templates"
                 />
               </div>
+              <button type="button" className="secondary lists-templates-button" onClick={() => setShowTemplates(false)}>
+                Lists
+              </button>
             </div>
             {templates.length === 0 ? (
               <div className="meal-empty-state">
@@ -258,10 +241,22 @@ export default function ListsPage() {
                   aria-label="Search lists"
                 />
               </div>
+              <button type="button" className="secondary lists-templates-button" onClick={() => setShowTemplates(true)}>
+                <ListChecks size={17} aria-hidden="true" /> Templates
+              </button>
+            </div>
+
+            <div className="rr-segmented lists-scope-selector" role="tablist" aria-label="Lists scope">
+              <button type="button" role="tab" aria-selected={scope === "personal"} className={`rr-segment${scope === "personal" ? " rr-segment-active" : ""}`} onClick={() => setScope("personal")}>
+                Personal
+              </button>
+              <button type="button" role="tab" aria-selected={scope === "household"} className={`rr-segment${scope === "household" ? " rr-segment-active" : ""}`} onClick={() => setScope("household")}>
+                Household
+              </button>
             </div>
 
             <div className="section-heading">
-              <h2>Household Lists</h2>
+              <h2>{scope === "personal" ? "My Lists" : "Household Lists"}</h2>
             </div>
 
             {lists.length === 0 ? (
@@ -351,7 +346,7 @@ export default function ListsPage() {
         {billing.list_usage && !canCreateList(billing.list_usage) && (
           <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
         )}
-        <button type="button" className="rr-fab" aria-label="Add" onClick={() => tab === "templates" ? setCreatingTemplate(true) : setCreating(true)}>
+        <button type="button" className="rr-fab" aria-label="Add" onClick={() => showTemplates ? setCreatingTemplate(true) : setCreating(true)}>
           <Plus size={22} aria-hidden="true" />
           <span aria-hidden="true">Add</span>
         </button>
@@ -380,6 +375,7 @@ export default function ListsPage() {
           <CreateListSheet
             homeId={activeHomeId}
             templates={templates}
+            defaultScope={scope}
             atLimit={Boolean(billing.list_usage && !canCreateList(billing.list_usage))}
             limitMessage={billing.list_usage ? atListLimitMessage(billing.list_usage) : null}
             onClose={() => setCreating(false)}
@@ -429,6 +425,7 @@ export default function ListsPage() {
 function CreateListSheet({
   homeId,
   templates,
+  defaultScope,
   atLimit,
   limitMessage,
   onClose,
@@ -436,6 +433,7 @@ function CreateListSheet({
 }: {
   homeId: string;
   templates: ListTemplate[];
+  defaultScope: ListTemplateScope;
   /** Known client-side, from the same billing.list_usage the passive
    * near-FAB banner already reads — when true, the limit is reflected here
    * instead of the create form, and no create request is ever attempted
@@ -450,6 +448,7 @@ function CreateListSheet({
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<ListIcon | "">("");
   const [templateId, setTemplateId] = useState("");
+  const [scope, setScope] = useState<ListTemplateScope>(defaultScope);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -462,7 +461,7 @@ function CreateListSheet({
     setBusy(true);
     setError("");
     try {
-      const payload = { name: name.trim(), icon: icon || null, ...(templateId ? { template_id: templateId } : {}) };
+      const payload = { name: name.trim(), icon: icon || null, scope, ...(templateId ? { template_id: templateId } : {}) };
       await api.createList(homeId, payload);
       await onCreated();
     } catch (cause) {
@@ -542,6 +541,13 @@ function CreateListSheet({
             </select>
           </label>
         )}
+        <label>
+          List scope
+          <select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}>
+            <option value="personal">Personal — only you</option>
+            <option value="household">Household</option>
+          </select>
+        </label>
         <FormStatus error={error} />
         <button className="sheet-primary" disabled={busy}>
           {busy ? "Creating…" : "Create list"}

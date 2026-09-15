@@ -856,6 +856,7 @@ export interface HouseholdList {
   item_count: number;
   remaining_count: number;
   created_by: string;
+  scope: ListTemplateScope;
   created_at: string;
   updated_at: string;
   // "normal" = usable now; "read_only_due_to_plan" = preserved but over
@@ -873,6 +874,7 @@ export interface HouseholdListDetail {
   item_count: number;
   remaining_count: number;
   created_by: string;
+  scope: ListTemplateScope;
   created_at: string;
   updated_at: string;
   commercial_access: CalendarCommercialAccess;
@@ -922,6 +924,7 @@ export interface ListCreatePayload {
   name: string;
   icon?: ListIcon | null;
   template_id?: string | null;
+  scope?: ListTemplateScope;
 }
 
 export interface ListTemplateSectionInput {

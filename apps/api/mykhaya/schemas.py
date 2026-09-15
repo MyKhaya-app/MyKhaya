@@ -1438,6 +1438,7 @@ class ListCreate(StrictModel):
     name: str = Field(min_length=1, max_length=160)
     icon: str | None = Field(default=None, max_length=20)
     template_id: uuid.UUID | None = None
+    scope: RoutineScope = RoutineScope.household
 
     @field_validator("icon")
     @classmethod
@@ -1512,6 +1513,7 @@ class ListResponse(BaseModel):
     item_count: int
     remaining_count: int
     created_by: uuid.UUID
+    scope: RoutineScope
     created_at: datetime
     updated_at: datetime
     # "normal" = usable now; "read_only_due_to_plan" = preserved but over
@@ -1530,6 +1532,7 @@ class ListDetailResponse(BaseModel):
     item_count: int
     remaining_count: int
     created_by: uuid.UUID
+    scope: RoutineScope
     created_at: datetime
     updated_at: datetime
     commercial_access: Literal["normal", "read_only_due_to_plan"]

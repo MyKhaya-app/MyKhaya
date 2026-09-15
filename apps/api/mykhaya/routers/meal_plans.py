@@ -896,6 +896,8 @@ async def add_ingredients_to_list(
     )
     if target_list is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That list could not be found")
+    if target_list.scope == "personal" and target_list.created_by != auth.user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That list could not be found")
     # This writes HouseholdListItem rows directly (not through
     # routers.lists' own endpoints) — it must independently respect the
     # same over-the-plan-limit restriction those endpoints enforce, or a
