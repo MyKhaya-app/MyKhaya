@@ -377,6 +377,15 @@ async def create_managed_demo_home(
         )
     except ManagedDemoError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        # Preflight checks and namespaced fixture identities handle normal
+        # cases. Keep concurrent genuine conflicts safe for PCC without
+        # exposing SQL or database constraint names.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A managed demo/test Home with that fixture key or account email already exists.",
+        ) from exc
     platform_audit(db, request, context, "managed_demo.created", "managed_demo_home", row.id,
                    new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value})
     await db.commit()

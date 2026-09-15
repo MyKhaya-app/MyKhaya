@@ -32,6 +32,7 @@ from mykhaya.models import (
     PlatformAdministrator,
     PlatformRole,
     Reminder,
+    User,
 )
 from mykhaya.security import password_hash
 
@@ -526,3 +527,59 @@ async def test_family_demo_fixture_regression_still_resolves_family_access(
     created = await create_free_demo(admin_client, owner, demo_keys, fixture_type="demo")
     assert created["fixture_type"] == "demo"
     assert created["access"] == "family"
+
+
+@pytest.mark.asyncio
+async def test_family_demos_namespace_fixture_members_and_isolate_lifecycle(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    demo_keys: list[str],
+) -> None:
+    """Family fixture members are deterministic per managed Home, not global."""
+    first = await create_free_demo(
+        admin_client, await admin_factory(PlatformRole.owner), demo_keys, fixture_type="demo"
+    )
+    second = await create_free_demo(
+        admin_client, await admin_factory(PlatformRole.owner), demo_keys, fixture_type="demo"
+    )
+
+    async def member_emails(home_id: str) -> dict[str, str]:
+        async with SessionFactory() as db:
+            rows = await db.execute(
+                select(User.display_name, User.email)
+                .join(Membership, Membership.user_id == User.id)
+                .where(Membership.group_id == uuid.UUID(home_id))
+            )
+            return dict(rows.all())
+
+    first_members = await member_emails(first["home_id"])
+    second_members = await member_emails(second["home_id"])
+    assert set(first_members) >= {"Jamie Carter", "Sophie Carter", "Noah Carter"}
+    assert set(second_members) >= {"Jamie Carter", "Sophie Carter", "Noah Carter"}
+    assert set(first_members.values()).isdisjoint(second_members.values())
+    assert first_members["Jamie Carter"].endswith(
+        f"+{first['fixture_key']}@managed.mykhaya.invalid"
+    )
+    assert second_members["Jamie Carter"].endswith(
+        f"+{second['fixture_key']}@managed.mykhaya.invalid"
+    )
+
+    refreshed = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/demo-test-homes/{first['id']}/refresh",
+        json={"reason": "Namespace isolation test", "confirmed": True},
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert await member_emails(first["home_id"]) == first_members
+    assert await member_emails(second["home_id"]) == second_members
+
+    deleted = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/demo-test-homes/{first['id']}",
+        json={"reason": "Namespace isolation cleanup", "confirmed": True},
+    )
+    assert deleted.status_code == 204, deleted.text
+    demo_keys.remove(first["fixture_key"])
+    assert await member_emails(second["home_id"]) == second_members

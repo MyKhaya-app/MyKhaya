@@ -57,6 +57,12 @@ class ManagedDemoError(RuntimeError):
     pass
 
 
+def _namespaced_fixture_email(row: ManagedDemoHome, template_email: str) -> str:
+    """Return a deterministic member identity scoped to one managed Home."""
+    local, _, _domain = template_email.partition("@")
+    return f"{local}+{row.fixture_key}@managed.mykhaya.invalid"
+
+
 class ManagedDemoService:
     """Owns lifecycle state; templates remain explicit functions in fixture modules."""
 
@@ -86,9 +92,13 @@ class ManagedDemoService:
         """Create the managed identity and Home; callers then seed a template."""
         email = normalise_email(email)
         if await ManagedDemoService.get(db, fixture_key):
-            raise ManagedDemoError("Fixture key already exists")
+            raise ManagedDemoError(
+                "A managed demo/test Home with that fixture key already exists."
+            )
         if await db.scalar(select(User).where(User.email == email)):
-            raise ManagedDemoError("Refusing to adopt an existing customer account")
+            raise ManagedDemoError(
+                "The account email is already in use by another customer account."
+            )
         user = User(
             email=email,
             display_name=display_name,
@@ -147,7 +157,12 @@ class ManagedDemoService:
         return row
 
     @staticmethod
-    async def seed_template(db: AsyncSession, row: ManagedDemoHome) -> None:
+    async def seed_template(
+        db: AsyncSession,
+        row: ManagedDemoHome,
+        *,
+        preserved_member_emails: dict[str, str] | None = None,
+    ) -> None:
         """Seed the selected supported template using normal Home-owned rows."""
         owner = await db.get(User, row.owner_user_id)
         calendar = await db.scalar(
@@ -256,6 +271,10 @@ class ManagedDemoService:
             )
         members = [owner]
         for name, email, is_child in member_specs:
+            if row.fixture_type in (ManagedDemoType.demo, ManagedDemoType.qa_test):
+                email = (preserved_member_emails or {}).get(
+                    name, _namespaced_fixture_email(row, email)
+                )
             user = User(
                 email=email, display_name=name, email_verified_at=datetime.now(UTC), is_active=True
             )
@@ -406,6 +425,19 @@ class ManagedDemoService:
     @staticmethod
     async def refresh_template(db: AsyncSession, row: ManagedDemoHome) -> None:
         """Delete only Home-owned content and reseed without changing lifecycle state."""
+        preserved_member_emails = {
+            name: email
+            for name, email in (
+                await db.execute(
+                    select(User.display_name, User.email)
+                    .join(Membership, Membership.user_id == User.id)
+                    .where(
+                        Membership.group_id == row.home_id,
+                        Membership.user_id != row.owner_user_id,
+                    )
+                )
+            ).all()
+        }
         member_ids = list(
             await db.scalars(
                 select(Membership.user_id).where(
@@ -482,7 +514,9 @@ class ManagedDemoService:
                 User.id.in_(member_ids), ~User.id.in_(remaining_members)
             )
             await db.execute(delete(User).where(User.id.in_(orphaned_member_ids)))
-        await ManagedDemoService.seed_template(db, row)
+        await ManagedDemoService.seed_template(
+            db, row, preserved_member_emails=preserved_member_emails
+        )
 
     @staticmethod
     async def register(
