@@ -35,6 +35,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>MyKhayaAPNsEnvironment</key>
+	<string>$(MYKHAYA_APNS_BUILD_ENVIRONMENT)</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to securely unlock MyKhaya and access your family information.</string>
 	<key>NSCameraUsageDescription</key>

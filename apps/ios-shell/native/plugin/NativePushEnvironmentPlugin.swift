@@ -1,9 +1,10 @@
 import Capacitor
 import Foundation
-import Security
 
-/// Exposes the signed `aps-environment` entitlement to the web registration
-/// layer. The value comes from the installed binary, never from its API host.
+/// Exposes the APNs environment selected by the signed app build configuration
+/// to the web registration layer. The same build setting expands into the
+/// app's aps-environment entitlement and this private Info.plist key; it is
+/// never inferred from the API host.
 @objc(NativePushEnvironmentPlugin)
 public class NativePushEnvironmentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "NativePushEnvironmentPlugin"
@@ -13,8 +14,7 @@ public class NativePushEnvironmentPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     @objc func getEnvironment(_ call: CAPPluginCall) {
-        guard let task = SecTaskCreateFromSelf(nil),
-              let value = SecTaskCopyValueForEntitlement(task, "aps-environment" as CFString, nil) as? String else {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "MyKhayaAPNsEnvironment") as? String else {
             call.reject("Signed APNs environment entitlement is missing")
             return
         }
