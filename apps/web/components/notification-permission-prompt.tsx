@@ -81,16 +81,21 @@ export function NotificationPermissionPrompt() {
         };
 
   return (
-    <BottomSheet title={copy.title} onDismiss={dismiss}>
+    <BottomSheet
+      title={copy.title}
+      onDismiss={dismiss}
+      footer={
+        <div className="notification-permission-actions">
+          <button type="button" disabled={busy} onClick={() => void primaryAction()}>
+            {copy.primaryLabel}
+          </button>
+          <button type="button" className="secondary" disabled={busy} onClick={dismiss}>
+            {copy.secondaryLabel}
+          </button>
+        </div>
+      }
+    >
       {copy.body}
-      <div className="settings-inline-actions">
-        <button type="button" disabled={busy} onClick={() => void primaryAction()}>
-          {copy.primaryLabel}
-        </button>
-        <button type="button" className="secondary" disabled={busy} onClick={dismiss}>
-          {copy.secondaryLabel}
-        </button>
-      </div>
     </BottomSheet>
   );
 }

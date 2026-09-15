@@ -10,7 +10,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { HouseholdListDetail, HouseholdListItem, Member } from "@mykhaya/shared-types";
+import type { HouseholdListDetail, HouseholdListItem, ListSection, Member } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
@@ -40,6 +40,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
   const [newItemSectionId, setNewItemSectionId] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingItem, setEditingItem] = useState<HouseholdListItem | null>(null);
+  const [sectionActions, setSectionActions] = useState<ListSection | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [error, setError] = useState("");
   const [notFound, setNotFound] = useState(false);
@@ -50,6 +51,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
     try {
       const result = await api.list(activeHomeId, listId);
       setList(result);
+      setNewItemSectionId((current) => current || result.sections?.[0]?.id || "");
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 404) setNotFound(true);
       else setError(loadErrorMessage(cause, "Could not load this list."));
@@ -281,11 +283,10 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
         </form>
         {sections.length > 0 && (
           <div className="lists-item-section-picker">
-            <label>Section<select value={newItemSectionId} onChange={(event) => setNewItemSectionId(event.target.value)} aria-label="Item section">
+            <label><span>Add to:</span><select value={newItemSectionId} onChange={(event) => setNewItemSectionId(event.target.value)} aria-label="Item section">
               <option value="">Uncategorised</option>
               {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
             </select></label>
-            <button type="button" className="tertiary" onClick={() => void addSection()}>Add section</button>
           </div>
         )}
 
@@ -301,22 +302,22 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
 
         {sections.length > 0 ? (
           <div className="lists-section-list">
-            {sections.map((section, index) => (
+            {sections.map((section) => (
               <section className="lists-section" key={section.id}>
                 <div className="lists-section-heading">
-                  <h2>{section.name}</h2>
-                  <span>
-                    <button type="button" className="icon-button secondary" aria-label={`Move ${section.name} up`} disabled={index === 0} onClick={() => void reorderSections(section.id, -1)}><ArrowUp size={14} aria-hidden="true" /></button>
-                    <button type="button" className="icon-button secondary" aria-label={`Move ${section.name} down`} disabled={index === sections.length - 1} onClick={() => void reorderSections(section.id, 1)}><ArrowDown size={14} aria-hidden="true" /></button>
-                    <button type="button" className="tertiary" onClick={() => void renameSection(section.id, section.name)}>Rename</button>
-                    <button type="button" className="tertiary" onClick={() => void removeSection(section.id, section.name)}>Remove</button>
-                  </span>
+                  <h2>{section.name} <span className="lists-section-count">({list.items.filter((item) => item.section_id === section.id).length})</span></h2>
+                  <button type="button" className="icon-button secondary" aria-label={`${section.name} section actions`} onClick={() => setSectionActions(section)}>
+                    <MoreVertical size={18} aria-hidden="true" />
+                  </button>
                 </div>
                 <div className="lists-item-list">{list.items.filter((item) => item.section_id === section.id && (!hideCompleted || !item.is_checked)).map(renderItem)}</div>
+                {list.items.filter((item) => item.section_id === section.id).length === 0 && (
+                  <div className="lists-section-empty"><strong>No items yet</strong><span>Add items to this section</span></div>
+                )}
               </section>
             ))}
             {list.items.some((item) => item.section_id === null && (!hideCompleted || !item.is_checked)) && (
-              <section className="lists-section"><div className="lists-section-heading"><h2>Uncategorised</h2></div><div className="lists-item-list">{list.items.filter((item) => item.section_id === null && (!hideCompleted || !item.is_checked)).map(renderItem)}</div></section>
+              <section className="lists-section"><div className="lists-section-heading"><h2>Uncategorised <span className="lists-section-count">({list.items.filter((item) => item.section_id === null).length})</span></h2></div><div className="lists-item-list">{list.items.filter((item) => item.section_id === null && (!hideCompleted || !item.is_checked)).map(renderItem)}</div></section>
             )}
           </div>
         ) : list.item_count === 0 ? (
@@ -325,6 +326,31 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
           <div className="lists-item-list">
             {visibleItems.map(renderItem)}
           </div>
+        )}
+
+        {sections.length > 0 && (
+          <button type="button" className="lists-add-section" onClick={() => void addSection()}>
+            <Plus size={20} aria-hidden="true" /> Add section
+          </button>
+        )}
+
+        {sectionActions && (
+          <BottomSheet title={`${sectionActions.name} actions`} onDismiss={() => setSectionActions(null)}>
+            <div className="lists-section-actions-sheet">
+              <button type="button" className="secondary" onClick={() => { setSectionActions(null); void renameSection(sectionActions.id, sectionActions.name); }}>
+                Rename section
+              </button>
+              <button type="button" className="secondary" disabled={sections.findIndex((section) => section.id === sectionActions.id) === 0} onClick={() => { setSectionActions(null); void reorderSections(sectionActions.id, -1); }}>
+                <ArrowUp size={14} aria-hidden="true" /> Move up
+              </button>
+              <button type="button" className="secondary" disabled={sections.findIndex((section) => section.id === sectionActions.id) === sections.length - 1} onClick={() => { setSectionActions(null); void reorderSections(sectionActions.id, 1); }}>
+                <ArrowDown size={14} aria-hidden="true" /> Move down
+              </button>
+              <button type="button" className="secondary" onClick={() => { setSectionActions(null); void removeSection(sectionActions.id, sectionActions.name); }}>
+                <Trash2 size={16} aria-hidden="true" /> Remove section
+              </button>
+            </div>
+          </BottomSheet>
         )}
 
         {showActions && (

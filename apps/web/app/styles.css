@@ -2515,6 +2515,30 @@ html.native-shell .home-section-overlap {
   flex: 1 1 0;
   min-width: 0;
 }
+/* NotificationPermissionPrompt's footer (Enable notifications / Not now,
+   Open phone settings / Maybe later): an asymmetric two-button row rather
+   than routine-form-actions' even 50/50 split — the primary action reads as
+   the clear default, the secondary as a smaller, clearly-secondary escape
+   hatch. Both buttons keep the shared button/.secondary styling (colour,
+   radius, padding) untouched; only the row's width distribution is scoped
+   here. */
+.notification-permission-actions {
+  align-items: stretch;
+  display: flex;
+  gap: 0.6rem;
+}
+.notification-permission-actions > button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notification-permission-actions > button:first-child {
+  flex: 7 1 0%;
+}
+.notification-permission-actions > button.secondary {
+  flex: 3 1 0%;
+}
 /* Combined Routines & Reminders list — same visual language as the Home
    To-do row (check dot + copy) plus an actions column for Edit/Delete,
    which the compact Home row has no room for. */
@@ -7920,32 +7944,100 @@ select.plan-meal-field-input {
   flex: none;
 }
 .lists-item-section-picker {
-  align-items: end;
+  align-items: center;
   display: flex;
-  gap: 0.65rem;
-  margin: 0.65rem 0 1rem;
+  margin: 0.35rem 0 0.75rem;
 }
 .lists-item-section-picker label {
+  align-items: center;
+  color: var(--colour-muted);
+  display: flex;
+  font-size: var(--font-small);
+  font-weight: 600;
+  gap: 0.25rem;
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+.lists-item-section-picker select {
+  background: transparent;
+  border: 0;
+  color: var(--colour-slate);
+  font: inherit;
+  flex: 1;
+  font-weight: 700;
+  min-height: 44px;
+  min-width: 0;
+  padding: 0 1.75rem 0 0.15rem;
 }
 .lists-section-list {
   display: grid;
-  gap: 1.25rem;
+  gap: 0.75rem;
+}
+.lists-section {
+  background: var(--colour-white);
+  border: 1px solid #ebe6dc;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  padding: 0.65rem 1rem 0.4rem;
 }
 .lists-section-heading {
   align-items: center;
   display: flex;
   justify-content: space-between;
-  margin-bottom: 0.55rem;
+  gap: 0.75rem;
+  margin-bottom: 0.1rem;
 }
 .lists-section-heading h2 {
-  font-size: var(--font-small);
+  color: var(--colour-slate);
+  font-size: var(--font-body);
+  line-height: 1.25;
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lists-section-count {
+  color: var(--colour-muted);
+  font-weight: 600;
 }
 .lists-section-heading > span {
   align-items: center;
   display: inline-flex;
   gap: 0.2rem;
+}
+.lists-section-empty {
+  align-items: center;
+  border: 1px dashed #d9d3c7;
+  border-radius: var(--radius-small);
+  color: var(--colour-muted);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--font-small);
+  gap: 0.15rem;
+  margin: 0.35rem 0 0.2rem;
+  padding: 0.65rem;
+  text-align: center;
+}
+.lists-section-empty strong {
+  color: var(--colour-muted);
+}
+.lists-add-section {
+  align-items: center;
+  background: var(--colour-cream-light);
+  color: var(--colour-sage-dark);
+  display: flex;
+  gap: 0.45rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+  width: 100%;
+}
+.lists-section-actions-sheet {
+  display: grid;
+  gap: 0.6rem;
+}
+.lists-section-actions-sheet button {
+  justify-content: flex-start;
 }
 .lists-toggle-completed {
   margin: -0.2rem 0 0.6rem;
@@ -8007,6 +8099,7 @@ select.plan-meal-field-input {
   min-height: auto;
   min-width: 0;
   padding: 0.3rem 0;
+  justify-content: flex-start;
   text-align: left;
 }
 .lists-item-text:hover {

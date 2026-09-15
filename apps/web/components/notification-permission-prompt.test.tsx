@@ -45,6 +45,22 @@ describe("NotificationPermissionPrompt — recommend (first native launch, not r
     expect(screen.getByText(/MyKhaya works best when notifications are enabled/)).toBeInTheDocument();
   });
 
+  it("renders the two actions in the sheet's dedicated footer row, not inline in the scrollable body", async () => {
+    render(<NotificationPermissionPrompt />);
+    await screen.findByRole("dialog");
+
+    const footer = document.querySelector(".sheet-footer");
+    expect(footer).not.toBeNull();
+    const actionsRow = footer!.querySelector(".notification-permission-actions");
+    expect(actionsRow).not.toBeNull();
+    expect(actionsRow).toContainElement(screen.getByRole("button", { name: "Enable notifications" }));
+    expect(actionsRow).toContainElement(screen.getByRole("button", { name: "Not now" }));
+    // Not part of the scrollable content area — keeps the body purely the
+    // explainer copy and the footer purely the action row.
+    const content = document.querySelector(".sheet-content");
+    expect(content!.querySelector(".notification-permission-actions")).toBeNull();
+  });
+
   it("'Enable notifications' calls the adapter's requestPermission and closes", async () => {
     render(<NotificationPermissionPrompt />);
     await screen.findByRole("dialog");

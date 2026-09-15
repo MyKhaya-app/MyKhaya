@@ -110,6 +110,74 @@ describe("List detail — rendering", () => {
     expect(await screen.findByText(/that list could not be found/i)).toBeInTheDocument();
     expect(screen.queryByText(/^not found$/i)).not.toBeInTheDocument();
   });
+
+  it("renders section cards with counts, empty-state copy, and compact actions", async () => {
+    const sections = [
+      { id: "section-fridge", name: "Fridge", position: 0, updated_at: "2026-08-01T00:00:00Z" },
+      { id: "section-fruit", name: "Fruit/Veg", position: 1, updated_at: "2026-08-01T00:00:00Z" },
+    ];
+    (api.list as ReturnType<typeof vi.fn>).mockResolvedValue(
+      detail({
+        sections,
+        items: [{ ...detail().items[0], section_id: "section-fridge" }],
+        item_count: 1,
+        remaining_count: 1,
+      }),
+    );
+
+    const { container } = renderPage();
+
+    expect(await screen.findByRole("heading", { name: /Fridge \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Fruit\/Veg \(0\)/i })).toBeInTheDocument();
+    expect(screen.getByText("No items yet")).toBeInTheDocument();
+    expect(screen.getByText("Add items to this section")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Uncategorised/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add section" })).toBeInTheDocument();
+    expect(container.querySelector(".lists-item-section-picker select")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Rename$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fridge section actions" })).toBeInTheDocument();
+  });
+
+  it("keeps populated uncategorised items visible with a count", async () => {
+    (api.list as ReturnType<typeof vi.fn>).mockResolvedValue(
+      detail({
+        sections: [{ id: "section-fridge", name: "Fridge", position: 0, updated_at: "2026-08-01T00:00:00Z" }],
+        items: [{ ...detail().items[0], section_id: null }],
+        item_count: 1,
+        remaining_count: 1,
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: /Uncategorised \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByText("Milk")).toBeInTheDocument();
+  });
+
+  it("keeps section management actions behind the section overflow menu", async () => {
+    (api.list as ReturnType<typeof vi.fn>).mockResolvedValue(
+      detail({
+        sections: [
+          { id: "section-fridge", name: "Fridge", position: 0, updated_at: "2026-08-01T00:00:00Z" },
+          { id: "section-fruit", name: "Fruit/Veg", position: 1, updated_at: "2026-08-01T00:00:00Z" },
+        ],
+        items: [],
+        item_count: 0,
+        remaining_count: 0,
+      }),
+    );
+
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Fridge section actions" }));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename section" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Move up/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Move down/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove section" })).toBeInTheDocument();
+  });
 });
 
 describe("List detail — adding items", () => {
