@@ -138,12 +138,10 @@ from mykhaya.notifications.default_templates import (
     SAMPLE_VARIABLES,
     TEMPLATES,
 )
-from mykhaya.notifications.engine import notify
+from mykhaya.notifications.engine import enqueue_native_push, notify
 from mykhaya.notifications.push import (
     generate_vapid_keypair,
-    resolve_apns_config,
     resolve_push_config,
-    send_apns,
     send_push,
 )
 from mykhaya.notifications.templates import (
@@ -6216,9 +6214,6 @@ async def send_test_push(
     require_recent_auth(context, settings)
     await enforce_rate_limit(request, settings, "platform-test-push", 3, 300)
     config = await resolve_push_config(settings, db)
-    apns_config = resolve_apns_config(settings)
-    if not config.configured and not apns_config.configured:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
     recipient = await db.scalar(select(User).where(User.email == normalise_email(body.recipient)))
     if recipient is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No household member has that email.")
@@ -6237,6 +6232,8 @@ async def send_test_push(
             )
         )
     ).all()
+    if not config.configured and not native_devices:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
     if not subscriptions and not native_devices:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That member has no registered devices to test."
@@ -6272,18 +6269,26 @@ async def send_test_push(
             )
     for device in native_devices:
         try:
-            await asyncio.to_thread(
-                send_apns,
-                apns_config,
-                device,
-                {
-                    "title": "MyKhaya test notification",
-                    "body": "This confirms push notifications are working.",
-                    "deep_link": {"type": "settings"},
-                    "notification_type": "test_push",
-                },
+            delivery = await enqueue_native_push(
+                db,
+                device=device,
+                recipient_user_id=recipient.id,
+                notification_type="test_push",
+                title="MyKhaya test notification",
+                body="This confirms push notifications are working.",
+                idempotency_key=f"platform-test:{uuid.uuid4()}:native:{device.id}",
+                deep_link={"type": "settings"},
             )
-            results.append({"channel": "native", "device_label": device.device_label, "result": "accepted"})
+            results.append(
+                {
+                    "channel": "native",
+                    "device_label": device.device_label,
+                    "result": "queued",
+                    "delivery_id": str(delivery.id),
+                    "device_id": str(device.id),
+                    "environment": device.apns_environment or "production",
+                }
+            )
         except Exception as exc:
             results.append({"channel": "native", "device_label": device.device_label, "result": type(exc).__name__})
             await log.awarning(

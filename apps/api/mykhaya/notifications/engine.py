@@ -367,37 +367,65 @@ async def _enqueue_push(
         )
     ).all()
     for device in native_devices:
-        native_key = f"{idempotency_key}:native:{device.id}"
-        duplicate = await db.scalar(
-            select(NotificationDelivery.id).where(
-                NotificationDelivery.idempotency_key == native_key
-            )
+        await enqueue_native_push(
+            db,
+            device=device,
+            recipient_user_id=recipient_user_id,
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            idempotency_key=f"{idempotency_key}:native:{device.id}",
+            deep_link=deep_link,
+            group_id=group_id,
         )
-        if duplicate:
-            continue
-        event = OutboxEvent(
-            topic="notification.native_push",
-            payload={
-                "native_push_device_id": str(device.id),
-                "title": title,
-                "body": body,
-                "deep_link": dict(deep_link) if deep_link else None,
-                "delivery_idempotency_key": native_key,
-                "notification_type": notification_type,
-                "recipient_user_id": str(recipient_user_id),
-                "group_id": str(group_id) if group_id else None,
-            },
-        )
-        db.add(event)
-        await db.flush()
-        db.add(
-            NotificationDelivery(
-                channel=NotificationChannel.push,
-                recipient_user_id=recipient_user_id,
-                notification_type=notification_type,
-                idempotency_key=native_key,
-                outbox_event_id=event.id,
-                native_push_device_id=device.id,
-                scheduled_at=datetime.now(UTC),
-            )
-        )
+
+
+async def enqueue_native_push(
+    db: AsyncSession,
+    *,
+    device: NativePushDevice,
+    recipient_user_id: uuid.UUID,
+    notification_type: str,
+    title: str,
+    body: str,
+    idempotency_key: str,
+    deep_link: DeepLinkTarget | None,
+    group_id: uuid.UUID | None = None,
+) -> NotificationDelivery:
+    """Create the durable native delivery consumed by scheduler and worker.
+
+    This is deliberately shared by normal notifications and administrative test
+    sends. It performs no APNs work; the worker is the only native sender.
+    """
+    duplicate = await db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.idempotency_key == idempotency_key)
+    )
+    if duplicate is not None:
+        return duplicate
+    event = OutboxEvent(
+        topic="notification.native_push",
+        payload={
+            "native_push_device_id": str(device.id),
+            "title": title,
+            "body": body,
+            "deep_link": dict(deep_link) if deep_link else None,
+            "delivery_idempotency_key": idempotency_key,
+            "notification_type": notification_type,
+            "recipient_user_id": str(recipient_user_id),
+            "group_id": str(group_id) if group_id else None,
+        },
+    )
+    db.add(event)
+    await db.flush()
+    delivery = NotificationDelivery(
+        channel=NotificationChannel.push,
+        recipient_user_id=recipient_user_id,
+        notification_type=notification_type,
+        idempotency_key=idempotency_key,
+        outbox_event_id=event.id,
+        native_push_device_id=device.id,
+        scheduled_at=datetime.now(UTC),
+    )
+    db.add(delivery)
+    await db.flush()
+    return delivery

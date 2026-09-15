@@ -26,9 +26,9 @@ from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
+    NativePushDevice,
     NotificationDelivery,
     NotificationDeliveryStatus,
-    NativePushDevice,
     OutboxEvent,
     PlatformAdministrator,
     PlatformPushSettings,
@@ -792,7 +792,6 @@ async def test_platform_test_push_success_and_failure_are_audited(
 
     await reset_rate_limit("platform-test-push", "127.0.0.2")
     monkeypatch.setattr(platform_router, "send_push", lambda *args, **kwargs: None)
-    monkeypatch.setattr(platform_router, "send_apns", lambda *args, **kwargs: None)
     async with SessionFactory() as db:
         db.add(
             NativePushDevice(
@@ -812,7 +811,23 @@ async def test_platform_test_push_success_and_failure_are_audited(
     )
     assert ok.status_code == 200
     assert {result["channel"] for result in ok.json()["results"]} == {"web", "native"}
-    assert all(result["result"] == "accepted" for result in ok.json()["results"])
+    web_result = next(result for result in ok.json()["results"] if result["channel"] == "web")
+    assert web_result["result"] == "accepted"
+    native_result = next(result for result in ok.json()["results"] if result["channel"] == "native")
+    assert native_result["result"] == "queued"
+    assert native_result["delivery_id"]
+    assert native_result["device_id"]
+    assert native_result["environment"] == "production"
+    assert not hasattr(platform_router, "send_apns")
+    async with SessionFactory() as db:
+        native_delivery = await db.get(
+            NotificationDelivery, uuid.UUID(native_result["delivery_id"])
+        )
+        assert native_delivery is not None
+        assert native_delivery.native_push_device_id == uuid.UUID(native_result["device_id"])
+        native_event = await db.get(OutboxEvent, native_delivery.outbox_event_id)
+        assert native_event is not None
+        assert native_event.topic == "notification.native_push"
 
     def fail(*args: object, **kwargs: object) -> None:
         raise gone_exception()
