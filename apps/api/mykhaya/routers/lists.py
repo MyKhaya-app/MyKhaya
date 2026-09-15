@@ -62,6 +62,9 @@ from mykhaya.schemas import (
     ListListResponse,
     ListRenameRequest,
     ListResponse,
+    ListSectionCreate,
+    ListSectionRenameRequest,
+    ListSectionReorderRequest,
     ListSectionResponse,
     ListTemplateCreate,
     ListTemplateItemResponse,
@@ -265,6 +268,7 @@ async def _detail_response(
                 name=section.name,
                 position=section.position,
                 items=section_items.get(section.id, []),
+                updated_at=section.updated_at,
             )
             for section in sections
         ],
@@ -282,6 +286,20 @@ async def _next_position(db: AsyncSession, list_id: uuid.UUID) -> int:
         )
         or 0
     )
+
+
+async def _get_active_section(
+    db: AsyncSession, list_id: uuid.UUID, section_id: uuid.UUID, *, for_update: bool = False
+) -> HouseholdListSection:
+    query = select(HouseholdListSection).where(
+        HouseholdListSection.id == section_id, HouseholdListSection.list_id == list_id
+    )
+    if for_update:
+        query = query.with_for_update()
+    section = await db.scalar(query)
+    if section is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That section is invalid")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +352,7 @@ async def _template_response(db: AsyncSession, row: ListTemplate) -> ListTemplat
                 name=section.name,
                 position=section.position,
                 items=items_by_section.get(section.id, []),
+                updated_at=section.updated_at,
             )
             for section in sections
         ],
@@ -678,6 +697,88 @@ async def delete_list(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/{home_id}/lists/{list_id}/sections", response_model=ListDetailResponse, status_code=201)
+async def add_list_section(
+    home_id: uuid.UUID, list_id: uuid.UUID, body: ListSectionCreate, request: Request,
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+) -> ListDetailResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
+    position = int(await db.scalar(select(func.count()).where(HouseholdListSection.list_id == row.id)) or 0)
+    db.add(HouseholdListSection(list_id=row.id, name=body.name.strip(), position=position))
+    audit(db, request, "lists.section.added", auth.user.id, home_id, "list", row.id)
+    await db.commit()
+    return await _detail_response(db, row, access)
+
+
+@router.patch("/{home_id}/lists/{list_id}/sections/{section_id}", response_model=ListDetailResponse)
+async def rename_list_section(
+    home_id: uuid.UUID, list_id: uuid.UUID, section_id: uuid.UUID, body: ListSectionRenameRequest,
+    request: Request, auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+) -> ListDetailResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
+    section = await _get_active_section(db, row.id, section_id, for_update=True)
+    if section.updated_at != body.expected_updated_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This section changed. Reload and try again.")
+    section.name = body.name.strip()
+    audit(db, request, "lists.section.renamed", auth.user.id, home_id, "list", row.id)
+    await db.commit()
+    return await _detail_response(db, row, access)
+
+
+@router.delete("/{home_id}/lists/{list_id}/sections/{section_id}", response_model=ListDetailResponse)
+async def remove_list_section(
+    home_id: uuid.UUID, list_id: uuid.UUID, section_id: uuid.UUID, request: Request,
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+) -> ListDetailResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_active_list(db, home_id, list_id)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
+    section = await _get_active_section(db, row.id, section_id)
+    await db.execute(
+        HouseholdListItem.__table__.update().where(HouseholdListItem.section_id == section.id).values(section_id=None)
+    )
+    await db.delete(section)
+    audit(db, request, "lists.section.removed", auth.user.id, home_id, "list", row.id)
+    await db.commit()
+    return await _detail_response(db, row, access)
+
+
+@router.post("/{home_id}/lists/{list_id}/sections/reorder", response_model=ListDetailResponse)
+async def reorder_list_sections(
+    home_id: uuid.UUID, list_id: uuid.UUID, body: ListSectionReorderRequest,
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+) -> ListDetailResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_active_list(db, home_id, list_id, for_update=True)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
+    sections = list(
+        (
+            await db.scalars(
+                select(HouseholdListSection).where(HouseholdListSection.list_id == row.id)
+            )
+        ).all()
+    )
+    if {section.id for section in sections} != set(body.section_ids) or len(sections) != len(body.section_ids):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This list's sections changed. Reload and try again.")
+    by_id = {section.id: section for section in sections}
+    for position, section_id in enumerate(body.section_ids):
+        by_id[section_id].position = position
+    await db.commit()
+    return await _detail_response(db, row, access)
+
+
 @router.post("/{home_id}/lists/{list_id}/items", response_model=ListDetailResponse, status_code=201)
 async def add_list_item(
     home_id: uuid.UUID,
@@ -693,6 +794,8 @@ async def add_list_item(
     row = await _get_active_list(db, home_id, list_id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
+    if body.section_id is not None:
+        await _get_active_section(db, row.id, body.section_id)
     if body.assigned_member_id is not None:
         await _validate_member(db, home_id, body.assigned_member_id)
     next_position = await _next_position(db, row.id)
@@ -703,6 +806,7 @@ async def add_list_item(
         quantity=body.quantity,
         note=body.note,
         assigned_member_id=body.assigned_member_id,
+        section_id=body.section_id,
         created_by=auth.user.id,
     )
     db.add(item)
@@ -757,6 +861,10 @@ async def update_list_item(
         item.note = body.note
     if "assigned_member_id" in fields:
         item.assigned_member_id = body.assigned_member_id
+    if "section_id" in fields:
+        if body.section_id is not None:
+            await _get_active_section(db, row.id, body.section_id)
+        item.section_id = body.section_id
     new_checked = body.is_checked
     if "is_checked" in fields and new_checked is not None and new_checked != item.is_checked:
         item.is_checked = new_checked

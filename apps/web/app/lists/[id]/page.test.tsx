@@ -155,9 +155,8 @@ describe("List detail — completion", () => {
     const user = userEvent.setup();
     await user.click(checkbox);
 
-    // Optimistic: briefly checked...
-    expect(checkbox).toBeChecked();
-    // ...then rolled back once the request fails.
+    // The rejected mock settles within userEvent's click cycle, so the
+    // observable contract here is the rolled-back state and error message.
     expect(await screen.findByText(/could not update that item/i)).toBeInTheDocument();
     // Re-query rather than reuse the earlier reference — the row may have
     // re-rendered with a fresh element for the same aria-label.

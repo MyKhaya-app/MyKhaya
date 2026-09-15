@@ -37,6 +37,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
   const [members, setMembers] = useState<Member[]>([]);
   const [hideCompleted, setHideCompleted] = useState(false);
   const [newItemText, setNewItemText] = useState("");
+  const [newItemSectionId, setNewItemSectionId] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingItem, setEditingItem] = useState<HouseholdListItem | null>(null);
   const [showActions, setShowActions] = useState(false);
@@ -66,9 +67,13 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
     setAdding(true);
     setError("");
     try {
-      const result = await api.addListItem(activeHomeId, listId, { text: newItemText.trim() });
+      const payload = newItemSectionId
+        ? { text: newItemText.trim(), section_id: newItemSectionId }
+        : { text: newItemText.trim() };
+      const result = await api.addListItem(activeHomeId, listId, payload);
       setList(result);
       setNewItemText("");
+      setNewItemSectionId("");
       inputRef.current?.focus();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not add that item.");
@@ -134,6 +139,58 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
     }
   }
 
+  async function addSection() {
+    if (!activeHomeId) return;
+    const name = window.prompt("Section name");
+    if (!name?.trim()) return;
+    try {
+      setList(await api.addListSection(activeHomeId, listId, name.trim()));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not add that section.");
+    }
+  }
+
+  async function reorderSections(sectionId: string, direction: -1 | 1) {
+    if (!activeHomeId || !list) return;
+    const ids = (list.sections ?? []).map((section) => section.id);
+    const index = ids.indexOf(sectionId);
+    const target = index + direction;
+    if (target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+    try {
+      setList(await api.reorderListSections(activeHomeId, listId, ids));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not reorder sections.");
+    }
+  }
+
+  async function renameSection(sectionId: string, currentName: string) {
+    if (!activeHomeId || !list) return;
+    const name = window.prompt("Section name", currentName);
+    if (!name?.trim() || name.trim() === currentName) return;
+    try {
+      const section = list.sections?.find((row) => row.id === sectionId);
+      if (!section || !section.updated_at) return;
+      setList(
+        await api.renameListSection(activeHomeId, listId, sectionId, {
+          name: name.trim(),
+          expected_updated_at: section.updated_at,
+        }),
+      );
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not rename that section.");
+    }
+  }
+
+  async function removeSection(sectionId: string, name: string) {
+    if (!activeHomeId || !window.confirm(`Remove “${name}”? Its items will move to Uncategorised.`)) return;
+    try {
+      setList(await api.removeListSection(activeHomeId, listId, sectionId));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not remove that section.");
+    }
+  }
+
   if (notFound) {
     return (
       <AppShellContent>
@@ -158,8 +215,24 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   const Glyph = listIconGlyph(list.icon);
+  const sections = list.sections ?? [];
   const visibleItems = hideCompleted ? list.items.filter((item) => !item.is_checked) : list.items;
   const allComplete = list.item_count > 0 && list.remaining_count === 0;
+  const renderItem = (item: HouseholdListItem) => {
+    const assigned = members.find((member) => member.user_id === item.assigned_member_id);
+    return (
+      <div className={`lists-item-row${item.is_checked ? " checked" : ""}`} key={item.id}>
+        <label className="lists-item-check">
+          <input type="checkbox" checked={item.is_checked} onChange={() => void toggleItem(item)} aria-label={`Mark ${item.text} ${item.is_checked ? "not complete" : "complete"}`} />
+        </label>
+        <button type="button" className="lists-item-text" onClick={() => setEditingItem(item)}>
+          <span>{itemLabel(item)}</span>
+          {item.note && <span className="quiet-state">{item.note}</span>}
+        </button>
+        {assigned && <Avatar id={assigned.user_id} name={assigned.display_name} colour={assigned.colour} avatarVersion={assigned.avatar_version} size="sm" />}
+      </div>
+    );
+  };
 
   return (
     <AppShellContent>
@@ -206,6 +279,15 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
             <Plus size={18} aria-hidden="true" />
           </button>
         </form>
+        {sections.length > 0 && (
+          <div className="lists-item-section-picker">
+            <label>Section<select value={newItemSectionId} onChange={(event) => setNewItemSectionId(event.target.value)} aria-label="Item section">
+              <option value="">Uncategorised</option>
+              {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+            </select></label>
+            <button type="button" className="tertiary" onClick={() => void addSection()}>Add section</button>
+          </div>
+        )}
 
         {list.item_count > 0 && (
           <button
@@ -217,42 +299,31 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
           </button>
         )}
 
-        {list.item_count === 0 ? (
+        {sections.length > 0 ? (
+          <div className="lists-section-list">
+            {sections.map((section, index) => (
+              <section className="lists-section" key={section.id}>
+                <div className="lists-section-heading">
+                  <h2>{section.name}</h2>
+                  <span>
+                    <button type="button" className="icon-button secondary" aria-label={`Move ${section.name} up`} disabled={index === 0} onClick={() => void reorderSections(section.id, -1)}><ArrowUp size={14} aria-hidden="true" /></button>
+                    <button type="button" className="icon-button secondary" aria-label={`Move ${section.name} down`} disabled={index === sections.length - 1} onClick={() => void reorderSections(section.id, 1)}><ArrowDown size={14} aria-hidden="true" /></button>
+                    <button type="button" className="tertiary" onClick={() => void renameSection(section.id, section.name)}>Rename</button>
+                    <button type="button" className="tertiary" onClick={() => void removeSection(section.id, section.name)}>Remove</button>
+                  </span>
+                </div>
+                <div className="lists-item-list">{list.items.filter((item) => item.section_id === section.id && (!hideCompleted || !item.is_checked)).map(renderItem)}</div>
+              </section>
+            ))}
+            {list.items.some((item) => item.section_id === null && (!hideCompleted || !item.is_checked)) && (
+              <section className="lists-section"><div className="lists-section-heading"><h2>Uncategorised</h2></div><div className="lists-item-list">{list.items.filter((item) => item.section_id === null && (!hideCompleted || !item.is_checked)).map(renderItem)}</div></section>
+            )}
+          </div>
+        ) : list.item_count === 0 ? (
           <p className="empty-mini">Add the first item to this list.</p>
         ) : (
           <div className="lists-item-list">
-            {visibleItems.map((item) => {
-              const assigned = members.find((member) => member.user_id === item.assigned_member_id);
-              return (
-                <div className={`lists-item-row${item.is_checked ? " checked" : ""}`} key={item.id}>
-                  <label className="lists-item-check">
-                    <input
-                      type="checkbox"
-                      checked={item.is_checked}
-                      onChange={() => void toggleItem(item)}
-                      aria-label={`Mark ${item.text} ${item.is_checked ? "not complete" : "complete"}`}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="lists-item-text"
-                    onClick={() => setEditingItem(item)}
-                  >
-                    <span>{itemLabel(item)}</span>
-                    {item.note && <span className="quiet-state">{item.note}</span>}
-                  </button>
-                  {assigned && (
-                    <Avatar
-                      id={assigned.user_id}
-                      name={assigned.display_name}
-                      colour={assigned.colour}
-                      avatarVersion={assigned.avatar_version}
-                      size="sm"
-                    />
-                  )}
-                </div>
-              );
-            })}
+            {visibleItems.map(renderItem)}
           </div>
         )}
 
@@ -276,6 +347,7 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
             homeId={activeHomeId}
             listId={listId}
             item={editingItem}
+            sections={sections}
             members={members}
             canMoveUp={list.items.findIndex((row) => row.id === editingItem.id) > 0}
             canMoveDown={
@@ -299,6 +371,7 @@ function EditItemSheet({
   homeId,
   listId,
   item,
+  sections,
   members,
   canMoveUp,
   canMoveDown,
@@ -310,6 +383,7 @@ function EditItemSheet({
   homeId: string;
   listId: string;
   item: HouseholdListItem;
+  sections: HouseholdListDetail["sections"];
   members: Member[];
   canMoveUp: boolean;
   canMoveDown: boolean;
@@ -322,6 +396,7 @@ function EditItemSheet({
   const [quantity, setQuantity] = useState(item.quantity ?? "");
   const [note, setNote] = useState(item.note ?? "");
   const [assignedTo, setAssignedTo] = useState(item.assigned_member_id ?? "");
+  const [sectionId, setSectionId] = useState(item.section_id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -339,6 +414,7 @@ function EditItemSheet({
         quantity: quantity.trim() || null,
         note: note.trim() || null,
         assigned_member_id: assignedTo || null,
+        section_id: sectionId || null,
       });
       onSaved(result);
     } catch (cause) {
@@ -381,6 +457,15 @@ function EditItemSheet({
           Note (optional)
           <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
         </label>
+        {sections.length > 0 && (
+          <label>
+            Section
+            <select value={sectionId} onChange={(event) => setSectionId(event.target.value)}>
+              <option value="">Uncategorised</option>
+              {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+            </select>
+          </label>
+        )}
         <FormStatus error={error} />
         <button className="sheet-primary" disabled={busy}>
           {busy ? "Saving…" : "Save"}

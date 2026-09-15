@@ -893,6 +893,7 @@ export interface ListSection {
   id: string;
   name: string;
   position: number;
+  updated_at?: string;
   items: ListTemplateItem[];
 }
 
@@ -947,6 +948,7 @@ export interface ListRenamePayload {
 
 export interface ListItemInputPayload {
   text: string;
+  section_id?: string | null;
   quantity?: string | null;
   note?: string | null;
   assigned_member_id?: string | null;
@@ -960,6 +962,7 @@ export interface ListItemUpdatePayload {
   quantity?: string | null;
   note?: string | null;
   assigned_member_id?: string | null;
+  section_id?: string | null;
   is_checked?: boolean;
 }
 

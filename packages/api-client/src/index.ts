@@ -973,6 +973,26 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`,
       { method: "PATCH", body: JSON.stringify(body) },
     );
+  addListSection = (homeId: string, listId: string, name: string) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/sections`,
+      { method: "POST", body: JSON.stringify({ name }) },
+    );
+  renameListSection = (homeId: string, listId: string, sectionId: string, body: { name: string; expected_updated_at: string }) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/sections/${encodeURIComponent(sectionId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  removeListSection = (homeId: string, listId: string, sectionId: string) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/sections/${encodeURIComponent(sectionId)}`,
+      { method: "DELETE" },
+    );
+  reorderListSections = (homeId: string, listId: string, sectionIds: string[]) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/sections/reorder`,
+      { method: "POST", body: JSON.stringify({ section_ids: sectionIds }) },
+    );
   removeListItem = (homeId: string, listId: string, itemId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`,

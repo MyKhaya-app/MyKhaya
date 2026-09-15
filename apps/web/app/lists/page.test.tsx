@@ -282,11 +282,11 @@ describe("Lists — Family plan overview", () => {
     render(<ListsPage />);
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("link", { name: /groceries/i })).toBeInTheDocument();
+    expect(await screen.findAllByRole("link", { name: /groceries/i })).not.toHaveLength(0);
     await user.click(screen.getByRole("tab", { name: "Templates" }));
 
-    expect(screen.getByText(/templates.*coming soon/i)).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /groceries/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/no templates yet/i)).toBeInTheDocument();
+    expect(document.querySelector(".lists-grid")).toBeNull();
     // No fabricated template data — Templates never calls a lists-fetching
     // endpoint of its own, since no such backend concept exists yet.
     expect(api.lists).toHaveBeenCalledTimes(1);
@@ -319,8 +319,16 @@ describe("Lists — Family plan overview", () => {
     });
 
     render(<ListsPage />);
-    const groceriesCard = (await screen.findByRole("link", { name: /groceries/i })).closest(".lists-card");
-    const customCard = screen.getByRole("link", { name: /something bespoke/i }).closest(".lists-card");
+    const groceriesLink = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(groceriesLink).toBeDefined();
+    const groceriesCard = groceriesLink?.closest(".lists-card");
+    const customLink = (await screen.findAllByRole("link", { name: /something bespoke/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(customLink).toBeDefined();
+    const customCard = customLink?.closest(".lists-card");
 
     expect(groceriesCard?.querySelector(".lists-card-icon")).toHaveAttribute(
       "src",
@@ -359,8 +367,10 @@ describe("Lists — Family plan overview", () => {
     });
 
     render(<ListsPage />);
-
-    const groceries = await screen.findByRole("link", { name: /groceries/i });
+    const groceries = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(groceries).toBeDefined();
     expect(groceries).toHaveAttribute("href", "/lists/list-1");
     expect(screen.getByText(/3 remaining · 8 items/i)).toBeInTheDocument();
     expect(screen.getByText(/complete · 6 items/i)).toBeInTheDocument();

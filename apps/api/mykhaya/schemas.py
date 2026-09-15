@@ -1453,6 +1453,7 @@ class ListRenameRequest(ListCreate):
 
 class ListItemInput(StrictModel):
     text: str = Field(min_length=1, max_length=200)
+    section_id: uuid.UUID | None = None
     quantity: str | None = Field(default=None, max_length=40)
     note: str | None = Field(default=None, max_length=500)
     assigned_member_id: uuid.UUID | None = None
@@ -1481,6 +1482,7 @@ class ListItemUpdate(StrictModel):
     quantity: str | None = Field(default=None, max_length=40)
     note: str | None = Field(default=None, max_length=500)
     assigned_member_id: uuid.UUID | None = None
+    section_id: uuid.UUID | None = None
     is_checked: bool | None = None
 
 
@@ -1489,6 +1491,18 @@ class ListItemReorderRequest(StrictModel):
     # exact match against the list's current active items, then applied as
     # position = index. See mykhaya.routers.lists.reorder_list_items.
     item_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+
+
+class ListSectionCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class ListSectionRenameRequest(ListSectionCreate):
+    expected_updated_at: datetime
+
+
+class ListSectionReorderRequest(StrictModel):
+    section_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
 
 
 class ListResponse(BaseModel):
@@ -1558,6 +1572,7 @@ class ListSectionResponse(BaseModel):
     id: uuid.UUID
     name: str
     position: int
+    updated_at: datetime
     items: list[ListTemplateItemResponse] = Field(default_factory=list)
 
 

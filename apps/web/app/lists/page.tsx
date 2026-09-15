@@ -462,7 +462,8 @@ function CreateListSheet({
     setBusy(true);
     setError("");
     try {
-      await api.createList(homeId, { name: name.trim(), icon: icon || null, template_id: templateId || null });
+      const payload = { name: name.trim(), icon: icon || null, ...(templateId ? { template_id: templateId } : {}) };
+      await api.createList(homeId, payload);
       await onCreated();
     } catch (cause) {
       // A stale client-side atLimit=false (raced by another tab/device)
