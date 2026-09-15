@@ -62,6 +62,7 @@ from mykhaya.schemas import (
     ListListResponse,
     ListRenameRequest,
     ListResponse,
+    ListScopeUpdateRequest,
     ListSectionCreate,
     ListSectionRenameRequest,
     ListSectionReorderRequest,
@@ -682,6 +683,48 @@ async def rename_list(
     row.name = " ".join(body.name.strip().split())
     row.icon = body.icon
     audit(db, request, "lists.list.renamed", auth.user.id, home_id, "list", row.id)
+    await db.commit()
+    await db.refresh(row)
+    return await _detail_response(db, row, access)
+
+
+@router.patch("/{home_id}/lists/{list_id}/scope", response_model=ListDetailResponse)
+async def update_list_scope(
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    body: ListScopeUpdateRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> ListDetailResponse:
+    await require_capability(home_id, Capability.lists_manage, auth, db)
+    await require_entitlement(db, home_id, "lists.enabled")
+    row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id, for_update=True)
+    access = await _list_access(db, home_id)
+    _require_list_writable(access, row.id)
+    if row.updated_at != body.expected_updated_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This list changed. Reload and try again.")
+
+    old_scope = row.scope
+    if old_scope == body.scope:
+        return await _detail_response(db, row, access)
+    if old_scope == RoutineScope.household and row.created_by != auth.user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the list owner can make a household list personal.",
+        )
+
+    row.scope = body.scope
+    audit(
+        db,
+        request,
+        "lists.list.scope_changed",
+        auth.user.id,
+        home_id,
+        "list",
+        row.id,
+        metadata={"old_scope": old_scope, "new_scope": body.scope},
+    )
     await db.commit()
     await db.refresh(row)
     return await _detail_response(db, row, access)

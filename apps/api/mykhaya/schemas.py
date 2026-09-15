@@ -1452,6 +1452,11 @@ class ListRenameRequest(ListCreate):
     expected_updated_at: datetime
 
 
+class ListScopeUpdateRequest(StrictModel):
+    scope: RoutineScope
+    expected_updated_at: datetime
+
+
 class ListItemInput(StrictModel):
     text: str = Field(min_length=1, max_length=200)
     section_id: uuid.UUID | None = None

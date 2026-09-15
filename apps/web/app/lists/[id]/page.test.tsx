@@ -36,6 +36,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       removeListItem: vi.fn(),
       clearCompletedListItems: vi.fn(),
       reorderListItems: vi.fn(),
+      moveListScope: vi.fn(),
     },
   };
 });
@@ -56,6 +57,7 @@ function detail(overrides: Record<string, unknown> = {}) {
     created_by: "u1",
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
+    scope: "household",
     ...overrides,
   };
 }
@@ -303,5 +305,20 @@ describe("List detail — clear completed", () => {
     await user.click(screen.getByRole("button", { name: /clear completed/i }));
 
     expect(api.clearCompletedListItems).toHaveBeenCalledWith("home-1", "list-1");
+  });
+});
+
+describe("List detail — scope move", () => {
+  it("shows the dynamic scope action and confirmation in the overflow menu", async () => {
+    (api.moveListScope as ReturnType<typeof vi.fn>).mockResolvedValue(detail({ scope: "personal" }));
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /list actions/i }));
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(screen.getByRole("heading", { name: "Move to Personal?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(api.moveListScope).toHaveBeenCalledWith("home-1", "list-1", {
+      scope: "personal", expected_updated_at: "2026-08-01T00:00:00Z",
+    });
   });
 });

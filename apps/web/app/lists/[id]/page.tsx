@@ -16,6 +16,7 @@ import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { ListScopeConfirmation } from "@/components/list-scope-confirmation";
 import { useActiveHome } from "@/components/use-active-home";
 import { listIconGlyph } from "../list-icons";
 
@@ -42,6 +43,9 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
   const [editingItem, setEditingItem] = useState<HouseholdListItem | null>(null);
   const [sectionActions, setSectionActions] = useState<ListSection | null>(null);
   const [showActions, setShowActions] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [movingBusy, setMovingBusy] = useState(false);
+  const [moveError, setMoveError] = useState("");
   const [error, setError] = useState("");
   const [notFound, setNotFound] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -123,6 +127,25 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
       setShowActions(false);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not clear completed items.");
+    }
+  }
+
+  async function moveListScope() {
+    if (!activeHomeId || !list) return;
+    const nextScope = list.scope === "personal" ? "household" : "personal";
+    setMovingBusy(true);
+    setMoveError("");
+    try {
+      const result = await api.moveListScope(activeHomeId, listId, {
+        scope: nextScope,
+        expected_updated_at: list.updated_at,
+      });
+      setList(result);
+      setMoving(false);
+      setMovingBusy(false);
+    } catch (cause) {
+      setMoveError(cause instanceof ApiError ? cause.message : "Could not change this list's scope.");
+      setMovingBusy(false);
     }
   }
 
@@ -359,6 +382,17 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
               <button
                 type="button"
                 className="secondary"
+                onClick={() => {
+                  setShowActions(false);
+                  setMoveError("");
+                  setMoving(true);
+                }}
+              >
+                Move to {list.scope === "personal" ? "Household" : "Personal"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
                 onClick={() => void clearCompleted()}
                 disabled={!list.items.some((item) => item.is_checked)}
               >
@@ -366,6 +400,18 @@ export default function ListDetailPage({ params }: { params: Promise<{ id: strin
               </button>
             </div>
           </BottomSheet>
+        )}
+
+        {moving && (
+          <ListScopeConfirmation
+            currentScope={list.scope}
+            busy={movingBusy}
+            error={moveError}
+            onCancel={() => {
+              if (!movingBusy) setMoving(false);
+            }}
+            onConfirm={() => void moveListScope()}
+          />
         )}
 
         {editingItem && (

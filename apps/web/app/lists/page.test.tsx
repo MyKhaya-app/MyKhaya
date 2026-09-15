@@ -37,6 +37,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       createList: vi.fn(),
       renameList: vi.fn(),
       deleteList: vi.fn(),
+      moveListScope: vi.fn(),
     },
   };
 });
@@ -432,5 +433,26 @@ describe("Lists — Family plan overview", () => {
       { timeout: 3000 },
     );
     expect(screen.getByRole("heading", { name: "Household Lists" })).toBeInTheDocument();
+  });
+
+  it("offers the dynamic scope move from a list action sheet and confirms it", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{
+        id: "list-1", name: "Groceries", icon: "groceries", item_count: 1,
+        remaining_count: 1, created_by: "u1", scope: "household",
+        created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+        commercial_access: "normal",
+      }],
+    });
+    (api.moveListScope as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    render(<ListsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /more actions for groceries/i }));
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(screen.getByRole("heading", { name: "Move to Personal?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(api.moveListScope).toHaveBeenCalledWith("home-1", "list-1", {
+      scope: "personal", expected_updated_at: "2026-08-01T00:00:00Z",
+    });
   });
 });

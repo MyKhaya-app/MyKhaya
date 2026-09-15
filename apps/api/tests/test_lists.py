@@ -894,6 +894,66 @@ async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(c
     assert uuid.UUID(personal["created_by"]) == owner_id
 
 
+@pytest.mark.asyncio
+async def test_list_scope_move_preserves_content_and_changes_visibility(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("move-owner"), "Move Owner")
+    home_id = await create_home(client, "List Move Home")
+    created = await create_list(client, home_id, name="Moving list", scope="personal")
+    section = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists/{created['id']}/sections", json={"name": "Fridge"}
+    )
+    section_id = section.json()["sections"][0]["id"]
+    item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Milk", "section_id": section_id},
+    )
+    item_id = item.json()["items"][0]["id"]
+    checked = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"is_checked": True},
+    )
+    before_move = checked.json()
+    moved_household = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/scope",
+        json={"scope": "household", "expected_updated_at": before_move["updated_at"]},
+    )
+    assert moved_household.status_code == 200
+    assert moved_household.json()["id"] == created["id"]
+    assert moved_household.json()["scope"] == "household"
+    assert moved_household.json()["sections"][0]["name"] == "Fridge"
+    assert moved_household.json()["items"][0]["is_checked"] is True
+
+    partner_email = unique_email("move-partner")
+    await add_partner(client, home_id, partner_email, "Move Partner")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        login = await unsafe(
+            partner_client, "POST", "/api/v1/auth/login", json={"email": partner_email, "password": PASSWORD}
+        )
+        assert login.status_code == 200
+        assert (await partner_client.get(f"/api/v1/homes/{home_id}/lists/{created['id']}")).status_code == 200
+
+    latest = moved_household.json()
+    moved_personal = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/scope",
+        json={"scope": "personal", "expected_updated_at": latest["updated_at"]},
+    )
+    assert moved_personal.status_code == 200
+    assert moved_personal.json()["scope"] == "personal"
+    assert moved_personal.json()["items"][0]["text"] == "Milk"
+    assert (await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")).json()["items"] == []
+    assert [row["id"] for row in (await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")).json()["items"]] == [created["id"]]
+
+
 # ---------------------------------------------------------------------------
 # Capability: standard_partner has full manage rights (documented V1 matrix)
 # ---------------------------------------------------------------------------

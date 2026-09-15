@@ -976,6 +976,15 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`,
       { method: "PATCH", body: JSON.stringify(body) },
     );
+  moveListScope = (
+    homeId: string,
+    listId: string,
+    body: { scope: import("@mykhaya/shared-types").ListTemplateScope; expected_updated_at: string },
+  ) =>
+    this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
+      `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/scope`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
   addListSection = (homeId: string, listId: string, name: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdListDetail>(
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/sections`,

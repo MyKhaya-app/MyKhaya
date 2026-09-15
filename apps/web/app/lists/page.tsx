@@ -8,6 +8,7 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { ListScopeConfirmation } from "@/components/list-scope-confirmation";
 import {
   atListLimitMessage,
   canCreateList,
@@ -48,6 +49,9 @@ export default function ListsPage() {
   const [renaming, setRenaming] = useState<HouseholdList | null>(null);
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<ListTemplate | null>(null);
+  const [moving, setMoving] = useState<HouseholdList | null>(null);
+  const [movingBusy, setMovingBusy] = useState(false);
+  const [moveError, setMoveError] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -101,6 +105,26 @@ export default function ListsPage() {
       await load();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not delete that list.");
+    }
+  }
+
+  async function moveList(list: HouseholdList) {
+    if (!activeHomeId) return;
+    const nextScope: ListTemplateScope = list.scope === "personal" ? "household" : "personal";
+    setMovingBusy(true);
+    setMoveError("");
+    try {
+      await api.moveListScope(activeHomeId, list.id, {
+        scope: nextScope,
+        expected_updated_at: list.updated_at,
+      });
+      setMoving(null);
+      setMovingBusy(false);
+      setLists((current) => current.filter((row) => row.id !== list.id));
+      setScope(nextScope);
+    } catch (cause) {
+      setMoveError(cause instanceof ApiError ? cause.message : "Could not change this list's scope.");
+      setMovingBusy(false);
     }
   }
 
@@ -364,11 +388,33 @@ export default function ListsPage() {
               >
                 Rename list
               </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setActionsFor(null);
+                  setMoveError("");
+                  setMoving(actionsFor);
+                }}
+              >
+                Move to {actionsFor.scope === "personal" ? "Household" : "Personal"}
+              </button>
               <button type="button" className="secondary" onClick={() => void removeList(actionsFor)}>
                 Delete list
               </button>
             </div>
           </BottomSheet>
+        )}
+        {moving && (
+          <ListScopeConfirmation
+            currentScope={moving.scope}
+            busy={movingBusy}
+            error={moveError}
+            onCancel={() => {
+              if (!movingBusy) setMoving(null);
+            }}
+            onConfirm={() => void moveList(moving)}
+          />
         )}
 
         {creating && (
