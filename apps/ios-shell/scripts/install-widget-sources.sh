@@ -34,6 +34,7 @@ echo "Copied $(find MyKhayaWidgets -name '*.swift' | wc -l | tr -d ' ') Swift fi
 echo "== 2. Copy main-app plugin sources (WidgetBridgePlugin, SystemSettingsPlugin, MainViewController) =="
 cp native/plugin/WidgetBridgePlugin.swift ios/App/App/WidgetBridgePlugin.swift
 cp native/plugin/SystemSettingsPlugin.swift ios/App/App/SystemSettingsPlugin.swift
+cp native/plugin/NativePushEnvironmentPlugin.swift ios/App/App/NativePushEnvironmentPlugin.swift
 cp native/plugin/MainViewController.swift ios/App/App/MainViewController.swift
 # The shared snapshot model/store used to be copied here as loose files
 # (WidgetSnapshot.swift/WidgetSnapshotStore.swift) because both the App

@@ -8,6 +8,7 @@ import {
 import type { PluginListenerHandle } from "@capacitor/core";
 import { api } from "@mykhaya/api-client";
 import { isNativeShell, nativePlatform } from "./native-runtime";
+import { nativePushEnvironment } from "./native-push-environment";
 
 export type NativePushStatus = "unsupported" | "prompt" | "granted" | "denied" | "registering" | "registered" | "error";
 
@@ -74,11 +75,13 @@ async function ensureListeners(): Promise<void> {
       const platform = nativePlatform();
       if (platform !== "ios" && platform !== "android") return;
       try {
+        const apnsEnvironment = platform === "ios" ? await nativePushEnvironment() : undefined;
         const registration = await api.registerNativePushDevice({
           platform,
           token: token.value,
           installation_id: installationId(),
           device_label: platform === "ios" ? "iPhone" : "Android device",
+          apns_environment: apnsEnvironment,
         });
         lastRegistrationId = registration.id;
         // Diagnostics-only timestamp (About > Diagnostics' "Last

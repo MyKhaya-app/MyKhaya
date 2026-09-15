@@ -46,6 +46,7 @@ def native_device_response(row: NativePushDevice) -> NativePushDeviceResponse:
         created_at=row.created_at,
         last_seen_at=row.last_seen_at,
         disabled_at=row.disabled_at,
+        apns_environment=row.apns_environment,
     )
 
 
@@ -55,12 +56,26 @@ async def register_native_device(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> NativePushDeviceResponse:
+    if body.platform == "ios" and body.apns_environment is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "iOS native registrations must include their APNs environment.",
+        )
     row = await db.scalar(
         select(NativePushDevice).where(
             NativePushDevice.platform == body.platform,
             NativePushDevice.installation_id == body.installation_id,
+            NativePushDevice.apns_environment == body.apns_environment,
         )
     )
+    if row is None and body.apns_environment is not None:
+        row = await db.scalar(
+            select(NativePushDevice).where(
+                NativePushDevice.platform == body.platform,
+                NativePushDevice.installation_id == body.installation_id,
+                NativePushDevice.apns_environment.is_(None),
+            )
+        )
     now = datetime.now(UTC)
     if row is None:
         row = NativePushDevice(
@@ -69,6 +84,7 @@ async def register_native_device(
             token=body.token,
             installation_id=body.installation_id,
             device_label=body.device_label,
+            apns_environment=body.apns_environment,
             last_seen_at=now,
         )
         db.add(row)
@@ -76,6 +92,7 @@ async def register_native_device(
         row.user_id = auth.user.id
         row.token = body.token
         row.device_label = body.device_label
+        row.apns_environment = body.apns_environment
         row.last_seen_at = now
         row.disabled_at = None
         row.disabled_reason = None

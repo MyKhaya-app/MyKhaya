@@ -1,5 +1,29 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { BiometryError, BiometryErrorType, BiometryType } from "@aparajita/capacitor-biometric-auth";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  BiometryError,
+  BiometryErrorType,
+  BiometryType,
+  type CheckBiometryResult,
+} from "@aparajita/capacitor-biometric-auth";
+
+const checkBiometryMock = vi.fn<() => Promise<CheckBiometryResult>>();
+const authenticateMock = vi.fn<(options: unknown) => Promise<void>>();
+vi.mock("@aparajita/capacitor-biometric-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aparajita/capacitor-biometric-auth")>();
+  return {
+    ...actual,
+    BiometricAuth: {
+      checkBiometry: () => checkBiometryMock(),
+      authenticate: (options: unknown) => authenticateMock(options),
+    },
+  };
+});
+
+const nativePlatformMock = vi.fn<() => "ios" | "android" | "web">(() => "ios");
+vi.mock("./native-runtime", () => ({
+  nativePlatform: () => nativePlatformMock(),
+}));
+
 import {
   authenticateWithBiometrics,
   biometricLabel,
@@ -28,6 +52,58 @@ function provider(overrides: Partial<BiometricProvider> = {}): BiometricProvider
 
 afterEach(() => {
   resetBiometricProvider();
+  nativePlatformMock.mockReturnValue("ios");
+  checkBiometryMock.mockClear();
+  authenticateMock.mockClear();
+});
+
+describe("the real (non-test-injected) provider on a platform other than iOS", () => {
+  // Regression: @aparajita/capacitor-biometric-auth is not installed for
+  // Android, but its own registerPlugin() call declares an `android` JS
+  // factory that just re-binds the plugin's own proxy method onto itself —
+  // so calling it on Android recurses into itself forever, observed on a
+  // real Android emulator running the WebView renderer's heap from ~180MB
+  // to an ~1GB OOM crash in under 20 seconds, right after login (see
+  // NativeBiometricOffer, the one call site with no startup timeout guard).
+  // These assert the real BiometricAuth.checkBiometry/authenticate are never
+  // reached at all outside iOS — the fix, not just "eventually resolves."
+  it("getBiometricCapability reports unavailable without ever calling the plugin", async () => {
+    nativePlatformMock.mockReturnValue("android");
+
+    const capability = await getBiometricCapability();
+
+    expect(capability.available).toBe(false);
+    expect(capability.kind).toBe("none");
+    expect(checkBiometryMock).not.toHaveBeenCalled();
+  });
+
+  it("authenticateWithBiometrics fails safely without ever calling the plugin", async () => {
+    nativePlatformMock.mockReturnValue("android");
+
+    const result = await authenticateWithBiometrics("Unlock MyKhaya");
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.code).toBe(BiometryErrorType.biometryNotAvailable);
+    expect(authenticateMock).not.toHaveBeenCalled();
+  });
+
+  it("still calls the real plugin on iOS", async () => {
+    nativePlatformMock.mockReturnValue("ios");
+    checkBiometryMock.mockResolvedValue({
+      isAvailable: true,
+      strongBiometryIsAvailable: true,
+      biometryType: BiometryType.faceId,
+      biometryTypes: [BiometryType.faceId],
+      deviceIsSecure: true,
+      reason: "",
+      code: BiometryErrorType.none,
+    });
+
+    const capability = await getBiometricCapability();
+
+    expect(capability.available).toBe(true);
+    expect(checkBiometryMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("getBiometricCapability", () => {

@@ -17,5 +17,6 @@ public class MainViewController: CAPBridgeViewController {
     public override func capacitorDidLoad() {
         bridge?.registerPluginInstance(WidgetBridgePlugin())
         bridge?.registerPluginInstance(SystemSettingsPlugin())
+        bridge?.registerPluginInstance(NativePushEnvironmentPlugin())
     }
 }

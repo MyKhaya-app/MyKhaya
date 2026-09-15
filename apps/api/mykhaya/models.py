@@ -1554,7 +1554,20 @@ class NativePushDevice(UuidTimeMixin, Base):
 
     __tablename__ = "native_push_devices"
     __table_args__ = (
-        UniqueConstraint("platform", "installation_id", name="uq_native_push_device_installation"),
+        CheckConstraint(
+            "apns_environment IN ('sandbox', 'production') OR apns_environment IS NULL",
+            name="ck_native_push_devices_apns_environment",
+        ),
+        Index(
+            "uq_native_push_device_legacy_installation",
+            "platform", "installation_id", unique=True,
+            postgresql_where=text("apns_environment IS NULL"),
+        ),
+        Index(
+            "uq_native_push_device_environment",
+            "platform", "installation_id", "apns_environment", unique=True,
+            postgresql_where=text("apns_environment IS NOT NULL"),
+        ),
         Index("ix_native_push_devices_user", "user_id", "disabled_at"),
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -1563,6 +1576,7 @@ class NativePushDevice(UuidTimeMixin, Base):
     platform: Mapped[str] = mapped_column(String(20))
     token: Mapped[str] = mapped_column(String(512))
     installation_id: Mapped[str] = mapped_column(String(128))
+    apns_environment: Mapped[str | None] = mapped_column(String(10))
     device_label: Mapped[str | None] = mapped_column(String(120))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

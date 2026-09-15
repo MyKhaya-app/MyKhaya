@@ -16,6 +16,7 @@ const platform = vi.hoisted(() => ({ native: true, value: "ios" as "ios" | "web"
 
 vi.mock("@capacitor/push-notifications", () => ({ PushNotifications: push }));
 vi.mock("@mykhaya/api-client", () => ({ api }));
+vi.mock("./native-push-environment", () => ({ nativePushEnvironment: vi.fn().mockResolvedValue("production") }));
 vi.mock("./native-runtime", () => ({
   isNativeShell: () => platform.native,
   nativePlatform: () => platform.value,

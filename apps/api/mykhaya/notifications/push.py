@@ -42,7 +42,6 @@ class PushConfig:
 @dataclass(frozen=True)
 class ApnsConfig:
     configured: bool
-    environment: Literal["sandbox", "production"] = "production"
     team_id: str | None = None
     key_id: str | None = None
     bundle_id: str | None = None
@@ -200,13 +199,11 @@ def is_subscription_gone(exc: WebPushException) -> bool:
 
 
 def resolve_apns_config(settings: Settings) -> ApnsConfig:
-    environment = settings.apns_environment
     configured = settings.apns_delivery_configured and bool(
-        settings.apns_team_id and settings.apns_key_id and settings.apns_private_key and environment
+        settings.apns_team_id and settings.apns_key_id and settings.apns_private_key
     )
     return ApnsConfig(
         configured=configured,
-        environment=environment or "production",
         team_id=settings.apns_team_id,
         key_id=settings.apns_key_id,
         bundle_id=settings.apns_bundle_id,
@@ -231,7 +228,13 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
         "deep_link": payload.get("deep_link"),
         "notification_type": payload.get("notification_type"),
     }
-    endpoint = APNS_SANDBOX_ENDPOINT if config.environment == "sandbox" else APNS_PRODUCTION_ENDPOINT
+    # NULL is the backward-compatible state for registrations created before
+    # per-device provenance existed. Those registrations historically used the
+    # production endpoint and remain deliverable until the app re-registers.
+    environment = device.apns_environment or "production"
+    if environment not in ("sandbox", "production"):
+        raise RuntimeError("Native device has an invalid APNs environment")
+    endpoint = APNS_SANDBOX_ENDPOINT if environment == "sandbox" else APNS_PRODUCTION_ENDPOINT
     with httpx.Client(http2=True, timeout=10) as client:
         response = client.post(
             f"{endpoint}/3/device/{device.token}",

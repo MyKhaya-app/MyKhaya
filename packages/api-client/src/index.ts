@@ -650,6 +650,7 @@ export class MyKhayaClient {
     token: string;
     installation_id: string;
     device_label?: string;
+    apns_environment?: "sandbox" | "production";
   }) => this.request<{ id: string }>("/notifications/native-devices", { method: "POST", body: JSON.stringify(body) });
   deleteNativePushDevice = (deviceId: string) =>
     this.request<void>(`/notifications/native-devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });

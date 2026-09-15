@@ -60,6 +60,7 @@ def _device() -> NativePushDevice:
         platform="ios",
         token="a" * 64,
         installation_id="installation-123456",
+        apns_environment="production",
     )
 
 
@@ -119,17 +120,69 @@ def test_send_apns_selects_configured_environment(
     monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
     config = ApnsConfig(
         configured=True,
-        environment=environment,  # type: ignore[arg-type]
         team_id="TEAM123",
         key_id="KEY123",
         bundle_id="app.mykhaya.mobile",
         private_key=_private_key_pem(),
     )
 
-    send_apns(config, _device(), {"title": "T", "body": "B"})
+    device = _device()
+    device.apns_environment = environment
+    send_apns(config, device, {"title": "T", "body": "B"})
 
     assert fake.request is not None
     assert str(fake.request.url).startswith(f"{expected_endpoint}/3/device/")
+
+
+def test_same_backend_routes_sandbox_and_production_devices_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[str] = []
+
+    class RecordingClient(_FakeClient):
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
+            requests.append(url)
+            return super().post(url, headers=headers, json=json)
+
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", RecordingClient)
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        bundle_id="app.mykhaya.mobile",
+        private_key=_private_key_pem(),
+    )
+    sandbox = _device()
+    sandbox.apns_environment = "sandbox"
+    production = _device()
+    production.apns_environment = "production"
+
+    send_apns(config, sandbox, {"title": "T", "body": "B"})
+    send_apns(config, production, {"title": "T", "body": "B"})
+
+    assert requests[0].startswith(f"{push.APNS_SANDBOX_ENDPOINT}/3/device/")
+    assert requests[1].startswith(f"{push.APNS_PRODUCTION_ENDPOINT}/3/device/")
+
+
+def test_legacy_device_without_environment_keeps_production_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeClient()
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    config = ApnsConfig(
+        configured=True,
+        team_id="TEAM123",
+        key_id="KEY123",
+        bundle_id="app.mykhaya.mobile",
+        private_key=_private_key_pem(),
+    )
+    device = _device()
+    device.apns_environment = None
+
+    send_apns(config, device, {"title": "T", "body": "B"})
+
+    assert fake.request is not None
+    assert str(fake.request.url).startswith(f"{push.APNS_PRODUCTION_ENDPOINT}/3/device/")
 
 
 @pytest.mark.parametrize(

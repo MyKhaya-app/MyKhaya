@@ -1692,6 +1692,7 @@ class NativePushDeviceCreate(StrictModel):
     token: str = Field(min_length=1, max_length=512)
     installation_id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     device_label: str | None = Field(default=None, max_length=120)
+    apns_environment: Literal["sandbox", "production"] | None = None
 
 
 class NativePushDeviceResponse(BaseModel):
@@ -1701,6 +1702,7 @@ class NativePushDeviceResponse(BaseModel):
     created_at: datetime
     last_seen_at: datetime | None
     disabled_at: datetime | None
+    apns_environment: Literal["sandbox", "production"] | None
 class PushSubscriptionResponse(BaseModel):
     id: uuid.UUID
     device_label: str | None

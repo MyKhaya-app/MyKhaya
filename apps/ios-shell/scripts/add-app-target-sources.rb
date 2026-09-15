@@ -15,6 +15,7 @@ APP_TARGET_NAME = 'App'
 FILES = %w[
   WidgetBridgePlugin.swift
   SystemSettingsPlugin.swift
+  NativePushEnvironmentPlugin.swift
   MainViewController.swift
 ].freeze
 # WidgetSnapshot.swift/WidgetSnapshotStore.swift used to be copied here as

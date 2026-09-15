@@ -5,6 +5,7 @@ import {
   BiometryType,
   type CheckBiometryResult,
 } from "@aparajita/capacitor-biometric-auth";
+import { nativePlatform } from "./native-runtime";
 
 // Native Face ID/Touch ID, via LocalAuthentication under the hood (the
 // plugin's native iOS implementation wraps LAContext directly — see
@@ -30,12 +31,61 @@ function biometricDebug(event: string, fields: Record<string, unknown> = {}): vo
   console.info("[BIOMETRIC DEBUG]", event, fields);
 }
 
+// `@aparajita/capacitor-biometric-auth` is deliberately not a dependency of
+// apps/android-shell (Face ID/Touch ID via LocalAuthentication is an iOS
+// concept; Android biometrics are an unimplemented future phase — see this
+// file's top-of-file doc comment). But apps/web ships one JS bundle to both
+// native shells, and this plugin's own `registerPlugin()` call (unlike
+// widget-bridge.ts's repo-local WidgetBridge) declares an explicit `android`
+// JS factory that just delegates to the native bridge — so Capacitor's
+// normal "plugin not implemented" fast-fail (thrown only when a platform key
+// is *absent*) never triggers. Instead, because the Android build has no
+// native "BiometricAuthNative" plugin compiled in, `@aparajita/capacitor-
+// biometric-auth`'s own `BiometricAuthNative` class (dist/esm/native.js)
+// binds `this.checkBiometry = proxy.checkBiometry` — where `proxy` is that
+// same outer Capacitor plugin proxy — so Capacitor's method-resolution
+// fallback (no native header found) hands back that identical proxy method
+// as the "implementation," making every call recurse into itself forever.
+// Confirmed via a live Android emulator: calling checkBiometry() straight
+// after login (NativeBiometricOffer's post-login effect, the one call site
+// with no withNativeStartupTimeout guard) triggers unbounded async
+// self-recursion that runs the WebView renderer's V8 heap from ~180MB to
+// the ~1GB OOM ceiling in under 20 seconds — a hard renderer crash, not a
+// slow leak. Guarding here, at the one place production code reaches the
+// real plugin, keeps every current and future caller of
+// getBiometricCapability()/authenticateWithBiometrics() safe without
+// touching either of them or their callers, and leaves
+// setBiometricProviderForTesting's injected providers (used by every test
+// in native-biometric.test.ts) completely unaffected.
 const defaultProvider: BiometricProvider = {
-  checkBiometry: () => BiometricAuth.checkBiometry(),
+  checkBiometry: () => {
+    if (nativePlatform() !== "ios") {
+      return Promise.resolve({
+        isAvailable: false,
+        strongBiometryIsAvailable: false,
+        biometryType: BiometryType.none,
+        biometryTypes: [],
+        deviceIsSecure: false,
+        reason: "Biometric sign-in is not available on this device yet.",
+        code: BiometryErrorType.none,
+      });
+    }
+    return BiometricAuth.checkBiometry();
+  },
   // allowDeviceCredential: true — Phase 4's "device passcode fallback where
   // appropriate": if biometry itself is unavailable/fails, iOS offers the
   // device passcode as a fallback rather than dead-ending the user.
-  authenticate: (reason) => BiometricAuth.authenticate({ reason, allowDeviceCredential: true }),
+  authenticate: (reason) => {
+    if (nativePlatform() !== "ios") {
+      return Promise.reject(
+        new BiometryError(
+          "Biometric sign-in is not available on this device yet.",
+          BiometryErrorType.biometryNotAvailable,
+        ),
+      );
+    }
+    return BiometricAuth.authenticate({ reason, allowDeviceCredential: true });
+  },
 };
 
 let provider: BiometricProvider = defaultProvider;
