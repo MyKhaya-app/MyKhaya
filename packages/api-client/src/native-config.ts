@@ -46,17 +46,6 @@ const WEB_TO_NATIVE_ENVIRONMENT: Record<string, NativeApiEnvironment> = {
 };
 
 export function nativeApiBaseUrlForWebHost(hostname: string): string {
-  // TEMPORARY, Android Phase 2B local-testing-only branch: when the native
-  // shell's WebView is pointed at a developer's local Docker Caddy stack
-  // (reached via `adb reverse tcp:8089 tcp:8089`, see
-  // apps/android-shell/README.md) rather than a real dev.mykhaya.app/
-  // mykhaya.app deployment, `window.location.hostname` is "localhost" and
-  // has no entry in WEB_TO_NATIVE_ENVIRONMENT. Route to that same local
-  // origin's own /api/v1, consistent with this file's own "native traffic
-  // stays same-origin" principle — never to a real dev.mykhaya.app/
-  // mykhaya.app instance. Not intended to be committed; revert once local
-  // testing is complete.
-  if (hostname === "localhost") return "http://localhost:8089/api/v1";
   const environment = WEB_TO_NATIVE_ENVIRONMENT[hostname];
   if (!environment) {
     throw new Error(

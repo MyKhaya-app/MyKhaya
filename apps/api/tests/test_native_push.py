@@ -104,6 +104,35 @@ def test_send_apns_uses_signed_bearer_and_safe_alert_payload(
 
 
 @pytest.mark.parametrize(
+    ("environment", "expected_endpoint"),
+    [
+        ("sandbox", push.APNS_SANDBOX_ENDPOINT),
+        ("production", push.APNS_PRODUCTION_ENDPOINT),
+    ],
+)
+def test_send_apns_selects_configured_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+    expected_endpoint: str,
+) -> None:
+    fake = _FakeClient()
+    monkeypatch.setattr("mykhaya.notifications.push.httpx.Client", lambda **kwargs: fake)
+    config = ApnsConfig(
+        configured=True,
+        environment=environment,  # type: ignore[arg-type]
+        team_id="TEAM123",
+        key_id="KEY123",
+        bundle_id="app.mykhaya.mobile",
+        private_key=_private_key_pem(),
+    )
+
+    send_apns(config, _device(), {"title": "T", "body": "B"})
+
+    assert fake.request is not None
+    assert str(fake.request.url).startswith(f"{expected_endpoint}/3/device/")
+
+
+@pytest.mark.parametrize(
     "private_key",
     [_private_key_pem(), _private_key_pem().replace("\n", r"\n")],
 )

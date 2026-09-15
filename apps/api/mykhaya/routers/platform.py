@@ -139,7 +139,13 @@ from mykhaya.notifications.default_templates import (
     TEMPLATES,
 )
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_config, send_push
+from mykhaya.notifications.push import (
+    generate_vapid_keypair,
+    resolve_apns_config,
+    resolve_push_config,
+    send_apns,
+    send_push,
+)
 from mykhaya.notifications.templates import (
     MissingRequiredTemplateVariable,
     UnknownTemplateVariable,
@@ -6210,7 +6216,8 @@ async def send_test_push(
     require_recent_auth(context, settings)
     await enforce_rate_limit(request, settings, "platform-test-push", 3, 300)
     config = await resolve_push_config(settings, db)
-    if not config.configured:
+    apns_config = resolve_apns_config(settings)
+    if not config.configured and not apns_config.configured:
         raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
     recipient = await db.scalar(select(User).where(User.email == normalise_email(body.recipient)))
     if recipient is None:
@@ -6222,7 +6229,15 @@ async def send_test_push(
             )
         )
     ).all()
-    if not subscriptions:
+    native_devices = (
+        await db.scalars(
+            select(NativePushDevice).where(
+                NativePushDevice.user_id == recipient.id,
+                NativePushDevice.disabled_at.is_(None),
+            )
+        )
+    ).all()
+    if not subscriptions and not native_devices:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That member has no registered devices to test."
         )
@@ -6240,19 +6255,42 @@ async def send_test_push(
                     "notification_type": "test_push",
                 },
             )
-            results.append({"device_label": subscription.device_label, "result": "accepted"})
+            results.append({"channel": "web", "device_label": subscription.device_label, "result": "accepted"})
         except Exception as exc:
             # Covers both WebPushException (the push service rejected/failed the
             # request) and lower-level encoding errors from a malformed subscription
             # (e.g. corrupted or truncated keys) — either way this is a per-device
             # delivery failure, not a reason to fail the whole admin request.
             results.append(
-                {"device_label": subscription.device_label, "result": type(exc).__name__}
+                {"channel": "web", "device_label": subscription.device_label, "result": type(exc).__name__}
             )
             await log.awarning(
                 "platform_test_push_device_failed",
+                channel="web",
                 error=type(exc).__name__,
                 subscription_id=str(subscription.id),
+            )
+    for device in native_devices:
+        try:
+            await asyncio.to_thread(
+                send_apns,
+                apns_config,
+                device,
+                {
+                    "title": "MyKhaya test notification",
+                    "body": "This confirms push notifications are working.",
+                    "deep_link": {"type": "settings"},
+                    "notification_type": "test_push",
+                },
+            )
+            results.append({"channel": "native", "device_label": device.device_label, "result": "accepted"})
+        except Exception as exc:
+            results.append({"channel": "native", "device_label": device.device_label, "result": type(exc).__name__})
+            await log.awarning(
+                "platform_test_push_device_failed",
+                channel="native",
+                error=type(exc).__name__,
+                device_id=str(device.id),
             )
     any_accepted = any(r["result"] == "accepted" for r in results)
     platform_audit(

@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  TEMPORARY, Phase 2B local-testing-only file. Permits cleartext (HTTP)
-  traffic strictly to `localhost` so this debug build can reach the
-  developer's local Docker Caddy stack (bound to host port 8089, reached via
-  `adb reverse tcp:8089 tcp:8089`) for authenticated-session testing against
-  a disposable local fixture account. Every other domain remains covered by
-  the app-wide `android:usesCleartextTraffic="false"` default in
-  AndroidManifest.xml — this file does not weaken that for any real MyKhaya
-  origin (dev.mykhaya.app / mykhaya.app). Not intended to be committed as
-  part of the app's normal configuration; remove this file and the manifest
-  reference to it once local testing is complete.
+  TEMPORARY, memory-investigation local-testing-only file (see Phase 2B and
+  the follow-up WebView-OOM investigation). Permits cleartext (HTTP) traffic
+  strictly to `localhost` so this debug build can reach the developer's
+  local Docker Caddy stack via `adb reverse tcp:8089 tcp:8089`. Not intended
+  to be committed as part of the app's normal configuration; remove this
+  file and the manifest reference to it once local testing is complete.
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">

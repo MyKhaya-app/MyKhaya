@@ -71,6 +71,44 @@ describe("native push platform boundary", () => {
     );
   });
 
+  it("shares one registration when startup reconciliation overlaps a permission grant", async () => {
+    let checks = 0;
+    push.checkPermissions.mockImplementation(async () => {
+      checks += 1;
+      return checks === 2 ? { receive: "prompt" } : { receive: "granted" };
+    });
+    push.requestPermissions.mockResolvedValue({ receive: "granted" });
+    push.register.mockImplementation(async () => {
+      listenerFor<Token>("registration")({ value: "native-token" });
+    });
+    const { reconcileNativePush, requestNativePermissionOnly } = await import("./native-push");
+
+    const startup = reconcileNativePush();
+    const permission = requestNativePermissionOnly();
+    await Promise.all([startup, permission]);
+    await vi.waitFor(() => expect(api.registerNativePushDevice).toHaveBeenCalledTimes(1));
+    expect(push.register).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one in-flight operation across concurrent registration requests", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    push.register.mockImplementation(async () => {
+      await gate;
+      listenerFor<Token>("registration")({ value: "native-token" });
+    });
+    const { enableNativePush } = await import("./native-push");
+
+    const first = enableNativePush();
+    const second = enableNativePush();
+    await vi.waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true, status: "registered" },
+      { ok: true, status: "registered" },
+    ]);
+  });
+
   it("reports an OS registration error and does not call the backend", async () => {
     push.register.mockImplementation(async () => {
       listenerFor<unknown>("registrationError")({ message: "registration failed" });
@@ -177,7 +215,7 @@ describe("native push platform boundary", () => {
     });
 
     it("still triggers APNs registration in the background after granting", async () => {
-      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.checkPermissions.mockResolvedValueOnce({ receive: "prompt" }).mockResolvedValue({ receive: "granted" });
       push.requestPermissions.mockResolvedValue({ receive: "granted" });
       push.register.mockImplementation(async () => {
         listenerFor<Token>("registration")({ value: "native-token" });

@@ -27,6 +27,7 @@ let registrationWaiter: Promise<void> | undefined;
 let resolveRegistrationWaiter: (() => void) | undefined;
 let registrationFailure: unknown;
 let registrationActive = false;
+let registrationFlight: Promise<{ ok: true; status: "registered" } | { ok: false; status: NativePushStatus }> | undefined;
 let cleanupRequested = false;
 let actionHandler: ((path: string) => void) | undefined;
 let listenerHandles: PluginListenerHandle[] = [];
@@ -152,12 +153,12 @@ export async function requestNativePermissionOnly(): Promise<NativePermissionOnl
   const current = await PushNotifications.checkPermissions();
   if (current.receive === "denied") return "denied";
   if (current.receive === "granted") {
-    void enableNativePush();
+    void reconcileNativePush();
     return "granted";
   }
   const requested = await PushNotifications.requestPermissions();
   if (requested.receive === "granted") {
-    void enableNativePush();
+    void reconcileNativePush();
     return "granted";
   }
   return requested.receive === "denied" ? "denied" : "not_requested";
@@ -171,7 +172,7 @@ export function nativePushDiagnostics(): { tokenPresent: boolean; registered: bo
   return { tokenPresent: Boolean(lastToken), registered: Boolean(lastRegistrationId) };
 }
 
-export async function enableNativePush(
+async function enableNativePushOnce(
   onAction?: (path: string) => void,
 ): Promise<{ ok: true; status: "registered" } | { ok: false; status: NativePushStatus }> {
   if (!isNativeShell() || nativePlatform() !== "ios") return { ok: false, status: "unsupported" };
@@ -214,6 +215,23 @@ export async function enableNativePush(
   }
 }
 
+/**
+ * Coordinated native registration entry point. Startup reconciliation,
+ * permission onboarding, and explicit settings actions all share this
+ * promise, so a concurrent lifecycle event cannot call the native register
+ * API more than once.
+ */
+export function enableNativePush(
+  onAction?: (path: string) => void,
+): Promise<{ ok: true; status: "registered" } | { ok: false; status: NativePushStatus }> {
+  if (!registrationFlight) {
+    registrationFlight = enableNativePushOnce(onAction).finally(() => {
+      registrationFlight = undefined;
+    });
+  }
+  return registrationFlight;
+}
+
 export async function revokeNativePush(): Promise<void> {
   if (lastRegistrationId) {
     await api.deleteNativePushDevice(lastRegistrationId).catch(() => {});
@@ -242,5 +260,6 @@ async function finishCleanup(): Promise<void> {
   registrationWaiter = undefined;
   resolveRegistrationWaiter = undefined;
   actionHandler = undefined;
+  registrationFlight = undefined;
   cleanupRequested = false;
 }

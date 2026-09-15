@@ -28,6 +28,7 @@ from mykhaya.models import (
     AdministrativeAuditEvent,
     NotificationDelivery,
     NotificationDeliveryStatus,
+    NativePushDevice,
     OutboxEvent,
     PlatformAdministrator,
     PlatformPushSettings,
@@ -791,6 +792,18 @@ async def test_platform_test_push_success_and_failure_are_audited(
 
     await reset_rate_limit("platform-test-push", "127.0.0.2")
     monkeypatch.setattr(platform_router, "send_push", lambda *args, **kwargs: None)
+    monkeypatch.setattr(platform_router, "send_apns", lambda *args, **kwargs: None)
+    async with SessionFactory() as db:
+        db.add(
+            NativePushDevice(
+                user_id=user_id,
+                platform="ios",
+                token="b" * 64,
+                installation_id=f"installation-{uuid.uuid4()}",
+                device_label="Test iPhone",
+            )
+        )
+        await db.commit()
     ok = await unsafe(
         admin_client,
         "POST",
@@ -798,7 +811,8 @@ async def test_platform_test_push_success_and_failure_are_audited(
         json={"recipient": email, "reason": "Confirming push works.", "confirmed": True},
     )
     assert ok.status_code == 200
-    assert ok.json()["results"][0]["result"] == "accepted"
+    assert {result["channel"] for result in ok.json()["results"]} == {"web", "native"}
+    assert all(result["result"] == "accepted" for result in ok.json()["results"])
 
     def fail(*args: object, **kwargs: object) -> None:
         raise gone_exception()

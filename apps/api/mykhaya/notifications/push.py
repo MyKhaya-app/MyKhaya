@@ -42,6 +42,7 @@ class PushConfig:
 @dataclass(frozen=True)
 class ApnsConfig:
     configured: bool
+    environment: Literal["sandbox", "production"] = "production"
     team_id: str | None = None
     key_id: str | None = None
     bundle_id: str | None = None
@@ -53,6 +54,7 @@ class ApnsPermanentError(Exception):
 
 
 APNS_PRODUCTION_ENDPOINT = "https://api.push.apple.com"
+APNS_SANDBOX_ENDPOINT = "https://api.sandbox.push.apple.com"
 
 
 def is_apns_response_retryable(status_code: int) -> bool:
@@ -198,9 +200,13 @@ def is_subscription_gone(exc: WebPushException) -> bool:
 
 
 def resolve_apns_config(settings: Settings) -> ApnsConfig:
+    environment = settings.apns_environment
+    configured = settings.apns_delivery_configured and bool(
+        settings.apns_team_id and settings.apns_key_id and settings.apns_private_key and environment
+    )
     return ApnsConfig(
-        configured=settings.apns_delivery_configured
-        and bool(settings.apns_team_id and settings.apns_key_id and settings.apns_private_key),
+        configured=configured,
+        environment=environment or "production",
         team_id=settings.apns_team_id,
         key_id=settings.apns_key_id,
         bundle_id=settings.apns_bundle_id,
@@ -225,9 +231,10 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
         "deep_link": payload.get("deep_link"),
         "notification_type": payload.get("notification_type"),
     }
+    endpoint = APNS_SANDBOX_ENDPOINT if config.environment == "sandbox" else APNS_PRODUCTION_ENDPOINT
     with httpx.Client(http2=True, timeout=10) as client:
         response = client.post(
-            f"{APNS_PRODUCTION_ENDPOINT}/3/device/{device.token}",
+            f"{endpoint}/3/device/{device.token}",
             headers={"authorization": f"bearer {bearer}", "apns-topic": topic},
             json=request_payload,
         )

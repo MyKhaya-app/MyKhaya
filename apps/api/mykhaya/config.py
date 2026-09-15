@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     apns_key_id: str | None = None
     apns_bundle_id: str = "app.mykhaya.mobile"
     apns_private_key: SecretStr | None = None
+    apns_environment: Literal["sandbox", "production"] | None = None
     apns_delivery_configured: bool = False
     # Deployment-managed external sign-in configuration. Secrets never enter
     # platform_settings or API responses; explicit enablement does not itself
@@ -277,6 +278,22 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MYKHAYA_ADMIN_MFA_REQUIRED may be false only for pure localhost development."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_apns_environment(self) -> "Settings":
+        if not self.apns_delivery_configured:
+            return self
+        if self.apns_environment is None:
+            raise ValueError(
+                "MYKHAYA_APNS_ENVIRONMENT must be set to sandbox or production when APNs is enabled."
+            )
+        expected = "production" if self.environment == "production" else "sandbox"
+        if self.apns_environment != expected:
+            raise ValueError(
+                f"MYKHAYA_APNS_ENVIRONMENT={self.apns_environment!r} is inconsistent with "
+                f"MYKHAYA_ENVIRONMENT={self.environment!r}; expected {expected!r}."
+            )
         return self
 
     @model_validator(mode="after")
