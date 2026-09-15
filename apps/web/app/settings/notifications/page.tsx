@@ -10,12 +10,8 @@ import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
 import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
-import {
-  enableNativePush,
-  nativePushPermission,
-  type NativePushStatus,
-} from "@/components/native-push";
 import { isNativeShell } from "@/components/native-runtime";
+import { useNotificationPermission } from "@/components/use-notification-permission";
 
 const STAGE_LABELS: Record<SubscribeStage, string> = {
   "checking-support": "Checking browser support…",
@@ -46,7 +42,12 @@ export default function NotificationSettings() {
   const [error, setError] = useState("");
   const [subscribing, setSubscribing] = useState(false);
   const [subscribeStage, setSubscribeStage] = useState<SubscribeStage | null>(null);
-  const [nativeStatus, setNativeStatus] = useState<NativePushStatus>("prompt");
+  const {
+    status: nativePermissionStatus,
+    loading: nativePermissionLoading,
+    requestPermission: requestNativePermission,
+    openSettings: openSystemNotificationSettings,
+  } = useNotificationPermission();
 
   const load = useCallback(async () => {
     const [preferences, subscriptions] = await Promise.all([
@@ -65,14 +66,6 @@ export default function NotificationSettings() {
   useEffect(() => {
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
-
-  useEffect(() => {
-    if (!isNativeShell()) return;
-    nativePushPermission().then((permission) => {
-      if (!permission) return;
-      setNativeStatus(permission.receive === "granted" ? "granted" : permission.receive === "denied" ? "denied" : "prompt");
-    }).catch(() => setNativeStatus("error"));
-  }, []);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -170,17 +163,10 @@ export default function NotificationSettings() {
   }
 
   async function enableNativeOnThisDevice() {
-    setNativeStatus("registering");
     setError("");
-    const result = await enableNativePush();
-    if (result.ok) {
-      setNativeStatus("registered");
-      setMessage("Notifications are enabled on this iPhone.");
-    } else {
-      setNativeStatus(result.status);
-      if (result.status === "denied") setError("Notifications are disabled for MyKhaya in iOS Settings.");
-      else if (result.status === "error") setError("We couldn't register this iPhone for notifications.");
-    }
+    const result = await requestNativePermission();
+    if (result === "granted") setMessage("Notifications are enabled on this device.");
+    else if (result === "denied") setError("Notifications are disabled for MyKhaya in iOS Settings.");
   }
 
   async function removeDevice(id: string) {
@@ -214,19 +200,27 @@ export default function NotificationSettings() {
         {isNativeShell() ? (
           <>
             <p>
-              {nativeStatus === "registered"
-                ? "Notifications are enabled on this iPhone."
-                : nativeStatus === "denied"
-                  ? "Notifications are disabled for MyKhaya in iOS Settings."
-                  : nativeStatus === "registering"
-                    ? "Setting up notifications…"
-                    : "Notifications are available on this iPhone."}
+              <strong>Notifications on this device</strong>
+              <br />
+              {nativePermissionLoading
+                ? "Checking…"
+                : nativePermissionStatus === "granted"
+                  ? "Enabled ✓"
+                  : nativePermissionStatus === "denied"
+                    ? "Off"
+                    : nativePermissionStatus === "restricted"
+                      ? "Restricted by this device"
+                      : "Not yet turned on"}
             </p>
-            {nativeStatus !== "denied" && nativeStatus !== "registered" && (
-              <button type="button" className="secondary" onClick={enableNativeOnThisDevice} disabled={nativeStatus === "registering"}>
+            {nativePermissionStatus === "denied" ? (
+              <button type="button" className="secondary" onClick={() => void openSystemNotificationSettings()}>
+                <Bell size={16} aria-hidden="true" /> Enable in phone settings
+              </button>
+            ) : nativePermissionStatus === "not_requested" ? (
+              <button type="button" className="secondary" onClick={() => void enableNativeOnThisDevice()}>
                 <Bell size={16} aria-hidden="true" /> Enable notifications
               </button>
-            )}
+            ) : null}
           </>
         ) : !isStandalone() ? (
           <p>Install MyKhaya to your Home Screen first to enable notifications.</p>

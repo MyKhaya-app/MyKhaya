@@ -31,8 +31,9 @@ mkdir -p MyKhayaWidgets
 rsync -a --delete native/widgets/ MyKhayaWidgets/
 echo "Copied $(find MyKhayaWidgets -name '*.swift' | wc -l | tr -d ' ') Swift files into MyKhayaWidgets/"
 
-echo "== 2. Copy main-app plugin sources (WidgetBridgePlugin, MainViewController) =="
+echo "== 2. Copy main-app plugin sources (WidgetBridgePlugin, SystemSettingsPlugin, MainViewController) =="
 cp native/plugin/WidgetBridgePlugin.swift ios/App/App/WidgetBridgePlugin.swift
+cp native/plugin/SystemSettingsPlugin.swift ios/App/App/SystemSettingsPlugin.swift
 cp native/plugin/MainViewController.swift ios/App/App/MainViewController.swift
 # The shared snapshot model/store used to be copied here as loose files
 # (WidgetSnapshot.swift/WidgetSnapshotStore.swift) because both the App
@@ -43,7 +44,7 @@ cp native/plugin/MainViewController.swift ios/App/App/MainViewController.swift
 # can be linked by XCTest (an app extension's own compiled code cannot be
 # an XCTest host — verified). Do not reintroduce loose copies here.
 
-echo "== 3. Add WidgetBridgePlugin/MainViewController.swift to the App target =="
+echo "== 3. Add WidgetBridgePlugin/SystemSettingsPlugin/MainViewController.swift to the App target =="
 ruby scripts/add-app-target-sources.rb
 
 echo "== 4. Point Main.storyboard's bridge view controller at MainViewController =="

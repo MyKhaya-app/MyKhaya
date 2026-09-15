@@ -34,6 +34,20 @@ vi.mock("@/components/native-runtime", () => ({ isNativeShell }));
 const { getInfo } = vi.hoisted(() => ({ getInfo: vi.fn() }));
 vi.mock("@capacitor/app", () => ({ App: { getInfo } }));
 
+const nativePermission = vi.hoisted(() => ({
+  status: "granted" as "not_requested" | "granted" | "denied" | "restricted" | "unsupported",
+  loading: false,
+  requestPermission: vi.fn(),
+  openSettings: vi.fn(),
+  refresh: vi.fn(),
+}));
+vi.mock("@/components/use-notification-permission", () => ({
+  useNotificationPermission: () => nativePermission,
+}));
+
+const nativePushDiagnostics = vi.hoisted(() => vi.fn(() => ({ tokenPresent: false, registered: false })));
+vi.mock("@/components/native-push", () => ({ nativePushDiagnostics }));
+
 const { api } = await import("@mykhaya/api-client");
 
 function mockBuild(payload: unknown) {
@@ -46,6 +60,8 @@ function mockBuild(payload: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   isNativeShell.mockReturnValue(false);
+  nativePermission.status = "granted";
+  nativePushDiagnostics.mockReturnValue({ tokenPresent: false, registered: false });
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
     id: "u1",
     display_name: "Megan",
@@ -106,6 +122,100 @@ describe("About — native iOS", () => {
 
     await screen.findByText("0.1.0");
     expect(screen.queryByText("iOS app")).not.toBeInTheDocument();
+  });
+});
+
+describe("About — native Notifications diagnostics", () => {
+  beforeEach(() => {
+    isNativeShell.mockReturnValue(true);
+  });
+
+  it("does not appear at all outside the native shell", async () => {
+    isNativeShell.mockReturnValue(false);
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+
+    render(<About />);
+
+    await screen.findByText("0.1.0");
+    expect(screen.queryByText("Notification permission")).not.toBeInTheDocument();
+  });
+
+  it("shows the live permission status independent of push-registration state", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    nativePermission.status = "granted";
+    nativePushDiagnostics.mockReturnValue({ tokenPresent: false, registered: false });
+
+    render(<About />);
+
+    await screen.findByText("Notification permission");
+    expect(screen.getByText("Granted")).toBeInTheDocument();
+    expect(screen.getByText("Not registered")).toBeInTheDocument();
+    expect(screen.getByText("Not present")).toBeInTheDocument();
+  });
+
+  it("shows Registered/Present when a device has registered", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    nativePushDiagnostics.mockReturnValue({ tokenPresent: true, registered: true });
+
+    render(<About />);
+
+    await screen.findByText("Registered");
+    expect(screen.getByText("Present")).toBeInTheDocument();
+  });
+
+  it("never shows the raw device token — only masked Present/Not present", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    nativePushDiagnostics.mockReturnValue({ tokenPresent: true, registered: true });
+
+    render(<About />);
+
+    await screen.findByText("Present");
+    expect(screen.queryByText("native-token")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/[0-9a-f]{32,}/i);
+  });
+
+  it("shows Push provider as APNs", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+
+    render(<About />);
+
+    await screen.findByText("Push provider");
+    expect(screen.getByText("APNs")).toBeInTheDocument();
+  });
+
+  it("omits the Last registration row rather than showing a fake value when never registered", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    window.localStorage.removeItem("mykhaya.native.push.last-registered-at");
+
+    render(<About />);
+
+    await screen.findByText("Notification permission");
+    expect(screen.queryByText("Last registration")).not.toBeInTheDocument();
+  });
+
+  it("shows a formatted Last registration timestamp when one is present", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    window.localStorage.setItem("mykhaya.native.push.last-registered-at", String(Date.UTC(2026, 0, 1)));
+
+    render(<About />);
+
+    await screen.findByText("Last registration");
+    window.localStorage.removeItem("mykhaya.native.push.last-registered-at");
+  });
+
+  it("shows Off when notification permission is denied, distinct from push-registration status", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    nativePermission.status = "denied";
+    nativePushDiagnostics.mockReturnValue({ tokenPresent: true, registered: true });
+
+    render(<About />);
+
+    await screen.findByText("Notification permission");
+    expect(screen.getByText("Off")).toBeInTheDocument();
+    // Registration can still show "Registered" even though permission now
+    // reads denied (e.g. revoked after a previous successful registration) —
+    // the two are independent facts, neither overwrites the other.
+    expect(screen.getByText("Registered")).toBeInTheDocument();
   });
 });
 

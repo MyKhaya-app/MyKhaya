@@ -11,6 +11,13 @@ import { isNativeShell, nativePlatform } from "./native-runtime";
 
 export type NativePushStatus = "unsupported" | "prompt" | "granted" | "denied" | "registering" | "registered" | "error";
 
+/** Cross-platform permission result for requestNativePermissionOnly() —
+ * structurally identical to notification-permission.ts's
+ * NotificationPermissionStatus (that file owns the canonical/shared name;
+ * this one is kept import-free to avoid a cross-module type dependency for
+ * a single string union). */
+export type NativePermissionOnlyResult = "unsupported" | "not_requested" | "granted" | "denied";
+
 let listenersReady: Promise<void> | undefined;
 let lastRegistrationId: string | null = null;
 let lastToken: string | null = null;
@@ -73,6 +80,14 @@ async function ensureListeners(): Promise<void> {
           device_label: platform === "ios" ? "iPhone" : "Android device",
         });
         lastRegistrationId = registration.id;
+        // Diagnostics-only timestamp (About > Diagnostics' "Last
+        // registration" row) — never read by any permission/registration
+        // decision, so a missing or stale value can't affect behavior.
+        try {
+          window.localStorage.setItem("mykhaya.native.push.last-registered-at", String(Date.now()));
+        } catch {
+          // Best-effort; diagnostics simply omit the row if this fails.
+        }
       } catch (error) {
         registrationFailure = error;
       } finally {
@@ -117,6 +132,43 @@ export async function reconcileNativePush(): Promise<void> {
 export async function nativePushPermission(): Promise<PermissionStatus | null> {
   if (!isNativeShell() || nativePlatform() !== "ios") return null;
   return PushNotifications.checkPermissions();
+}
+
+/**
+ * Resolves OS notification permission only — never waits on, or reports the
+ * outcome of, APNs device registration (that's what conflated "OS granted"
+ * with "backend registration failed" into one status the Settings page
+ * showed as "not enabled" even when the OS permission genuinely was
+ * granted). If OS permission is already denied, this does not call
+ * `requestPermissions()` again — iOS silently no-ops a second system prompt
+ * once denied, so re-asking would only be misleading UI, not a real retry.
+ * On the result becoming granted, APNs registration is still kicked off
+ * (fire-and-forget, via the existing fully-tested `enableNativePush()`) so
+ * the device still gets registered — just decoupled from the status this
+ * function returns.
+ */
+export async function requestNativePermissionOnly(): Promise<NativePermissionOnlyResult> {
+  if (!isNativeShell() || nativePlatform() !== "ios") return "unsupported";
+  const current = await PushNotifications.checkPermissions();
+  if (current.receive === "denied") return "denied";
+  if (current.receive === "granted") {
+    void enableNativePush();
+    return "granted";
+  }
+  const requested = await PushNotifications.requestPermissions();
+  if (requested.receive === "granted") {
+    void enableNativePush();
+    return "granted";
+  }
+  return requested.receive === "denied" ? "denied" : "not_requested";
+}
+
+/** Read-only diagnostics for About > Diagnostics — reflects this session's
+ * in-memory registration state (populated by reconcileNativePush() on app
+ * bootstrap, or by an explicit enable flow), never inferred from OS
+ * permission or vice versa. */
+export function nativePushDiagnostics(): { tokenPresent: boolean; registered: boolean } {
+  return { tokenPresent: Boolean(lastToken), registered: Boolean(lastRegistrationId) };
 }
 
 export async function enableNativePush(

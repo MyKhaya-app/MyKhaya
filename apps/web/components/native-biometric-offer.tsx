@@ -17,15 +17,25 @@ import { isNativeShell } from "./native-runtime";
 
 /** One-shot offer shown after a successful native password login. It is
  * intentionally separate from the Settings control: a declined offer is
- * remembered, while Settings remains the durable way to enable it later. */
-export function NativeBiometricOffer() {
+ * remembered, while Settings remains the durable way to enable it later.
+ *
+ * `onSettled` is an optional completion signal — called exactly once, either
+ * immediately when this offer determines it has nothing to show, or once
+ * the user has acted (enabled or declined) — used by AppShell to sequence
+ * this ahead of NotificationPermissionPrompt so the two one-shot native
+ * onboarding overlays never compete for the screen at once. Defaults to a
+ * no-op so every other/existing usage is unaffected. */
+export function NativeBiometricOffer({ onSettled }: { onSettled?: () => void } = {}) {
   const [capability, setCapability] = useState<BiometricCapability | null>(null);
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!isNativeShell() || !consumeBiometricOfferAfterLogin()) return;
+    if (!isNativeShell() || !consumeBiometricOfferAfterLogin()) {
+      onSettled?.();
+      return;
+    }
     let cancelled = false;
     void Promise.all([getBiometricCapability(), getBiometricPreference()]).then(([result, preference]) => {
       console.info("[BIOMETRIC DEBUG]", "offer_preference_result", {
@@ -33,9 +43,12 @@ export function NativeBiometricOffer() {
         type: result.kind,
         preference,
       });
-      if (!cancelled && result.available && preference === "undecided") {
+      if (cancelled) return;
+      if (result.available && preference === "undecided") {
         setCapability(result);
         setVisible(true);
+      } else {
+        onSettled?.();
       }
     });
     return () => { cancelled = true; };
@@ -54,6 +67,7 @@ export function NativeBiometricOffer() {
     await setBiometricSignInEnabled(true);
     setVisible(false);
     setBusy(false);
+    onSettled?.();
   }
 
   async function notNow() {
@@ -61,6 +75,7 @@ export function NativeBiometricOffer() {
     await declineBiometricSignIn();
     setVisible(false);
     setBusy(false);
+    onSettled?.();
   }
 
   if (!visible || !capability) return null;

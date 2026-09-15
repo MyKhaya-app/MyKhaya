@@ -148,4 +148,91 @@ describe("native push platform boundary", () => {
     await initializeNativePush(() => undefined);
     expect(push.addListener).toHaveBeenCalledTimes(8);
   });
+
+  describe("requestNativePermissionOnly — permission decoupled from registration", () => {
+    it("returns 'unsupported' outside the native iOS shell", async () => {
+      platform.native = false;
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("unsupported");
+      expect(push.requestPermissions).not.toHaveBeenCalled();
+    });
+
+    it("returns 'denied' without calling requestPermissions() again when already denied", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "denied" });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("denied");
+      expect(push.requestPermissions).not.toHaveBeenCalled();
+    });
+
+    it("returns 'granted' immediately, without waiting on backend registration, when already granted", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "granted" });
+      // Registration itself hangs — if requestNativePermissionOnly awaited
+      // it, this test would time out instead of resolving fast.
+      api.registerNativePushDevice.mockReturnValue(new Promise(() => {}));
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("granted");
+    });
+
+    it("still triggers APNs registration in the background after granting", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.requestPermissions.mockResolvedValue({ receive: "granted" });
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "native-token" });
+      });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("granted");
+      await vi.waitFor(() => expect(api.registerNativePushDevice).toHaveBeenCalledTimes(1));
+    });
+
+    it("prompts exactly once when not yet requested, and maps a fresh denial to 'denied'", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.requestPermissions.mockResolvedValue({ receive: "denied" });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("denied");
+      expect(push.requestPermissions).toHaveBeenCalledTimes(1);
+    });
+
+    it("maps a dismissed prompt (still 'prompt') to 'not_requested'", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.requestPermissions.mockResolvedValue({ receive: "prompt" });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("not_requested");
+    });
+  });
+
+  describe("nativePushDiagnostics — read-only session state for About > Diagnostics", () => {
+    it("reports no token/registration before anything has registered", async () => {
+      const { nativePushDiagnostics } = await import("./native-push");
+      expect(nativePushDiagnostics()).toEqual({ tokenPresent: false, registered: false });
+    });
+
+    it("reports token present and registered once enableNativePush completes successfully", async () => {
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "native-token" });
+      });
+      const { enableNativePush, nativePushDiagnostics } = await import("./native-push");
+
+      await enableNativePush();
+      expect(nativePushDiagnostics()).toEqual({ tokenPresent: true, registered: true });
+    });
+
+    it("persists a last-registered-at timestamp to localStorage on successful registration", async () => {
+      window.localStorage.removeItem("mykhaya.native.push.last-registered-at");
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "native-token" });
+      });
+      const { enableNativePush } = await import("./native-push");
+
+      const before = Date.now();
+      await enableNativePush();
+      const stored = Number(window.localStorage.getItem("mykhaya.native.push.last-registered-at"));
+      expect(stored).toBeGreaterThanOrEqual(before);
+    });
+  });
 });

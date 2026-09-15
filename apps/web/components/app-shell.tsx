@@ -9,6 +9,7 @@ import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
+import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { api } from "@mykhaya/api-client";
 
@@ -28,6 +29,12 @@ export function AppShell({
   const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
   const [familyAccess, setFamilyAccess] = useState(false);
+  // Sequences the two one-shot native onboarding overlays so they never
+  // compete for the screen: NotificationPermissionPrompt isn't mounted at
+  // all until the (established, first-run) biometric offer has settled —
+  // shown-and-resolved, or determined it had nothing to show. See
+  // NativeBiometricOffer's onSettled doc comment.
+  const [biometricSettled, setBiometricSettled] = useState(false);
 
   useEffect(() => {
     if (!activeHome?.id) {
@@ -122,7 +129,11 @@ export function AppShell({
       )}
       <div className="app-content-scroll-region">
         {hero}
-        <main className="app-main"><NativeBiometricOffer />{children}</main>
+        <main className="app-main">
+          <NativeBiometricOffer onSettled={() => setBiometricSettled(true)} />
+          {biometricSettled && <NotificationPermissionPrompt />}
+          {children}
+        </main>
       </div>
       <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />
       {!isNativeShell() && <AroundHouseDock />}

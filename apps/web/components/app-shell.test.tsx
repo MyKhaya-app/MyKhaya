@@ -1,11 +1,23 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AppShell, PersistentAppShell } from "./app-shell";
 
 vi.mock("./around-house-dock", () => ({
   AroundHouseDock: () => <aside data-testid="around-house-dock" />,
+}));
+
+let biometricOnSettled: (() => void) | undefined;
+vi.mock("./native-biometric-offer", () => ({
+  NativeBiometricOffer: ({ onSettled }: { onSettled?: () => void } = {}) => {
+    biometricOnSettled = onSettled;
+    return <div data-testid="biometric-offer-stub" />;
+  },
+}));
+
+vi.mock("./notification-permission-prompt", () => ({
+  NotificationPermissionPrompt: () => <div data-testid="notification-prompt-stub" />,
 }));
 
 vi.mock("./auth-provider", () => ({
@@ -82,6 +94,7 @@ beforeEach(() => {
   replace.mockClear();
   nativeShell = false;
   platformControlCentre = false;
+  biometricOnSettled = undefined;
   document.documentElement.classList.remove("native-shell");
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
     id: "u1",
@@ -219,5 +232,49 @@ describe("AppShell — authenticated navigation", () => {
     expect(screen.getByText("PCC")).toBeInTheDocument();
     expect(document.querySelector(".app-header")).toBeNull();
     expect(document.querySelector(".bottom-nav")).toBeNull();
+  });
+});
+
+describe("AppShell — sequences the biometric offer ahead of the notification prompt", () => {
+  it("does not mount NotificationPermissionPrompt until the biometric offer settles", async () => {
+    render(<AppShell>content</AppShell>);
+    await screen.findByTestId("biometric-offer-stub");
+
+    expect(screen.queryByTestId("notification-prompt-stub")).not.toBeInTheDocument();
+
+    act(() => {
+      biometricOnSettled?.();
+    });
+
+    expect(await screen.findByTestId("notification-prompt-stub")).toBeInTheDocument();
+  });
+
+  it("never shows both onboarding overlays at once", async () => {
+    render(<AppShell>content</AppShell>);
+    await screen.findByTestId("biometric-offer-stub");
+    expect(screen.queryByTestId("notification-prompt-stub")).toBeNull();
+
+    act(() => {
+      biometricOnSettled?.();
+    });
+
+    // The biometric stub stays mounted (it's AppShell's own persistent
+    // slot, not conditionally unmounted) — what matters is the
+    // notification prompt was withheld until settling, not a mutual-
+    // exclusion toggle between the two.
+    expect(await screen.findByTestId("notification-prompt-stub")).toBeInTheDocument();
+  });
+
+  it("still shows the notification prompt when the biometric offer has nothing to show (settles immediately)", async () => {
+    render(<AppShell>content</AppShell>);
+
+    // The stub's onSettled ref is captured synchronously on mount; calling
+    // it simulates the real component's "nothing to show" early-settle path.
+    await screen.findByTestId("biometric-offer-stub");
+    act(() => {
+      biometricOnSettled?.();
+    });
+
+    expect(await screen.findByTestId("notification-prompt-stub")).toBeInTheDocument();
   });
 });

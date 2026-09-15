@@ -24,8 +24,21 @@ vi.mock("@/components/use-active-home", () => ({
   }),
 }));
 
+let nativeShell = false;
 vi.mock("@/components/native-runtime", () => ({
-  isNativeShell: () => false,
+  isNativeShell: () => nativeShell,
+  nativePlatform: () => (nativeShell ? "ios" : "web"),
+}));
+
+const nativePermission = vi.hoisted(() => ({
+  status: "not_requested" as "not_requested" | "granted" | "denied" | "restricted" | "unsupported",
+  loading: false,
+  requestPermission: vi.fn(),
+  openSettings: vi.fn(),
+  refresh: vi.fn(),
+}));
+vi.mock("@/components/use-notification-permission", () => ({
+  useNotificationPermission: () => nativePermission,
 }));
 
 vi.mock("@/components/install-prompt", () => ({
@@ -78,6 +91,11 @@ function basePrefs(overrides: Partial<NotificationPreferences> = {}): Notificati
 
 beforeEach(() => {
   vi.clearAllMocks();
+  nativeShell = false;
+  nativePermission.status = "not_requested";
+  nativePermission.loading = false;
+  nativePermission.requestPermission.mockReset().mockResolvedValue("granted");
+  nativePermission.openSettings.mockReset().mockResolvedValue(undefined);
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
   (api.notificationPreferences as ReturnType<typeof vi.fn>).mockResolvedValue(basePrefs());
   (api.updateNotificationPreferences as ReturnType<typeof vi.fn>).mockImplementation(
@@ -215,5 +233,67 @@ describe("Notification settings — Daily briefing unaffected", () => {
     expect(
       screen.getByRole("checkbox", { name: "Send me a morning summary" }),
     ).toBeChecked();
+  });
+});
+
+describe("Notification settings — 'This device' reflects live OS permission only", () => {
+  it("shows 'Enabled ✓' when the OS permission is granted, regardless of any backend push registration", async () => {
+    nativeShell = true;
+    nativePermission.status = "granted";
+    // No native push devices are ever surfaced to this page (only Web Push
+    // `devices` exist in its state) — this asserts the root-cause fix
+    // directly: status comes from the live adapter, never from whether any
+    // push subscription/device row exists.
+    (api.listPushSubscriptions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    render(<NotificationSettings />);
+
+    await screen.findByText("Enabled ✓");
+    expect(screen.queryByRole("button", { name: /enable notifications/i })).not.toBeInTheDocument();
+  });
+
+  it("shows 'Off' and an 'Enable in phone settings' button when denied — never re-requesting permission", async () => {
+    nativeShell = true;
+    nativePermission.status = "denied";
+    render(<NotificationSettings />);
+
+    await screen.findByText("Off");
+    const button = screen.getByRole("button", { name: /enable in phone settings/i });
+    await userEvent.click(button);
+
+    expect(nativePermission.openSettings).toHaveBeenCalledTimes(1);
+    expect(nativePermission.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("shows an 'Enable notifications' button that requests permission when not yet requested", async () => {
+    nativeShell = true;
+    nativePermission.status = "not_requested";
+    render(<NotificationSettings />);
+
+    const button = await screen.findByRole("button", { name: /^enable notifications$/i });
+    await userEvent.click(button);
+
+    expect(nativePermission.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it("individual preference toggles stay independently represented regardless of device permission status", async () => {
+    nativeShell = true;
+    nativePermission.status = "granted";
+    (api.notificationPreferences as ReturnType<typeof vi.fn>).mockResolvedValue(
+      basePrefs({ daily_briefing_enabled: false, event_reminders_enabled: true }),
+    );
+    render(<NotificationSettings />);
+
+    await screen.findByText("Enabled ✓");
+    expect(screen.getByRole("checkbox", { name: "Send me a morning summary" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Event reminders" })).toBeChecked();
+  });
+
+  it("does not show a native device section outside the native shell (browser/PWA unaffected)", async () => {
+    nativeShell = false;
+    render(<NotificationSettings />);
+
+    await screen.findByRole("heading", { name: "This device" });
+    expect(screen.queryByText("Enabled ✓")).not.toBeInTheDocument();
+    expect(screen.queryByText("Off")).not.toBeInTheDocument();
   });
 });
