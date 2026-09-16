@@ -32,10 +32,13 @@ from mykhaya.notifications.lifecycle import (
 from mykhaya.notifications.nudges import deliver_daily_nudge_summary, deliver_nudge_summary
 from mykhaya.notifications.push import (
     ApnsPermanentError,
+    FcmPermanentError,
     is_subscription_gone,
     resolve_apns_config,
+    resolve_fcm_config,
     resolve_push_config,
     send_apns,
+    send_fcm,
     send_push,
 )
 from mykhaya.notifications.reminders import deliver_event_reminder
@@ -136,6 +139,30 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
         delivery.sanitised_failure_reason = "This device's push registration is invalid."
 
 
+class _UnsupportedNativePlatform(Exception):
+    """A NativePushDevice row with a platform this worker has no sender for.
+
+    The notification engine's device query (engine.py) already restricts
+    itself to platforms this dispatcher knows about, so this only guards
+    against a stale/invalid row slipping through some other path — it is
+    never expected in normal operation."""
+
+
+def _send_native_push(
+    settings: Settings, device: NativePushDevice, payload: dict[str, Any]
+) -> None:
+    """The one place a native push delivery decides APNs vs FCM. Callers
+    (just `_process_native_push` below) never branch on platform themselves —
+    adding a third native platform means adding one branch here, nowhere
+    else."""
+    if device.platform == "ios":
+        send_apns(resolve_apns_config(settings), device, payload)
+    elif device.platform == "android":
+        send_fcm(resolve_fcm_config(settings), device, payload)
+    else:
+        raise _UnsupportedNativePlatform(device.platform)
+
+
 async def _process_native_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
     delivery = await db.scalar(
         select(NotificationDelivery).where(
@@ -161,7 +188,7 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         "notification_type": event.payload.get("notification_type"),
     }
     try:
-        await asyncio.to_thread(send_apns, resolve_apns_config(settings), device, payload)
+        await asyncio.to_thread(_send_native_push, settings, device, payload)
         delivery.status = NotificationDeliveryStatus.sent
         delivery.attempted_at = datetime.now(UTC)
         device.last_seen_at = datetime.now(UTC)
@@ -171,6 +198,21 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         delivery.sanitised_failure_reason = "This native device registration is invalid."
         device.disabled_at = datetime.now(UTC)
         device.disabled_reason = "APNs rejected this device registration."
+    except FcmPermanentError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This native device registration is invalid."
+        device.disabled_at = datetime.now(UTC)
+        device.disabled_reason = "FCM rejected this device registration."
+    except _UnsupportedNativePlatform:
+        # Not retryable — no code path will ever know how to send to this
+        # platform. Cancel rather than fail-and-retry-forever.
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This device's platform is not supported."
+        await log.awarning(
+            "native_push_unsupported_platform", platform=device.platform, device_id=str(device.id)
+        )
     except RuntimeError:
         delivery.status = NotificationDeliveryStatus.cancelled
         delivery.attempted_at = datetime.now(UTC)

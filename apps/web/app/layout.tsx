@@ -2,6 +2,7 @@ import "@mykhaya/design-tokens/css";
 import "./styles.css";
 import type { Metadata, Viewport } from "next";
 import { ServiceWorkerRegister } from "../components/service-worker-register";
+import { NativeBackButton } from "../components/native-back-button";
 import { AuthProvider } from "../components/auth-provider";
 import { PersistentAppShell } from "../components/app-shell";
 import { isPlatformControlCentreHost } from "../components/application-host";
@@ -44,6 +45,7 @@ export default async function RootLayout({
       <body>
         {application}
         <ServiceWorkerRegister />
+        <NativeBackButton />
       </body>
     </html>
   );

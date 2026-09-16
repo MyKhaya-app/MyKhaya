@@ -20,10 +20,11 @@ vi.mock("./notification-permission-prompt", () => ({
   NotificationPermissionPrompt: () => <div data-testid="notification-prompt-stub" />,
 }));
 
+const authState: { status: string } = { status: "ready" };
 vi.mock("./auth-provider", () => ({
   useAuth: () => ({
     user: { id: "u1", display_name: "Owner", principal_type: "adult" },
-    status: "ready",
+    status: authState.status,
     initialSessionLoading: false,
     sessionRefreshing: false,
     retryInitialSession: vi.fn(),
@@ -76,9 +77,11 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 
 let nativeShell = false;
 let platformControlCentre = false;
+let nativePlatform: "ios" | "android" | "web" = "ios";
 vi.mock("./native-runtime", () => ({
   isNativeShell: () => nativeShell,
   isPlatformControlCentre: () => platformControlCentre,
+  nativePlatform: () => nativePlatform,
 }));
 
 const bootstrapNativeSession = vi.fn<() => Promise<unknown>>();
@@ -94,6 +97,8 @@ beforeEach(() => {
   replace.mockClear();
   nativeShell = false;
   platformControlCentre = false;
+  nativePlatform = "ios";
+  authState.status = "ready";
   biometricOnSettled = undefined;
   document.documentElement.classList.remove("native-shell");
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -276,5 +281,27 @@ describe("AppShell — sequences the biometric offer ahead of the notification p
     });
 
     expect(await screen.findByTestId("notification-prompt-stub")).toBeInTheDocument();
+  });
+});
+
+describe("AppShell — locked-state unlock copy is platform-aware", () => {
+  it("names Face ID and Touch ID by name on iOS", async () => {
+    nativePlatform = "ios";
+    authState.status = "locked";
+
+    render(<AppShell>content</AppShell>);
+
+    expect(await screen.findByText(/face id/i)).toBeInTheDocument();
+    expect(screen.getByText(/touch id/i)).toBeInTheDocument();
+  });
+
+  it("never claims a specific named modality on Android", async () => {
+    nativePlatform = "android";
+    authState.status = "locked";
+
+    render(<AppShell>content</AppShell>);
+
+    await screen.findByRole("heading", { name: /unlock mykhaya/i });
+    expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
   });
 });

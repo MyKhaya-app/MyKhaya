@@ -10,6 +10,7 @@ import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 import { setBiometricSignInEnabled } from "./native-biometric-preference";
 import { authenticateWithBiometrics, getBiometricCapability, isBiometricCancellation } from "./native-biometric";
+import { markUnlocked } from "./native-app-lock";
 import { clearWidgetSnapshot, syncWidgetSnapshot } from "./widget-bridge";
 
 export class NativeBiometricUnlockError extends Error {
@@ -202,7 +203,13 @@ export function nativeChildLogin(
  * always clears the store even if the network call fails), and clears the
  * Quick Sign-In preference — a device that's been signed out of should not
  * still offer "unlock with Face ID" on its next launch. Never touches any
- * other signed-in device. */
+ * other signed-in device.
+ *
+ * Also clears the Phase 4 app-lock clock (`markUnlocked()`): there's no
+ * session left for a stale "backgrounded at" timestamp to protect, and
+ * leaving an old one in place would otherwise carry over into whatever
+ * account signs in next on this device, potentially forcing an immediate,
+ * meaningless re-lock on its very first background/foreground cycle. */
 export async function nativeLogout(): Promise<void> {
   try {
     const { cleanupNativePush, revokeNativePush } = await import("./native-push");
@@ -212,6 +219,7 @@ export async function nativeLogout(): Promise<void> {
   } finally {
     api.setRequestTransport(null);
     await setBiometricSignInEnabled(false);
+    markUnlocked();
     // Must run even if the network logout call failed above — a widget
     // must never keep showing a signed-out user's household data.
     await clearWidgetSnapshot();

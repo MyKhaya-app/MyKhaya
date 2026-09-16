@@ -45,6 +45,24 @@ export function wasBackgroundedLongEnoughToLock(now: number = Date.now()): boole
   return shouldRequireUnlock(backgroundedAt, now);
 }
 
+/** Whether at least one background transition has actually been recorded
+ *  since the last `markUnlocked()` (or since the app started, if that has
+ *  never fired). A resume handler needs this *in addition to*
+ *  `wasBackgroundedLongEnoughToLock()`: `shouldRequireUnlock(null, ...)`
+ *  deliberately returns `true` for "no recorded timestamp," which is the
+ *  right default for a caller asking "is it safe to skip auth" (Phase 3's
+ *  own cold-launch bootstrapSession() case), but the *opposite* of what a
+ *  resume listener wants — some platforms are known to fire an initial
+ *  `appStateChange { isActive: true }` once during ordinary app startup,
+ *  before any real backgrounding has ever happened, and that must never be
+ *  misread as "backgrounded forever, lock now." Checking this first lets a
+ *  resume handler treat "never actually backgrounded yet" as "nothing to
+ *  do here" and leave cold-launch bootstrap entirely to its own existing
+ *  code path. */
+export function hasEverBeenBackgrounded(): boolean {
+  return backgroundedAt !== null;
+}
+
 /** Called once unlock has actually happened (biometric success, or a fresh
  * login) so the *next* foreground starts its own clock rather than
  * immediately re-locking on the following short task switch. */

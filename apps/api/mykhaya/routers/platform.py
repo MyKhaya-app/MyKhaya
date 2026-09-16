@@ -6282,11 +6282,21 @@ async def send_test_push(
             results.append(
                 {
                     "channel": "native",
+                    "platform": device.platform,
                     "device_label": device.device_label,
                     "result": "queued",
                     "delivery_id": str(delivery.id),
                     "device_id": str(device.id),
-                    "environment": device.apns_environment or "production",
+                    # APNs environment only means anything for iOS devices —
+                    # FCM has no sandbox/production split, so this key stays
+                    # `None` for Android rather than a misleading default.
+                    # NULL on a legacy iOS row predates per-device provenance
+                    # and has always meant production (see push.send_apns).
+                    "environment": (
+                        (device.apns_environment or "production")
+                        if device.platform == "ios"
+                        else None
+                    ),
                 }
             )
         except Exception as exc:

@@ -2,10 +2,12 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { App } from "@capacitor/app";
 import type { User } from "@mykhaya/shared-types";
 import { api, ApiError } from "@mykhaya/api-client";
 import { recordAuthDiagnostic } from "./auth-diagnostics";
 import { bootstrapNativeSession } from "./native-auth";
+import { hasEverBeenBackgrounded, markUnlocked, startAppLockTracking, wasBackgroundedLongEnoughToLock } from "./native-app-lock";
 import { initializeNativePush, reconcileNativePush } from "./native-push";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
@@ -69,12 +71,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         setUser(restored);
         setStatus("ready");
+        // Phase 4: whether this call originated from cold-launch bootstrap
+        // or a Phase-4 resume re-lock, reaching "ready" here means whatever
+        // the last background period was has just been fully accounted
+        // for — the *next* one must be judged on its own elapsed time, not
+        // added on top of this one. See native-app-lock.ts's own doc
+        // comment on markUnlocked() for the short-dip-after-unlock bug this
+        // prevents.
+        markUnlocked();
         recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_AUTHENTICATED");
         return true;
       }
       recordAuthDiagnostic("ME_REQUEST_STARTED");
       setUser(await api.me());
       setStatus("ready");
+      markUnlocked();
       recordAuthDiagnostic("ME_RESULT_200");
       recordAuthDiagnostic("AUTHENTICATED");
       return true;
@@ -88,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           setUser(await api.renew());
           setStatus("ready");
+          markUnlocked();
           recordAuthDiagnostic("RENEW_RESULT_200");
           return true;
         } catch (renewalCause) {
@@ -135,6 +147,84 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void reconcileNativePush();
   }, [router, status]);
 
+  // Phase 4: native lifecycle re-lock. This is a *local* re-lock layer over
+  // the existing server session — never a second session model. It reuses
+  // exactly the same bootstrap path a cold launch already goes through
+  // (`loadSession(true)` → `bootstrapNativeSession()`), which already
+  // contains the whole biometric-gate-then-verify-with-server sequence,
+  // the "cancellation never destroys the stored session" guarantee, and
+  // the "an expired/revoked server session wins regardless of biometric
+  // outcome" behaviour — none of that is reimplemented here, only
+  // triggered at the right moment.
+  //
+  // Registered once, for the component's lifetime, independent of `status`
+  // — background/foreground transitions must be tracked accurately even
+  // while the app is "locked" or still bootstrapping, not only while
+  // "ready". `statusRef`/`loadSessionRef` (kept current by the effects
+  // below) let the listener always act on the latest values without being
+  // torn down and re-created on every status change, which would otherwise
+  // risk missing an appStateChange event during the brief re-subscribe gap.
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+  const loadSessionRef = useRef(loadSession);
+  useEffect(() => {
+    loadSessionRef.current = loadSession;
+  }, [loadSession]);
+  const reauthenticatingOnResume = useRef(false);
+
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    startAppLockTracking();
+    let disposed = false;
+    let removeListener: (() => void) | undefined;
+    void App.addListener("appStateChange", ({ isActive }) => {
+      if (!isActive) return;
+      // Only ever acts while genuinely "ready" — resuming while already
+      // "locked" leaves the existing lock screen's own Try again/Sign in
+      // with password controls in charge (no auto-retry storm), and there
+      // is nothing to protect in any other status (offline/signed_out/
+      // initializing already show their own non-authenticated screen).
+      if (statusRef.current !== "ready") return;
+      // hasEverBeenBackgrounded() first: some platforms fire one
+      // appStateChange(isActive:true) during ordinary startup with no
+      // preceding isActive:false, which wasBackgroundedLongEnoughToLock()
+      // alone cannot distinguish from "backgrounded forever" (see that
+      // function's own doc comment on the deliberate `null` → `true`
+      // default, which exists for a *different* caller). Cold launch is
+      // already fully owned by the bootstrap effect above; this listener
+      // has nothing to do unless a real background period was recorded.
+      if (!hasEverBeenBackgrounded() || !wasBackgroundedLongEnoughToLock()) return;
+      // A synchronous re-entrancy guard, not a ref-derived one: rapid
+      // repeated foreground events (task-switcher flicker, a picker/
+      // permission dialog's own transitions) must never start a second
+      // overlapping re-lock/re-auth attempt while one is already in
+      // flight. statusRef alone can't guard this — it only updates after
+      // React commits the `setStatus("locked")` below, leaving a window
+      // where a second synchronous event in the same tick would still see
+      // "ready".
+      if (reauthenticatingOnResume.current) return;
+      reauthenticatingOnResume.current = true;
+      // Set synchronously, before any await, so the very next paint shows
+      // the lock screen instead of one frame of the still-mounted
+      // authenticated content underneath — there is nothing else that can
+      // render in between since nothing but this effect changes `status`.
+      setStatus("locked");
+      recordAuthDiagnostic("NATIVE_APP_LOCK_RESUME_TRIGGERED");
+      void loadSessionRef.current(true).finally(() => {
+        reauthenticatingOnResume.current = false;
+      });
+    }).then((handle) => {
+      if (disposed) void handle.remove();
+      else removeListener = () => void handle.remove();
+    });
+    return () => {
+      disposed = true;
+      removeListener?.();
+    };
+  }, []);
+
   const value = useMemo<AuthContextValue>(() => ({
     user,
     status,
@@ -147,6 +237,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(authenticatedUser);
       setStatus("ready");
       setInitialSessionLoading(false);
+      // A fresh sign-in (password or MFA) starts this device's Phase-4
+      // app-lock clock over from nothing — any "backgrounded at" timestamp
+      // recorded before this login belongs to whatever was previously
+      // signed in (or to no one, on a first-ever login) and must never be
+      // read as if it applied to this session.
+      markUnlocked();
     },
   }), [user, status, initialSessionLoading, sessionRefreshing, loadSession]);
 

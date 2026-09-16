@@ -5,7 +5,7 @@ import Link from "next/link";
 import { App } from "@capacitor/app";
 import { SettingsPage } from "@/components/settings-page";
 import { useBuildInfo } from "@/components/app-version";
-import { isNativeShell } from "@/components/native-runtime";
+import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { useNotificationPermission } from "@/components/use-notification-permission";
 import { nativePushDiagnostics } from "@/components/native-push";
 
@@ -78,7 +78,7 @@ export default function About() {
         <h2>Version information</h2>
         {isNativeShell() && nativeInfo && (
           <p>
-            <strong>iOS app</strong>
+            <strong>{nativePlatform() === "android" ? "Android app" : "iOS app"}</strong>
             <br />
             {nativeInfo.version} (Build {nativeInfo.build})
           </p>
@@ -116,7 +116,7 @@ export default function About() {
               <p>
                 <strong>Push provider</strong>
                 <br />
-                APNs
+                {nativePlatform() === "android" ? "FCM" : "APNs"}
               </p>
               <p>
                 <strong>Device token</strong>

@@ -49,6 +49,11 @@ vi.mock("./native-biometric", () => ({
   isBiometricCancellation: (result: unknown) => isBiometricCancellation(result),
 }));
 
+const markUnlocked = vi.fn<() => void>();
+vi.mock("./native-app-lock", () => ({
+  markUnlocked: () => markUnlocked(),
+}));
+
 describe("native-auth", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -133,6 +138,14 @@ describe("native-auth", () => {
 
     expect(logout).toHaveBeenCalledTimes(1);
     expect(setBiometricSignInEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("nativeLogout resets the app-lock clock — a stale 'backgrounded at' timestamp must never carry over to whichever account signs in next on this device", async () => {
+    const { nativeLogout } = await import("./native-auth");
+
+    await nativeLogout();
+
+    expect(markUnlocked).toHaveBeenCalledTimes(1);
   });
 
   it("reuses the same client instance across calls", async () => {

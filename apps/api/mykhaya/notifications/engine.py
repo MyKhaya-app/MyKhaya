@@ -361,7 +361,11 @@ async def _enqueue_push(
         await db.scalars(
             select(NativePushDevice).where(
                 NativePushDevice.user_id == recipient_user_id,
-                NativePushDevice.platform == "ios",
+                # Phase 5: widened from iOS-only. Provider selection (APNs vs
+                # FCM) happens once, in the worker, based on this same
+                # `platform` column — this query only needs to admit the set
+                # of platforms the worker actually knows how to dispatch.
+                NativePushDevice.platform.in_(("ios", "android")),
                 NativePushDevice.disabled_at.is_(None),
             )
         )

@@ -35,7 +35,7 @@ export interface NotificationPermissionAdapter {
   refreshPermissionStatus(): Promise<NotificationPermissionStatus>;
 }
 
-function mapIosPermission(receive: string | undefined): NotificationPermissionStatus {
+function mapNativePermission(receive: string | undefined): NotificationPermissionStatus {
   switch (receive) {
     case "granted":
       return "granted";
@@ -49,10 +49,27 @@ function mapIosPermission(receive: string | undefined): NotificationPermissionSt
   }
 }
 
-const iosAdapter: NotificationPermissionAdapter = {
+/**
+ * Shared by both native platforms — nativePushPermission()/
+ * requestNativePermissionOnly() (native-push.ts) and openAppSettings()
+ * (system-settings-bridge.ts) are already platform-generic themselves (each
+ * dispatches to whichever native implementation Capacitor picks for the
+ * running platform), so iOS and Android need no separate adapter bodies
+ * here — only the platform-specific native code underneath differs.
+ *
+ * This also already covers Android's version-dependent permission model
+ * without any extra branching: on API 33+ POST_NOTIFICATIONS is a real
+ * runtime permission that behaves exactly like iOS's (prompt once, "denied"
+ * afterwards means the OS won't show it again — requestNativePermissionOnly()
+ * already encodes that "don't re-prompt once denied" rule generically); on
+ * API <33 there is no such runtime permission at all, and the Capacitor
+ * plugin itself reports "granted" without ever prompting — this adapter
+ * just reflects whatever the plugin says, on either OS version.
+ */
+const nativePushAdapter: NotificationPermissionAdapter = {
   async getPermissionStatus() {
     const permission = await nativePushPermission();
-    return permission ? mapIosPermission(permission.receive) : "unsupported";
+    return permission ? mapNativePermission(permission.receive) : "unsupported";
   },
   async requestPermission() {
     const result = await requestNativePermissionOnly();
@@ -63,7 +80,7 @@ const iosAdapter: NotificationPermissionAdapter = {
   },
   async refreshPermissionStatus() {
     const permission = await nativePushPermission();
-    return permission ? mapIosPermission(permission.receive) : "unsupported";
+    return permission ? mapNativePermission(permission.receive) : "unsupported";
   },
 };
 
@@ -86,13 +103,15 @@ const unsupportedAdapter: NotificationPermissionAdapter = {
  * caller (the hook, the prompt, Settings) works only against the
  * NotificationPermissionAdapter interface after this point.
  *
- * Android: add `androidNotificationPermissionAdapter` implementing the same
- * interface (its requestPermission()/openSystemNotificationSettings() will
- * use the Android-equivalent APIs — an Intent to
- * Settings.ACTION_APP_NOTIFICATION_SETTINGS, etc.) and return it here for
- * `nativePlatform() === "android"`. No other file needs to change.
+ * Phase 5: both native platforms share nativePushAdapter (see its own doc
+ * comment for why one implementation covers both) — a genuinely
+ * Android-specific adapter would only be needed if some future Android
+ * permission concern couldn't be expressed through the same
+ * getPermissionStatus/requestPermission/openSystemNotificationSettings
+ * shape, which is not the case today.
  */
 export function getNotificationPermissionAdapter(): NotificationPermissionAdapter {
-  if (nativePlatform() === "ios") return iosAdapter;
+  const platform = nativePlatform();
+  if (platform === "ios" || platform === "android") return nativePushAdapter;
   return unsupportedAdapter;
 }

@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("getNotificationPermissionAdapter — platform selection", () => {
-  it("returns the iOS adapter on iOS", async () => {
+  it("returns the native push adapter on iOS", async () => {
     const { getNotificationPermissionAdapter } = await import("./notification-permission");
     nativePush.nativePushPermission.mockResolvedValue({ receive: "granted" });
 
@@ -32,8 +32,17 @@ describe("getNotificationPermissionAdapter — platform selection", () => {
     await expect(adapter.getPermissionStatus()).resolves.toBe("granted");
   });
 
-  it("returns the unsupported stub adapter on android/web (Android's future seam)", async () => {
+  it("returns the same native push adapter on Android — one implementation, no separate Android settings experience", async () => {
     platform.value = "android";
+    nativePush.nativePushPermission.mockResolvedValue({ receive: "granted" });
+    const { getNotificationPermissionAdapter } = await import("./notification-permission");
+
+    const adapter = getNotificationPermissionAdapter();
+    await expect(adapter.getPermissionStatus()).resolves.toBe("granted");
+  });
+
+  it("returns the unsupported stub adapter on web", async () => {
+    platform.value = "web";
     const { getNotificationPermissionAdapter } = await import("./notification-permission");
 
     const adapter = getNotificationPermissionAdapter();
@@ -44,19 +53,28 @@ describe("getNotificationPermissionAdapter — platform selection", () => {
   });
 });
 
-describe("iOS adapter — status mapping from Capacitor PermissionState", () => {
-  it.each([
-    ["granted", "granted"],
-    ["denied", "denied"],
-    ["prompt", "not_requested"],
-    ["prompt-with-rationale", "not_requested"],
-  ] as const)("maps checkPermissions() receive=%s to %s", async (receive, expected) => {
-    nativePush.nativePushPermission.mockResolvedValue({ receive });
-    const { getNotificationPermissionAdapter } = await import("./notification-permission");
+describe.each([["ios"], ["android"]] as const)(
+  "native push adapter on %s — status mapping from Capacitor PermissionState",
+  (platformValue) => {
+    beforeEach(() => {
+      platform.value = platformValue;
+    });
 
-    await expect(getNotificationPermissionAdapter().getPermissionStatus()).resolves.toBe(expected);
-  });
+    it.each([
+      ["granted", "granted"],
+      ["denied", "denied"],
+      ["prompt", "not_requested"],
+      ["prompt-with-rationale", "not_requested"],
+    ] as const)("maps checkPermissions() receive=%s to %s", async (receive, expected) => {
+      nativePush.nativePushPermission.mockResolvedValue({ receive });
+      const { getNotificationPermissionAdapter } = await import("./notification-permission");
 
+      await expect(getNotificationPermissionAdapter().getPermissionStatus()).resolves.toBe(expected);
+    });
+  },
+);
+
+describe("native push adapter (iOS, default platform in this file's beforeEach) — remaining behaviour", () => {
   it("maps a null permission (unsupported) to 'unsupported'", async () => {
     nativePush.nativePushPermission.mockResolvedValue(null);
     const { getNotificationPermissionAdapter } = await import("./notification-permission");

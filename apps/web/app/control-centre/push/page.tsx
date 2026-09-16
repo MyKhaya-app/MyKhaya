@@ -45,10 +45,28 @@ function publicKeySummary(key: string | null): string {
   return key ? `Configured · ending ${key.slice(-8)}` : "Not generated";
 }
 
+type TestPushResult = {
+  channel: "web" | "native";
+  platform: "ios" | "android" | null;
+  device_label: string | null;
+  result: string;
+};
+
+// A human label for the transport an operator would otherwise have to infer
+// from channel+platform — distinguishes iOS/APNs, Android/FCM and Web Push
+// without a bigger per-device registry view (out of scope for this phase).
+function providerLabel(row: TestPushResult): string {
+  if (row.channel === "web") return "Web Push";
+  if (row.platform === "android") return "Android · FCM";
+  if (row.platform === "ios") return "iOS · APNs";
+  return "Native";
+}
+
 export default function PushPage() {
   const [data, setData] = useState<PushState | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [testResults, setTestResults] = useState<TestPushResult[]>([]);
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -144,13 +162,17 @@ export default function PushPage() {
         setSending(true);
         setError("");
         setMessage("");
+        setTestResults([]);
         try {
-          const result = await platformApi.post<{ results: { device_label: string | null; result: string }[] }>(
+          const result = await platformApi.post<{ results: TestPushResult[] }>(
             "/push/test",
             { recipient: form.get("recipient"), reason: form.get("reason"), confirmed: true },
           );
-          const accepted = result.results.filter((row) => row.result === "accepted").length;
+          const accepted = result.results.filter(
+            (row) => row.result === "accepted" || row.result === "queued",
+          ).length;
           setMessage(`${accepted} of ${result.results.length} device(s) accepted the test push.`);
+          setTestResults(result.results);
           await load();
         } catch (cause) {
           if (cause instanceof ApiError && cause.status === 403) throw cause;
@@ -164,6 +186,12 @@ export default function PushPage() {
   );
 
   const settings = data?.push_settings;
+
+  const testResultColumns: CcTableColumn<TestPushResult>[] = [
+    { key: "device", header: "Device", render: (row) => row.device_label ?? "Unlabelled" },
+    { key: "provider", header: "Provider", render: (row) => providerLabel(row) },
+    { key: "result", header: "Result", render: (row) => titleCase(row.result) },
+  ];
 
   const failureColumns: CcTableColumn<PushState["recent_failures"][number]>[] = [
     { key: "type", header: "Type", render: (row) => titleCase(row.notification_type) },
@@ -302,6 +330,15 @@ export default function PushPage() {
                     ]}
                   />
                 </form>
+                {testResults.length > 0 && (
+                  <CcTable
+                    columns={testResultColumns}
+                    rows={testResults}
+                    rowKey={(row) => `${row.channel}-${row.device_label ?? "unlabelled"}-${row.result}`}
+                    emptyMessage="No devices to show."
+                    caption="Test push results by device"
+                  />
+                )}
               </CcCard>
               </CcSection>
             )}

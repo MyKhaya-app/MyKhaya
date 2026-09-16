@@ -11,6 +11,7 @@ import { PublicHero } from "@/components/marketing/public-hero";
 import { PublicPricing } from "@/components/marketing/public-pricing";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
+import { genericUnlockPromptCopy } from "@/components/native-biometric";
 
 function PublicWelcome() {
   return (
@@ -51,7 +52,7 @@ function NativeRootGate() {
     return (
       <main className="app-bootstrap-state" role="alert">
         <h1>Unlock MyKhaya</h1>
-        <p>Authenticate with Face ID, Touch ID, or your device passcode to continue.</p>
+        <p>Authenticate with {genericUnlockPromptCopy()} to continue.</p>
         <button onClick={retryInitialSession}>Try again</button>
         <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
       </main>

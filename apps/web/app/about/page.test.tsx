@@ -28,8 +28,11 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   };
 });
 
-const { isNativeShell } = vi.hoisted(() => ({ isNativeShell: vi.fn(() => false) }));
-vi.mock("@/components/native-runtime", () => ({ isNativeShell }));
+const { isNativeShell, nativePlatform } = vi.hoisted(() => ({
+  isNativeShell: vi.fn(() => false),
+  nativePlatform: vi.fn(() => "ios" as "ios" | "android" | "web"),
+}));
+vi.mock("@/components/native-runtime", () => ({ isNativeShell, nativePlatform }));
 
 const { getInfo } = vi.hoisted(() => ({ getInfo: vi.fn() }));
 vi.mock("@capacitor/app", () => ({ App: { getInfo } }));
@@ -60,6 +63,7 @@ function mockBuild(payload: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   isNativeShell.mockReturnValue(false);
+  nativePlatform.mockReturnValue("ios");
   nativePermission.status = "granted";
   nativePushDiagnostics.mockReturnValue({ tokenPresent: false, registered: false });
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -122,6 +126,46 @@ describe("About — native iOS", () => {
 
     await screen.findByText("0.1.0");
     expect(screen.queryByText("iOS app")).not.toBeInTheDocument();
+  });
+});
+
+describe("About — native Android", () => {
+  beforeEach(() => {
+    isNativeShell.mockReturnValue(true);
+    nativePlatform.mockReturnValue("android");
+  });
+
+  it("shows the Android app version and build number, not iOS", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    getInfo.mockResolvedValue({ name: "MyKhaya", id: "app.mykhaya.mobile", build: "8", version: "0.1.0" });
+
+    render(<About />);
+
+    await waitFor(() => expect(screen.getByText(/0\.1\.0 \(Build 8\)/)).toBeInTheDocument());
+    expect(screen.getByText("Android app")).toBeInTheDocument();
+    expect(screen.queryByText("iOS app")).not.toBeInTheDocument();
+  });
+
+  it("shows Push provider as FCM, not APNs", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+
+    render(<About />);
+
+    await screen.findByText("Push provider");
+    expect(screen.getByText("FCM")).toBeInTheDocument();
+    expect(screen.queryByText("APNs")).not.toBeInTheDocument();
+  });
+
+  it("shows the same permission/registration diagnostics rows as iOS, unmodified", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    nativePermission.status = "denied";
+    nativePushDiagnostics.mockReturnValue({ tokenPresent: false, registered: false });
+
+    render(<About />);
+
+    await screen.findByText("Notification permission");
+    expect(screen.getByText("Off")).toBeInTheDocument();
+    expect(screen.getByText("Not registered")).toBeInTheDocument();
   });
 });
 

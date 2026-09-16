@@ -12,7 +12,7 @@ const api = vi.hoisted(() => ({
   registerNativePushDevice: vi.fn().mockResolvedValue({ id: "registration-1" }),
   deleteNativePushDevice: vi.fn().mockResolvedValue(undefined),
 }));
-const platform = vi.hoisted(() => ({ native: true, value: "ios" as "ios" | "web" }));
+const platform = vi.hoisted(() => ({ native: true, value: "ios" as "ios" | "android" | "web" }));
 
 vi.mock("@capacitor/push-notifications", () => ({ PushNotifications: push }));
 vi.mock("@mykhaya/api-client", () => ({ api }));
@@ -242,6 +242,90 @@ describe("native push platform boundary", () => {
       const { requestNativePermissionOnly } = await import("./native-push");
 
       await expect(requestNativePermissionOnly()).resolves.toBe("not_requested");
+    });
+  });
+
+  describe("Android — FCM registration and permission (Phase 5)", () => {
+    beforeEach(() => {
+      platform.value = "android";
+    });
+
+    it("registers an Android device with no APNs environment and a platform-appropriate label", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.requestPermissions.mockResolvedValue({ receive: "granted" });
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "fcm-token" });
+      });
+      const { enableNativePush } = await import("./native-push");
+
+      await expect(enableNativePush()).resolves.toEqual({ ok: true, status: "registered" });
+      expect(api.registerNativePushDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platform: "android",
+          token: "fcm-token",
+          device_label: "Android device",
+          apns_environment: undefined,
+        }),
+      );
+    });
+
+    it("does not invoke initializeNativePush/reconcileNativePush's iOS-only guard — Android is a supported platform, not skipped", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "granted" });
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "fcm-token" });
+      });
+      const { reconcileNativePush } = await import("./native-push");
+
+      await reconcileNativePush();
+      await vi.waitFor(() => expect(api.registerNativePushDevice).toHaveBeenCalledTimes(1));
+    });
+
+    it("returns 'denied' without re-prompting when Android permission was already denied (incl. a permanent 'Don't ask again' denial, which Capacitor also reports as 'denied')", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "denied" });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("denied");
+      expect(push.requestPermissions).not.toHaveBeenCalled();
+    });
+
+    it("prompts exactly once when not yet requested on Android, mapping a fresh denial to 'denied'", async () => {
+      push.checkPermissions.mockResolvedValue({ receive: "prompt" });
+      push.requestPermissions.mockResolvedValue({ receive: "denied" });
+      const { requestNativePermissionOnly } = await import("./native-push");
+
+      await expect(requestNativePermissionOnly()).resolves.toBe("denied");
+      expect(push.requestPermissions).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves a fresh FCM token refresh (e.g. after reinstall) through the same registration listener as any other token event", async () => {
+      const { enableNativePush } = await import("./native-push");
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "fcm-token-v1" });
+      });
+      await enableNativePush();
+      expect(api.registerNativePushDevice).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ token: "fcm-token-v1" }),
+      );
+
+      // A later registration event (token refresh, or a fresh register() call
+      // after reinstall/cleanup) must register the new token the same way.
+      await import("./native-push").then(({ cleanupNativePush }) => cleanupNativePush());
+      push.register.mockImplementation(async () => {
+        listenerFor<Token>("registration")({ value: "fcm-token-v2" });
+      });
+      await enableNativePush();
+      expect(api.registerNativePushDevice).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ token: "fcm-token-v2" }),
+      );
+    });
+
+    it("resolves notification-tap deep links the same way as iOS — no platform branching in tap handling", async () => {
+      const { safeNativePushPath } = await import("./native-push");
+
+      expect(safeNativePushPath("/calendar/2026-09-01")).toBe("/calendar/2026-09-01");
+      expect(safeNativePushPath("https://evil.example")).toBe("/home");
     });
   });
 

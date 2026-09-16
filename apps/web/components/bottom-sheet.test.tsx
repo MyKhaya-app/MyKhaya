@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, within } from "@testing-library/react";
 import { useState } from "react";
 import { BottomSheet } from "./bottom-sheet";
+import { dismissTopmost } from "./dismissal-stack";
 
 let nativeShell = false;
 vi.mock("./native-runtime", () => ({
@@ -119,6 +120,62 @@ describe("BottomSheet — scroll lock, native shell", () => {
 // deterministically blur that field before its DOM is torn down, and must
 // never scroll the page when focus is restored afterwards — see
 // bottom-sheet.tsx's cleanup comment for the full mechanism.
+// Regression coverage for Android hardware/gesture Back: a mounted
+// BottomSheet must be closeable by the shared back-button handler
+// (native-back-button.ts) without either of them knowing about the other
+// directly — see dismissal-stack.ts, the seam between them.
+describe("BottomSheet — dismissal-stack registration (Android Back integration)", () => {
+  it("registers itself as dismissible while mounted, and dismissTopmost() calls the latest onDismiss", () => {
+    const onDismiss = vi.fn();
+    const { unmount } = render(<BottomSheet title="Sheet" onDismiss={onDismiss} children="x" />);
+
+    expect(dismissTopmost()).toBe(true);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("unregisters on unmount — dismissTopmost() finds nothing once closed", () => {
+    const onDismiss = vi.fn();
+    const { unmount } = render(<BottomSheet title="Sheet" onDismiss={onDismiss} children="x" />);
+
+    unmount();
+
+    expect(dismissTopmost()).toBe(false);
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the topmost of two stacked sheets first, leaving the other registered", () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    const { unmount: unmountOuter } = render(<BottomSheet title="Outer" onDismiss={outer} children="x" />);
+    const { unmount: unmountInner } = render(<BottomSheet title="Inner" onDismiss={inner} children="x" />);
+
+    expect(dismissTopmost()).toBe(true);
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+
+    unmountInner();
+    expect(dismissTopmost()).toBe(true);
+    expect(outer).toHaveBeenCalledTimes(1);
+
+    unmountOuter();
+  });
+
+  it("always calls the latest onDismiss even after a parent re-render passes a new callback", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender, unmount } = render(<BottomSheet title="Sheet" onDismiss={first} children="x" />);
+
+    rerender(<BottomSheet title="Sheet" onDismiss={second} children="x" />);
+    expect(dismissTopmost()).toBe(true);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+});
+
 describe("BottomSheet — focus handling on close (calendar-save zoom/jump regression)", () => {
   it("blurs a focused field inside the sheet before unmounting, rather than letting the browser discover it vanished", () => {
     const trigger = document.createElement("button");

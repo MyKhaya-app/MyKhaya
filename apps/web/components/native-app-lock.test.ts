@@ -7,6 +7,7 @@ vi.mock("@capacitor/app", () => ({
 
 const {
   BIOMETRIC_LOCK_TIMEOUT_MS,
+  hasEverBeenBackgrounded,
   markUnlocked,
   resetAppLockTrackingForTesting,
   shouldRequireUnlock,
@@ -89,5 +90,47 @@ describe("startAppLockTracking / wasBackgroundedLongEnoughToLock", () => {
     // on its own elapsed time, not any timestamp from before the unlock.
     handler({ isActive: false });
     expect(wasBackgroundedLongEnoughToLock(Date.now() + 1_000)).toBe(false);
+  });
+});
+
+describe("hasEverBeenBackgrounded", () => {
+  afterEach(() => {
+    resetAppLockTrackingForTesting();
+    vi.clearAllMocks();
+  });
+
+  it("is false before any background transition has been recorded", () => {
+    expect(hasEverBeenBackgrounded()).toBe(false);
+  });
+
+  it("becomes true once a background transition is recorded", () => {
+    startAppLockTracking();
+    const handler = addListener.mock.calls[0]?.[1] as (info: { isActive: boolean }) => void;
+
+    handler({ isActive: false });
+
+    expect(hasEverBeenBackgrounded()).toBe(true);
+  });
+
+  it("goes back to false after markUnlocked — a resume handler must not treat this as 'still backgrounded'", () => {
+    startAppLockTracking();
+    const handler = addListener.mock.calls[0]?.[1] as (info: { isActive: boolean }) => void;
+    handler({ isActive: false });
+    expect(hasEverBeenBackgrounded()).toBe(true);
+
+    markUnlocked();
+
+    expect(hasEverBeenBackgrounded()).toBe(false);
+  });
+
+  it("an isActive:true firing with no prior background is distinguishable via this flag even though shouldRequireUnlock(null, ...) alone would say true", () => {
+    // This is the exact scenario the flag exists for: some platforms send
+    // one appStateChange(isActive:true) during ordinary startup, with no
+    // preceding isActive:false. wasBackgroundedLongEnoughToLock() alone
+    // (built on shouldRequireUnlock's null-means-true default) cannot tell
+    // this apart from "backgrounded forever" — hasEverBeenBackgrounded()
+    // is what lets a caller correctly do nothing here instead.
+    expect(hasEverBeenBackgrounded()).toBe(false);
+    expect(wasBackgroundedLongEnoughToLock()).toBe(true);
   });
 });

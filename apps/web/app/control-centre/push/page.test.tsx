@@ -140,6 +140,48 @@ describe("PushPage", () => {
     expect(await screen.findByText("1 of 1 device(s) accepted the test push.")).toBeInTheDocument();
   });
 
+  it("shows a per-device provider breakdown distinguishing iOS/APNs, Android/FCM and Web Push", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    post.mockResolvedValue({
+      results: [
+        { channel: "web", platform: null, device_label: "Chrome on laptop", result: "accepted" },
+        { channel: "native", platform: "ios", device_label: "iPhone", result: "queued" },
+        { channel: "native", platform: "android", device_label: "Pixel", result: "queued" },
+      ],
+    });
+    render(<PushPage />);
+    await screen.findByLabelText("Recipient's email (must have a registered device)");
+    await user.clear(screen.getByLabelText("Recipient's email (must have a registered device)"));
+    await user.type(screen.getByLabelText("Recipient's email (must have a registered device)"), "admin@mykhaya.app");
+    await user.type(screen.getByLabelText("Reason for test"), "Confirming push wiring");
+    await user.click(screen.getByRole("button", { name: "Send test push" }));
+
+    expect(await screen.findByText("3 of 3 device(s) accepted the test push.")).toBeInTheDocument();
+    expect(screen.getByText("Web Push")).toBeInTheDocument();
+    expect(screen.getByText("iOS · APNs")).toBeInTheDocument();
+    expect(screen.getByText("Android · FCM")).toBeInTheDocument();
+  });
+
+  it("does not misreport a queued native failure as accepted in the per-device table", async () => {
+    const user = userEvent.setup();
+    mockRoutes();
+    post.mockResolvedValue({
+      results: [
+        { channel: "native", platform: "android", device_label: "Pixel", result: "FcmPermanentError" },
+      ],
+    });
+    render(<PushPage />);
+    await screen.findByLabelText("Recipient's email (must have a registered device)");
+    await user.clear(screen.getByLabelText("Recipient's email (must have a registered device)"));
+    await user.type(screen.getByLabelText("Recipient's email (must have a registered device)"), "admin@mykhaya.app");
+    await user.type(screen.getByLabelText("Reason for test"), "Confirming push wiring");
+    await user.click(screen.getByRole("button", { name: "Send test push" }));
+
+    expect(await screen.findByText("0 of 1 device(s) accepted the test push.")).toBeInTheDocument();
+    expect(screen.getByText("Android · FCM")).toBeInTheDocument();
+  });
+
   it("surfaces a safe error message on a rejected save", async () => {
     const user = userEvent.setup();
     mockRoutes();

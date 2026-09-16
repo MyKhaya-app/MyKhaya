@@ -27,6 +27,8 @@ vi.mock("./native-runtime", () => ({
 import {
   authenticateWithBiometrics,
   biometricLabel,
+  deviceNoun,
+  genericUnlockPromptCopy,
   getBiometricCapability,
   isBiometricCancellation,
   resetBiometricProvider,
@@ -57,37 +59,23 @@ afterEach(() => {
   authenticateMock.mockClear();
 });
 
-describe("the real (non-test-injected) provider on a platform other than iOS", () => {
-  // Regression: @aparajita/capacitor-biometric-auth is not installed for
-  // Android, but its own registerPlugin() call declares an `android` JS
-  // factory that just re-binds the plugin's own proxy method onto itself —
-  // so calling it on Android recurses into itself forever, observed on a
-  // real Android emulator running the WebView renderer's heap from ~180MB
-  // to an ~1GB OOM crash in under 20 seconds, right after login (see
-  // NativeBiometricOffer, the one call site with no startup timeout guard).
-  // These assert the real BiometricAuth.checkBiometry/authenticate are never
-  // reached at all outside iOS — the fix, not just "eventually resolves."
-  it("getBiometricCapability reports unavailable without ever calling the plugin", async () => {
-    nativePlatformMock.mockReturnValue("android");
-
-    const capability = await getBiometricCapability();
-
-    expect(capability.available).toBe(false);
-    expect(capability.kind).toBe("none");
-    expect(checkBiometryMock).not.toHaveBeenCalled();
-  });
-
-  it("authenticateWithBiometrics fails safely without ever calling the plugin", async () => {
-    nativePlatformMock.mockReturnValue("android");
-
-    const result = await authenticateWithBiometrics("Unlock MyKhaya");
-
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.code).toBe(BiometryErrorType.biometryNotAvailable);
-    expect(authenticateMock).not.toHaveBeenCalled();
-  });
-
-  it("still calls the real plugin on iOS", async () => {
+describe("the real (non-test-injected) provider — calls the plugin on both native platforms", () => {
+  // Historical regression (now fixed, see native-biometric.ts's own doc
+  // comment for the full story): @aparajita/capacitor-biometric-auth wasn't
+  // installed for Android, but its own registerPlugin() call declares an
+  // `android` JS factory that just re-binds the plugin's own proxy method
+  // onto itself — so calling it with no native implementation registered
+  // recursed into itself forever, observed on a real Android emulator
+  // running the WebView renderer's heap from ~180MB to an ~1GB OOM crash in
+  // under 20 seconds, right after login (NativeBiometricOffer, the one call
+  // site with no startup timeout guard). Fixed by adding the dependency to
+  // apps/android-shell/package.json and verifying `cap sync android`
+  // registers a real native plugin (see that file's comment for the exact
+  // verification). These assert the real BiometricAuth.checkBiometry/
+  // authenticate are reached identically on both platforms now — a
+  // regression here (the guard coming back, or being widened to block
+  // Android again) would be a real product regression, not a safety net.
+  it("calls the real plugin on iOS", async () => {
     nativePlatformMock.mockReturnValue("ios");
     checkBiometryMock.mockResolvedValue({
       isAvailable: true,
@@ -103,6 +91,62 @@ describe("the real (non-test-injected) provider on a platform other than iOS", (
 
     expect(capability.available).toBe(true);
     expect(checkBiometryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the real plugin on Android too — the native implementation is installed and registered", async () => {
+    nativePlatformMock.mockReturnValue("android");
+    checkBiometryMock.mockResolvedValue({
+      isAvailable: true,
+      strongBiometryIsAvailable: false,
+      biometryType: BiometryType.fingerprintAuthentication,
+      biometryTypes: [BiometryType.fingerprintAuthentication],
+      deviceIsSecure: true,
+      reason: "",
+      code: BiometryErrorType.none,
+    });
+
+    const capability = await getBiometricCapability();
+
+    expect(checkBiometryMock).toHaveBeenCalledTimes(1);
+    expect(capability.available).toBe(true);
+    // Android never claims a specific named modality — see kindFromType's
+    // own doc comment for why "other"/"biometric sign-in" is the honest
+    // label even when the plugin reports a specific BiometryType.
+    expect(capability.kind).toBe("other");
+    expect(capability.label).toBe("biometric sign-in");
+  });
+
+  it("authenticateWithBiometrics reaches the real plugin on Android with allowDeviceCredential", async () => {
+    nativePlatformMock.mockReturnValue("android");
+    authenticateMock.mockResolvedValue(undefined);
+
+    const result = await authenticateWithBiometrics("Unlock MyKhaya");
+
+    expect(result).toEqual({ ok: true });
+    expect(authenticateMock).toHaveBeenCalledWith({
+      reason: "Unlock MyKhaya",
+      allowDeviceCredential: true,
+    });
+  });
+
+  it("Android biometryNotEnrolled/biometryLockout codes surface identically to iOS", async () => {
+    nativePlatformMock.mockReturnValue("android");
+    checkBiometryMock.mockResolvedValue({
+      isAvailable: false,
+      strongBiometryIsAvailable: false,
+      biometryType: BiometryType.none,
+      biometryTypes: [],
+      deviceIsSecure: true,
+      reason: "The user does not have any biometrics enrolled.",
+      code: BiometryErrorType.biometryNotEnrolled,
+    });
+
+    const capability = await getBiometricCapability();
+
+    expect(capability.notEnrolled).toBe(true);
+    expect(capability.available).toBe(false);
+    // Android's own "no modality known yet" fallback — never "Face ID".
+    expect(capability.label).toBe("biometric sign-in");
   });
 });
 
@@ -277,6 +321,41 @@ describe("biometricLabel", () => {
     expect(biometricLabel("faceId")).toBe("Face ID");
     expect(biometricLabel("touchId")).toBe("Touch ID");
     expect(biometricLabel("other")).not.toMatch(/browser|web|pwa/i);
-    expect(biometricLabel("none")).not.toMatch(/browser|web|pwa/i);
+  });
+
+  it("'none' (unknown/pending) falls back to Face ID on iOS", () => {
+    nativePlatformMock.mockReturnValue("ios");
+    expect(biometricLabel("none")).toBe("Face ID");
+  });
+
+  it("'none' (unknown/pending) falls back to a neutral label on Android — never 'Face ID'", () => {
+    nativePlatformMock.mockReturnValue("android");
+    expect(biometricLabel("none")).toBe("biometric sign-in");
+    expect(biometricLabel("none")).not.toMatch(/face id|touch id/i);
+  });
+});
+
+describe("deviceNoun", () => {
+  it("says 'this iPhone' on iOS", () => {
+    nativePlatformMock.mockReturnValue("ios");
+    expect(deviceNoun()).toBe("this iPhone");
+  });
+
+  it("says 'this device' on Android — never guesses at a device model", () => {
+    nativePlatformMock.mockReturnValue("android");
+    expect(deviceNoun()).toBe("this device");
+  });
+});
+
+describe("genericUnlockPromptCopy", () => {
+  it("mentions Face ID and Touch ID by name on iOS", () => {
+    nativePlatformMock.mockReturnValue("ios");
+    expect(genericUnlockPromptCopy()).toMatch(/face id/i);
+    expect(genericUnlockPromptCopy()).toMatch(/touch id/i);
+  });
+
+  it("never claims a specific named modality on Android", () => {
+    nativePlatformMock.mockReturnValue("android");
+    expect(genericUnlockPromptCopy()).not.toMatch(/face id|touch id/i);
   });
 });

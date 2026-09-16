@@ -56,6 +56,16 @@ export function safeNativePushPath(value: unknown): string {
   return allowed.some((prefix) => value === prefix || value.startsWith(prefix)) ? value : "/home";
 }
 
+/** Phase 5: the one place that decides which native platforms this module
+ * supports at all — both current native push platforms (APNs on iOS, FCM on
+ * Android) gate identically here; only registerToken()'s payload (device
+ * label, APNs environment) differs per platform below. */
+function isSupportedNativePushPlatform(): boolean {
+  if (!isNativeShell()) return false;
+  const platform = nativePlatform();
+  return platform === "ios" || platform === "android";
+}
+
 function installationId(): string {
   const key = "mykhaya.native.push.installation";
   const existing = window.localStorage.getItem(key);
@@ -121,20 +131,20 @@ async function ensureListeners(): Promise<void> {
 }
 
 export async function initializeNativePush(onAction: (path: string) => void): Promise<void> {
-  if (!isNativeShell() || nativePlatform() !== "ios") return;
+  if (!isSupportedNativePushPlatform()) return;
   actionHandler = onAction;
   await ensureListeners();
 }
 
 /** Reconcile an already-granted OS permission without prompting. */
 export async function reconcileNativePush(): Promise<void> {
-  if (!isNativeShell() || nativePlatform() !== "ios") return;
+  if (!isSupportedNativePushPlatform()) return;
   const permission = await PushNotifications.checkPermissions();
   if (permission.receive === "granted") await enableNativePush();
 }
 
 export async function nativePushPermission(): Promise<PermissionStatus | null> {
-  if (!isNativeShell() || nativePlatform() !== "ios") return null;
+  if (!isSupportedNativePushPlatform()) return null;
   return PushNotifications.checkPermissions();
 }
 
@@ -152,7 +162,7 @@ export async function nativePushPermission(): Promise<PermissionStatus | null> {
  * function returns.
  */
 export async function requestNativePermissionOnly(): Promise<NativePermissionOnlyResult> {
-  if (!isNativeShell() || nativePlatform() !== "ios") return "unsupported";
+  if (!isSupportedNativePushPlatform()) return "unsupported";
   const current = await PushNotifications.checkPermissions();
   if (current.receive === "denied") return "denied";
   if (current.receive === "granted") {
@@ -178,7 +188,7 @@ export function nativePushDiagnostics(): { tokenPresent: boolean; registered: bo
 async function enableNativePushOnce(
   onAction?: (path: string) => void,
 ): Promise<{ ok: true; status: "registered" } | { ok: false; status: NativePushStatus }> {
-  if (!isNativeShell() || nativePlatform() !== "ios") return { ok: false, status: "unsupported" };
+  if (!isSupportedNativePushPlatform()) return { ok: false, status: "unsupported" };
   registrationActive = true;
   cleanupRequested = false;
   registrationFailure = undefined;

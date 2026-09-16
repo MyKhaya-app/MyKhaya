@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { isNativeShell } from "./native-runtime";
+import { registerDismissible } from "./dismissal-stack";
 
 export function BottomSheet({
   title,
@@ -86,7 +87,14 @@ export function BottomSheet({
     };
     document.addEventListener("keydown", keydown);
     document.body.classList.add("sheet-open");
+    // Registers this sheet as the thing an Android hardware/gesture Back
+    // press should close, instead of navigating away or exiting the app —
+    // see native-back-button.ts and dismissal-stack.ts. `dismiss.current()`
+    // rather than `onDismiss` directly so a parent re-render that passes a
+    // new callback identity is still honoured without re-registering.
+    const unregisterDismissible = registerDismissible(() => dismiss.current());
     return () => {
+      unregisterDismissible();
       // Blur a still-focused field (e.g. Save tapped straight from a text
       // input, keyboard still open) *before* React removes this sheet's DOM
       // — this cleanup is a layout effect specifically so it runs

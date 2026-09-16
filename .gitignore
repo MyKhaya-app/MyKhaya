@@ -20,3 +20,12 @@ playwright-report/
 test-results/
 backups/
 *.sql.gz
+
+# Firebase Cloud Messaging (Phase 5). Server-side FCM credentials are three
+# plain settings values (mykhaya.config: fcm_project_id/fcm_client_email/
+# fcm_private_key), never the service-account JSON file itself — but ignore
+# the file defensively in case one is ever downloaded into the repo by
+# mistake. The Android client-side equivalent (google-services.json) is
+# already gitignored separately, in apps/android-shell/android/app/.gitignore.
+firebase-service-account*.json
+*-firebase-adminsdk-*.json

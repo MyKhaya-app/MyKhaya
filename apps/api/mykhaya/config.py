@@ -121,6 +121,16 @@ class Settings(BaseSettings):
     apns_bundle_id: str = "app.mykhaya.mobile"
     apns_private_key: SecretStr | None = None
     apns_delivery_configured: bool = False
+    # Firebase Cloud Messaging (Android native push, Phase 5) — mirrors the
+    # APNs fields above exactly: three plain values taken directly from a
+    # Firebase service-account JSON (`project_id`, `client_email`,
+    # `private_key`), never the JSON file itself. Env-only, like APNs — no
+    # Platform-Admin-managed path exists for either native provider (unlike
+    # Web Push's VAPID keys, which also support platform_settings storage).
+    fcm_project_id: str | None = None
+    fcm_client_email: str | None = None
+    fcm_private_key: SecretStr | None = None
+    fcm_delivery_configured: bool = False
     # Deployment-managed external sign-in configuration. Secrets never enter
     # platform_settings or API responses; explicit enablement does not itself
     # implement a provider ceremony.

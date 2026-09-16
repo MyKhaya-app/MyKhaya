@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import {
   authenticateWithBiometrics,
+  biometricLabel,
+  deviceNoun,
   getBiometricCapability,
   isBiometricCancellation,
   type BiometricCapability,
@@ -12,7 +14,7 @@ import {
   setBiometricSignInEnabled,
 } from "./native-biometric-preference";
 
-// A native Capacitor plugin call whose iOS implementation isn't actually
+// A native Capacitor plugin call whose native implementation isn't actually
 // linked into the compiled binary can reject immediately — or, observed on
 // a real device, simply never resolve at all. Nothing in this component
 // (or the underlying plugin wrappers) can distinguish "slow" from "will
@@ -38,12 +40,13 @@ function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
   });
 }
 
-// The native iOS Security page's biometric card — deliberately a distinct
+// The native Security page's biometric card — deliberately a distinct
 // component from the browser/PWA "Biometric sign-in" (WebAuthn passkey)
 // card in app/settings/security/page.tsx, which is rendered instead of
 // this one outside the native shell. Never mentions "browser"/"Web/PWA":
-// this is Face ID/Touch ID via native LocalAuthentication (see
-// components/native-biometric.ts), with no WebAuthn involved at all.
+// this is native biometric sign-in (Face ID/Touch ID on iOS, BiometricPrompt
+// on Android — see components/native-biometric.ts), with no WebAuthn
+// involved at all.
 //
 // Phase 5's "Enabling" requirements: an active valid authenticated session
 // is already required simply by this component only ever being reachable
@@ -63,17 +66,18 @@ export function QuickSignIn() {
 
   useEffect(() => {
     let cancelled = false;
-    // Defence-in-depth against a native plugin whose iOS implementation
-    // isn't actually linked into the compiled binary (see
-    // apps/ios-shell/package.json) — such a bridge call can reject, but has
-    // also been observed to simply never resolve, which would otherwise
-    // leave `capability`/`enabled` stuck pending forever and this card
-    // looking frozen. Racing against a short timeout guarantees this effect
-    // always settles into a safe state either way; it never affects a call
-    // that resolves normally well within the window.
+    // Defence-in-depth against a native plugin whose implementation isn't
+    // actually linked into the compiled binary (see
+    // apps/ios-shell/package.json and apps/android-shell/package.json) —
+    // such a bridge call can reject, but has also been observed to simply
+    // never resolve, which would otherwise leave `capability`/`enabled`
+    // stuck pending forever and this card looking frozen. Racing against a
+    // short timeout guarantees this effect always settles into a safe
+    // state either way; it never affects a call that resolves normally
+    // well within the window.
     const timedOutCapability: BiometricCapability = {
       kind: "none",
-      label: "Face ID",
+      label: biometricLabel("none"),
       available: false,
       lockedOut: false,
       notEnrolled: false,
@@ -95,7 +99,7 @@ export function QuickSignIn() {
     setError("");
     setMessage("");
     try {
-      const label = capability?.label ?? "Face ID";
+      const label = capability?.label ?? biometricLabel("none");
       const result = await withTimeout(authenticateWithBiometrics(`Enable ${label} for MyKhaya`), {
         ok: false,
         code: "unknown",
@@ -122,40 +126,41 @@ export function QuickSignIn() {
     try {
       await setBiometricSignInEnabled(false);
       setEnabled(false);
-      setMessage("Quick Sign-In has been turned off on this iPhone.");
+      setMessage(`Quick Sign-In has been turned off on ${deviceNoun()}.`);
     } finally {
       setBusy(false);
     }
   }
 
-  const label = capability?.label ?? "Face ID";
+  const label = capability?.label ?? biometricLabel("none");
+  const device = deviceNoun();
 
   return (
     <section className="card details">
       <h2>Quick Sign-In</h2>
       {enabled ? (
         <>
-          <p className="muted">{label} is enabled on this iPhone.</p>
+          <p className="muted">{label} is enabled on {device}.</p>
           <button className="secondary" disabled={busy} onClick={() => void disable()}>
             {busy ? "Turning off…" : "Disable"}
           </button>
         </>
       ) : capability?.available ? (
         <>
-          <p className="muted">Use {label} to securely access MyKhaya on this iPhone.</p>
+          <p className="muted">Use {label} to securely access MyKhaya on {device}.</p>
           <button className="secondary" disabled={busy} onClick={() => void enable()}>
             {busy ? "Confirming…" : `Enable ${label}`}
           </button>
         </>
       ) : capability?.notEnrolled ? (
         <p className="muted">
-          {label} isn&rsquo;t set up on this iPhone yet — add it in your iPhone&rsquo;s Settings
+          {label} isn&rsquo;t set up on {device} yet — add it in {device}&rsquo;s Settings
           app to use Quick Sign-In here.
         </p>
       ) : capability?.lockedOut ? (
-        <p className="muted">{label} is temporarily unavailable on this iPhone. Try again shortly.</p>
+        <p className="muted">{label} is temporarily unavailable on {device}. Try again shortly.</p>
       ) : capability ? (
-        <p className="muted">Quick Sign-In isn&rsquo;t available on this iPhone — your password still works as usual.</p>
+        <p className="muted">Quick Sign-In isn&rsquo;t available on {device} — your password still works as usual.</p>
       ) : null}
       {message && <p className="notice" role="status">{message}</p>}
       {error && <p className="notice error" role="alert">{error}</p>}

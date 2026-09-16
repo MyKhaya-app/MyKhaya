@@ -189,6 +189,56 @@ is called from exactly one place: `worker.py`'s `_process_push()`, handling the
 is marked `disabled_at` rather than retried forever; a malformed subscription (bad
 stored keys) is treated the same way, since retrying it would fail identically forever.
 
+### Native push (APNs / FCM)
+
+Distinct from Web Push above: a `NativePushDevice` row (one per installed native app
+instance, `platform: "ios" | "android"`) rather than a browser `PushSubscription`. The
+engine enqueues a `notification.native_push` outbox event exactly the same way regardless
+of platform (`enqueue_native_push`, called from `_enqueue_push` for every non-disabled
+`ios`/`android` device); provider selection happens in exactly one place,
+`worker._send_native_push()`, which picks `send_apns`/`resolve_apns_config` for `ios` or
+`send_fcm`/`resolve_fcm_config` for `android` based on `device.platform` — no other file
+branches on native platform. A platform with no sender (neither of the above) is logged
+and the delivery cancelled, never retried forever and never routed to the other
+provider's sender.
+
+Both senders build their own short-lived bearer token per send (an APNs provider JWT via
+`authlib`, or an FCM OAuth2 access token exchanged from a signed service-account JWT via
+the same `authlib` primitive) rather than caching one — sends are infrequent enough
+(per outbox event, off any hot path) that this is simpler than a cache that could serve a
+stale/revoked token. A permanently-rejected registration (`ApnsPermanentError` for
+400/404/410 from Apple, `FcmPermanentError` for FCM's `UNREGISTERED`/`NOT_FOUND` error
+codes) disables that one `NativePushDevice` row with a provider-specific reason, mirroring
+Web Push's own dead-subscription handling above — a device is never left retrying a dead
+token forever. Missing/incomplete provider configuration (`resolve_apns_config`/
+`resolve_fcm_config` returning `configured=False`) fails safely: the affected delivery is
+cancelled with `"Native push delivery is not configured."`, and this can never affect the
+*other* provider — an unconfigured FCM project does not block APNs delivery, or Web Push,
+or vice versa.
+
+#### Android notification channels
+
+Android requires every notification to belong to a channel the receiving app has already
+created on-device; an unrecognised `channel_id` is silently dropped rather than shown
+with a fallback. `apps/android-shell`'s `MainActivity.onCreate()` creates exactly three
+channels via `NotificationChannels.createAll()` (idempotent, safe on every launch), and
+`push.py`'s `fcm_channel_for_notification_type()` — the single source of truth on the
+backend side — maps every `notification_type` to one of the same three ids for the
+`android.notification.channel_id` field of the FCM v1 message:
+
+| Channel id        | Shown as              | Contains                                                                 |
+| ------------------ | ---------------------- | ------------------------------------------------------------------------- |
+| `general`           | General                | Account/security types, `daily_briefing`, test/admin notifications, and anything added later without an explicit mapping (the safe default, never a `KeyError`). |
+| `reminders`         | Reminders & Nudges     | `event_reminder`, `household_routine_reminder`, `birthday_reminder`, `daily_nudge_summary`, `nudges_day_complete`, `nudges_evening_cleanup`, `standalone_reminder`. |
+| `calendar_family`   | Calendar & Family      | `event_invitation`/`event_updated`/`event_cancelled`, `list_item_assigned`, `wishlist_share_created`/`wishlist_share_revoked`, `calendar_share_invitation`/`accepted`/`declined`/`revoked`. |
+
+Deliberately three channels, not one per `notification_type` (~20 and growing) — Android
+Settings > Notifications stays legible, and this groups roughly along the same lines as
+`engine.PREFERENCE_GATES` already does for in-app preference toggles. iOS has no
+equivalent concept (APNs categories are a distinct, opt-in mechanism this phase does not
+add) and Web Push has no channel concept at all, so this table only affects Android's own
+system notification tray/settings.
+
 ## In-app
 
 Written synchronously inside `notify()` — no queue, no worker round-trip, since it's a

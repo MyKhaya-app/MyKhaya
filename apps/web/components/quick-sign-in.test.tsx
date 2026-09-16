@@ -13,10 +13,20 @@ import { QuickSignIn } from "./quick-sign-in";
 
 const getBiometricCapability = vi.fn<() => Promise<unknown>>();
 const authenticateWithBiometrics = vi.fn<(reason: string) => Promise<unknown>>();
+// Defaults match iOS shape — most of this file's own concern is the
+// hang/timeout safety net and the enable/disable flow, not per-platform
+// copy (see native-biometric.test.ts's biometricLabel/deviceNoun describe
+// blocks for that in isolation) — but the "Android" describe block below
+// overrides these per-test to prove the component itself renders Android's
+// neutral copy correctly end-to-end, not just that the helpers return it.
+const biometricLabelMock = vi.fn((kind: string) => (kind === "none" ? "Face ID" : kind));
+const deviceNounMock = vi.fn(() => "this iPhone");
 vi.mock("./native-biometric", () => ({
   getBiometricCapability: () => getBiometricCapability(),
   authenticateWithBiometrics: (reason: string) => authenticateWithBiometrics(reason),
   isBiometricCancellation: (result: { ok: boolean }) => !result.ok,
+  biometricLabel: (kind: string) => biometricLabelMock(kind),
+  deviceNoun: () => deviceNounMock(),
 }));
 
 const isBiometricSignInEnabled = vi.fn<() => Promise<boolean>>();
@@ -109,5 +119,75 @@ describe("QuickSignIn — normal enable/disable flow (unaffected by the timeout 
 
     expect(setBiometricSignInEnabled).toHaveBeenCalledWith(false);
     await screen.findByText(/turned off on this iphone/i);
+  });
+});
+
+describe("QuickSignIn — Android's neutral copy end-to-end", () => {
+  beforeEach(() => {
+    biometricLabelMock.mockImplementation((kind: string) =>
+      kind === "none" ? "biometric sign-in" : "biometric sign-in",
+    );
+    deviceNounMock.mockImplementation(() => "this device");
+    getBiometricCapability.mockResolvedValue({
+      kind: "other",
+      label: "biometric sign-in",
+      available: true,
+      lockedOut: false,
+      notEnrolled: false,
+      reason: "",
+    });
+  });
+
+  afterEach(() => {
+    biometricLabelMock.mockImplementation((kind: string) => (kind === "none" ? "Face ID" : kind));
+    deviceNounMock.mockImplementation(() => "this iPhone");
+  });
+
+  it("offers neutral 'biometric sign-in' copy, never 'Face ID'/'Touch ID', when available", async () => {
+    render(<QuickSignIn />);
+
+    const button = await screen.findByRole("button", { name: /enable biometric sign-in/i });
+    expect(button).toBeInTheDocument();
+    expect(screen.getByText(/securely access mykhaya on this device/i)).toBeInTheDocument();
+    expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
+  });
+
+  it("enabling on Android records the preference and shows neutral confirmation copy", async () => {
+    authenticateWithBiometrics.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(<QuickSignIn />);
+
+    await user.click(await screen.findByRole("button", { name: /enable biometric sign-in/i }));
+
+    expect(setBiometricSignInEnabled).toHaveBeenCalledWith(true);
+    expect(authenticateWithBiometrics).toHaveBeenCalledWith("Enable biometric sign-in for MyKhaya");
+    await screen.findByText(/biometric sign-in is ready/i);
+  });
+
+  it("not-enrolled copy on Android names the device generically, never 'iPhone'", async () => {
+    getBiometricCapability.mockResolvedValue({
+      kind: "other",
+      label: "biometric sign-in",
+      available: false,
+      lockedOut: false,
+      notEnrolled: true,
+      reason: "The user does not have any biometrics enrolled.",
+    });
+
+    render(<QuickSignIn />);
+
+    expect(await screen.findByText(/isn.t set up on this device yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/iphone/i)).not.toBeInTheDocument();
+  });
+
+  it("cancelling the Android biometric prompt during Enable never shows an error or enables the preference", async () => {
+    authenticateWithBiometrics.mockResolvedValue({ ok: false, code: "userCancel", message: "cancelled" });
+    const user = userEvent.setup();
+    render(<QuickSignIn />);
+
+    await user.click(await screen.findByRole("button", { name: /enable biometric sign-in/i }));
+
+    expect(setBiometricSignInEnabled).not.toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

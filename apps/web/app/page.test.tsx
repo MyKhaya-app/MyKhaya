@@ -5,9 +5,9 @@ import { render, screen } from "@testing-library/react";
 import Welcome from "./page";
 
 const { nativeState, authState, replace } = vi.hoisted(() => ({
-  nativeState: { value: false },
+  nativeState: { value: false, platform: "ios" as "ios" | "android" | "web" },
   authState: {
-    status: "signed_out" as "initializing" | "ready" | "offline" | "signed_out",
+    status: "signed_out" as "initializing" | "ready" | "offline" | "signed_out" | "locked",
     initialSessionLoading: false,
     retryInitialSession: vi.fn(),
   },
@@ -24,7 +24,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace }),
 }));
 
-vi.mock("@/components/native-runtime", () => ({ isNativeShell: () => nativeState.value }));
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeState.value,
+  nativePlatform: () => nativeState.platform,
+}));
 vi.mock("@/components/auth-provider", () => ({ useAuth: () => authState }));
 
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
@@ -62,6 +65,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 beforeEach(() => {
   vi.clearAllMocks();
   nativeState.value = false;
+  nativeState.platform = "ios";
   authState.status = "signed_out";
   authState.initialSessionLoading = false;
 });
@@ -193,5 +197,25 @@ describe("Welcome (public marketing homepage)", () => {
 
     expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
     expect(replace).toHaveBeenCalledWith("/home");
+  });
+
+  it("locked-state unlock copy names Face ID and Touch ID by name on iOS", async () => {
+    nativeState.value = true;
+    nativeState.platform = "ios";
+    authState.status = "locked";
+    render(<Welcome />);
+
+    expect(await screen.findByText(/face id/i)).toBeInTheDocument();
+    expect(screen.getByText(/touch id/i)).toBeInTheDocument();
+  });
+
+  it("locked-state unlock copy never claims a specific named modality on Android", async () => {
+    nativeState.value = true;
+    nativeState.platform = "android";
+    authState.status = "locked";
+    render(<Welcome />);
+
+    await screen.findByRole("heading", { name: /unlock mykhaya/i });
+    expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
   });
 });

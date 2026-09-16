@@ -9,6 +9,7 @@ import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
+import { genericUnlockPromptCopy } from "./native-biometric";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { api } from "@mykhaya/api-client";
@@ -108,7 +109,7 @@ export function AppShell({
     return (
       <main className="app-bootstrap-state" role="alert">
         <h1>Unlock MyKhaya</h1>
-        <p>Authenticate with Face ID, Touch ID, or your device passcode to continue.</p>
+        <p>Authenticate with {genericUnlockPromptCopy()} to continue.</p>
         <button onClick={retryInitialSession}>Try again</button>
         <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
       </main>
