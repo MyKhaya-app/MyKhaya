@@ -14,6 +14,8 @@ import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { api } from "@mykhaya/api-client";
 import { NotificationProvider } from "./notification-state";
+import { useActivityHeartbeat } from "./use-activity-heartbeat";
+import { useProductAnalytics } from "./use-product-analytics";
 
 export function AppShell({
   children,
@@ -37,6 +39,8 @@ export function AppShell({
   // shown-and-resolved, or determined it had nothing to show. See
   // NativeBiometricOffer's onSettled doc comment.
   const [biometricSettled, setBiometricSettled] = useState(false);
+  useActivityHeartbeat(status === "ready");
+  useProductAnalytics(status === "ready", path, activeHome?.id);
 
   useEffect(() => {
     if (!activeHome?.id) {

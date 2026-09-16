@@ -93,6 +93,7 @@ from mykhaya.models import (
     NotificationTemplateRevision,
     OperationalHeartbeat,
     OutboxEvent,
+    ProductUsageEvent,
     PlatformAdministrator,
     PlatformAdministratorInvitation,
     PlatformPushSettings,
@@ -2547,7 +2548,7 @@ async def users(
     verified: bool | None = None,
     active: bool | None = None,
     lifecycle: LifecycleState | None = Query(default=None),
-    sort: Literal["created_at", "email", "display_name", "last_login_at"] = "created_at",
+    sort: Literal["created_at", "email", "display_name", "last_login_at", "last_activity_at"] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -2959,6 +2960,7 @@ async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int,
     await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user.id))
     await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id))
     await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user.id))
+    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user.id))
     await db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
     await db.execute(
         update(Session)
@@ -6066,6 +6068,27 @@ async def _get_push_settings_row(db: AsyncSession) -> PlatformPushSettings | Non
     return row
 
 
+async def _native_push_environment_breakdown(db: AsyncSession) -> dict[str, int]:
+    """Buckets every currently-active (non-disabled) NativePushDevice row by
+    its APNs environment. `apns_environment IS NULL` predates per-device
+    provenance (migration 0075) and is reported as "legacy" — see
+    push.send_apns's own comment on why NULL has always meant production for
+    delivery purposes; that delivery behaviour is unchanged here, this is
+    read-only reporting. Any value other than the two the check constraint
+    allows is defensively folded into "legacy" too, rather than raising."""
+    rows = (
+        await db.execute(
+            select(NativePushDevice.apns_environment, func.count(NativePushDevice.id))
+            .where(NativePushDevice.disabled_at.is_(None))
+            .group_by(NativePushDevice.apns_environment)
+        )
+    ).all()
+    counts = {"production": 0, "sandbox": 0, "legacy": 0}
+    for environment, count in rows:
+        counts[environment if environment in ("production", "sandbox") else "legacy"] += count
+    return counts
+
+
 @router.get("/push")
 async def push_configuration(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -6074,12 +6097,32 @@ async def push_configuration(
 ) -> dict[str, Any]:
     config = await resolve_push_config(settings, db)
     row = await _get_push_settings_row(db)
-    active_subscriptions = (
+    # Deliberately named `active_subscriptions` (kept) and
+    # `active_web_subscriptions` (new, explicit) for the exact same value —
+    # this has only ever counted Web Push (VAPID) subscriptions, never
+    # NativePushDevice rows. See docs/architecture/notification-engine.md
+    # "Native push (APNs / FCM)" and the PCC push audit this corrects.
+    active_web_subscriptions = (
         await db.scalar(
             select(func.count(PushSubscription.id)).where(PushSubscription.disabled_at.is_(None))
         )
         or 0
     )
+    active_native_registrations = (
+        await db.scalar(
+            select(func.count(NativePushDevice.id)).where(NativePushDevice.disabled_at.is_(None))
+        )
+        or 0
+    )
+    users_with_active_native_push = (
+        await db.scalar(
+            select(func.count(func.distinct(NativePushDevice.user_id))).where(
+                NativePushDevice.disabled_at.is_(None)
+            )
+        )
+        or 0
+    )
+    native_environment_breakdown = await _native_push_environment_breakdown(db)
     failures = (
         await db.scalars(
             select(NotificationDelivery)
@@ -6091,17 +6134,58 @@ async def push_configuration(
             .limit(10)
         )
     ).all()
+    # One extra lookup to describe *which* native device failed (platform,
+    # APNs environment) — the failure query's own WHERE clause (channel/
+    # status) is unchanged; this only enriches what's already selected.
+    failed_native_device_ids = [
+        row.native_push_device_id for row in failures if row.native_push_device_id
+    ]
+    native_devices_by_id: dict[uuid.UUID, NativePushDevice] = (
+        {
+            device.id: device
+            for device in (
+                await db.scalars(
+                    select(NativePushDevice).where(NativePushDevice.id.in_(failed_native_device_ids))
+                )
+            ).all()
+        }
+        if failed_native_device_ids
+        else {}
+    )
     return {
         "configured": config.configured,
         "managed_by": config.source,
         "public_key": config.public_key,
-        "active_subscriptions": active_subscriptions,
+        "active_subscriptions": active_web_subscriptions,
+        "active_web_subscriptions": active_web_subscriptions,
+        "active_native_registrations": active_native_registrations,
+        "users_with_active_native_push": users_with_active_native_push,
+        "native_registrations_by_environment": native_environment_breakdown,
         "recent_failures": [
             {
                 "id": row.id,
                 "notification_type": row.notification_type,
                 "failed_at": row.attempted_at,
                 "safe_failure_message": row.sanitised_failure_reason,
+                # A failure row is always exactly one device's delivery
+                # attempt, never "the whole notification" or "the whole
+                # user" — these fields exist so the UI can say so explicitly
+                # rather than implying a total failure. See the PCC push
+                # audit ("Recent failures audit") this corrects.
+                "channel": "native" if row.native_push_device_id else "web",
+                "platform": (
+                    native_devices_by_id[row.native_push_device_id].platform
+                    if row.native_push_device_id in native_devices_by_id
+                    else None
+                ),
+                "apns_environment": (
+                    native_devices_by_id[row.native_push_device_id].apns_environment
+                    if row.native_push_device_id in native_devices_by_id
+                    else None
+                ),
+                "recipient_user_id": row.recipient_user_id,
+                "native_push_device_id": row.native_push_device_id,
+                "push_subscription_id": row.push_subscription_id,
             }
             for row in failures
         ],
@@ -6114,6 +6198,64 @@ async def push_configuration(
             "editable": config.source != "environment",
         },
     }
+
+
+@router.get("/push/native-devices", response_model=PageResponse)
+async def native_push_device_list(
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    """Read-only drill-down for `native_push_devices` — the PCC push audit
+    found there was previously no way to browse these at all except as a
+    side effect of sending one named user a test push. Deliberately never
+    selects/returns `NativePushDevice.token` (raw APNs/FCM device token) or
+    any provider credential — same "never return a secret" rule as every
+    other PCC read endpoint. Includes disabled rows (Status distinguishes
+    them) so an operator can see a device's full history, not just the
+    currently-active set already summarised on `GET /push`."""
+    total = await db.scalar(select(func.count(NativePushDevice.id))) or 0
+    rows = (
+        await db.scalars(
+            select(NativePushDevice)
+            .order_by(NativePushDevice.created_at.desc(), NativePushDevice.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    user_ids = [row.user_id for row in rows]
+    users_by_id: dict[uuid.UUID, User] = (
+        {
+            user.id: user
+            for user in (await db.scalars(select(User).where(User.id.in_(user_ids)))).all()
+        }
+        if user_ids
+        else {}
+    )
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "user_id": row.user_id,
+                "display_name": (
+                    users_by_id[row.user_id].display_name if row.user_id in users_by_id else None
+                ),
+                "email": users_by_id[row.user_id].email if row.user_id in users_by_id else None,
+                "platform": row.platform,
+                "device_label": row.device_label,
+                "installation_id": row.installation_id,
+                "apns_environment": row.apns_environment,
+                "last_seen_at": row.last_seen_at,
+                "disabled_at": row.disabled_at,
+                "disabled_reason": row.disabled_reason,
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 @router.put("/push/vapid-settings")

@@ -10,6 +10,9 @@ This is the initial policy baseline and requires owner/legal review before produ
 | Closed/deleted accounts | Minimise via Control Centre User anonymisation after the reviewed grace period (see below); full account/data deletion remains a designed requirement, not an implemented capability |
 | Invitations/action tokens | Expiry plus short abuse-investigation window; remove token material promptly |
 | User sessions | Expiry/revocation plus short security window |
+| Product activity (`users.last_activity_at`) | Retain with the user record for operational account activity visibility; it is a throttled timestamp, not an event history |
+| Raw product usage events | 90 days; events contain no user-generated content and are deleted during scheduler maintenance |
+| Product usage daily aggregates | Retain as non-identifying counts subject to periodic policy review |
 | Authentication/security events | 12 months unless an incident/legal need requires a documented hold |
 | Administrative audit | 7 years, subject to necessity and legal review |
 | Email delivery events | 90 days, excluding message content |

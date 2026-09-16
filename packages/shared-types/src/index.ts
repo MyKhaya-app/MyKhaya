@@ -403,6 +403,16 @@ export type FeatureKey =
   | "external_sharing"
   | "nudges";
 
+export type ProductUsagePlatform = "web" | "ios" | "android";
+export type ProductUsageModule =
+  | "app" | "calendar" | "nudges" | "lists" | "meals"
+  | "notifications" | "family" | "home" | "settings";
+export type ProductUsageEventName =
+  | "app_open" | "calendar_viewed" | "calendar_event_created"
+  | "nudges_viewed" | "nudge_completed" | "lists_viewed" | "list_created"
+  | "list_item_completed" | "meal_plan_viewed" | "meal_added"
+  | "notification_opened" | "home_viewed" | "family_viewed";
+
 export interface FeatureEvaluation {
   feature: FeatureKey;
   enabled: boolean;

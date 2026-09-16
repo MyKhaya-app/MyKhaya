@@ -24,6 +24,10 @@ const pushState = {
   managed_by: "platform_admin",
   public_key: "BExamplePublicKey",
   active_subscriptions: 4,
+  active_web_subscriptions: 4,
+  active_native_registrations: 9,
+  users_with_active_native_push: 5,
+  native_registrations_by_environment: { production: 1, sandbox: 2, legacy: 6 },
   recent_failures: [],
   push_settings: {
     enabled: true,
@@ -35,10 +39,15 @@ const pushState = {
   },
 };
 
+const emptyNativeDevicePage = { items: [], page: 1, page_size: 25, total: 0 };
+
 function mockRoutes(overrides: Record<string, unknown> = {}) {
   get.mockImplementation((path: string) => {
     if (path === "/push") return Promise.resolve(overrides.push ?? pushState);
     if (path === "/auth/me") return Promise.resolve({ email: "op@mykhaya.app" });
+    if (path.startsWith("/push/native-devices")) {
+      return Promise.resolve(overrides.nativeDevices ?? emptyNativeDevicePage);
+    }
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
 }
@@ -217,5 +226,258 @@ describe("PushPage", () => {
     await waitFor(() =>
       expect(put.mock.calls.filter((call) => call[0] === "/push/vapid-settings")).toHaveLength(2),
     );
+  });
+});
+
+describe("PushPage — PCC push audit corrections (Phase 2)", () => {
+  it("relabels the historical Active devices metric as Active web push subscriptions", async () => {
+    mockRoutes();
+    render(<PushPage />);
+    await screen.findAllByText("Configured · ending ublicKey");
+
+    expect(screen.queryByText("Active devices")).not.toBeInTheDocument();
+    expect(screen.queryByText("Active registered devices")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Active web push subscriptions").length).toBeGreaterThan(0);
+  });
+
+  it("shows all five new native-push summary metrics", async () => {
+    mockRoutes();
+    render(<PushPage />);
+    await screen.findByText("Active native registrations");
+
+    expect(screen.getByText("Users with native push")).toBeInTheDocument();
+    expect(screen.getByText("Production APNs")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox APNs")).toBeInTheDocument();
+    expect(screen.getByText("Legacy registrations")).toBeInTheDocument();
+    // Values from the pushState fixture: 9 active, 5 users, 1/2/6 breakdown.
+    expect(screen.getByText("9")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("6")).toBeInTheDocument();
+  });
+
+  it("renders the native registration table with the minimum required columns", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [
+          {
+            id: "device-1",
+            user_id: "user-1",
+            display_name: "Jamie Example",
+            email: "jamie@example.com",
+            platform: "ios",
+            device_label: "Jamie's iPhone",
+            installation_id: "installation-abc123",
+            apns_environment: "sandbox",
+            last_seen_at: "2026-09-10T08:00:00Z",
+            disabled_at: null,
+            disabled_reason: null,
+          },
+        ],
+        page: 1,
+        page_size: 25,
+        total: 1,
+      },
+    });
+    render(<PushPage />);
+
+    expect(await screen.findByText("Jamie Example")).toBeInTheDocument();
+    expect(screen.getByText("jamie@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Jamie's iPhone")).toBeInTheDocument();
+    expect(screen.getByText("iOS")).toBeInTheDocument();
+    expect(screen.getByText("installation-abc123")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    // Never the raw device token — the fixture above deliberately has no
+    // token field at all, matching what the real endpoint returns.
+    expect(document.body.textContent).not.toMatch(/[0-9a-f]{40,}/i);
+  });
+
+  it("labels a legacy (NULL apns_environment) row as Legacy, not a raw null", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [
+          {
+            id: "device-legacy",
+            user_id: "user-2",
+            display_name: "Legacy User",
+            email: "legacy@example.com",
+            platform: "ios",
+            device_label: null,
+            installation_id: "installation-legacy",
+            apns_environment: null,
+            last_seen_at: null,
+            disabled_at: null,
+            disabled_reason: null,
+          },
+        ],
+        page: 1,
+        page_size: 25,
+        total: 1,
+      },
+    });
+    render(<PushPage />);
+
+    expect(await screen.findByText("Legacy")).toBeInTheDocument();
+    expect(screen.getByText("Never")).toBeInTheDocument();
+    expect(screen.getByText("Unlabelled")).toBeInTheDocument();
+  });
+
+  it("renders Android rows with an em dash for APNs environment, not a legacy label", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [
+          {
+            id: "device-android",
+            user_id: "user-3",
+            display_name: "Android User",
+            email: "android@example.com",
+            platform: "android",
+            device_label: "Pixel",
+            installation_id: "installation-android",
+            apns_environment: null,
+            last_seen_at: "2026-09-11T08:00:00Z",
+            disabled_at: null,
+            disabled_reason: null,
+          },
+        ],
+        page: 1,
+        page_size: 25,
+        total: 1,
+      },
+    });
+    render(<PushPage />);
+
+    expect(await screen.findByText("Android")).toBeInTheDocument();
+    // Both the APNs-environment cell and the (also-null) disabled-reason
+    // cell render "—" for this row — assert there are at least one, not
+    // exactly one, so this doesn't couple to an unrelated column's own
+    // choice of placeholder.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Legacy")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes an active row from a disabled row, showing the disabled reason", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [
+          {
+            id: "device-active",
+            user_id: "user-4",
+            display_name: "Active User",
+            email: "active@example.com",
+            platform: "ios",
+            device_label: "Active iPhone",
+            installation_id: "installation-active",
+            apns_environment: "production",
+            last_seen_at: "2026-09-12T08:00:00Z",
+            disabled_at: null,
+            disabled_reason: null,
+          },
+          {
+            id: "device-disabled",
+            user_id: "user-5",
+            display_name: "Disabled User",
+            email: "disabled@example.com",
+            platform: "ios",
+            device_label: "Old iPhone",
+            installation_id: "installation-disabled",
+            apns_environment: "sandbox",
+            last_seen_at: "2026-08-01T08:00:00Z",
+            disabled_at: "2026-08-02T08:00:00Z",
+            disabled_reason: "APNs rejected this device registration.",
+          },
+        ],
+        page: 1,
+        page_size: 25,
+        total: 2,
+      },
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Active iPhone");
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("APNs rejected this device registration.")).toBeInTheDocument();
+  });
+
+  it("paginates the native registration table using Previous/Next", async () => {
+    const user = userEvent.setup();
+    const pageOne = {
+      items: [
+        {
+          id: "device-page-1",
+          user_id: "user-6",
+          display_name: "Page One User",
+          email: "page1@example.com",
+          platform: "ios",
+          device_label: null,
+          installation_id: "installation-1",
+          apns_environment: "production",
+          last_seen_at: null,
+          disabled_at: null,
+          disabled_reason: null,
+        },
+      ],
+      page: 1,
+      page_size: 25,
+      total: 30,
+    };
+    const pageTwo = { ...pageOne, items: [{ ...pageOne.items[0], id: "device-page-2", display_name: "Page Two User" }], page: 2 };
+    get.mockImplementation((path: string) => {
+      if (path === "/push") return Promise.resolve(pushState);
+      if (path === "/auth/me") return Promise.resolve({ email: "op@mykhaya.app" });
+      if (path.includes("page=2")) return Promise.resolve(pageTwo);
+      if (path.startsWith("/push/native-devices")) return Promise.resolve(pageOne);
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Page One User");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Page Two User")).toBeInTheDocument();
+  });
+
+  it("shows web vs native context on Recent failures without implying a whole-notification failure", async () => {
+    mockRoutes({
+      push: {
+        ...pushState,
+        recent_failures: [
+          {
+            id: "failure-web",
+            notification_type: "event_reminder",
+            failed_at: "2026-09-10T08:00:00Z",
+            safe_failure_message: "Push service temporarily unavailable.",
+            channel: "web",
+            platform: null,
+            apns_environment: null,
+            recipient_user_id: "user-1",
+            native_push_device_id: null,
+            push_subscription_id: "subscription-1",
+          },
+          {
+            id: "failure-native",
+            notification_type: "event_reminder",
+            failed_at: "2026-09-10T08:05:00Z",
+            safe_failure_message: "Native push service temporarily unavailable.",
+            channel: "native",
+            platform: "ios",
+            apns_environment: "sandbox",
+            recipient_user_id: "user-2",
+            native_push_device_id: "device-1",
+            push_subscription_id: null,
+          },
+        ],
+      },
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Recent delivery failures");
+    expect(screen.getByText("Web Push")).toBeInTheDocument();
+    expect(screen.getByText("iOS · APNs (Sandbox)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Each row is one device's delivery attempt, not a whole notification or a whole user/,
+      ),
+    ).toBeInTheDocument();
   });
 });

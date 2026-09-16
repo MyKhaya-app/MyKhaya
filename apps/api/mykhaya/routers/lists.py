@@ -49,6 +49,8 @@ from mykhaya.models import (
     ListTemplateItem,
     ListTemplateSection,
     Membership,
+    ProductUsageEventName,
+    ProductUsageModule,
     RoutineScope,
 )
 from mykhaya.notifications.lists_wishlists import notify_list_assignment
@@ -73,6 +75,7 @@ from mykhaya.schemas import (
     ListTemplateResponse,
     ListTemplateUpdate,
 )
+from mykhaya.usage import platform_from_request, record_usage_event
 
 LISTS_LIMIT_KEY = "lists.max_lists"
 
@@ -612,6 +615,11 @@ async def create_list(
                 )
     audit(db, request, "lists.list.created", auth.user.id, home_id, "list", row.id)
     await db.commit()
+    await record_usage_event(
+        db, event_name=ProductUsageEventName.list_created,
+        platform=platform_from_request(request), module=ProductUsageModule.lists,
+        user_id=auth.user.id, group_id=home_id, event_key=f"list-created:{row.id}",
+    )
     return await _detail_response(db, row, {row.id: True})
 
 
@@ -950,6 +958,12 @@ async def update_list_item(
         )
     audit(db, request, "lists.item.updated", auth.user.id, home_id, "list", row.id)
     await db.commit()
+    if "is_checked" in fields and new_checked:
+        await record_usage_event(
+            db, event_name=ProductUsageEventName.list_item_completed,
+            platform=platform_from_request(request), module=ProductUsageModule.lists,
+            user_id=auth.user.id, group_id=home_id, event_key=f"list-item-completed:{item.id}:{item.completed_at}",
+        )
     return await _detail_response(db, row, access)
 
 

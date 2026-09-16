@@ -78,6 +78,20 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  activityHeartbeat = () =>
+    this.request<void>("/activity/heartbeat", { method: "POST", body: "{}" });
+  productUsageEvent = (body: {
+    event_name: import("@mykhaya/shared-types").ProductUsageEventName;
+    platform: import("@mykhaya/shared-types").ProductUsagePlatform;
+    module?: import("@mykhaya/shared-types").ProductUsageModule;
+    home_id?: string;
+    app_version?: string;
+    usage_session_id?: string;
+    event_key?: string;
+  }) => this.request<{ status: string }>("/usage/events", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
   authProviders = () =>
     this.request<{ providers: Array<{ provider: string; enabled: boolean }> }>(
       "/auth/providers",

@@ -28,6 +28,7 @@ const verifiedUser = {
   lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
   last_login_at: "2026-02-01T00:00:00Z",
+  last_activity_at: "2026-03-02T00:00:00Z",
   homes: [{ id: "home-1", name: "The Smiths", role: "owner" }],
   sessions: [{ id: "s1", user_agent: "Chrome on macOS", last_seen_at: "2026-03-01T00:00:00Z", expires_at: "2026-04-01T00:00:00Z" }],
   notes: [{ id: "note-1", body: "Called about billing.", created_at: "2026-02-15T00:00:00Z" }],
@@ -62,6 +63,7 @@ describe("User detail", () => {
     expect(screen.getByText("jane@example.com")).toBeInTheDocument();
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Verified").length).toBeGreaterThan(0);
+    expect(screen.getByText("Last active")).toBeInTheDocument();
   });
 
   it("shows Disabled status when the user is suspended", async () => {

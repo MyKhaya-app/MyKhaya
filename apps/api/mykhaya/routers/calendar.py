@@ -49,6 +49,8 @@ from mykhaya.models import (
     HouseholdRelationship,
     Invitation,
     Membership,
+    ProductUsageEventName,
+    ProductUsageModule,
     RecurrencePattern,
 )
 from mykhaya.notifications.calendar_shares import notify_calendar_share_recipients
@@ -75,6 +77,7 @@ from mykhaya.schemas import (
     HomeCalendarUpdate,
     HomeSummaryResponse,
 )
+from mykhaya.usage import platform_from_request, record_usage_event
 
 # Commercial-plan cleanup: renamed from "calendar.max_calendars" — a
 # HomeCalendar is presented to customers as an "event category", not a
@@ -1485,6 +1488,11 @@ async def create_event(
     )
     await db.commit()
     await db.refresh(event)
+    await record_usage_event(
+        db, event_name=ProductUsageEventName.calendar_event_created,
+        platform=platform_from_request(request), module=ProductUsageModule.calendar,
+        user_id=auth.user.id, group_id=home_id, event_key=f"calendar-event-created:{event.id}",
+    )
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     return _occurrence(

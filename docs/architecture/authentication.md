@@ -1,5 +1,19 @@
 # Authentication Architecture
 
+## Product activity and authentication timestamps
+
+`User.last_login_at` records session establishment. `Session.last_seen_at` and
+trusted-device timestamps describe authentication/session use. They are not
+product activity signals.
+
+`User.last_activity_at` is the product-level Last Active value. It is advanced
+only by the authenticated, content-free `POST /api/v1/activity/heartbeat`
+endpoint, using server time and the central five-minute throttle. Ordinary
+authenticated API reads, bootstrap, polling, token renewal, push registration,
+and background jobs do not advance it. The consumer app sends heartbeats only
+while authenticated and foreground/visible, using the shared browser
+visibility and Capacitor app-state lifecycle handling.
+
 Initial authentication supports registration, email verification, sign-in, sign-out, refresh or server session rotation, password reset, session listing and per-device revocation.
 
 Email verification is controlled by `MYKHAYA_EMAIL_VERIFICATION_ENABLED` and defaults

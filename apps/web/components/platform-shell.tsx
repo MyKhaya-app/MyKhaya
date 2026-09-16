@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ComponentType } from "react";
 import {
   Archive,
+  BarChart3,
   Bell,
   CalendarDays,
   Clock,
@@ -76,6 +77,7 @@ const navGroups: NavGroup[] = [
       { label: "Health", href: "/health", icon: HeartPulse },
       { label: "Jobs", href: "/jobs", icon: ListChecks },
       { label: "Timeline", href: "/timeline", icon: Clock },
+      { label: "Usage", href: "/usage", icon: BarChart3 },
       { label: "Diagnostics", href: "/diagnostics", icon: Stethoscope },
       { label: "Status & Incidents", href: "/incidents", icon: Siren },
     ],

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -11,6 +11,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.family_retention import scan_family_retention
 from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent
+from mykhaya.usage import aggregate_recent_usage, purge_expired_usage_events
 from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
 from mykhaya.notifications.nudges import scan_due_daily_nudge_summary, scan_due_nudges
@@ -26,9 +27,11 @@ from mykhaya.notifications.standalone_reminders import (
 # worker.py). If the worker crashes mid-job, the lease simply expires and the
 # row becomes selectable again without needing the worker to release it.
 LEASE_SECONDS = 120
+_last_usage_maintenance_date: date | None = None
 
 
 async def run() -> None:
+    global _last_usage_maintenance_date
     settings = get_settings()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
@@ -48,6 +51,11 @@ async def run() -> None:
                 await scan_due_daily_nudge_summary(db, settings)
                 await scan_family_retention(db)
                 await sync_due_holiday_sources(db)
+                maintenance_date = datetime.now(UTC).date()
+                if _last_usage_maintenance_date != maintenance_date:
+                    await purge_expired_usage_events(db)
+                    await aggregate_recent_usage(db)
+                    _last_usage_maintenance_date = maintenance_date
                 await db.commit()
             async with SessionFactory() as db:
                 rows = (

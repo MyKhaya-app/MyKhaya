@@ -14,7 +14,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
-from test_child_login import _child_login, _configure_login, _make_home_with_child, new_client, unique
+from test_child_login import (
+    _child_login,
+    _configure_login,
+    _make_home_with_child,
+    new_client,
+    unique,
+)
 from test_journey import create_verified_user
 
 from mykhaya.activity import ACTIVITY_THROTTLE, is_excluded_activity_path
@@ -53,6 +59,12 @@ async def _refresh(db_free_user: User) -> User:
         return user
 
 
+async def _heartbeat(client: AsyncClient):
+    csrf = client.cookies.get("mk_csrf")
+    headers = {"X-CSRF-Token": csrf} if csrf else {}
+    return await client.post("/api/v1/activity/heartbeat", headers=headers)
+
+
 @pytest.mark.asyncio
 async def test_qualifying_request_advances_stale_activity(client: AsyncClient) -> None:
     suffix = unique("qual")
@@ -62,8 +74,8 @@ async def test_qualifying_request_advances_stale_activity(client: AsyncClient) -
     old = datetime.now(UTC) - timedelta(days=1)
     await _backdate(user.id, old)
 
-    response = await client.get("/api/v1/groups")
-    assert response.status_code == 200
+    response = await _heartbeat(client)
+    assert response.status_code == 204
 
     refreshed = await _refresh(user)
     assert refreshed.last_activity_at is not None
@@ -80,8 +92,8 @@ async def test_activity_is_throttled_within_the_window(client: AsyncClient) -> N
     recent = datetime.now(UTC) - timedelta(minutes=1)
     await _backdate(user.id, recent)
 
-    response = await client.get("/api/v1/groups")
-    assert response.status_code == 200
+    response = await _heartbeat(client)
+    assert response.status_code == 204
 
     refreshed = await _refresh(user)
     assert refreshed.last_activity_at is not None
@@ -99,8 +111,8 @@ async def test_activity_advances_again_after_the_throttle_window(client: AsyncCl
     stale = datetime.now(UTC) - ACTIVITY_THROTTLE - timedelta(seconds=1)
     await _backdate(user.id, stale)
 
-    response = await client.get("/api/v1/groups")
-    assert response.status_code == 200
+    response = await _heartbeat(client)
+    assert response.status_code == 204
 
     refreshed = await _refresh(user)
     assert refreshed.last_activity_at is not None
@@ -118,8 +130,8 @@ async def test_activity_request_never_touches_last_login_at(client: AsyncClient)
     original_login = user.last_login_at
     await _backdate(user.id, datetime.now(UTC) - timedelta(days=1))
 
-    response = await client.get("/api/v1/groups")
-    assert response.status_code == 200
+    response = await _heartbeat(client)
+    assert response.status_code == 204
 
     refreshed = await _refresh(user)
     assert refreshed.last_login_at == original_login
@@ -148,6 +160,29 @@ async def test_background_session_bootstrap_check_does_not_count_as_activity(
     refreshed = await _refresh(user)
     assert refreshed.last_activity_at is not None
     assert abs((refreshed.last_activity_at - old).total_seconds()) < 2
+
+
+@pytest.mark.asyncio
+async def test_passive_authenticated_read_does_not_count_as_activity(client: AsyncClient) -> None:
+    suffix = unique("passive")
+    email = f"passive-{suffix}@example.com"
+    await create_verified_user(client, email, "Passive User")
+    user = await _load_user(email)
+    old = datetime.now(UTC) - timedelta(days=1)
+    await _backdate(user.id, old)
+
+    response = await client.get("/api/v1/groups")
+    assert response.status_code == 200
+
+    refreshed = await _refresh(user)
+    assert refreshed.last_activity_at is not None
+    assert abs((refreshed.last_activity_at - old).total_seconds()) < 2
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_heartbeat_is_rejected(client: AsyncClient) -> None:
+    response = await client.post("/api/v1/activity/heartbeat")
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -216,8 +251,8 @@ async def test_managed_child_activity_is_tracked_independently_of_the_admin(
         # to any authenticated member, adult or Child) rather than a
         # capability-gated endpoint like /groups/{id}/members, which a
         # managed Child correctly cannot reach.
-        homes = await child_client.get("/api/v1/groups")
-        assert homes.status_code == 200
+        homes = await _heartbeat(child_client)
+        assert homes.status_code == 204
 
     async with SessionFactory() as db:
         refreshed_child = await db.get(User, child_user_id)
@@ -278,9 +313,6 @@ async def test_activity_update_failure_does_not_break_the_request(
     user = await _load_user(email)
     await _backdate(user.id, datetime.now(UTC) - timedelta(days=1))
 
-    from fastapi import Request
-    from starlette.datastructures import Headers
-
     import mykhaya.activity as activity_module
 
     async def _raise(*_args: object, **_kwargs: object) -> None:
@@ -290,17 +322,8 @@ async def test_activity_update_failure_does_not_break_the_request(
         fresh_user = await db.get(User, user.id)
         assert fresh_user is not None
         monkeypatch.setattr(db, "execute", _raise)
-        fake_request = Request(
-            {
-                "type": "http",
-                "method": "GET",
-                "path": "/api/v1/groups",
-                "headers": Headers({}).raw,
-                "query_string": b"",
-            }
-        )
         # Must not raise.
-        await activity_module.record_authenticated_activity(db, fresh_user, fake_request)
+        await activity_module.record_activity_heartbeat(db, fresh_user)
 
     # The triggering endpoint itself is a normal, separate request and must
     # still succeed end-to-end regardless of the above.

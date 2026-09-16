@@ -212,6 +212,40 @@ class FeatureKey(StrEnum):
     nudges = "nudges"
 
 
+class ProductUsagePlatform(StrEnum):
+    web = "web"
+    ios = "ios"
+    android = "android"
+
+
+class ProductUsageModule(StrEnum):
+    app = "app"
+    calendar = "calendar"
+    nudges = "nudges"
+    lists = "lists"
+    meals = "meals"
+    notifications = "notifications"
+    family = "family"
+    home = "home"
+    settings = "settings"
+
+
+class ProductUsageEventName(StrEnum):
+    app_open = "app_open"
+    calendar_viewed = "calendar_viewed"
+    calendar_event_created = "calendar_event_created"
+    nudges_viewed = "nudges_viewed"
+    nudge_completed = "nudge_completed"
+    lists_viewed = "lists_viewed"
+    list_created = "list_created"
+    list_item_completed = "list_item_completed"
+    meal_plan_viewed = "meal_plan_viewed"
+    meal_added = "meal_added"
+    notification_opened = "notification_opened"
+    home_viewed = "home_viewed"
+    family_viewed = "family_viewed"
+
+
 class UuidTimeMixin:
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -979,6 +1013,64 @@ class AuditEvent(Base):
     target_id: Mapped[uuid.UUID | None]
     request_id: Mapped[str | None] = mapped_column(String(80))
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class ProductUsageEvent(Base):
+    """Privacy-minimised product usage signal; never store user content here."""
+
+    __tablename__ = "product_usage_events"
+    __table_args__ = (
+        Index("ix_product_usage_events_occurred", "occurred_at"),
+        Index("ix_product_usage_events_user_occurred", "user_id", "occurred_at"),
+        Index("ix_product_usage_events_group_occurred", "group_id", "occurred_at"),
+        Index("ix_product_usage_events_event_occurred", "event_name", "occurred_at"),
+        UniqueConstraint("event_key", name="uq_product_usage_events_event_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    event_name: Mapped[ProductUsageEventName] = mapped_column(
+        Enum(ProductUsageEventName, name="product_usage_event_name"), nullable=False
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    platform: Mapped[ProductUsagePlatform] = mapped_column(
+        Enum(ProductUsagePlatform, name="product_usage_platform"), nullable=False
+    )
+    module: Mapped[ProductUsageModule | None] = mapped_column(
+        Enum(ProductUsageModule, name="product_usage_module"), nullable=True
+    )
+    app_version: Mapped[str | None] = mapped_column(String(80))
+    usage_session_id: Mapped[str | None] = mapped_column(String(64))
+    event_key: Mapped[str | None] = mapped_column(String(120))
+
+
+class ProductUsageDailyAggregate(Base):
+    __tablename__ = "product_usage_daily_aggregates"
+    __table_args__ = (
+        UniqueConstraint(
+            "reporting_date", "metric", "module", "platform",
+            name="uq_product_usage_daily_dimension",
+        ),
+        Index("ix_product_usage_daily_reporting_date", "reporting_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    reporting_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric: Mapped[str] = mapped_column(String(40), nullable=False)
+    module: Mapped[ProductUsageModule | None] = mapped_column(
+        Enum(ProductUsageModule, name="product_usage_module", create_type=False)
+    )
+    platform: Mapped[ProductUsagePlatform | None] = mapped_column(
+        Enum(ProductUsagePlatform, name="product_usage_platform", create_type=False)
+    )
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class OutboxEvent(Base):

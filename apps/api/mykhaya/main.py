@@ -12,7 +12,10 @@ from starlette.types import Message
 
 from mykhaya.config import get_settings
 from mykhaya.routers import (
+    activity,
     auth,
+    usage,
+    usage_admin,
     billing,
     birthdays,
     calendar,
@@ -189,6 +192,8 @@ async def security_and_limits(
 for router in (
     health.router,
     auth.router,
+    activity.router,
+    usage.router,
     users.router,
     groups.router,
     home_join.router,
@@ -217,3 +222,4 @@ for router in (
     status_router.router,
 ):
     app.include_router(router, prefix="/api/v1")
+app.include_router(usage_admin.router, prefix="/api/v1")

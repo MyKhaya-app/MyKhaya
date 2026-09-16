@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { ApiError, platformApi } from "@mykhaya/api-client";
+import { readableDate } from "@/components/platform-format";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { CcPage } from "@/components/control-centre/page-shell";
@@ -39,6 +40,7 @@ type UserDetail = {
   anonymised_at?: string | null;
   created_at: string;
   last_login_at: string | null;
+  last_activity_at: string | null;
   homes: { id: string; name: string; role: string }[];
   sessions: { id: string; user_agent: string; last_seen_at: string; expires_at: string }[];
   notes: { id: string; body: string; created_at: string }[];
@@ -353,9 +355,12 @@ export default function PlatformUserDetail() {
                         {data.verified ? "Verified" : "Unverified"}
                       </CcBadge>
                     </CcMetadataItem>
-                    <CcMetadataItem label="Created">{new Date(data.created_at).toLocaleString()}</CcMetadataItem>
+                    <CcMetadataItem label="Created">{readableDate(data.created_at)}</CcMetadataItem>
                     <CcMetadataItem label="Last login">
-                      {data.last_login_at ? new Date(data.last_login_at).toLocaleString() : "No login recorded"}
+                      {data.last_login_at ? readableDate(data.last_login_at) : "Never"}
+                    </CcMetadataItem>
+                    <CcMetadataItem label="Last active">
+                      {data.last_activity_at ? readableDate(data.last_activity_at) : "Never"}
                     </CcMetadataItem>
                   </CcMetadataGrid>
                 </CcCard>

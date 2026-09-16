@@ -21,7 +21,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from fastapi import Request
 from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -87,7 +86,7 @@ def is_excluded_activity_path(path: str) -> bool:
     return path.startswith(_EXCLUDED_PREFIXES)
 
 
-async def record_authenticated_activity(db: AsyncSession, user: User, request: Request) -> None:
+async def record_activity_heartbeat(db: AsyncSession, user: User) -> None:
     """Advance `user.last_activity_at` to "now", throttled to at most once
     per ACTIVITY_THROTTLE, for a qualifying authenticated request only.
 
@@ -106,8 +105,6 @@ async def record_authenticated_activity(db: AsyncSession, user: User, request: R
     AsyncSession — activity telemetry can never break the user's actual
     request.
     """
-    if is_excluded_activity_path(request.url.path):
-        return
     now = datetime.now(UTC)
     # Cheap in-memory check first: for the common "still inside the
     # throttle window" case this issues zero extra queries — this is what

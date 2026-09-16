@@ -34,6 +34,8 @@ from mykhaya.models import (
     MealPlanParticipant,
     MealType,
     Membership,
+    ProductUsageEventName,
+    ProductUsageModule,
 )
 from mykhaya.notifications.meal_plans import (
     notify_created,
@@ -62,6 +64,7 @@ from mykhaya.schemas import (
     RecentMealResponse,
     RecentMealsResponse,
 )
+from mykhaya.usage import platform_from_request, record_usage_event
 
 # Meal Plans has its own dedicated FeatureKey/module_registry entry (unlike
 # household_routines, which currently piggy-backs on the notifications
@@ -323,6 +326,11 @@ async def create_meal(
         )
     audit(db, request, "meals.meal.created", auth.user.id, home_id, "meal", meal.id)
     await db.commit()
+    await record_usage_event(
+        db, event_name=ProductUsageEventName.meal_added,
+        platform=platform_from_request(request), module=ProductUsageModule.meals,
+        user_id=auth.user.id, group_id=home_id, event_key=f"meal-added:{meal.id}",
+    )
     return _meal_response(meal, await _meal_ingredients(db, meal.id))
 
 

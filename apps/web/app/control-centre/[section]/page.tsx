@@ -147,6 +147,12 @@ function ManagedList({ section }: { section: "users" | "homes" }) {
               row.last_login_at ? displayValue(row.last_login_at) : "Never",
           },
           {
+            key: "last_activity_at",
+            header: "Last active",
+            render: (row) =>
+              row.last_activity_at ? displayValue(row.last_activity_at) : "Never",
+          },
+          {
             key: "actions",
             header: "Actions",
             render: (row) => (
