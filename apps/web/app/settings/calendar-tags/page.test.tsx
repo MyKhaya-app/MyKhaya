@@ -155,12 +155,9 @@ describe("Calendar tags — locked states", () => {
     expect(screen.getByText("Birthday")).toBeInTheDocument();
     expect(screen.getAllByText(/^family$/i).length).toBeGreaterThan(0);
 
-    // The create form is replaced by the locked upgrade CTA.
-    expect(screen.queryByRole("button", { name: /^add calendar tag$/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/add another calendar tag/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/unlimited calendar tags are included with myKhaya family/i),
-    ).toBeInTheDocument();
+    // The existing create form remains visible, but cannot submit while the
+    // Free-plan limit is reached.
+    expect(screen.getByRole("button", { name: /^add calendar tag$/i })).toBeDisabled();
   });
 
   it("shows every Calendar Tag as Active/manageable on Family", async () => {

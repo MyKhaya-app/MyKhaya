@@ -27,6 +27,13 @@ const verifiedUser = {
   active: true,
   lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
+  authentication_mfa: {
+    configured: "inherit" as const,
+    effective: "optional" as const,
+    source: "platform",
+    allowed_methods: ["totp", "email"],
+    methods: [],
+  },
   last_login_at: "2026-02-01T00:00:00Z",
   last_activity_at: "2026-03-02T00:00:00Z",
   homes: [{ id: "home-1", name: "The Smiths", role: "owner" }],

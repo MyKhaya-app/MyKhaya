@@ -36,6 +36,7 @@ export default function Login() {
   const invitation = params.get("invitation");
   const calendarShare = params.get("calendar_share");
   const appleResult = params.get("apple");
+  const mfaExpired = params.get("mfa_error") === "expired";
   const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
   // the exact protected path (e.g. a calendar-share accept link's
@@ -44,7 +45,7 @@ export default function Login() {
   // this must never become an open redirect to an attacker-supplied URL.
   const nextParam = params.get("next");
   const next = isSafeInternalPath(nextParam) ? nextParam : null;
-  const [error, setError] = useState(""),
+  const [error, setError] = useState(mfaExpired ? "Your verification session has expired. Please sign in again." : ""),
     [nativeDiagnostic, setNativeDiagnostic] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [biometricBusy, setBiometricBusy] = useState(false),

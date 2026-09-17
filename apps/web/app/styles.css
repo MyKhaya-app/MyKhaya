@@ -1089,6 +1089,25 @@ textarea {
   margin: 1rem auto;
   width: 220px;
 }
+.auth-mfa-setup {
+  margin: 1rem 0;
+}
+.security-mfa-status {
+  align-items: center;
+  border-top: 1px solid var(--platform-line);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 0;
+}
+.security-mfa-status div {
+  display: grid;
+  gap: 0.2rem;
+}
+.security-mfa-status span {
+  color: var(--cc-neutral);
+  font-size: 0.9rem;
+}
 .auth-biometric .tertiary {
   margin-top: 0.25rem;
 }

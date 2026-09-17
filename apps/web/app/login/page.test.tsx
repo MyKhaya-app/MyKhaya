@@ -102,6 +102,28 @@ describe("Login — no prior biometric enrolment on this device", () => {
       avatarVersion: null,
     });
   });
+
+  it("routes an MFA-required browser login to the transaction URL", async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({
+      authentication_state: "additional_auth_required",
+      transaction_id: "opaque-transaction",
+    });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/mfa?transaction=opaque-transaction"));
+  });
+
+  it("shows a safe message when returning from an expired MFA handoff", async () => {
+    searchParams = new URLSearchParams("mfa_error=expired");
+    render(<Login />);
+
+    expect(await screen.findByText("Your verification session has expired. Please sign in again.")).toBeInTheDocument();
+  });
 });
 
 describe("Login — biometric sign-in previously enrolled on this device", () => {

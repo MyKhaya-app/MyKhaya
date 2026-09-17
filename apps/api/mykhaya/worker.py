@@ -234,10 +234,25 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         select(NotificationDelivery).where(NotificationDelivery.idempotency_key == delivery_key)
     )
     if delivery is None:
+        _redact_sensitive_email_payload(event)
         return  # diagnostic record missing — nothing more to do
+
+    sensitive_until = event.payload.get("sensitive_email_expires_at")
+    if sensitive_until:
+        try:
+            expires_at = datetime.fromisoformat(str(sensitive_until))
+        except ValueError:
+            expires_at = datetime.now(UTC)
+        if expires_at <= datetime.now(UTC):
+            _redact_sensitive_email_payload(event)
+            delivery.status = NotificationDeliveryStatus.cancelled
+            delivery.attempted_at = datetime.now(UTC)
+            delivery.sanitised_failure_reason = "The verification code has expired."
+            return
 
     suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
     if suppression_reason is not None:
+        _redact_sensitive_email_payload(event)
         delivery.status = NotificationDeliveryStatus.skipped
         delivery.attempted_at = datetime.now(UTC)
         delivery.sanitised_failure_reason = suppression_reason
@@ -255,11 +270,13 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         )
         delivery.status = NotificationDeliveryStatus.sent
         delivery.attempted_at = datetime.now(UTC)
+        _redact_sensitive_email_payload(event)
     except EmailPermanentError as exc:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.cancelled
         delivery.sanitised_failure_reason = exc.category
+        _redact_sensitive_email_payload(event)
         # Permanent (e.g. recipient/sender rejected) failures are never
         # retried — retrying a 5xx recipient rejection indefinitely wastes
         # sends and can itself hurt sender reputation. Not re-raised, so the
@@ -276,6 +293,20 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         delivery.status = NotificationDeliveryStatus.failed
         delivery.sanitised_failure_reason = "Email delivery temporarily unavailable."
         raise
+
+
+def _redact_sensitive_email_payload(event: OutboxEvent) -> None:
+    """Remove rendered MFA content after it is no longer needed for delivery."""
+    if event.payload.get("sensitive_email_expires_at") is None:
+        return
+    # JSON columns do not detect in-place mutations reliably; assign a new
+    # mapping so the redaction is persisted with the delivery status update.
+    event.payload = {
+        **event.payload,
+        "body": "[redacted]",
+        "html_body": None,
+        "sensitive_email_expires_at": None,
+    }
 
 
 async def process(event_id: uuid.UUID) -> None:
@@ -347,7 +378,11 @@ async def process(event_id: uuid.UUID) -> None:
                 )
             elif event.topic == "notification.nudges.evening_cleanup":
                 await deliver_nudge_summary(
-                    db, settings, event.payload["user_id"], event.payload["date"], day_complete=False
+                    db,
+                    settings,
+                    event.payload["user_id"],
+                    event.payload["date"],
+                    day_complete=False,
                 )
             elif event.topic == "notification.nudges.day_complete":
                 await deliver_nudge_summary(
@@ -373,6 +408,7 @@ async def process(event_id: uuid.UUID) -> None:
                 # leave the WorkerJobRecord as the permanent diagnostic
                 # record of the last failure.
                 event.processed_at = datetime.now(UTC)
+                _redact_sensitive_email_payload(event)
             else:
                 event.available_at = datetime.now(UTC) + timedelta(
                     seconds=_backoff_seconds(event.attempts)

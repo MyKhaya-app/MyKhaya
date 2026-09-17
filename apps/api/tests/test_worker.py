@@ -7,7 +7,7 @@ lost. See docs/design/visual-identity.md context and the fix itself in
 mykhaya/worker.py and mykhaya/scheduler.py.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, select
@@ -26,7 +26,12 @@ from mykhaya.models import (
     WorkerJobRecord,
 )
 from mykhaya.secrets_crypto import encrypt_secret
-from mykhaya.worker import MAX_ATTEMPTS, _backoff_seconds, process
+from mykhaya.worker import (
+    MAX_ATTEMPTS,
+    _backoff_seconds,
+    _redact_sensitive_email_payload,
+    process,
+)
 
 
 @pytest.mark.asyncio
@@ -54,6 +59,39 @@ def test_backoff_grows_and_is_capped() -> None:
     # Must not grow forever — capped so a permanently-failing job doesn't
     # end up scheduled a year in the future.
     assert _backoff_seconds(20) == 3600
+
+
+def test_sensitive_email_payload_is_redacted() -> None:
+    event = OutboxEvent(
+        topic="notification.email",
+        payload={
+            "body": "Your verification code is 123456.",
+            "html_body": "<p>Your verification code is <strong>123456</strong>.</p>",
+            "sensitive_email_expires_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+        },
+    )
+
+    _redact_sensitive_email_payload(event)
+
+    assert event.payload == {
+        "body": "[redacted]",
+        "html_body": None,
+        "sensitive_email_expires_at": None,
+    }
+    assert "123456" not in repr(event.payload)
+
+
+def test_non_sensitive_email_payload_is_unchanged() -> None:
+    payload = {
+        "body": "Your weekly summary is ready.",
+        "html_body": "<p>Your weekly summary is ready.</p>",
+        "sensitive_email_expires_at": None,
+    }
+    event = OutboxEvent(topic="notification.email", payload=payload.copy())
+
+    _redact_sensitive_email_payload(event)
+
+    assert event.payload == payload
 
 
 @pytest.mark.asyncio
@@ -161,9 +199,10 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
         payload={
             "recipient_email": "recipient@example.com",
             "subject": "Verify your MyKhaya email",
-            "body": "Please verify your email.",
-            "html_body": None,
+            "body": "Your verification code is 123456.",
+            "html_body": "<p>Your verification code is <strong>123456</strong>.</p>",
             "delivery_idempotency_key": "worker-pcc-smtp-test:email",
+            "sensitive_email_expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         },
     )
     smtp = PlatformSmtpSettings(
@@ -211,7 +250,7 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
         assert config.password == "smtp-password"
         assert recipient == "recipient@example.com"
         assert subject == "Verify your MyKhaya email"
-        assert body == "Please verify your email."
+        assert body == "Your verification code is 123456."
         async with SessionFactory() as db:
             stored_delivery = await db.scalar(
                 select(NotificationDelivery).where(
@@ -220,6 +259,11 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
             )
             assert stored_delivery is not None
             assert stored_delivery.status == NotificationDeliveryStatus.sent
+            stored_event = await db.get(OutboxEvent, event_id)
+            assert stored_event is not None
+            assert stored_event.payload["body"] == "[redacted]"
+            assert stored_event.payload["html_body"] is None
+            assert stored_event.payload["sensitive_email_expires_at"] is None
     finally:
         async with SessionFactory() as db:
             await db.execute(delete(WorkerJobRecord).where(WorkerJobRecord.id == event_id))

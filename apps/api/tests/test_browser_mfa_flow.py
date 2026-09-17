@@ -1,16 +1,18 @@
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pyotp
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
+from mykhaya.consumer_mfa_policy import CONSUMER_MFA_POLICY_SETTING_KEY, ConsumerMfaPolicyError
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import ActionToken, PlatformSetting, Session, TokenPurpose, User
-from mykhaya.consumer_mfa_policy import CONSUMER_MFA_POLICY_SETTING_KEY
 from mykhaya.security import derived_token
 from mykhaya.routers import auth as auth_router
 
@@ -53,7 +55,26 @@ async def _verified_user(client: AsyncClient, prefix: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_email_mfa_handoff_has_no_session_before_success(client: AsyncClient, monkeypatch) -> None:
+async def test_invalid_required_policy_fails_closed_before_session_issue(monkeypatch) -> None:
+    async def invalid_policy(*_args, **_kwargs):
+        raise ConsumerMfaPolicyError("invalid effective policy")
+
+    monkeypatch.setattr(auth_router, "resolve_consumer_mfa_policy", invalid_policy)
+    with pytest.raises(HTTPException) as error:
+        await auth_router._resolve_browser_mfa_policy(
+            object(),  # type: ignore[arg-type]
+            uuid.uuid4(),
+            get_settings(),
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "We couldn't complete secure sign-in. Please contact support."
+
+
+@pytest.mark.asyncio
+async def test_email_mfa_handoff_has_no_session_before_success(
+    client: AsyncClient, monkeypatch
+) -> None:
     settings = get_settings().model_copy(update={"browser_mfa_handoff_enabled": True})
     app.dependency_overrides[get_settings] = lambda: settings
     monkeypatch.setattr(auth_router, "new_email_code", lambda: "123456")
@@ -145,6 +166,10 @@ async def test_explicit_optional_policy_skips_browser_mfa_even_when_rollout_flag
         assert "mk_session" in client.cookies
     finally:
         async with SessionFactory() as db:
-            await db.execute(delete(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY))
+            await db.execute(
+                delete(PlatformSetting).where(
+                    PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY
+                )
+            )
             await db.commit()
         app.dependency_overrides.pop(get_settings, None)

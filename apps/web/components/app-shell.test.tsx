@@ -40,8 +40,9 @@ const push = vi.fn<(url: string) => void>();
 // produce) breaks AppShell's redirectToLogin/bootstrap useCallback
 // dependency chain, causing bootstrap to needlessly re-run on every render.
 const router = { replace: (url: string) => replace(url), push: (url: string) => push(url) };
+let pathname = "/home";
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/home",
+  usePathname: () => pathname,
   useRouter: () => router,
 }));
 
@@ -98,6 +99,7 @@ beforeEach(() => {
   nativeShell = false;
   platformControlCentre = false;
   nativePlatform = "ios";
+  pathname = "/home";
   authState.status = "ready";
   biometricOnSettled = undefined;
   document.documentElement.classList.remove("native-shell");
@@ -187,6 +189,16 @@ describe("AppShell — content scroll region", () => {
 });
 
 describe("AppShell — authenticated navigation", () => {
+  it("leaves the browser MFA route outside the authenticated shell", async () => {
+    pathname = "/mfa";
+    render(<PersistentAppShell><div>MFA</div></PersistentAppShell>);
+
+    expect(await screen.findByText("MFA")).toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).toBeNull();
+    expect(document.querySelector(".desktop-nav")).toBeNull();
+    expect(document.querySelector(".bottom-nav")).toBeNull();
+  });
+
   it("mounts the browser wide-screen rail alongside the protected mobile nav", async () => {
     nativeShell = false;
     render(<AppShell>content</AppShell>);

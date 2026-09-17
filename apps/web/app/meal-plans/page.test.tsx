@@ -142,7 +142,7 @@ describe("Meal Plans — Family plan access", () => {
     expect(screen.getAllByText("Dinner").length).toBeGreaterThan(0);
   });
 
-  it("removes the This Week weekday selector, the View week link and the Shopping List shortcut from this screen", async () => {
+  it("keeps the compact day controls and household shopping-list shortcut on this screen", async () => {
     (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       meals_enabled: true,
     });
@@ -152,7 +152,7 @@ describe("Meal Plans — Family plan access", () => {
 
     expect(screen.queryByText("This Week")).not.toBeInTheDocument();
     expect(screen.queryByText(/view week/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/shopping list/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/shopping list/i)).toBeInTheDocument();
     expect(document.querySelector(".week-strip")).not.toBeInTheDocument();
     // No leftover empty gap/container reserved for the removed section.
     expect(document.querySelectorAll(".week-strip-day").length).toBe(0);
@@ -254,12 +254,10 @@ describe("Meal Plans — Family plan access", () => {
     expect(container.querySelector(".calendar-month-row")).not.toBeInTheDocument();
 
     const dateNav = toolbar?.querySelector(".meal-plans-date-nav");
-    const toolbarRight = toolbar?.querySelector(".meal-plans-toolbar-right");
+    const controlsRow = container.querySelector(".meal-plans-controls-row");
     expect(dateNav).toBeInTheDocument();
-    expect(toolbarRight).toBeInTheDocument();
-    // Both groups are children of the same single toolbar row.
+    expect(controlsRow).toBeInTheDocument();
     expect(dateNav?.parentElement).toBe(toolbar);
-    expect(toolbarRight?.parentElement).toBe(toolbar);
 
     expect(
       within(dateNav as HTMLElement).getByRole("button", { name: /previous day/i }),
@@ -267,12 +265,7 @@ describe("Meal Plans — Family plan access", () => {
     expect(
       within(dateNav as HTMLElement).getByRole("button", { name: /next day/i }),
     ).toBeInTheDocument();
-    expect(
-      within(toolbarRight as HTMLElement).getByRole("tab", { name: "Day" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbarRight as HTMLElement).getByRole("tab", { name: "Week" }),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter meals")).toBeInTheDocument();
   });
 
   it("shows a real icon and a compact empty state for each meal slot with nothing planned, under a Today's Plan heading", async () => {
@@ -286,18 +279,25 @@ describe("Meal Plans — Family plan access", () => {
     expect(screen.getByRole("heading", { name: "Today’s Plan" })).toBeInTheDocument();
 
     const breakfastSection = screen
-      .getByText("Breakfast")
-      .closest(".mealplan-slot-card") as HTMLElement;
+      .getAllByText("Breakfast")
+      .find((element) => element.closest(".mealplan-slot-card"))
+      ?.closest(".mealplan-slot-card") as HTMLElement;
     expect(within(breakfastSection).getByText("Nothing planned yet")).toBeInTheDocument();
     expect(breakfastSection.querySelector(".mealplan-slot-icon")).toHaveAttribute(
       "src",
       expect.stringContaining("/images/meal-plans-breakfast.png"),
     );
 
-    const lunchSection = screen.getByText("Lunch").closest(".mealplan-slot-card") as HTMLElement;
+    const lunchSection = screen
+      .getAllByText("Lunch")
+      .find((element) => element.closest(".mealplan-slot-card"))
+      ?.closest(".mealplan-slot-card") as HTMLElement;
     expect(within(lunchSection).getByText("Nothing planned yet")).toBeInTheDocument();
 
-    const dinnerSection = screen.getByText("Dinner").closest(".mealplan-slot-card") as HTMLElement;
+    const dinnerSection = screen
+      .getAllByText("Dinner")
+      .find((element) => element.closest(".mealplan-slot-card"))
+      ?.closest(".mealplan-slot-card") as HTMLElement;
     expect(within(dinnerSection).getByText("Nothing planned yet")).toBeInTheDocument();
 
     // No Snacks slot is ever rendered on this screen.
@@ -369,7 +369,7 @@ describe("Meal Plans — Family plan access", () => {
         (slot) => slot.textContent === "Dinner",
       ),
     ).toBe(true);
-    expect(screen.getByText("+ Add")).toBeInTheDocument();
+    expect(screen.getAllByText("+ Add").length).toBeGreaterThan(0);
     expect(screen.queryByText("Breakfast meal")).not.toBeInTheDocument();
   });
 
@@ -598,8 +598,9 @@ describe("Meal Plans — Add meal sheet", () => {
     const user = userEvent.setup();
     await screen.findByRole("tab", { name: "Plan" });
     const breakfastSection = screen
-      .getByText("Breakfast")
-      .closest(".mealplan-slot-card");
+      .getAllByText("Breakfast")
+      .find((element) => element.closest(".mealplan-slot-card"))
+      ?.closest(".mealplan-slot-card");
     if (!breakfastSection) throw new Error("Breakfast section not found");
     await user.click(
       within(breakfastSection as HTMLElement).getByRole("button", {

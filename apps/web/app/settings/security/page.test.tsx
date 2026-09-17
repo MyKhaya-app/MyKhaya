@@ -54,6 +54,10 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       revokePasskey: vi.fn(),
       revokeDevice: vi.fn(),
       revokeOtherDevices: vi.fn(),
+      mfaStatus: vi.fn(),
+      totpSetup: vi.fn(),
+      totpVerify: vi.fn(),
+      removeTotp: vi.fn(),
     },
   };
 });
@@ -74,6 +78,8 @@ vi.mock("@/components/native-runtime", () => ({
 }));
 
 vi.mock("@/components/native-biometric", () => ({
+  biometricLabel: vi.fn(() => "Face ID"),
+  deviceNoun: vi.fn(() => "device"),
   getBiometricCapability: vi.fn(async () => ({
     kind: "faceId",
     label: "Face ID",
@@ -136,6 +142,13 @@ beforeEach(() => {
   (bootstrapNativeSession as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.mfaStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+    required: false,
+    allowed_methods: ["totp", "email"],
+    email_available: true,
+    totp_enabled: false,
+    can_disable_totp: false,
+  });
   (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(true);
 });
 
@@ -156,6 +169,30 @@ describe("Security — Biometric sign-in, not enrolled on this device", () => {
 
     await screen.findByText(/biometric sign-in isn't available/i);
     expect(screen.queryByRole("button", { name: /enable/i })).not.toBeInTheDocument();
+  });
+
+  it("starts authenticator setup and confirms it with a six-digit code", async () => {
+    (api.totpSetup as ReturnType<typeof vi.fn>).mockResolvedValue({
+      provisioning_uri: "otpauth://totp/MyKhaya:test@example.com?secret=ABC",
+      manual_key: "ABC",
+    });
+    (api.totpVerify as ReturnType<typeof vi.fn>).mockResolvedValue({
+      required: false,
+      allowed_methods: ["totp", "email"],
+      email_available: true,
+      totp_enabled: true,
+      can_disable_totp: true,
+    });
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: /set up authenticator/i }));
+    await screen.findByText("ABC");
+    await user.type(screen.getByLabelText("Confirmation code"), "123456");
+    await user.click(screen.getByRole("button", { name: /confirm setup/i }));
+
+    expect(api.totpVerify).toHaveBeenCalledWith("123456");
+    await screen.findByText(/authenticator app is now set up/i);
   });
 
   it("enrolling creates a passkey, remembers it as this device's, and sets the login hint", async () => {

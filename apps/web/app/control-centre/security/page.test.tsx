@@ -94,6 +94,33 @@ describe("Global Security", () => {
     );
   });
 
+  it("submits Browser MFA changes to the consumer policy endpoint", async () => {
+    put.mockResolvedValue({ ...optionalBrowserPolicy, configured: "required", effective: "required", enforcement_enabled: true });
+    render(<GlobalSecurityPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Require browser MFA" }));
+    await userEvent.type(screen.getByLabelText("Reason for this change"), "Require consumer browser MFA");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm browser MFA policy" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/auth/mfa/browser-policy", {
+      policy: "required",
+      allowed_methods: ["totp", "email"],
+      reason: "Require consumer browser MFA",
+      confirmed: true,
+    }));
+  });
+
+  it("keeps Browser MFA usable when an unrelated security endpoint fails", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/mfa/policy") return Promise.reject(new ApiError(403, "Administrator policy access denied."));
+      if (path === "/auth/mfa/browser-policy") return Promise.resolve(optionalBrowserPolicy);
+      if (path.startsWith("/security")) return Promise.resolve({ items: events });
+      if (path === "/auth/providers") return Promise.resolve(providers);
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText("Browser MFA")).toBeInTheDocument();
+    expect(screen.getByText("Administrator policy access denied.")).toBeInTheDocument();
+  });
+
   it("opens the reauth modal on a 403 and retries the same change once verified", async () => {
     put.mockImplementation(() => {
       const priorAttempts = put.mock.calls.length;

@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { api, ApiError } from "@mykhaya/api-client";
+import QRCode from "qrcode";
 import type { Passkey } from "@mykhaya/shared-types";
 import { SettingsPage } from "@/components/settings-page";
 import {
@@ -26,6 +28,16 @@ type Device = {
   current: boolean;
 };
 
+type MfaStatus = {
+  required: boolean;
+  allowed_methods: ("totp" | "email")[];
+  email_available: boolean;
+  totp_enabled: boolean;
+  can_disable_totp: boolean;
+};
+
+type TotpSetup = { provisioning_uri: string; manual_key: string };
+
 export default function Security() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
@@ -37,6 +49,11 @@ export default function Security() {
   // device that does have Face ID/Touch ID/Windows Hello.
   const [biometricAvailable, setBiometricAvailable] = useState<boolean | null>(null);
   const [labelText, setLabelText] = useState("biometrics");
+  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
+  const [totpSetup, setTotpSetup] = useState<TotpSetup | null>(null);
+  const [totpQr, setTotpQr] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
 
   const native = isNativeShell();
 
@@ -50,9 +67,56 @@ export default function Security() {
     // observed to hang inside the Capacitor WKWebView, which is exactly
     // the "Quick Sign-In freezes the app" defect this guard fixes.
     if (native) return;
+    api.mfaStatus().then(setMfaStatus).catch(() => setError("Could not load your browser MFA status."));
     biometricSignInAvailable().then(setBiometricAvailable);
     setLabelText(biometricLabel());
   }, [native]);
+
+  async function setupAuthenticator() {
+    setMfaBusy(true);
+    setError("");
+    try {
+      const setup = await api.totpSetup();
+      setTotpSetup(setup);
+      setTotpQr(await QRCode.toDataURL(setup.provisioning_uri, { margin: 1, width: 220 }));
+    } catch {
+      setError("Could not start authenticator setup. Please try again.");
+    } finally {
+      setMfaBusy(false);
+    }
+  }
+
+  async function confirmAuthenticator(event: FormEvent) {
+    event.preventDefault();
+    setMfaBusy(true);
+    setError("");
+    try {
+      setMfaStatus(await api.totpVerify(totpCode));
+      setTotpSetup(null);
+      setTotpQr(null);
+      setTotpCode("");
+      setMessage("Authenticator app is now set up.");
+    } catch {
+      setError("That authenticator code isn't correct. Please try again.");
+    } finally {
+      setMfaBusy(false);
+    }
+  }
+
+  async function disableAuthenticator() {
+    if (!window.confirm("Turn off your authenticator app?")) return;
+    setMfaBusy(true);
+    setError("");
+    try {
+      await api.removeTotp();
+      setMfaStatus((value) => value && { ...value, totp_enabled: false, can_disable_totp: false });
+      setMessage("Authenticator app has been turned off.");
+    } catch {
+      setError("Could not turn off authenticator app. Please try again.");
+    } finally {
+      setMfaBusy(false);
+    }
+  }
 
   // "Enabled on this device" — precisely the credential this browser
   // created (see getEnrolledPasskeyId), not just "the account has some
@@ -167,6 +231,41 @@ export default function Security() {
 
   return (
     <SettingsPage title="Security">
+      {!native && mfaStatus && (
+        <section className="card details" aria-labelledby="browser-mfa-heading">
+          <h2 id="browser-mfa-heading">Multi-factor authentication</h2>
+          <p className="muted">
+            Browser sign-in {mfaStatus.required ? "requires" : "can use"} an additional verification step.
+          </p>
+          <div className="security-mfa-status">
+            <div>
+              <strong>Authenticator app</strong>
+              <span>{mfaStatus.totp_enabled ? "Set up" : "Not set up"}</span>
+            </div>
+            {!totpSetup && (mfaStatus.totp_enabled ? (
+              mfaStatus.can_disable_totp && <button className="secondary" disabled={mfaBusy} onClick={() => void disableAuthenticator()}>Disable</button>
+            ) : (
+              <button className="secondary" disabled={mfaBusy} onClick={() => void setupAuthenticator()}>Set up authenticator</button>
+            ))}
+          </div>
+          {mfaStatus.totp_enabled && !mfaStatus.can_disable_totp && (
+            <p className="muted">This authenticator app is required by your sign-in policy.</p>
+          )}
+          {totpSetup && (
+            <form onSubmit={(event) => void confirmAuthenticator(event)} className="mfa-method">
+              <p>Scan this QR code with your authenticator app, or enter the setup key manually.</p>
+              {totpQr && <img src={totpQr} alt="Scan with your authenticator app" className="auth-mfa-qr" />}
+              <p>Setup key: <code>{totpSetup.manual_key}</code></p>
+              <label htmlFor="security-totp-code">Confirmation code</label>
+              <input id="security-totp-code" value={totpCode} onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" required />
+              <button disabled={mfaBusy || totpCode.length !== 6}>{mfaBusy ? "Checking…" : "Confirm setup"}</button>
+            </form>
+          )}
+          <div className="security-mfa-status">
+            <div><strong>Email verification</strong><span>{mfaStatus.email_available ? "Available for verification codes" : "Not available"}</span></div>
+          </div>
+        </section>
+      )}
       {native && <QuickSignIn />}
       {!native && (
       <section className="card details">

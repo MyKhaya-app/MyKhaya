@@ -26,7 +26,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function isPublicPath(path: string) {
-  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding"].some(
+  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding", "/mfa"].some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
 }

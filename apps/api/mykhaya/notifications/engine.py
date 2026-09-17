@@ -110,6 +110,7 @@ async def notify(
     timezone_override: str | None = None,
     html_body: str | None = None,
     allow_email: bool = True,
+    sensitive_email_expires_at: datetime | None = None,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -155,6 +156,7 @@ async def notify(
             idempotency_key=idempotency_key,
             html_body=html_body,
             group_id=group_id,
+            sensitive_email_expires_at=sensitive_email_expires_at,
         )
         return None
 
@@ -238,6 +240,7 @@ async def notify(
                 idempotency_key=idempotency_key,
                 html_body=html_body,
                 group_id=group_id,
+                sensitive_email_expires_at=sensitive_email_expires_at,
             )
 
     return notification
@@ -254,6 +257,7 @@ async def _enqueue_email(
     idempotency_key: str,
     html_body: str | None = None,
     group_id: uuid.UUID | None = None,
+    sensitive_email_expires_at: datetime | None = None,
 ) -> None:
     email_key = f"{idempotency_key}:email"
     already_queued = await db.scalar(
@@ -276,6 +280,11 @@ async def _enqueue_email(
             # already checked both once, but time passes between enqueue
             # and a worker actually picking this up.
             "group_id": str(group_id) if group_id else None,
+            "sensitive_email_expires_at": (
+                sensitive_email_expires_at.isoformat()
+                if sensitive_email_expires_at is not None
+                else None
+            ),
         },
     )
     db.add(event)

@@ -141,6 +141,33 @@ export class MyKhayaClient {
     );
   revokePasskey = (id: string) =>
     this.request<void>(`/auth/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
+  mfaStatus = () =>
+    this.request<{
+      required: boolean;
+      allowed_methods: ("totp" | "email")[];
+      email_available: boolean;
+      totp_enabled: boolean;
+      can_disable_totp: boolean;
+    }>("/auth/mfa/status");
+  totpSetup = () =>
+    this.request<{
+      method: "totp";
+      provisioning_uri: string;
+      manual_key: string;
+      enrolling: boolean;
+    }>("/auth/mfa/totp/setup", { method: "POST", body: "{}" });
+  totpVerify = (code: string) =>
+    this.request<{
+      required: boolean;
+      allowed_methods: ("totp" | "email")[];
+      email_available: boolean;
+      totp_enabled: boolean;
+      can_disable_totp: boolean;
+    }>("/auth/mfa/totp/verify", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+  removeTotp = () => this.request<void>("/auth/mfa/totp", { method: "DELETE" });
   updateMyBirthday = (
     body: import("@mykhaya/shared-types").UserBirthdayPayload,
   ) =>

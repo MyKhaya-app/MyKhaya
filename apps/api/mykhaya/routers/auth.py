@@ -40,7 +40,11 @@ from mykhaya.consumer_mfa import (
     new_email_code,
     totp_provisioning_uri,
 )
-from mykhaya.consumer_mfa_policy import resolve_consumer_mfa_policy
+from mykhaya.consumer_mfa_policy import (
+    ConsumerMfaPolicyError,
+    EffectiveConsumerMfaPolicy,
+    resolve_consumer_mfa_policy,
+)
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.models import (
@@ -80,11 +84,13 @@ from mykhaya.secrets_crypto import decrypt_user_mfa_totp, encrypt_user_mfa_totp
 from mykhaya.schemas import (
     AuthContinuationResponse,
     ChildLoginRequest,
+    ConsumerMfaStatusResponse,
     ForgotRequest,
     LoginRequest,
     MfaOptionsResponse,
     MfaStartRequest,
     MfaStartResponse,
+    MfaTotpVerifyRequest,
     MfaVerifyRequest,
     MessageResponse,
     MobileDeviceRenewRequest,
@@ -146,7 +152,7 @@ async def complete_browser_authentication(
 ) -> UserResponse | AuthContinuationResponse:
     """Shared final browser-auth seam; native callers do not use this path."""
     policy = (
-        await resolve_consumer_mfa_policy(db, user.id, settings)
+        await _resolve_browser_mfa_policy(db, user.id, settings)
         if kind == SessionKind.adult
         else None
     )
@@ -171,6 +177,19 @@ async def complete_browser_authentication(
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     return user_response(user, session)
+
+
+async def _resolve_browser_mfa_policy(
+    db: AsyncSession, user_id: uuid.UUID, settings: Settings
+) -> EffectiveConsumerMfaPolicy:
+    try:
+        return await resolve_consumer_mfa_policy(db, user_id, settings)
+    except ConsumerMfaPolicyError:
+        auth_diag_log.error("consumer_mfa_policy_invalid", user_id=str(user_id))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't complete secure sign-in. Please contact support.",
+        ) from None
 
 
 async def _mfa_preauth_user(
@@ -213,6 +232,29 @@ def _masked_email(email: str) -> str:
     return f"{masked}@{domain}"
 
 
+def _usable_browser_mfa_methods(
+    allowed: set[UserMfaMethod],
+    active: set[UserMfaMethod],
+    email_verified: bool,
+) -> list[str]:
+    """Return methods the consumer can use now, in stable UI order.
+
+    A required TOTP-only policy keeps the enrollment method visible even when
+    no factor is active yet; the existing start/verify flow completes setup.
+    """
+    usable = active & allowed
+    if email_verified and UserMfaMethod.email in allowed:
+        usable.add(UserMfaMethod.email)
+    methods = [
+        method.value
+        for method in (UserMfaMethod.totp, UserMfaMethod.email)
+        if method in usable
+    ]
+    if not methods and allowed == {UserMfaMethod.totp}:
+        return [UserMfaMethod.totp.value]
+    return methods
+
+
 @router.get("/mfa/options", response_model=MfaOptionsResponse)
 async def browser_mfa_options(
     transaction_id: str,
@@ -220,16 +262,12 @@ async def browser_mfa_options(
     settings: Settings = Depends(get_settings),
 ) -> MfaOptionsResponse:
     _state, user = await _mfa_preauth_user(transaction_id, db, settings)
-    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     active = await _active_mfa_methods(db, user.id)
     allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
-    methods = [
-        method.value
-        for method in (UserMfaMethod.totp, UserMfaMethod.email)
-        if method in active
-    ]
-    if not methods:
-        methods = sorted(policy.allowed_methods)
+    methods = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None
+    )
     return MfaOptionsResponse(
         methods=methods,
         destination=_masked_email(user.email),
@@ -248,7 +286,7 @@ async def browser_mfa_start(
     settings: Settings = Depends(get_settings),
 ) -> MfaStartResponse:
     state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
-    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if body.method not in policy.allowed_methods:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
     if body.method == UserMfaMethod.email.value:
@@ -287,6 +325,7 @@ async def browser_mfa_start(
             html_body=html,
             idempotency_key=f"mfa-email:{challenge.id}",
             is_critical=True,
+            sensitive_email_expires_at=challenge.expires_at,
         )
         audit(
             db,
@@ -340,7 +379,7 @@ async def browser_mfa_verify(
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
     state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
-    policy = await resolve_consumer_mfa_policy(db, user.id, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if body.method not in policy.allowed_methods:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
     now = datetime.now(UTC)
@@ -484,6 +523,28 @@ async def authenticated_totp_setup(
     )
 
 
+@router.get("/mfa/status", response_model=ConsumerMfaStatusResponse)
+async def authenticated_mfa_status(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    require_fresh_adult_auth(auth)
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    active = await _active_mfa_methods(db, auth.user.id)
+    email_available = (
+        auth.user.email_verified_at is not None and "email" in policy.allowed_methods
+    )
+    totp_enabled = UserMfaMethod.totp in active
+    return ConsumerMfaStatusResponse(
+        required=policy.required,
+        allowed_methods=sorted(policy.allowed_methods),
+        email_available=email_available,
+        totp_enabled=totp_enabled,
+        can_disable_totp=totp_enabled and (not policy.required or email_available),
+    )
+
+
 @router.delete("/mfa/totp")
 async def remove_authenticated_totp(
     request: Request,
@@ -505,6 +566,39 @@ async def remove_authenticated_totp(
     audit(db, request, "MFA_TOTP_REMOVED", auth.user.id, target_type="mfa_method")
     await db.commit()
     return {"message": "Authenticator app removed."}
+
+
+@router.post("/mfa/totp/verify", response_model=ConsumerMfaStatusResponse)
+async def verify_authenticated_totp(
+    body: MfaTotpVerifyRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    require_fresh_adult_auth(auth)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None or not factor.encrypted_secret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+    step = matched_totp_step(
+        decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
+    )
+    if step is None or not await claim_totp_step(settings, auth.user.id, step):
+        audit(db, request, "MFA_TOTP_ENROLMENT_FAILED", auth.user.id, target_type="mfa_method")
+        await db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That authenticator code isn't correct.")
+    now = datetime.now(UTC)
+    factor.enabled = True
+    factor.enrolled_at = factor.enrolled_at or now
+    factor.last_used_at = now
+    audit(db, request, "MFA_TOTP_ENROLLED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return await authenticated_mfa_status(auth=auth, db=db, settings=settings)
 
 
 def _safe_return_path(value: str | None) -> str | None:

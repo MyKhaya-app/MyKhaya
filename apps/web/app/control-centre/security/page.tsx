@@ -46,6 +46,7 @@ export default function GlobalSecurityPage() {
   const [events, setEvents] = useState<SecurityEvent[] | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[] | null>(null);
   const [error, setError] = useState("");
+  const [browserPolicyError, setBrowserPolicyError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingChange, setPendingChange] = useState<boolean | null>(null);
@@ -54,20 +55,19 @@ export default function GlobalSecurityPage() {
 
   const load = useCallback(async () => {
     setError("");
-    try {
-      const [policyResult, browserPolicyResult, eventsResult, providersResult] = await Promise.all([
-        platformApi.get<MfaPolicy>("/auth/mfa/policy"),
-        platformApi.get<ConsumerMfaPolicy>("/auth/mfa/browser-policy"),
-        platformApi.get<{ items: SecurityEvent[] }>("/security?page_size=25"),
-        platformApi.get<{ providers: ProviderStatus[] }>("/auth/providers"),
-      ]);
-      setPolicy(policyResult);
-      setBrowserPolicy(browserPolicyResult);
-      setEvents(eventsResult.items);
-      setProviders(providersResult.providers);
-    } catch (cause) {
-      setError(safeError(cause, "Could not load security policy."));
-    }
+    setBrowserPolicyError("");
+    void platformApi.get<MfaPolicy>("/auth/mfa/policy")
+      .then(setPolicy)
+      .catch((cause) => setError(safeError(cause, "Could not load administrator MFA policy.")));
+    void platformApi.get<ConsumerMfaPolicy>("/auth/mfa/browser-policy")
+      .then(setBrowserPolicy)
+      .catch((cause) => setBrowserPolicyError(safeError(cause, "Browser MFA policy could not be loaded.")));
+    void platformApi.get<{ items: SecurityEvent[] }>("/security?page_size=25")
+      .then((result) => setEvents(result.items))
+      .catch((cause) => setError(safeError(cause, "Security events could not be loaded.")));
+    void platformApi.get<{ providers: ProviderStatus[] }>("/auth/providers")
+      .then((result) => setProviders(result.providers))
+      .catch((cause) => setError(safeError(cause, "Sign-in providers could not be loaded.")));
   }, []);
   useEffect(() => {
     void load();
@@ -210,7 +210,7 @@ export default function GlobalSecurityPage() {
         )}
 
         {!browserPolicy ? (
-          <CcLoadingState label="Loading browser MFA policy…" />
+          browserPolicyError ? <CcNotice tone="error">{browserPolicyError}</CcNotice> : <CcLoadingState label="Loading browser MFA policy…" />
         ) : (
           <CcCard
             title="Browser MFA"
@@ -227,7 +227,7 @@ export default function GlobalSecurityPage() {
                 {browserPolicy.configured === "required" ? "Make browser MFA optional" : "Require browser MFA"}
               </button>
             ) : (
-              <form onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("reason"); void applyBrowserChange(typeof value === "string" ? value : ""); }} className="mfa-method">
+              <form onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("browser-reason"); void applyBrowserChange(typeof value === "string" ? value : ""); }} className="mfa-method">
                 <CcField label="Reason for this change">
                   <input name="browser-reason" minLength={10} maxLength={500} required autoFocus />
                 </CcField>

@@ -58,6 +58,17 @@ class MfaStartRequest(StrictModel):
     method: Literal["totp", "email"]
 
 
+class MfaTotpVerifyRequest(StrictModel):
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def numeric_code(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Verification code must contain six digits")
+        return value
+
+
 class MfaVerifyRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
     method: Literal["totp", "email"]
@@ -86,6 +97,14 @@ class MfaStartResponse(BaseModel):
     provisioning_uri: str | None = None
     manual_key: str | None = None
     enrolling: bool = False
+
+
+class ConsumerMfaStatusResponse(BaseModel):
+    required: bool
+    allowed_methods: list[Literal["totp", "email"]]
+    email_available: bool
+    totp_enabled: bool
+    can_disable_totp: bool
 
 
 class TokenRequest(StrictModel):

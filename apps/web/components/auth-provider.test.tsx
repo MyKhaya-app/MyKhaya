@@ -90,6 +90,19 @@ beforeEach(() => {
 });
 
 describe("AuthProvider", () => {
+  it("does not bootstrap or redirect a browser MFA pre-auth route", async () => {
+    // usePathname() excludes the query string; the MFA page reads the
+    // transaction separately through useSearchParams().
+    pathname = "/mfa";
+    me.mockRejectedValue(new (await import("@mykhaya/api-client")).ApiError(401, "Unauthenticated"));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+    expect(me).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it("shows initial bootstrap state, then remains ready without reloading", async () => {
     let resolve!: (value: unknown) => void;
     me.mockReturnValue(new Promise((r) => { resolve = r; }));

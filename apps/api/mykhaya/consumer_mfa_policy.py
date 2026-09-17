@@ -5,9 +5,9 @@ effective policy stricter or reduce the permitted method set.  Managed-child
 authentication never calls this service.
 """
 
+import uuid
 from dataclasses import dataclass
 from typing import Any
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,10 @@ from mykhaya.models import ConsumerMfaPolicy, Group, Membership, User
 
 CONSUMER_MFA_POLICY_SETTING_KEY = "consumer_browser_mfa_policy"
 MFA_METHODS = frozenset({"totp", "email"})
+
+
+class ConsumerMfaPolicyError(ValueError):
+    """The effective consumer policy cannot provide a safe MFA method."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,7 @@ async def resolve_consumer_mfa_policy(
         (group_id, policy.value if isinstance(policy, ConsumerMfaPolicy) else str(policy))
         for group_id, policy, _ in memberships
     )
-    for _, policy, home_methods in memberships:
+    for _, _policy, home_methods in memberships:
         if home_methods is not None:
             methods &= _normalise_methods(home_methods)
 
@@ -99,6 +103,8 @@ async def resolve_consumer_mfa_policy(
     legacy_fallback = settings.browser_mfa_handoff_enabled and platform_row is None
     if legacy_fallback:
         effective, source = ConsumerMfaPolicy.required.value, "rollout_flag"
+    if effective == ConsumerMfaPolicy.required.value and not methods:
+        raise ConsumerMfaPolicyError("Required consumer MFA policy has no allowed methods.")
     return EffectiveConsumerMfaPolicy(
         configured_platform=platform_policy,
         configured_user=user_policy,

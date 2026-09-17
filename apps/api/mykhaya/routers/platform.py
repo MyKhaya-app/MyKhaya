@@ -31,6 +31,7 @@ from mykhaya.calendar_highlights import sync_holiday_source
 from mykhaya.config import Settings, get_settings
 from mykhaya.consumer_mfa_policy import (
     CONSUMER_MFA_POLICY_SETTING_KEY,
+    ConsumerMfaPolicyError,
     methods_value,
     policy_value,
     resolve_consumer_mfa_policy,
@@ -1425,6 +1426,20 @@ async def _consumer_platform_values(db: AsyncSession) -> tuple[str, set[str]]:
     return str(value.get("policy", "optional")), set(value.get("allowed_methods", ["totp", "email"]))
 
 
+async def _validate_consumer_policy_users(
+    db: AsyncSession, settings: Settings, user_ids: list[uuid.UUID]
+) -> None:
+    """Validate effective policies after a pending policy change is flushed."""
+    for user_id in user_ids:
+        try:
+            await resolve_consumer_mfa_policy(db, user_id, settings)
+        except ConsumerMfaPolicyError:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This policy would leave some users without an available MFA method.",
+            ) from None
+
+
 @router.get("/auth/mfa/browser-policy", response_model=ConsumerMfaPolicyResponse)
 async def consumer_mfa_platform_policy(
     _: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
@@ -1463,6 +1478,15 @@ async def update_consumer_mfa_platform_policy(
         db.add(row)
     row.value = {"policy": configured, "allowed_methods": methods}
     row.updated_by = context.administrator.id
+    await db.flush()
+    user_ids = list(
+        await db.scalars(select(User.id).where(User.is_active.is_(True)))
+    )
+    try:
+        await _validate_consumer_policy_users(db, settings, user_ids)
+    except HTTPException:
+        await db.rollback()
+        raise
     platform_audit(db, request, context, "MFA_PLATFORM_POLICY_CHANGED", "platform_setting", None, reason=body.reason, previous=previous, new=row.value)
     if configured == "required":
         platform_audit(db, request, context, "MFA_ENFORCEMENT_ENABLED", "platform_setting", None)
@@ -1514,6 +1538,20 @@ async def update_consumer_mfa_home_policy(
     previous = {"policy": group.mfa_policy.value, "allowed_methods": group.mfa_allowed_methods}
     group.mfa_policy = configured
     group.mfa_allowed_methods = None if set(methods) == platform_methods else methods
+    await db.flush()
+    member_ids = list(
+        await db.scalars(
+            select(Membership.user_id).where(
+                Membership.group_id == group.id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    )
+    try:
+        await _validate_consumer_policy_users(db, settings, member_ids)
+    except HTTPException:
+        await db.rollback()
+        raise
     platform_audit(db, request, context, "MFA_HOME_POLICY_CHANGED", "home", group.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": group.mfa_allowed_methods})
     await db.commit()
     effective = "required" if configured == "required" or platform_policy == "required" else "optional"
@@ -1558,6 +1596,12 @@ async def update_consumer_mfa_user_policy(
     previous = {"policy": user.mfa_policy.value, "allowed_methods": user.mfa_allowed_methods}
     user.mfa_policy = configured
     user.mfa_allowed_methods = methods
+    await db.flush()
+    try:
+        await _validate_consumer_policy_users(db, settings, [user.id])
+    except HTTPException:
+        await db.rollback()
+        raise
     event = "MFA_USER_FORCED" if configured == "required" else "MFA_USER_FORCE_REMOVED" if previous["policy"] == "required" else "MFA_USER_POLICY_CHANGED"
     platform_audit(db, request, context, event, "user", user.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": methods})
     await db.commit()

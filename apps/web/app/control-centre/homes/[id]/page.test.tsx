@@ -27,6 +27,12 @@ const activeHome = {
   active: true,
   lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
+  authentication_mfa: {
+    configured: "inherit" as const,
+    effective: "optional" as const,
+    source: "platform",
+    allowed_methods: ["totp", "email"],
+  },
   members: [{ user_id: "u1", display_name: "Jane Smith", email: "jane@example.com", role: "owner" }],
   pending_invitations: [{ id: "inv-1", email: "invitee@example.com", role: "member", expires_at: "2026-12-01T00:00:00Z" }],
   feature_overrides: [{ feature: "calendar", enabled: true }],

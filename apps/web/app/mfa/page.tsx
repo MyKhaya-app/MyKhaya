@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import QRCode from "qrcode";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -31,10 +31,16 @@ export default function MfaPage() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const autoStartAttempted = useRef(false);
+
+  const returnToLogin = useCallback(() => {
+    router.replace("/login?mfa_error=expired");
+  }, [router]);
 
   useEffect(() => {
     if (!transaction) {
-      setError("This sign-in attempt has expired. Please sign in again.");
+      returnToLogin();
       return;
     }
     api
@@ -43,27 +49,53 @@ export default function MfaPage() {
         setOptions(value);
         setMethod(value.methods[0] ?? "email");
       })
-      .catch((reason: ApiError) => setError(reason.message));
-  }, [transaction]);
+      .catch(() => returnToLogin());
+  }, [returnToLogin, transaction]);
 
-  async function begin(selected: Method = method) {
+  const begin = useCallback(async (selected: Method = method) => {
     setBusy(true);
     setError("");
     setStart(null);
+    setCode("");
     try {
       const value = await api.post<Start>("/auth/mfa/start", {
         transaction_id: transaction,
         method: selected,
       });
       setStart(value);
-      setQr(value.provisioning_uri ? await QRCode.toDataURL(value.provisioning_uri, { margin: 1, width: 220 }) : null);
+      setQr(
+        value.provisioning_uri
+          ? await QRCode.toDataURL(value.provisioning_uri, { margin: 1, width: 220 })
+          : null,
+      );
       setMethod(selected);
+      if (selected === "email") setResendCooldown(30);
     } catch (reason) {
-      setError(reason instanceof ApiError ? reason.message : "Could not start verification.");
+      setError(
+        reason instanceof ApiError && reason.status === 429
+          ? "Too many requests. Please wait a moment and try again."
+          : "We couldn't start verification. Please try again.",
+      );
     } finally {
       setBusy(false);
     }
-  }
+  }, [method, transaction]);
+
+  useEffect(() => {
+    if (options?.methods.length === 1 && !autoStartAttempted.current) {
+      autoStartAttempted.current = true;
+      void begin(options.methods[0]);
+    }
+  }, [begin, options]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = window.setInterval(
+      () => setResendCooldown((value) => Math.max(0, value - 1)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
 
   async function verify() {
     setBusy(true);
@@ -77,14 +109,24 @@ export default function MfaPage() {
       setAuthenticatedUser(user);
       router.push(options?.onboarding ? "/onboarding" : "/home");
     } catch (reason) {
-      setError(reason instanceof ApiError ? reason.message : "Could not verify the code.");
+      if (reason instanceof ApiError && reason.status === 400 && /sign-in attempt has expired/i.test(reason.message)) {
+        returnToLogin();
+        return;
+      }
+      setError(
+        reason instanceof ApiError && reason.status === 429
+          ? "Too many attempts. Please wait a moment and try again."
+          : reason instanceof ApiError && /invalid|incorrect/i.test(reason.message)
+            ? "That code isn't correct. Please try again."
+            : "We couldn't verify that code. Please try again.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <AuthCard title="Verify it’s you" intro="Choose a secure way to finish signing in.">
+    <AuthCard title="Verify it’s you" intro="For your security, we need to verify your identity.">
       {options && options.methods.length > 1 && (
         <div className="auth-mfa-methods" role="group" aria-label="Verification method">
           {options.methods.map((item) => (
@@ -100,25 +142,43 @@ export default function MfaPage() {
           ))}
         </div>
       )}
-      {method === "totp" && start?.enrolling && qr && (
-        <div>
-          <p>Scan this QR code, then enter the six-digit code from your authenticator app.</p>
-          <img src={qr} alt="Authenticator setup QR code" className="auth-mfa-qr" />
-          <p>Manual setup key: <code>{start.manual_key}</code></p>
+      {method === "totp" && start?.enrolling && (
+        <div className="auth-mfa-setup">
+          <p>Scan this QR code, then enter the 6-digit code from your authenticator app.</p>
+          {qr && <img src={qr} alt="Scan with your authenticator app" className="auth-mfa-qr" />}
+          <p>Can't scan? Enter this setup key manually: <code>{start.manual_key}</code></p>
         </div>
       )}
       {method === "email" && start && (
-        <p>We sent a six-digit code to {start.destination ?? options?.destination}.</p>
+        <p>We've sent a verification code to {start.destination ?? options?.destination}.</p>
       )}
       <FormStatus error={error} />
       {start ? (
         <form onSubmit={(event) => { event.preventDefault(); void verify(); }}>
-          <label>
+          <label htmlFor="mfa-code">
             Verification code
-            <input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" required />
+            <input
+              id="mfa-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              required
+              autoFocus
+            />
           </label>
           <button disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Verify"}</button>
-          {method === "email" && <button type="button" className="tertiary" onClick={() => void begin("email")} disabled={busy}>Resend code</button>}
+          {method === "email" && (
+            <button
+              type="button"
+              className="tertiary"
+              onClick={() => void begin("email")}
+              disabled={busy || resendCooldown > 0}
+            >
+              {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}
+            </button>
+          )}
         </form>
       ) : (
         <button type="button" onClick={() => void begin()} disabled={busy || !options}>{busy ? "Starting…" : "Continue"}</button>
