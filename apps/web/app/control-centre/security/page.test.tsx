@@ -58,8 +58,12 @@ beforeEach(() => {
 
 describe("Global Security", () => {
   it("renders the MFA policy state and the security event log", async () => {
-    render(<GlobalSecurityPage />);
+    const { container } = render(<GlobalSecurityPage />);
     expect((await screen.findAllByText("Optional")).length).toBeGreaterThanOrEqual(2);
+    expect(container.querySelector(".pcc-security-policy-grid")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-security-policy-grid > div")).toHaveLength(3);
+    expect(container.querySelector(".pcc-provider-grid")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-provider-card")).toHaveLength(2);
     expect(screen.getByText("Login Failed")).toBeInTheDocument();
     expect(screen.getByText("Too many attempts")).toBeInTheDocument();
   });
@@ -128,9 +132,10 @@ describe("Global Security", () => {
       effective: "required",
       enforcement_enabled: false,
     });
-    render(<GlobalSecurityPage />);
+    const { container } = render(<GlobalSecurityPage />);
     expect(await screen.findByText("Policy")).toBeInTheDocument();
     expect(screen.getByText("Enforcement")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-security-policy-columns > section")).toHaveLength(2);
     expect(screen.getByText("Authenticator app, Email")).toBeInTheDocument();
     expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=false")).toBeInTheDocument();
     expect(screen.getByText(/configured as Required but is not currently being enforced/i)).toBeInTheDocument();

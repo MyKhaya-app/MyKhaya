@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { Info, ShieldCheck, TriangleAlert } from "lucide-react";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
@@ -197,7 +197,7 @@ export default function GlobalSecurityPage() {
               <div><dt>Environment control</dt><dd><code>MYKHAYA_ADMIN_MFA_REQUIRED</code></dd></div>
             </dl>
             {policy.environment_enforced ? (
-              <CcNotice tone="warning">
+              <CcNotice tone="info" icon={Info}>
                 Managed by the deployment environment. MFA is permanently required for Platform
                 Administrators in this deployment and cannot be turned off here.
               </CcNotice>
@@ -261,7 +261,7 @@ export default function GlobalSecurityPage() {
               </section>
             </div>
             {browserPolicy.effective === "required" && !browserPolicy.enforcement_enabled ? (
-              <CcNotice tone="warning">{consumerEnforcementMessage(browserPolicy)}</CcNotice>
+              <CcNotice tone="warning" icon={TriangleAlert}>{consumerEnforcementMessage(browserPolicy)}</CcNotice>
             ) : (
               <p className="pcc-security-policy-note">{consumerEnforcementMessage(browserPolicy)}</p>
             )}
@@ -291,9 +291,9 @@ export default function GlobalSecurityPage() {
           {!providers ? (
             <CcLoadingState label="Loading provider configuration…" />
           ) : (
-            <div className="summary-groups">
+            <div className="pcc-provider-grid">
               {providers.map((provider) => (
-                <div key={provider.provider}>
+                <div key={provider.provider} className="pcc-provider-card">
                   <h3>{provider.provider === "apple" ? "Apple" : "Google"}</h3>
                   <dl>
                     <div>

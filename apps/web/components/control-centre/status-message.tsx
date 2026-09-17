@@ -1,15 +1,18 @@
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 export function CcNotice({
   tone,
+  icon: Icon,
   children,
 }: {
-  tone: "error" | "success" | "warning";
+  tone: "error" | "success" | "warning" | "info";
+  icon?: ComponentType<{ size?: number; strokeWidth?: number; "aria-hidden"?: boolean }>;
   children: ReactNode;
 }) {
   const isAlert = tone === "error";
   return (
-    <p className={`notice ${tone} cc-notice`} role={isAlert ? "alert" : "status"}>
+    <p className={`notice ${tone} cc-notice ${Icon ? "cc-notice-with-icon" : ""}`.trim()} role={isAlert ? "alert" : "status"}>
+      {Icon && <Icon aria-hidden size={19} strokeWidth={2} />}
       {children}
     </p>
   );
