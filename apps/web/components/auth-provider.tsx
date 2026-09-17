@@ -21,6 +21,13 @@ type AuthContextValue = {
   retryInitialSession: () => void;
   refreshSession: () => Promise<boolean>;
   setAuthenticatedUser: (user: User) => void;
+  /** Sign-out's client-state counterpart to setAuthenticatedUser: clears the
+   *  in-memory user/status so no previously-authenticated route can keep
+   *  rendering (or be restored via browser Back) after the server session is
+   *  gone — AppShell already treats "signed_out" as "render nothing" (see
+   *  its own early return), so flipping status here is what makes that
+   *  protection apply immediately, not just on the next full page load. */
+  clearSession: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -243,6 +250,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // signed in (or to no one, on a first-ever login) and must never be
       // read as if it applied to this session.
       markUnlocked();
+    },
+    clearSession: () => {
+      setUser(null);
+      setStatus("signed_out");
     },
   }), [user, status, initialSessionLoading, sessionRefreshing, loadSession]);
 

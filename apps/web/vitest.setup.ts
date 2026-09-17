@@ -39,6 +39,7 @@ const defaultAuthContext = () => ({
   retryInitialSession: vi.fn(),
   refreshSession: vi.fn(),
   setAuthenticatedUser: vi.fn(),
+  clearSession: vi.fn(),
 });
 vi.mock("@/components/auth-provider", () => ({ useAuth: defaultAuthContext }));
 vi.mock("./components/auth-provider", () => ({ useAuth: defaultAuthContext }));

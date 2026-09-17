@@ -1421,6 +1421,80 @@ textarea {
   margin-left: auto;
   font-size: var(--font-small);
 }
+/* Desktop/tablet browser account dropdown (AccountMenu) — the anchored
+   counterpart to the mobile/native .sheet-menu above, reusing its item
+   styling exactly. Rendered via a portal to document.body with computed
+   fixed positioning: .app-header has overflow:hidden and its own stacking
+   context, so an absolutely-positioned child anchored inside it would be
+   clipped rather than floating over the page. z-index 25 deliberately sits
+   between the Around the House dock (20, fixed) and the mobile sheet
+   backdrop (30, fixed) — the existing numeric ordering already in this
+   file — rather than an arbitrary very large value. */
+.account-menu {
+  background: var(--colour-white);
+  border: 1px solid #e8e2d8;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  max-width: 300px;
+  min-width: 240px;
+  padding: 0.6rem;
+  position: fixed;
+  z-index: 25;
+}
+.account-menu-identity {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.4rem 0.6rem 0.6rem;
+}
+.account-menu-identity strong {
+  color: var(--colour-slate);
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
+}
+.account-menu-identity small {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  overflow-wrap: anywhere;
+}
+.account-menu-divider {
+  border-top: 1px solid #e8e2d8;
+  margin: 0.3rem 0;
+}
+.account-menu-items {
+  display: grid;
+  gap: 0.15rem;
+}
+.account-menu-item {
+  align-items: center;
+  background: none;
+  border-radius: 0.65rem;
+  color: var(--colour-slate);
+  display: flex;
+  font-size: var(--font-body);
+  font-weight: 600;
+  gap: 0.75rem;
+  justify-content: flex-start;
+  min-height: 40px;
+  padding: 0.5rem 0.6rem;
+  text-decoration: none;
+  width: 100%;
+}
+.account-menu-item:hover,
+.account-menu-item:focus-visible {
+  background: var(--colour-sage-soft);
+}
+.account-menu-item.danger {
+  color: var(--colour-danger);
+}
+.account-menu-item:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.account-menu-error {
+  color: var(--colour-danger);
+  font-size: var(--font-small);
+  margin: 0.4rem 0.6rem 0;
+}
 .link-button {
   background: none;
   color: var(--colour-muted);

@@ -30,6 +30,7 @@ vi.mock("./auth-provider", () => ({
     retryInitialSession: vi.fn(),
     refreshSession: vi.fn(),
     setAuthenticatedUser: vi.fn(),
+    clearSession: vi.fn(),
   }),
 }));
 
