@@ -75,3 +75,165 @@ describe("Health", () => {
     expect(await screen.findByText(/Health checks are unavailable/)).toBeInTheDocument();
   });
 });
+
+describe("Health — Push notifications component breakdown", () => {
+  function pushResponse(overrides: {
+    state: string;
+    explanation: string;
+    components: Array<{
+      name: string;
+      state: string;
+      successes_24h: number;
+      failures_24h: number;
+      failing_devices: number;
+    }>;
+  }) {
+    return {
+      overall: "Healthy",
+      checked_at: "2026-09-07T09:00:00Z",
+      services: [
+        {
+          service: "Push notifications",
+          state: overrides.state,
+          explanation: overrides.explanation,
+          last_checked: "2026-09-07T09:00:00Z",
+          last_success: "2026-09-07T09:00:00Z",
+          last_failure: null,
+          recommended_action: null,
+          components: overrides.components,
+        },
+      ],
+    };
+  }
+
+  it("renders a row for each push component with its counts", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/me") return Promise.resolve(actor);
+      return Promise.resolve(
+        pushResponse({
+          state: "Healthy",
+          explanation: "All production-relevant push components are healthy.",
+          components: [
+            { name: "Production APNs", state: "Healthy", successes_24h: 12, failures_24h: 0, failing_devices: 0 },
+            { name: "Sandbox APNs", state: "Degraded", successes_24h: 3, failures_24h: 2, failing_devices: 1 },
+            { name: "Android FCM", state: "Healthy", successes_24h: 8, failures_24h: 0, failing_devices: 0 },
+            { name: "Web Push", state: "Healthy", successes_24h: 5, failures_24h: 0, failing_devices: 0 },
+            { name: "Legacy iOS", state: "Warning", successes_24h: 0, failures_24h: 1, failing_devices: 1 },
+          ],
+        })
+      );
+    });
+    render(<HealthPage />);
+    await screen.findByText("Push notifications");
+
+    expect(screen.getByText("Production APNs")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox APNs")).toBeInTheDocument();
+    expect(screen.getByText("Android FCM")).toBeInTheDocument();
+    expect(screen.getByText("Web Push")).toBeInTheDocument();
+    expect(screen.getByText("Legacy iOS")).toBeInTheDocument();
+  });
+
+  it("shows per-component success/failure/failing-device counts", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/me") return Promise.resolve(actor);
+      return Promise.resolve(
+        pushResponse({
+          state: "Degraded",
+          explanation: "Production APNs is failing in the last 24 hours.",
+          components: [
+            { name: "Production APNs", state: "Degraded", successes_24h: 4, failures_24h: 7, failing_devices: 3 },
+            { name: "Sandbox APNs", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Android FCM", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Web Push", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Legacy iOS", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+          ],
+        })
+      );
+    });
+    render(<HealthPage />);
+    await screen.findByText("Production APNs");
+
+    const row = screen.getByText("Production APNs").closest("tr");
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toContain("4");
+    expect(row!.textContent).toContain("7");
+    expect(row!.textContent).toContain("3");
+  });
+
+  it("presents a sandbox-only failure without implying a production outage", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/me") return Promise.resolve(actor);
+      return Promise.resolve(
+        pushResponse({
+          state: "Healthy",
+          explanation:
+            "3 active web subscriptions. All production-relevant push components are healthy. " +
+            "Sandbox APNs has recent failures — visible in the components below, not a production outage.",
+          components: [
+            { name: "Production APNs", state: "Healthy", successes_24h: 5, failures_24h: 0, failing_devices: 0 },
+            { name: "Sandbox APNs", state: "Degraded", successes_24h: 0, failures_24h: 4, failing_devices: 2 },
+            { name: "Android FCM", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Web Push", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Legacy iOS", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+          ],
+        })
+      );
+    });
+    render(<HealthPage />);
+    await screen.findByText("Push notifications");
+
+    expect(screen.getByText(/not a production outage/)).toBeInTheDocument();
+    const sandboxRow = screen.getByText("Sandbox APNs").closest("tr");
+    expect(sandboxRow!.textContent).toContain("Degraded");
+    const topLevelBadges = screen.getAllByText("Healthy");
+    expect(topLevelBadges.length).toBeGreaterThan(0);
+  });
+
+  it("presents a production failure as a top-level degradation naming the component", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/me") return Promise.resolve(actor);
+      return Promise.resolve(
+        pushResponse({
+          state: "Degraded",
+          explanation: "Production APNs is failing in the last 24 hours. See the Push page for details.",
+          components: [
+            { name: "Production APNs", state: "Degraded", successes_24h: 0, failures_24h: 6, failing_devices: 4 },
+            { name: "Sandbox APNs", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Android FCM", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Web Push", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Legacy iOS", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+          ],
+        })
+      );
+    });
+    render(<HealthPage />);
+    await screen.findByText("Push notifications");
+
+    expect(screen.getByText(/Production APNs is failing/)).toBeInTheDocument();
+    const prodRow = screen.getByText("Production APNs").closest("tr");
+    expect(prodRow!.textContent).toContain("Degraded");
+  });
+
+  it("shows the corrected configured-state copy for a native-only deployment", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/me") return Promise.resolve(actor);
+      return Promise.resolve(
+        pushResponse({
+          state: "Healthy",
+          explanation: "0 active web subscriptions. All production-relevant push components are healthy.",
+          components: [
+            { name: "Production APNs", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Sandbox APNs", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Android FCM", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Web Push", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+            { name: "Legacy iOS", state: "Healthy", successes_24h: 0, failures_24h: 0, failing_devices: 0 },
+          ],
+        })
+      );
+    });
+    render(<HealthPage />);
+    await screen.findByText("Push notifications");
+
+    expect(screen.queryByText("Not configured")).not.toBeInTheDocument();
+  });
+});

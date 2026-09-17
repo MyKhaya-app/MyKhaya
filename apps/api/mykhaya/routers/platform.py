@@ -143,6 +143,8 @@ from mykhaya.notifications.default_templates import (
 from mykhaya.notifications.engine import enqueue_native_push, notify
 from mykhaya.notifications.push import (
     generate_vapid_keypair,
+    resolve_apns_config,
+    resolve_fcm_config,
     resolve_push_config,
     send_push,
 )
@@ -4878,6 +4880,124 @@ async def bulk_home_lifecycle(
     return BulkLifecycleResponse(succeeded=succeeded, failed=failed)
 
 
+_NATIVE_PUSH_HEALTH_BUCKETS = ("production_apns", "sandbox_apns", "android_fcm", "legacy_ios")
+
+
+def _native_push_health_bucket(platform: str, apns_environment: str | None) -> str:
+    """Same classification already used by the PCC push summary's
+    native_registrations_by_environment, applied here to delivery rows
+    instead of device counts. Android has no APNs-environment concept at
+    all (always NULL) so platform is checked first; "legacy_ios" is a
+    pre-migration-0075 iOS row awaiting natural promotion on its own next
+    re-registration, not a production-provider failure — see the PCC Push
+    Health audit's classification findings. Never inferred from server
+    hostname/deployment environment — only the device's own stored,
+    entitlement-derived apns_environment."""
+    if platform == "android":
+        return "android_fcm"
+    if apns_environment == "production":
+        return "production_apns"
+    if apns_environment == "sandbox":
+        return "sandbox_apns"
+    return "legacy_ios"
+
+
+async def _native_push_health_components(
+    db: AsyncSession, window_start: datetime
+) -> dict[str, dict[str, int]]:
+    """Per-component success/failure/distinct-failing-device counts within
+    the given window. Failed rows are excluded when their device is
+    *currently* disabled: a stale/rejected registration's already-logged
+    failures should not keep Health looking unhealthy once it can no
+    longer generate new ones (disabled devices are already excluded from
+    the engine's own fan-out) — a read-time interpretation only, no
+    historical NotificationDelivery row is altered. See the native-push-
+    device-lifecycle audit's "Device-lifecycle interaction" finding."""
+    components: dict[str, dict[str, int]] = {
+        bucket: {"successes": 0, "failures": 0, "failing_devices": 0}
+        for bucket in _NATIVE_PUSH_HEALTH_BUCKETS
+    }
+    success_rows = await db.execute(
+        select(NativePushDevice.platform, NativePushDevice.apns_environment, func.count())
+        .select_from(NotificationDelivery)
+        .join(NativePushDevice, NativePushDevice.id == NotificationDelivery.native_push_device_id)
+        .where(
+            NotificationDelivery.status == NotificationDeliveryStatus.sent,
+            NotificationDelivery.attempted_at > window_start,
+        )
+        .group_by(NativePushDevice.platform, NativePushDevice.apns_environment)
+    )
+    for platform, apns_environment, count in success_rows.all():
+        components[_native_push_health_bucket(platform, apns_environment)]["successes"] += count
+
+    failure_rows = await db.execute(
+        select(
+            NativePushDevice.platform,
+            NativePushDevice.apns_environment,
+            func.count(),
+            func.count(func.distinct(NotificationDelivery.native_push_device_id)),
+        )
+        .select_from(NotificationDelivery)
+        .join(NativePushDevice, NativePushDevice.id == NotificationDelivery.native_push_device_id)
+        .where(
+            NotificationDelivery.status == NotificationDeliveryStatus.failed,
+            NotificationDelivery.attempted_at > window_start,
+            NativePushDevice.disabled_at.is_(None),
+        )
+        .group_by(NativePushDevice.platform, NativePushDevice.apns_environment)
+    )
+    for platform, apns_environment, count, failing_devices in failure_rows.all():
+        bucket = components[_native_push_health_bucket(platform, apns_environment)]
+        bucket["failures"] += count
+        bucket["failing_devices"] += failing_devices
+
+    return components
+
+
+async def _web_push_health_component(db: AsyncSession, window_start: datetime) -> dict[str, int]:
+    """Mirrors _native_push_health_components' shape for the one channel
+    that isn't a NativePushDevice at all — a PushSubscription (browser)
+    row. No disabled-row exclusion is needed here: this phase's exclusion
+    rule is specific to native registrations (see that function's own
+    docstring); Web Push subscriptions were not part of the audited
+    device-lifecycle interaction and this phase does not extend it."""
+    successes = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NotificationDelivery)
+            .where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.sent,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    failures = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NotificationDelivery)
+            .where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.failed,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    failing_subscriptions = (
+        await db.scalar(
+            select(func.count(func.distinct(NotificationDelivery.push_subscription_id))).where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.failed,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    return {"successes": successes, "failures": failures, "failing_devices": failing_subscriptions}
+
+
 def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:
     """Blocking on purpose — run via asyncio.to_thread. A real write/read/delete
     probe (not just checking the path exists) confirms the volume is actually
@@ -4908,18 +5028,26 @@ async def internal_health(
         last_success: datetime | None = None,
         last_failure: datetime | None = None,
         action: str | None = None,
+        components: list[dict[str, Any]] | None = None,
     ) -> None:
-        services.append(
-            {
-                "service": service,
-                "state": state,
-                "explanation": explanation,
-                "last_checked": checked,
-                "last_success": last_success,
-                "last_failure": last_failure,
-                "recommended_action": action,
-            }
-        )
+        row: dict[str, Any] = {
+            "service": service,
+            "state": state,
+            "explanation": explanation,
+            "last_checked": checked,
+            "last_success": last_success,
+            "last_failure": last_failure,
+            "recommended_action": action,
+        }
+        # Additive/optional — every other card omits this key entirely, so
+        # existing consumers (PCC Health page's flat table, other tests) see
+        # no shape change. Only "Push notifications" currently populates it,
+        # to break an otherwise undifferentiated pass/fail verdict into its
+        # real components (production APNs / sandbox APNs / Android FCM /
+        # Web Push / legacy iOS) — see the PCC Push Health audit.
+        if components is not None:
+            row["components"] = components
+        services.append(row)
 
     observation(
         "Application process",
@@ -5099,7 +5227,19 @@ async def internal_health(
         action=None if email_configured else "Configure the deployment email transport.",
     )
 
+    # Push notifications — see docs/architecture/notification-engine.md and
+    # the PCC Push Health audit this replaces. Deliberately computed as
+    # separate components rather than one undifferentiated pass/fail count:
+    # a single stale sandbox/Xcode registration must never read the same as
+    # a real production-provider outage (Web Push, production APNs, and FCM
+    # are the "production-relevant" set below; sandbox APNs and legacy iOS
+    # are surfaced but never alone degrade the top-level state).
     push_config = await resolve_push_config(settings, db)
+    apns_config = resolve_apns_config(settings)
+    fcm_config = resolve_fcm_config(settings)
+    any_push_provider_configured = (
+        push_config.configured or apns_config.configured or fcm_config.configured
+    )
     active_subscriptions = (
         await db.scalar(
             select(func.count())
@@ -5108,6 +5248,10 @@ async def internal_health(
         )
         or 0
     )
+    # Unwindowed all-time max, unchanged from before this phase — still
+    # mixes every channel, kept only as a coarse "has this ever worked /
+    # ever failed at all" timestamp pair; the per-component counts below are
+    # what now drives the actual verdict.
     last_push_success = await db.scalar(
         select(func.max(NotificationDelivery.attempted_at)).where(
             NotificationDelivery.channel == NotificationChannel.push,
@@ -5120,34 +5264,88 @@ async def internal_health(
             NotificationDelivery.status == NotificationDeliveryStatus.failed,
         )
     )
-    recent_push_failures = (
-        await db.scalar(
-            select(func.count())
-            .select_from(NotificationDelivery)
-            .where(
-                NotificationDelivery.channel == NotificationChannel.push,
-                NotificationDelivery.status == NotificationDeliveryStatus.failed,
-                NotificationDelivery.attempted_at > checked - timedelta(hours=24),
-            )
+
+    push_window_start = checked - timedelta(hours=24)
+    native_push_components = await _native_push_health_components(db, push_window_start)
+    web_push_component = await _web_push_health_component(db, push_window_start)
+
+    def push_component_state(bucket_key: str, failures: int) -> str:
+        if failures == 0:
+            return "Healthy"
+        # Legacy iOS rows are pre-migration registrations awaiting natural
+        # promotion, not a production-provider failure — "Warning" says so
+        # without hiding that failures exist. Every other bucket (including
+        # sandbox, which still must not degrade the *top-level* card) uses
+        # "Degraded" for a genuine, visible failure at the component level.
+        return "Warning" if bucket_key == "legacy_ios" else "Degraded"
+
+    push_component_definitions = [
+        ("Production APNs", "production_apns", native_push_components["production_apns"]),
+        ("Sandbox APNs", "sandbox_apns", native_push_components["sandbox_apns"]),
+        ("Android FCM", "android_fcm", native_push_components["android_fcm"]),
+        ("Web Push", "web_push", web_push_component),
+        ("Legacy iOS", "legacy_ios", native_push_components["legacy_ios"]),
+    ]
+    push_components_payload = [
+        {
+            "name": name,
+            "state": push_component_state(key, data["failures"]),
+            "successes_24h": data["successes"],
+            "failures_24h": data["failures"],
+            "failing_devices": data["failing_devices"],
+        }
+        for name, key, data in push_component_definitions
+    ]
+
+    # The only three components allowed to degrade the top-level card —
+    # sandbox APNs and legacy iOS are deliberately excluded from this set.
+    production_relevant_keys = {"production_apns", "android_fcm", "web_push"}
+    failing_production_components = [
+        name
+        for name, key, data in push_component_definitions
+        if key in production_relevant_keys and data["failures"] > 0
+    ]
+    non_production_issues = [
+        name
+        for name, key, data in push_component_definitions
+        if key not in production_relevant_keys and data["failures"] > 0
+    ]
+
+    if not any_push_provider_configured:
+        push_state = "Not configured"
+        push_explanation = "No push provider is configured."
+        push_action = "Configure a push provider on the Push page."
+    elif failing_production_components:
+        push_state = "Degraded"
+        push_explanation = (
+            f"{', '.join(failing_production_components)} "
+            f"{'is' if len(failing_production_components) == 1 else 'are'} failing "
+            "in the last 24 hours. See the Push page for details."
         )
-        or 0
-    )
+        push_action = "Review the failing component(s) on the Push page."
+    else:
+        push_state = "Healthy"
+        push_explanation = (
+            f"{active_subscriptions} active web subscription"
+            f"{'s' if active_subscriptions != 1 else ''}. "
+            "All production-relevant push components are healthy."
+        )
+        if non_production_issues:
+            push_explanation += (
+                f" {', '.join(non_production_issues)} "
+                f"{'has' if len(non_production_issues) == 1 else 'have'} recent failures — "
+                "visible in the components below, not a production outage."
+            )
+        push_action = None
+
     observation(
         "Push notifications",
-        "Not configured"
-        if not push_config.configured
-        else ("Degraded" if recent_push_failures > 0 else "Healthy"),
-        "No push provider is configured."
-        if not push_config.configured
-        else (
-            f"{active_subscriptions} active subscription"
-            f"{'s' if active_subscriptions != 1 else ''}, "
-            f"{recent_push_failures} failure{'s' if recent_push_failures != 1 else ''} "
-            "in the last 24 hours."
-        ),
+        push_state,
+        push_explanation,
         last_success=last_push_success,
         last_failure=last_push_failure,
-        action=None if push_config.configured else "Configure a push provider on the Push page.",
+        action=push_action,
+        components=push_components_payload,
     )
 
     storage_dir = Path(settings.avatar_storage_dir)

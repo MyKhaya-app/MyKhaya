@@ -11,6 +11,13 @@ import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
 
+type HealthComponent = {
+  name: string;
+  state: string;
+  successes_24h: number;
+  failures_24h: number;
+  failing_devices: number;
+};
 type HealthCheck = {
   service: string;
   state: string;
@@ -19,6 +26,7 @@ type HealthCheck = {
   last_success: string | null;
   last_failure: string | null;
   recommended_action: string | null;
+  components?: HealthComponent[];
 };
 type HealthResponse = { overall: string; checked_at: string; services: HealthCheck[] };
 
@@ -57,6 +65,32 @@ export default function HealthPage() {
         <span className="cc-table-primary-cell">
           <strong>{check.service}</strong>
           <small className="cc-table-subtext">{check.explanation}</small>
+          {check.components && check.components.length > 0 && (
+            <table className="cc-subtable" aria-label={`${check.service} components`}>
+              <thead>
+                <tr>
+                  <th>Component</th>
+                  <th>State</th>
+                  <th>Successes (24h)</th>
+                  <th>Failures (24h)</th>
+                  <th>Failing devices</th>
+                </tr>
+              </thead>
+              <tbody>
+                {check.components.map((component) => (
+                  <tr key={component.name}>
+                    <td>{component.name}</td>
+                    <td>
+                      <CcBadge tone={stateTone(component.state)}>{component.state}</CcBadge>
+                    </td>
+                    <td>{component.successes_24h}</td>
+                    <td>{component.failures_24h}</td>
+                    <td>{component.failing_devices}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </span>
       ),
     },
