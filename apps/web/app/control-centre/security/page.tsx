@@ -169,7 +169,7 @@ export default function GlobalSecurityPage() {
 
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage wide className="pcc-security-page">
         <CcPageHeader
           eyebrow="Global platform security policy"
           title="Security"
@@ -245,19 +245,23 @@ export default function GlobalSecurityPage() {
             <div className="pcc-security-policy-columns">
               <section>
                 <h3>Policy</h3>
-                <dl>
-                  <div><dt>Configured policy</dt><dd>{titleCase(browserPolicy.configured)}</dd></div>
-                  <div><dt>Effective policy</dt><dd><CcBadge tone={browserPolicy.effective === "required" ? "success" : "warning"}>{titleCase(browserPolicy.effective)}</CcBadge></dd></div>
-                  <div><dt>Policy source</dt><dd>{titleCase(browserPolicy.source)}</dd></div>
-                  <div><dt>Allowed methods</dt><dd>{browserPolicy.allowed_methods.map(consumerMethodLabel).join(", ")}</dd></div>
-                </dl>
+                <div className="pcc-security-policy-panel">
+                  <dl>
+                    <div><dt>Configured Policy</dt><dd>{titleCase(browserPolicy.configured)}</dd></div>
+                    <div><dt>Effective Policy</dt><dd><CcBadge tone={browserPolicy.effective === "required" ? "success" : "warning"}>{titleCase(browserPolicy.effective)}</CcBadge></dd></div>
+                    <div><dt>Policy Source</dt><dd>{titleCase(browserPolicy.source)}</dd></div>
+                    <div><dt>Allowed Methods</dt><dd>{browserPolicy.allowed_methods.map(consumerMethodLabel).join(", ")}</dd></div>
+                  </dl>
+                </div>
               </section>
               <section>
                 <h3>Enforcement</h3>
-                <dl>
-                  <div><dt>Deployment enforcement</dt><dd><CcBadge tone={browserPolicy.enforcement_enabled ? "success" : "warning"}>{browserPolicy.enforcement_enabled ? "Enabled" : "Disabled"}</CcBadge></dd></div>
-                  <div><dt>Environment gate</dt><dd><code>MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED={browserPolicy.enforcement_enabled ? "true" : "false"}</code></dd></div>
-                </dl>
+                <div className="pcc-security-policy-panel">
+                  <dl>
+                    <div><dt>Deployment Enforcement</dt><dd><CcBadge tone={browserPolicy.enforcement_enabled ? "success" : "warning"}>{browserPolicy.enforcement_enabled ? "Enabled" : "Disabled"}</CcBadge></dd></div>
+                    <div><dt>Environment Gate</dt><dd><code>MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED={browserPolicy.enforcement_enabled ? "true" : "false"}</code></dd></div>
+                  </dl>
+                </div>
               </section>
             </div>
             {browserPolicy.effective === "required" && !browserPolicy.enforcement_enabled ? (

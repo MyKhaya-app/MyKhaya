@@ -7275,6 +7275,10 @@ button.danger,
   margin: 0.3rem 0 0;
 }
 /* Security policy cards keep privileged and consumer MFA details distinct. */
+.pcc-security-page > .cc-card {
+  margin-bottom: 1.25rem;
+  padding: 1.5rem 1.6rem;
+}
 .pcc-security-policy-grid {
   display: grid;
   gap: 1rem 1.5rem;
@@ -7283,8 +7287,11 @@ button.danger,
 }
 .pcc-security-policy-grid > div,
 .pcc-security-policy-columns > section {
-  border-top: 1px solid var(--platform-line);
-  padding-top: 0.7rem;
+  padding: 0.95rem 1.25rem;
+}
+.pcc-security-policy-grid > div + div {
+  border-left: 1px solid var(--platform-line);
+  padding-left: 1.5rem;
 }
 .pcc-security-policy-grid dt,
 .pcc-security-policy-columns dt {
@@ -7311,18 +7318,29 @@ button.danger,
 .pcc-security-policy-columns h3 {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
-  margin: 0 0 0.35rem;
+  margin: 0 0 0.55rem;
   text-transform: uppercase;
 }
-.pcc-security-policy-columns dl {
+.pcc-security-policy-panel {
+  background: var(--cc-surface-muted);
+  border: 1px solid var(--platform-line);
+  border-radius: 0.55rem;
+  padding: 0.45rem 1rem;
+}
+.pcc-security-policy-panel dl {
   display: grid;
   gap: 0.7rem;
 }
-.pcc-security-policy-columns dl > div {
+.pcc-security-policy-panel dl > div {
   align-items: baseline;
+  border-bottom: 1px solid var(--platform-line);
   display: grid;
   gap: 1rem;
   grid-template-columns: minmax(9rem, 0.8fr) minmax(0, 1.2fr);
+  padding: 0.72rem 0;
+}
+.pcc-security-policy-panel dl > div:last-child {
+  border-bottom: 0;
 }
 .pcc-security-policy-note {
   color: var(--cc-text-muted);
@@ -7336,14 +7354,18 @@ button.danger,
 .pcc-provider-card {
   border: 1px solid var(--platform-line);
   border-radius: 0.55rem;
-  padding: 0.9rem 1rem;
+  padding: 1rem 1.15rem;
 }
 .pcc-provider-card h3 {
   font-size: 0.9rem;
   margin: 0 0 0.45rem;
 }
 .pcc-provider-card dl > div {
-  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--platform-line);
+  padding: 0.7rem 0;
+}
+.pcc-provider-card dl > div:last-child {
+  border-bottom: 0;
 }
 .pcc-provider-card small {
   display: none;
@@ -7351,6 +7373,11 @@ button.danger,
 @media (max-width: 900px) {
   .pcc-security-policy-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pcc-security-policy-grid > div:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
   }
 }
 @media (max-width: 680px) {
