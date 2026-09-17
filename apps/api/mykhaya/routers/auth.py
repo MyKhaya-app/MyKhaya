@@ -529,7 +529,8 @@ async def authenticated_mfa_status(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> ConsumerMfaStatusResponse:
-    require_fresh_adult_auth(auth)
+    if auth.session.kind != SessionKind.adult:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This action is not available to a Child.")
     policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
     active = await _active_mfa_methods(db, auth.user.id)
     email_available = (

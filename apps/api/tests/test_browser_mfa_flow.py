@@ -72,6 +72,31 @@ async def test_invalid_required_policy_fails_closed_before_session_issue(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_existing_session_can_read_mfa_status_without_fresh_auth(client: AsyncClient) -> None:
+    email = await _verified_user(client, "mfa-legacy-status")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        session = await db.scalar(select(Session).where(Session.user_id == user.id))
+        assert session is not None
+        session.fresh_auth_at = None
+        await db.commit()
+
+    status_response = await client.get("/api/v1/auth/mfa/status")
+    assert status_response.status_code == 200
+    assert status_response.json() == {
+        "required": False,
+        "allowed_methods": ["email", "totp"],
+        "email_available": True,
+        "totp_enabled": False,
+        "can_disable_totp": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_email_mfa_handoff_has_no_session_before_success(
     client: AsyncClient, monkeypatch
 ) -> None:
