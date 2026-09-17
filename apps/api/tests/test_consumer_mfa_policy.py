@@ -7,7 +7,7 @@ import pytest
 from mykhaya.config import get_settings
 from mykhaya.consumer_mfa_policy import ConsumerMfaPolicyError, resolve_consumer_mfa_policy
 from mykhaya.models import ConsumerMfaPolicy, UserMfaMethod
-from mykhaya.routers.auth import _usable_browser_mfa_methods
+from mykhaya.routers.auth import _preferred_browser_mfa_method, _usable_browser_mfa_methods
 
 
 def fake_db(
@@ -87,12 +87,25 @@ async def test_required_policy_with_empty_intersection_fails_closed() -> None:
 
 
 def test_usable_methods_excludes_unenrolled_methods_except_required_totp_enrollment() -> None:
+    # Normal challenge resolution exposes only methods usable immediately.
     assert _usable_browser_mfa_methods(
         {UserMfaMethod.totp, UserMfaMethod.email}, set(), True
     ) == ["email"]
+    assert _usable_browser_mfa_methods({UserMfaMethod.totp}, set(), True) == []
+    # The enrolment-aware login flow is the only path that exposes a TOTP-only
+    # method before the user has enrolled it.
     assert _usable_browser_mfa_methods(
-        {UserMfaMethod.totp}, set(), True
+        {UserMfaMethod.totp}, set(), True, allow_totp_enrolment=True
     ) == ["totp"]
     assert _usable_browser_mfa_methods(
         {UserMfaMethod.totp, UserMfaMethod.email}, {UserMfaMethod.totp}, True
     ) == ["totp", "email"]
+
+
+def test_stale_preference_falls_back_to_first_usable_method() -> None:
+    user = SimpleNamespace(preferred_mfa_method="totp")
+    assert _preferred_browser_mfa_method(user, ["email"]) == "email"
+    user.preferred_mfa_method = "email"
+    assert _preferred_browser_mfa_method(user, ["totp"]) == "totp"
+    user.preferred_mfa_method = None
+    assert _preferred_browser_mfa_method(user, ["totp", "email"]) == "totp"

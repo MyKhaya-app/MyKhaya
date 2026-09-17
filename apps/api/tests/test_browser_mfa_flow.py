@@ -107,12 +107,60 @@ async def test_existing_session_can_read_mfa_status_without_fresh_auth(client: A
         "required": False,
         "allowed_methods": ["email", "totp"],
         "email_available": True,
-        "email_destination": "m******s@example.com",
+        "email_destination": auth_router._masked_email(email),
         "totp_enabled": False,
         "can_disable_totp": False,
         "usable_methods": ["email"],
         "preferred_method": "email",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handoff_enabled", "policy", "expects_preauth"),
+    [
+        (False, "optional", False),
+        (False, "required", False),
+        (True, "optional", False),
+        (True, "required", True),
+    ],
+)
+async def test_login_enforcement_matrix_uses_real_authentication_completion_path(
+    client: AsyncClient,
+    handoff_enabled: bool,
+    policy: str,
+    expects_preauth: bool,
+) -> None:
+    settings = get_settings().model_copy(update={"browser_mfa_handoff_enabled": handoff_enabled})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        email = await _verified_user(client, f"mfa-matrix-{str(handoff_enabled).lower()}-{policy}")
+        async with SessionFactory() as db:
+            db.add(
+                PlatformSetting(
+                    key=CONSUMER_MFA_POLICY_SETTING_KEY,
+                    value={"policy": policy, "allowed_methods": ["email"]},
+                )
+            )
+            await db.commit()
+
+        login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+        assert login.status_code == 200
+        assert (
+            login.json().get("authentication_state") == "additional_auth_required"
+        ) is expects_preauth
+        assert ("mk_session" not in client.cookies) is expects_preauth
+        if not expects_preauth:
+            assert "mk_session" in client.cookies
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(
+                    PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY
+                )
+            )
+            await db.commit()
+        app.dependency_overrides.pop(get_settings, None)
 
 
 @pytest.mark.asyncio
@@ -161,6 +209,14 @@ async def test_totp_enrolment_and_replay_protection(client: AsyncClient) -> None
     app.dependency_overrides[get_settings] = lambda: settings
     try:
         email = await _verified_user(client, "mfa-totp")
+        async with SessionFactory() as db:
+            db.add(
+                PlatformSetting(
+                    key=CONSUMER_MFA_POLICY_SETTING_KEY,
+                    value={"policy": "required", "allowed_methods": ["totp"]},
+                )
+            )
+            await db.commit()
         login = await client.post(
             "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
         )
@@ -185,6 +241,13 @@ async def test_totp_enrolment_and_replay_protection(client: AsyncClient) -> None
         )
         assert replay.status_code == 400
     finally:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(
+                    PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY
+                )
+            )
+            await db.commit()
         app.dependency_overrides.pop(get_settings, None)
 
 
