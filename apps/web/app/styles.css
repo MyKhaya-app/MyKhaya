@@ -6416,25 +6416,6 @@ button.danger,
   font-size: 0.78em;
   line-height: 1.35;
 }
-/* Nested component breakdown under a health card row (e.g. Push
-   notifications' Production APNs / Sandbox APNs / Android FCM / Web Push /
-   Legacy iOS rows) — deliberately smaller than the parent table so it reads
-   as detail, not a second top-level table. */
-.cc-subtable {
-  margin: 0.4rem 0 0;
-  font-size: 0.92em;
-  border-collapse: collapse;
-}
-.cc-subtable th,
-.cc-subtable td {
-  padding: 0.15rem 0.6rem 0.15rem 0;
-  text-align: left;
-  font-weight: normal;
-}
-.cc-subtable th {
-  color: var(--muted, #6b7280);
-  font-weight: 500;
-}
 .cc-table-truncate {
   display: block;
   max-width: 18rem;
@@ -6990,6 +6971,29 @@ button.danger,
 .cc-action-caution {
   background: var(--cc-warning-bg);
   color: var(--cc-warning);
+}
+
+/* Health page: a responsive desktop-first grid of service cards, replacing
+   the previous single flat table. Push notifications spans the full grid
+   width (.cc-health-grid-full) since it is the only service carrying a
+   sub-component breakdown; every other service is a uniform card at the
+   grid's normal column width — see apps/web/app/control-centre/health/page.tsx. */
+.cc-health-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+.cc-health-grid-full {
+  grid-column: 1 / -1;
+}
+/* A service's operator-recommended action, when one exists — plain
+   secondary text, not a button, because Health's API has no route
+   associated with this text; only Push's own hardcoded "View push
+   diagnostics" action links anywhere. */
+.cc-service-action {
+  color: var(--cc-text-muted);
+  font-size: 0.82rem;
+  margin: 0.9rem 0 0;
 }
 
 /* Compact multi-column alternative to the full-width .record-list stack —

@@ -7,9 +7,12 @@ import { relativeTime } from "@/components/platform-format";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcBadge, toneFromStateClass, type CcBadgeTone } from "@/components/control-centre/badge";
-import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
+import { CcCard } from "@/components/control-centre/section";
 import { CcStatusCard } from "@/components/control-centre/status-card";
-import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
+import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
+import { CcActionBar } from "@/components/control-centre/action-bar";
+import { CcNotice, CcLoadingState, CcEmptyState } from "@/components/control-centre/status-message";
 
 type HealthComponent = {
   name: string;
@@ -30,12 +33,100 @@ type HealthCheck = {
 };
 type HealthResponse = { overall: string; checked_at: string; services: HealthCheck[] };
 
+const PUSH_SERVICE_NAME = "Push notifications";
+
 function safeError(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
 function stateTone(state: string): CcBadgeTone {
   return toneFromStateClass(`state-${state.toLowerCase().replace(" ", "-")}`);
+}
+
+function plural(count: number, singular: string, pluralForm: string): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+function componentMeta(component: HealthComponent): string[] {
+  const meta = [
+    `${plural(component.successes_24h, "success", "successes")} (24h)`,
+    `${plural(component.failures_24h, "failure", "failures")} (24h)`,
+  ];
+  if (component.failing_devices > 0) {
+    meta.push(plural(component.failing_devices, "failing device", "failing devices"));
+  }
+  return meta;
+}
+
+/**
+ * Every other Health service is uniform: a name, a state, an explanation,
+ * some timestamps, and an optional operator action. The backend never
+ * supplies a route for `recommended_action` — per the approved Phase 1
+ * audit, that stays plain secondary text rather than a fabricated
+ * navigation target.
+ */
+function ServiceHealthCard({ check }: { check: HealthCheck }) {
+  return (
+    <CcCard
+      title={check.service}
+      description={check.explanation}
+      actions={<CcBadge tone={stateTone(check.state)}>{check.state}</CcBadge>}
+    >
+      <CcMetadataGrid dense>
+        <CcMetadataItem label="Last checked">{relativeTime(check.last_checked)}</CcMetadataItem>
+        <CcMetadataItem label="Last success">
+          {check.last_success ? relativeTime(check.last_success) : "Never"}
+        </CcMetadataItem>
+        <CcMetadataItem label="Last failure">
+          {check.last_failure ? relativeTime(check.last_failure) : "None"}
+        </CcMetadataItem>
+      </CcMetadataGrid>
+      {check.recommended_action && <p className="cc-service-action">{check.recommended_action}</p>}
+    </CcCard>
+  );
+}
+
+/**
+ * Push is the only service with real subcomponents (Production APNs,
+ * Sandbox APNs, Android FCM, Web Push, Legacy iOS) — promoted to its own
+ * dedicated, full-width card rather than forced into the uniform service
+ * grid. See docs/architecture/platform-control-centre.md and the PCC Push
+ * page (apps/web/app/control-centre/push/page.tsx) for the complementary
+ * configuration/registration detail this card deliberately does not repeat.
+ */
+function PushHealthCard({ check }: { check: HealthCheck }) {
+  return (
+    <CcCard
+      className="cc-health-grid-full"
+      title={check.service}
+      description={check.explanation}
+      actions={<CcBadge tone={stateTone(check.state)}>{check.state}</CcBadge>}
+    >
+      {check.components && check.components.length > 0 && (
+        <CcRecordList variant="grid">
+          {check.components.map((component) => (
+            <CcRecordCard
+              key={component.name}
+              title={component.name}
+              badge={component.state}
+              badgeTone={stateTone(component.state)}
+              meta={componentMeta(component)}
+            />
+          ))}
+        </CcRecordList>
+      )}
+      <CcActionBar
+        actions={[
+          {
+            key: "view-push-diagnostics",
+            label: "View push diagnostics",
+            href: "/push",
+            variant: "secondary",
+          },
+        ]}
+      />
+    </CcCard>
+  );
 }
 
 export default function HealthPage() {
@@ -56,70 +147,6 @@ export default function HealthPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const columns: CcTableColumn<HealthCheck>[] = [
-    {
-      key: "service",
-      header: "Service / dependency",
-      render: (check) => (
-        <span className="cc-table-primary-cell">
-          <strong>{check.service}</strong>
-          <small className="cc-table-subtext">{check.explanation}</small>
-          {check.components && check.components.length > 0 && (
-            <table className="cc-subtable" aria-label={`${check.service} components`}>
-              <thead>
-                <tr>
-                  <th>Component</th>
-                  <th>State</th>
-                  <th>Successes (24h)</th>
-                  <th>Failures (24h)</th>
-                  <th>Failing devices</th>
-                </tr>
-              </thead>
-              <tbody>
-                {check.components.map((component) => (
-                  <tr key={component.name}>
-                    <td>{component.name}</td>
-                    <td>
-                      <CcBadge tone={stateTone(component.state)}>{component.state}</CcBadge>
-                    </td>
-                    <td>{component.successes_24h}</td>
-                    <td>{component.failures_24h}</td>
-                    <td>{component.failing_devices}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </span>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (check) => <CcBadge tone={stateTone(check.state)}>{check.state}</CcBadge>,
-    },
-    {
-      key: "checked",
-      header: "Last checked",
-      render: (check) => relativeTime(check.last_checked),
-    },
-    {
-      key: "history",
-      header: "Recent history",
-      render: (check) => (
-        <span className="cc-table-primary-cell">
-          <small className="cc-table-subtext">Success: {check.last_success ? relativeTime(check.last_success) : "Never"}</small>
-          <small className="cc-table-subtext">Failure: {check.last_failure ? relativeTime(check.last_failure) : "None"}</small>
-        </span>
-      ),
-    },
-    {
-      key: "action",
-      header: "Operator action",
-      render: (check) => check.recommended_action ?? "None required",
-    },
-  ];
 
   return (
     <PlatformShell>
@@ -143,13 +170,19 @@ export default function HealthPage() {
               status={data.overall}
               description={`Checked ${relativeTime(data.checked_at)}`}
             />
-            <CcTable
-              columns={columns}
-              rows={data.services}
-              rowKey={(check) => check.service}
-              caption="Platform health checks"
-              emptyMessage="No health checks returned."
-            />
+            {data.services.length === 0 ? (
+              <CcEmptyState>No health checks returned.</CcEmptyState>
+            ) : (
+              <div className="cc-health-grid">
+                {data.services.map((check) =>
+                  check.service === PUSH_SERVICE_NAME ? (
+                    <PushHealthCard key={check.service} check={check} />
+                  ) : (
+                    <ServiceHealthCard key={check.service} check={check} />
+                  )
+                )}
+              </div>
+            )}
           </>
         )}
       </CcPage>
