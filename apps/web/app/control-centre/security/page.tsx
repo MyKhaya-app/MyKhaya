@@ -40,12 +40,30 @@ function safeError(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
+function consumerMethodLabel(method: string): string {
+  return method === "totp" ? "Authenticator app" : titleCase(method);
+}
+
+function consumerEnforcementMessage(policy: ConsumerMfaPolicy): string {
+  if (policy.effective === "required" && !policy.enforcement_enabled) {
+    return "Browser MFA is configured as Required but is not currently being enforced because the deployment safety gate is disabled.";
+  }
+  if (policy.effective === "required") {
+    return "Browser MFA is actively enforced for users whose effective policy requires it.";
+  }
+  if (policy.enforcement_enabled) {
+    return "The deployment supports Browser MFA enforcement, but the current Platform policy does not require it.";
+  }
+  return "The current Platform policy is Optional and deployment enforcement is disabled.";
+}
+
 export default function GlobalSecurityPage() {
   const [policy, setPolicy] = useState<MfaPolicy | null>(null);
   const [browserPolicy, setBrowserPolicy] = useState<ConsumerMfaPolicy | null>(null);
   const [events, setEvents] = useState<SecurityEvent[] | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[] | null>(null);
   const [error, setError] = useState("");
+  const [adminPolicyError, setAdminPolicyError] = useState("");
   const [browserPolicyError, setBrowserPolicyError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -55,10 +73,11 @@ export default function GlobalSecurityPage() {
 
   const load = useCallback(async () => {
     setError("");
+    setAdminPolicyError("");
     setBrowserPolicyError("");
     void platformApi.get<MfaPolicy>("/auth/mfa/policy")
       .then(setPolicy)
-      .catch((cause) => setError(safeError(cause, "Could not load administrator MFA policy.")));
+      .catch((cause) => setAdminPolicyError(safeError(cause, "Could not load administrator MFA policy.")));
     void platformApi.get<ConsumerMfaPolicy>("/auth/mfa/browser-policy")
       .then(setBrowserPolicy)
       .catch((cause) => setBrowserPolicyError(safeError(cause, "Browser MFA policy could not be loaded.")));
@@ -164,18 +183,23 @@ export default function GlobalSecurityPage() {
         {message && <CcNotice tone="success">{message}</CcNotice>}
 
         {!policy ? (
-          <CcLoadingState label="Loading security policy…" />
+          adminPolicyError ? <CcNotice tone="error">{adminPolicyError}</CcNotice> : <CcLoadingState label="Loading security policy…" />
         ) : (
           <CcCard
-            title="Require MFA for platform administrators"
-            description="Platform setting — changes here affect every platform administrator across the whole MyKhaya installation."
+            title="Platform Administrator Security"
+            description="Protects privileged Platform Control Centre access. This is separate from consumer Browser MFA and cannot be weakened through consumer policy."
             icon={ShieldCheck}
             actions={<CcBadge tone={policy.required ? "success" : "warning"}>{policy.required ? "Required" : "Optional"}</CcBadge>}
           >
+            <dl className="pcc-security-policy-grid">
+              <div><dt>Requirement</dt><dd>{policy.required ? "Required" : "Optional"}</dd></div>
+              <div><dt>Managed by</dt><dd>{policy.environment_enforced ? "Deployment environment" : "Platform policy"}</dd></div>
+              <div><dt>Environment control</dt><dd><code>MYKHAYA_ADMIN_MFA_REQUIRED</code></dd></div>
+            </dl>
             {policy.environment_enforced ? (
               <CcNotice tone="warning">
-                Managed by the deployment environment (MYKHAYA_ADMIN_MFA_REQUIRED). MFA is permanently
-                required in this deployment and cannot be turned off here.
+                Managed by the deployment environment. MFA is permanently required for Platform
+                Administrators in this deployment and cannot be turned off here.
               </CcNotice>
             ) : (
               <>
@@ -213,15 +237,35 @@ export default function GlobalSecurityPage() {
           browserPolicyError ? <CcNotice tone="error">{browserPolicyError}</CcNotice> : <CcLoadingState label="Loading browser MFA policy…" />
         ) : (
           <CcCard
-            title="Browser MFA"
-            description="Consumer browser MFA is separate from PCC administrator MFA. Native application authentication is unaffected."
+            title="Consumer Browser MFA"
+            description="Controls MFA for users signing into the MyKhaya consumer web application. This does not affect PCC administrator authentication or native app sign-in. Passkeys are managed separately from these Browser MFA challenge methods."
             icon={ShieldCheck}
             actions={<CcBadge tone={browserPolicy.effective === "required" ? "success" : "warning"}>{titleCase(browserPolicy.effective)}</CcBadge>}
           >
-            <p>
-              Effective policy: <strong>{titleCase(browserPolicy.effective)}</strong> · Source: <strong>{titleCase(browserPolicy.source)}</strong> · Allowed methods: {browserPolicy.allowed_methods.map(titleCase).join(", ")}. Email codes expire after {browserPolicy.email_code_lifetime_minutes} minutes.
-            </p>
-            <p>Rollout gate: {browserPolicy.enforcement_enabled ? "enabled" : "disabled"}. The deployment flag remains the final enforcement gate.</p>
+            <div className="pcc-security-policy-columns">
+              <section>
+                <h3>Policy</h3>
+                <dl>
+                  <div><dt>Configured policy</dt><dd>{titleCase(browserPolicy.configured)}</dd></div>
+                  <div><dt>Effective policy</dt><dd><CcBadge tone={browserPolicy.effective === "required" ? "success" : "warning"}>{titleCase(browserPolicy.effective)}</CcBadge></dd></div>
+                  <div><dt>Policy source</dt><dd>{titleCase(browserPolicy.source)}</dd></div>
+                  <div><dt>Allowed methods</dt><dd>{browserPolicy.allowed_methods.map(consumerMethodLabel).join(", ")}</dd></div>
+                </dl>
+              </section>
+              <section>
+                <h3>Enforcement</h3>
+                <dl>
+                  <div><dt>Deployment enforcement</dt><dd><CcBadge tone={browserPolicy.enforcement_enabled ? "success" : "warning"}>{browserPolicy.enforcement_enabled ? "Enabled" : "Disabled"}</CcBadge></dd></div>
+                  <div><dt>Environment gate</dt><dd><code>MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED={browserPolicy.enforcement_enabled ? "true" : "false"}</code></dd></div>
+                </dl>
+              </section>
+            </div>
+            {browserPolicy.effective === "required" && !browserPolicy.enforcement_enabled ? (
+              <CcNotice tone="warning">{consumerEnforcementMessage(browserPolicy)}</CcNotice>
+            ) : (
+              <p className="pcc-security-policy-note">{consumerEnforcementMessage(browserPolicy)}</p>
+            )}
+            <p className="pcc-security-policy-note">Email codes expire after {browserPolicy.email_code_lifetime_minutes} minutes.</p>
             {pendingBrowserChange === null ? (
               <button className={browserPolicy.configured === "required" ? "secondary" : undefined} onClick={() => setPendingBrowserChange(browserPolicy.configured === "required" ? "optional" : "required")}>
                 {browserPolicy.configured === "required" ? "Make browser MFA optional" : "Require browser MFA"}

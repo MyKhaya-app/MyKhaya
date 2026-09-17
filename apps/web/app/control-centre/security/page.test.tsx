@@ -73,7 +73,7 @@ describe("Global Security", () => {
   it("locks the toggle when the policy is environment-enforced", async () => {
     mockLoad({ required: true, environment_enforced: true });
     render(<GlobalSecurityPage />);
-    expect(await screen.findByText(/permanently required in this deployment/i)).toBeInTheDocument();
+    expect(await screen.findByText(/permanently required for Platform Administrators in this deployment/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Require MFA|Make MFA optional/ })).not.toBeInTheDocument();
   });
 
@@ -117,8 +117,35 @@ describe("Global Security", () => {
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     render(<GlobalSecurityPage />);
-    expect(await screen.findByText("Browser MFA")).toBeInTheDocument();
+    expect(await screen.findByText("Consumer Browser MFA")).toBeInTheDocument();
     expect(screen.getByText("Administrator policy access denied.")).toBeInTheDocument();
+  });
+
+  it("separates consumer policy from the deployment enforcement gate", async () => {
+    mockLoad(optionalPolicy, events, {
+      ...optionalBrowserPolicy,
+      configured: "required",
+      effective: "required",
+      enforcement_enabled: false,
+    });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText("Policy")).toBeInTheDocument();
+    expect(screen.getByText("Enforcement")).toBeInTheDocument();
+    expect(screen.getByText("Authenticator app, Email")).toBeInTheDocument();
+    expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=false")).toBeInTheDocument();
+    expect(screen.getByText(/configured as Required but is not currently being enforced/i)).toBeInTheDocument();
+  });
+
+  it("shows active enforcement when the required consumer policy gate is enabled", async () => {
+    mockLoad(optionalPolicy, events, {
+      ...optionalBrowserPolicy,
+      configured: "required",
+      effective: "required",
+      enforcement_enabled: true,
+    });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText(/actively enforced for users/i)).toBeInTheDocument();
+    expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=true")).toBeInTheDocument();
   });
 
   it("opens the reauth modal on a 403 and retries the same change once verified", async () => {

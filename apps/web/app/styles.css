@@ -7258,6 +7258,72 @@ button.danger,
   font-size: 0.84rem;
   margin: 0.3rem 0 0;
 }
+/* Security policy cards keep privileged and consumer MFA details distinct. */
+.pcc-security-policy-grid {
+  display: grid;
+  gap: 1rem 1.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 1.1rem;
+}
+.pcc-security-policy-grid > div,
+.pcc-security-policy-columns > section {
+  border-top: 1px solid var(--platform-line);
+  padding-top: 0.7rem;
+}
+.pcc-security-policy-grid dt,
+.pcc-security-policy-columns dt {
+  color: var(--cc-text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.pcc-security-policy-grid dd,
+.pcc-security-policy-columns dd {
+  font-weight: 750;
+  margin: 0.3rem 0 0;
+}
+.pcc-security-policy-grid code,
+.pcc-security-policy-columns code {
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+.pcc-security-policy-columns {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 0 1rem;
+}
+.pcc-security-policy-columns h3 {
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+}
+.pcc-security-policy-columns dl {
+  display: grid;
+  gap: 0.7rem;
+}
+.pcc-security-policy-columns dl > div {
+  align-items: baseline;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(9rem, 0.8fr) minmax(0, 1.2fr);
+}
+.pcc-security-policy-note {
+  color: var(--cc-text-muted);
+  line-height: 1.5;
+}
+@media (max-width: 900px) {
+  .pcc-security-policy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 680px) {
+  .pcc-security-policy-grid,
+  .pcc-security-policy-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .cc-card-actions {
   align-items: center;
   display: flex;
