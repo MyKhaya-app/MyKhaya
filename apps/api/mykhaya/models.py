@@ -1641,6 +1641,23 @@ class PushSubscription(UuidTimeMixin, Base):
     disabled_reason: Mapped[str | None] = mapped_column(String(200))
 
 
+class NativePushDisabledSource(StrEnum):
+    """Who/what most recently disabled a NativePushDevice row — distinct from
+    the free-text, human-readable `disabled_reason`. Exists specifically so
+    register_native_device()'s upsert can tell a Platform-Admin-initiated
+    disable apart from an ordinary provider rejection or consumer logout: the
+    former must never be silently cleared by the app's own next natural
+    re-registration, while the latter two are expected to reactivate (see
+    that function's own comment, and docs/architecture/notification-engine.md).
+    Nullable on the row — existing rows disabled before this column existed
+    have no recorded source and are treated the same as `provider`/`user`
+    (i.e. eligible to reactivate), never as `platform_admin`."""
+
+    provider = "provider"
+    user = "user"
+    platform_admin = "platform_admin"
+
+
 class NativePushDevice(UuidTimeMixin, Base):
     """Authenticated native APNs/FCM registration, separate from Web Push keys."""
 
@@ -1673,6 +1690,9 @@ class NativePushDevice(UuidTimeMixin, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_reason: Mapped[str | None] = mapped_column(String(200))
+    disabled_source: Mapped[NativePushDisabledSource | None] = mapped_column(
+        Enum(NativePushDisabledSource, name="native_push_disabled_source")
+    )
 
 
 class Notification(UuidTimeMixin, Base):

@@ -481,3 +481,179 @@ describe("PushPage — PCC push audit corrections (Phase 2)", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("PushPage — native registration lifecycle actions (Phase 2)", () => {
+  const activeDevice = {
+    id: "device-active",
+    user_id: "user-1",
+    display_name: "Active User",
+    email: "active@example.com",
+    platform: "ios",
+    device_label: "Active iPhone",
+    installation_id: "installation-active",
+    apns_environment: "production",
+    last_seen_at: "2026-09-12T08:00:00Z",
+    disabled_at: null,
+    disabled_reason: null,
+    disabled_source: null,
+  };
+  const providerDisabledDevice = {
+    ...activeDevice,
+    id: "device-provider-disabled",
+    display_name: "Provider Disabled User",
+    disabled_at: "2026-08-01T08:00:00Z",
+    disabled_reason: "APNs rejected this device registration.",
+    disabled_source: "provider",
+  };
+  const adminDisabledDevice = {
+    ...activeDevice,
+    id: "device-admin-disabled",
+    display_name: "Admin Disabled User",
+    disabled_at: "2026-08-02T08:00:00Z",
+    disabled_reason: "Disabled by Platform Admin",
+    disabled_source: "platform_admin",
+  };
+  const userDisabledDevice = {
+    ...activeDevice,
+    id: "device-user-disabled",
+    display_name: "User Disabled User",
+    disabled_at: "2026-08-03T08:00:00Z",
+    disabled_reason: "Removed by account owner.",
+    disabled_source: "user",
+  };
+
+  it("renders the Disabled by source label for each disable source", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [activeDevice, providerDisabledDevice, adminDisabledDevice, userDisabledDevice],
+        page: 1,
+        page_size: 25,
+        total: 4,
+      },
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Active User");
+    const table = screen.getByRole("table", { name: "Native push device registrations" });
+    expect(within(table).getAllByText("—").length).toBeGreaterThanOrEqual(1); // active device's "Disabled by"
+    expect(within(table).getByText("Provider")).toBeInTheDocument();
+    expect(within(table).getByText("Platform Admin")).toBeInTheDocument();
+    expect(within(table).getByText("Account owner")).toBeInTheDocument();
+  });
+
+  it("shows Disable for an active row and Re-enable for a disabled row", async () => {
+    mockRoutes({
+      nativeDevices: {
+        items: [activeDevice, adminDisabledDevice],
+        page: 1,
+        page_size: 25,
+        total: 2,
+      },
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Admin Disabled User");
+    expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-enable" })).toBeInTheDocument();
+  });
+
+  it("shows the required exact disable confirmation copy and sends the exact payload", async () => {
+    const user = userEvent.setup();
+    mockRoutes({ nativeDevices: { items: [activeDevice], page: 1, page_size: 25, total: 1 } });
+    post.mockResolvedValue({ message: "Native push registration disabled." });
+    render(<PushPage />);
+
+    await screen.findByText("Active iPhone");
+    await user.click(screen.getByRole("button", { name: "Disable" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Disable registration" });
+    expect(
+      within(dialog).getByText(
+        "This disables this MyKhaya push registration only. It does not change notification permissions on the user's phone. If notifications remain allowed on the device, the app may attempt to register again, but this registration will remain disabled until a Platform operator explicitly re-enables it.",
+      ),
+    ).toBeInTheDocument();
+    await user.type(
+      within(dialog).getByLabelText(/Reason for this administrative action/),
+      "Confirmed stale sandbox registration causing failures.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Disable registration" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/push/native-devices/device-active/disable", {
+        reason: "Confirmed stale sandbox registration causing failures.",
+        confirmed: true,
+      }),
+    );
+    expect(await screen.findByText("Native push registration disabled.")).toBeInTheDocument();
+  });
+
+  it("cancelling the disable dialog never calls the API", async () => {
+    const user = userEvent.setup();
+    mockRoutes({ nativeDevices: { items: [activeDevice], page: 1, page_size: 25, total: 1 } });
+    render(<PushPage />);
+
+    await screen.findByText("Active iPhone");
+    await user.click(screen.getByRole("button", { name: "Disable" }));
+    const dialog = await screen.findByRole("dialog", { name: "Disable registration" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("sends the exact re-enable payload for an already-disabled row", async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      nativeDevices: { items: [adminDisabledDevice], page: 1, page_size: 25, total: 1 },
+    });
+    post.mockResolvedValue({ message: "Native push registration re-enabled." });
+    render(<PushPage />);
+
+    await screen.findByText("Admin Disabled User");
+    await user.click(screen.getByRole("button", { name: "Re-enable" }));
+    const dialog = await screen.findByRole("dialog", { name: "Re-enable registration" });
+    await user.type(
+      within(dialog).getByLabelText(/Reason for this administrative action/),
+      "Confirmed the device reinstalled the app.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Re-enable registration" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/push/native-devices/device-admin-disabled/enable", {
+        reason: "Confirmed the device reinstalled the app.",
+        confirmed: true,
+      }),
+    );
+    expect(await screen.findByText("Native push registration re-enabled.")).toBeInTheDocument();
+  });
+
+  it("opens the reauth modal on a 403 during disable and retries the same action once verified", async () => {
+    const user = userEvent.setup();
+    mockRoutes({ nativeDevices: { items: [activeDevice], page: 1, page_size: 25, total: 1 } });
+    post.mockImplementation((path: string) => {
+      if (path === "/auth/reauthenticate") return Promise.resolve(undefined);
+      const priorAttempts = post.mock.calls.filter((call) => call[0] === path).length;
+      if (priorAttempts === 1) return Promise.reject(new ApiError(403, "Recent authentication required."));
+      return Promise.resolve({ message: "Native push registration disabled." });
+    });
+    render(<PushPage />);
+
+    await screen.findByText("Active iPhone");
+    await user.click(screen.getByRole("button", { name: "Disable" }));
+    const dialog = await screen.findByRole("dialog", { name: "Disable registration" });
+    await user.type(
+      within(dialog).getByLabelText(/Reason for this administrative action/),
+      "Confirmed stale sandbox registration.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Disable registration" }));
+
+    const reauthDialog = await screen.findByRole("dialog", { name: /Confirm it.s you/i });
+    await user.type(within(reauthDialog).getByLabelText("Password"), "hunter2");
+    await user.click(within(reauthDialog).getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() =>
+      expect(
+        post.mock.calls.filter((call) => call[0] === "/push/native-devices/device-active/disable"),
+      ).toHaveLength(2),
+    );
+  });
+});

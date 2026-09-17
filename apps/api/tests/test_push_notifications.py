@@ -27,12 +27,14 @@ from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
     NativePushDevice,
+    NativePushDisabledSource,
     NotificationDelivery,
     NotificationDeliveryStatus,
     OutboxEvent,
     PlatformAdministrator,
     PlatformPushSettings,
     PlatformRole,
+    PlatformSession,
     PushSubscription,
     TokenPurpose,
     User,
@@ -673,6 +675,7 @@ async def test_native_device_list_never_exposes_token(
         "last_seen_at",
         "disabled_at",
         "disabled_reason",
+        "disabled_source",
     }
     matching = next(
         item for item in response.json()["items"] if item["device_label"] == "Token Safety iPhone"
@@ -700,6 +703,206 @@ async def test_native_device_list_denied_to_household_session() -> None:
     ) as household_client:
         response = await household_client.get("/api/v1/platform/push/native-devices")
     assert response.status_code == 404
+
+
+async def _register_device_for(
+    client: AsyncClient, user_id: uuid.UUID, **overrides: object
+) -> NativePushDevice:
+    async with SessionFactory() as db:
+        device = NativePushDevice(
+            user_id=user_id,
+            platform="ios",
+            token="a" * 64,
+            installation_id=f"installation-{uuid.uuid4()}",
+            device_label="PCC Disable Test iPhone",
+            apns_environment="sandbox",
+        )
+        for key, value in overrides.items():
+            setattr(device, key, value)
+        db.add(device)
+        await db.commit()
+        await db.refresh(device)
+        return device
+
+
+@pytest.mark.asyncio
+async def test_disable_native_device_requires_support_role() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.4", 44203)),
+        base_url="http://localhost:8080",
+        cookies={"mk_session": "household-session", "mk_admin_session": "invented"},
+    ) as household_client:
+        response = await household_client.post(
+            f"/api/v1/platform/push/native-devices/{uuid.uuid4()}/disable",
+            json={"reason": "Attempted by a household session.", "confirmed": True},
+        )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_disable_native_device_requires_recent_auth(
+    admin_client: AsyncClient, admin_factory: AdminFactory, client: AsyncClient
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    user_id = await create_verified_user(client, unique_email("stale-auth"), "Stale Auth User")
+    device = await _register_device_for(client, user_id)
+
+    async with SessionFactory() as db:
+        session = await db.scalar(
+            select(PlatformSession).where(PlatformSession.administrator_id == admin.id)
+        )
+        assert session is not None
+        session.authenticated_at = datetime.now(UTC) - timedelta(hours=1)
+        await db.commit()
+
+    response = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{device.id}/disable",
+        json={"reason": "Attempting without recent auth.", "confirmed": True},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_disable_native_device_sets_platform_admin_source_and_survives_reregistration(
+    admin_client: AsyncClient, admin_factory: AdminFactory, client: AsyncClient
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    user_id = await create_verified_user(client, unique_email("disable-me"), "Disable Me User")
+    device = await _register_device_for(client, user_id)
+
+    response = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{device.id}/disable",
+        json={"reason": "Repeated sandbox delivery failures, confirmed stale.", "confirmed": True},
+    )
+    assert response.status_code == 200, response.text
+
+    async with SessionFactory() as db:
+        row = await db.get(NativePushDevice, device.id)
+        assert row is not None
+        assert row.disabled_at is not None
+        assert row.disabled_reason == "Disabled by Platform Admin"
+        assert row.disabled_source is not None
+        assert row.disabled_source.value == "platform_admin"
+
+    # An audit event was written with actor/target/reason.
+    async with SessionFactory() as db:
+        event = await db.scalar(
+            select(AdministrativeAuditEvent)
+            .where(AdministrativeAuditEvent.action == "push.native_device_disabled")
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+        )
+        assert event is not None
+        assert event.administrator_id == admin.id
+        assert event.target_type == "native_push_device"
+        assert event.target_id == device.id
+        assert event.reason == "Repeated sandbox delivery failures, confirmed stale."
+
+    # The device list already exposes the disabled_source for PCC rendering.
+    listed = await admin_client.get("/api/v1/platform/push/native-devices?page_size=100")
+    assert listed.status_code == 200
+    matching = next(item for item in listed.json()["items"] if item["id"] == str(device.id))
+    assert matching["disabled_source"] == "platform_admin"
+    assert matching["disabled_reason"] == "Disabled by Platform Admin"
+
+
+@pytest.mark.asyncio
+async def test_disable_native_device_requires_confirmation_and_a_real_reason(
+    admin_client: AsyncClient, admin_factory: AdminFactory, client: AsyncClient
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    user_id = await create_verified_user(client, unique_email("bad-reason"), "Bad Reason User")
+    device = await _register_device_for(client, user_id)
+
+    too_short = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{device.id}/disable",
+        json={"reason": "short", "confirmed": True},
+    )
+    assert too_short.status_code == 422
+
+    not_confirmed = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{device.id}/disable",
+        json={"reason": "A long enough reason for this test.", "confirmed": False},
+    )
+    assert not_confirmed.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reenable_native_device_clears_disable_state_and_is_audited(
+    admin_client: AsyncClient, admin_factory: AdminFactory, client: AsyncClient
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    user_id = await create_verified_user(client, unique_email("reenable"), "Reenable User")
+    device = await _register_device_for(
+        client,
+        user_id,
+        disabled_at=datetime.now(UTC),
+        disabled_reason="Disabled by Platform Admin",
+        disabled_source=NativePushDisabledSource.platform_admin,
+    )
+
+    response = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{device.id}/enable",
+        json={
+            "reason": "Confirmed the user reinstalled and permission is granted.",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    async with SessionFactory() as db:
+        row = await db.get(NativePushDevice, device.id)
+        assert row is not None
+        assert row.disabled_at is None
+        assert row.disabled_reason is None
+        assert row.disabled_source is None
+
+    async with SessionFactory() as db:
+        event = await db.scalar(
+            select(AdministrativeAuditEvent)
+            .where(AdministrativeAuditEvent.action == "push.native_device_enabled")
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+        )
+        assert event is not None
+        assert event.administrator_id == admin.id
+        assert event.target_id == device.id
+
+
+@pytest.mark.asyncio
+async def test_disable_and_enable_return_404_for_unknown_device(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    missing_id = uuid.uuid4()
+
+    disable = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{missing_id}/disable",
+        json={"reason": "This device does not exist.", "confirmed": True},
+    )
+    enable = await unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/push/native-devices/{missing_id}/enable",
+        json={"reason": "This device does not exist.", "confirmed": True},
+    )
+    assert disable.status_code == 404
+    assert enable.status_code == 404
 
 
 @pytest.mark.asyncio

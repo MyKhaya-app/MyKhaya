@@ -15,6 +15,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
     NativePushDevice,
+    NativePushDisabledSource,
     NotificationDelivery,
     NotificationDeliveryStatus,
     OperationalHeartbeat,
@@ -198,12 +199,14 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         delivery.sanitised_failure_reason = "This native device registration is invalid."
         device.disabled_at = datetime.now(UTC)
         device.disabled_reason = "APNs rejected this device registration."
+        device.disabled_source = NativePushDisabledSource.provider
     except FcmPermanentError:
         delivery.status = NotificationDeliveryStatus.cancelled
         delivery.attempted_at = datetime.now(UTC)
         delivery.sanitised_failure_reason = "This native device registration is invalid."
         device.disabled_at = datetime.now(UTC)
         device.disabled_reason = "FCM rejected this device registration."
+        device.disabled_source = NativePushDisabledSource.provider
     except _UnsupportedNativePlatform:
         # Not retryable — no code path will ever know how to send to this
         # platform. Cancel rather than fail-and-retry-forever.

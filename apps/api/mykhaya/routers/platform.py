@@ -86,6 +86,7 @@ from mykhaya.models import (
     MealPlanEntry,
     Membership,
     NativePushDevice,
+    NativePushDisabledSource,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -6249,6 +6250,7 @@ async def native_push_device_list(
                 "last_seen_at": row.last_seen_at,
                 "disabled_at": row.disabled_at,
                 "disabled_reason": row.disabled_reason,
+                "disabled_source": row.disabled_source,
             }
             for row in rows
         ],
@@ -6256,6 +6258,98 @@ async def native_push_device_list(
         page_size=page_size,
         total=total,
     )
+
+
+PLATFORM_ADMIN_DISABLE_REASON = "Disabled by Platform Admin"
+
+
+async def _get_native_push_device_or_404(
+    db: AsyncSession, device_id: uuid.UUID
+) -> NativePushDevice:
+    device = await db.get(NativePushDevice, device_id)
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Native push registration not found.")
+    return device
+
+
+@router.post("/push/native-devices/{device_id}/disable")
+async def disable_native_push_device(
+    device_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Disables one MyKhaya server-side push registration only — never the
+    device's OS notification permission. Sets `disabled_source =
+    platform_admin`, the one value register_native_device()'s upsert treats
+    as non-reactivating: if the app is still installed and OS permission
+    remains granted, it may still call the registration endpoint again, but
+    that call will refresh technical fields (token/device_label/last_seen_at)
+    without clearing the disabled state. See mykhaya.models.
+    NativePushDisabledSource and routers.notifications.register_native_device.
+    """
+    require_recent_auth(context, settings)
+    device = await _get_native_push_device_or_404(db, device_id)
+    previous = {
+        "disabled_at": device.disabled_at.isoformat() if device.disabled_at else None,
+        "disabled_source": device.disabled_source.value if device.disabled_source else None,
+    }
+    device.disabled_at = datetime.now(UTC)
+    device.disabled_reason = PLATFORM_ADMIN_DISABLE_REASON
+    device.disabled_source = NativePushDisabledSource.platform_admin
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.native_device_disabled",
+        "native_push_device",
+        device_id,
+        reason=body.reason,
+        previous=previous,
+        new={"disabled_source": NativePushDisabledSource.platform_admin.value},
+    )
+    await db.commit()
+    return {"message": "Native push registration disabled."}
+
+
+@router.post("/push/native-devices/{device_id}/enable")
+async def enable_native_push_device(
+    device_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """The only way back for a Platform-Admin-disabled registration — the
+    app's own natural re-registration deliberately cannot clear this state
+    (see disable_native_push_device above), so restoring delivery
+    eligibility is always an explicit, audited operator action."""
+    require_recent_auth(context, settings)
+    device = await _get_native_push_device_or_404(db, device_id)
+    previous = {
+        "disabled_at": device.disabled_at.isoformat() if device.disabled_at else None,
+        "disabled_reason": device.disabled_reason,
+        "disabled_source": device.disabled_source.value if device.disabled_source else None,
+    }
+    device.disabled_at = None
+    device.disabled_reason = None
+    device.disabled_source = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.native_device_enabled",
+        "native_push_device",
+        device_id,
+        reason=body.reason,
+        previous=previous,
+        new={"disabled_source": None},
+    )
+    await db.commit()
+    return {"message": "Native push registration re-enabled."}
 
 
 @router.put("/push/vapid-settings")

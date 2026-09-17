@@ -14,6 +14,7 @@ from mykhaya.models import (
     BriefingDays,
     LockScreenPreviewLevel,
     NativePushDevice,
+    NativePushDisabledSource,
     Notification,
     PushSubscription,
 )
@@ -89,13 +90,28 @@ async def register_native_device(
         )
         db.add(row)
     else:
+        # Technical fields always refresh — even a Platform-Admin-disabled
+        # row shouldn't sit on a stale token/label while parked, in case an
+        # operator re-enables it later (see mykhaya.models.
+        # NativePushDisabledSource's own comment).
         row.user_id = auth.user.id
         row.token = body.token
         row.device_label = body.device_label
         row.apns_environment = body.apns_environment
         row.last_seen_at = now
-        row.disabled_at = None
-        row.disabled_reason = None
+        # A Platform-Admin disable is the one disable source that must never
+        # be silently undone by the app's own next natural re-registration —
+        # that's the entire point of the action (see routers.platform's
+        # disable_native_push_device). A provider rejection or a consumer
+        # logout (disabled_source None/provider/user, including every row
+        # disabled before this column existed) still reactivates exactly as
+        # before: this is existing, intended behaviour (logging back in on
+        # the same device must resume working immediately), not something
+        # this phase changes.
+        if row.disabled_source != NativePushDisabledSource.platform_admin:
+            row.disabled_at = None
+            row.disabled_reason = None
+            row.disabled_source = None
     await db.commit()
     await db.refresh(row)
     return native_device_response(row)
@@ -117,6 +133,7 @@ async def remove_native_device(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Native device not found.")
     row.disabled_at = datetime.now(UTC)
     row.disabled_reason = "Removed by account owner."
+    row.disabled_source = NativePushDisabledSource.user
     await db.commit()
 
 

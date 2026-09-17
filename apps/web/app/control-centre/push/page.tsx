@@ -72,6 +72,8 @@ type PushState = {
   push_settings: PushSettings;
 };
 
+type NativeDisabledSource = "provider" | "user" | "platform_admin" | null;
+
 type NativeDeviceRow = {
   id: string;
   user_id: string;
@@ -84,7 +86,26 @@ type NativeDeviceRow = {
   last_seen_at: string | null;
   disabled_at: string | null;
   disabled_reason: string | null;
+  disabled_source: NativeDisabledSource;
 };
+
+// Distinct from disabled_reason's free-text — this is the typed field a
+// Platform-Admin disable must survive the app's own natural re-registration
+// against (see mykhaya.models.NativePushDisabledSource). Rendered so an
+// operator can tell "this will come back on its own" (provider/user) apart
+// from "this stays off until re-enabled here" (platform_admin).
+function disabledSourceLabel(source: NativeDisabledSource): string {
+  switch (source) {
+    case "platform_admin":
+      return "Platform Admin";
+    case "provider":
+      return "Provider";
+    case "user":
+      return "Account owner";
+    default:
+      return "—";
+  }
+}
 
 type NativeDevicePage = {
   items: NativeDeviceRow[];
@@ -143,6 +164,10 @@ export default function PushPage() {
   const [rotateOpen, setRotateOpen] = useState(false);
   const [nativeDevices, setNativeDevices] = useState<NativeDevicePage | null>(null);
   const [nativeDevicesPage, setNativeDevicesPage] = useState(1);
+  const [deviceAction, setDeviceAction] = useState<
+    { device: NativeDeviceRow; kind: "disable" | "enable" } | null
+  >(null);
+  const [deviceActionBusy, setDeviceActionBusy] = useState(false);
   const { guarded, modal } = useReauthGuard();
 
   const load = useCallback(async () => {
@@ -162,16 +187,20 @@ export default function PushPage() {
       .then((actor) => setRecipient(actor.email))
       .catch(() => {});
   }, []);
-  useEffect(() => {
+  const loadNativeDevices = useCallback(async () => {
     const params = new URLSearchParams({
       page: String(nativeDevicesPage),
       page_size: String(NATIVE_DEVICES_PAGE_SIZE),
     });
-    platformApi
-      .get<NativeDevicePage>(`/push/native-devices?${params.toString()}`)
-      .then(setNativeDevices)
-      .catch((cause) => setError(safeError(cause, "Could not load native push registrations.")));
+    try {
+      setNativeDevices(await platformApi.get<NativeDevicePage>(`/push/native-devices?${params.toString()}`));
+    } catch (cause) {
+      setError(safeError(cause, "Could not load native push registrations."));
+    }
   }, [nativeDevicesPage]);
+  useEffect(() => {
+    void loadNativeDevices();
+  }, [loadNativeDevices]);
   const nativeDevicesTotalPages = nativeDevices
     ? Math.max(1, Math.ceil(nativeDevices.total / NATIVE_DEVICES_PAGE_SIZE))
     : 1;
@@ -269,6 +298,43 @@ export default function PushPage() {
     [load, guarded],
   );
 
+  // Mirrors generateKeys/saveSettings/testPush above: guarded() transparently
+  // opens the reauth modal on a 403 (require_recent_auth) and retries the
+  // exact same submit once the operator re-authenticates.
+  const submitDeviceAction = useCallback(
+    (formData: FormData) => {
+      const action = deviceAction;
+      if (!action) return;
+      return guarded(async () => {
+        setDeviceActionBusy(true);
+        setError("");
+        setMessage("");
+        try {
+          const result = await platformApi.post<{ message: string }>(
+            `/push/native-devices/${action.device.id}/${action.kind}`,
+            { reason: formData.get("audit_reason"), confirmed: true },
+          );
+          setMessage(result.message);
+          setDeviceAction(null);
+          await loadNativeDevices();
+        } catch (cause) {
+          if (cause instanceof ApiError && cause.status === 403) throw cause;
+          setError(
+            safeError(
+              cause,
+              action.kind === "disable"
+                ? "The registration could not be disabled."
+                : "The registration could not be re-enabled.",
+            ),
+          );
+        } finally {
+          setDeviceActionBusy(false);
+        }
+      })();
+    },
+    [deviceAction, guarded, loadNativeDevices],
+  );
+
   const settings = data?.push_settings;
 
   const testResultColumns: CcTableColumn<TestPushResult>[] = [
@@ -314,6 +380,24 @@ export default function PushPage() {
       key: "disabled_reason",
       header: "Disabled reason",
       render: (row) => row.disabled_reason ?? "—",
+    },
+    {
+      key: "disabled_by",
+      header: "Disabled by",
+      render: (row) => disabledSourceLabel(row.disabled_source),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (row) => (
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => setDeviceAction({ device: row, kind: row.disabled_at ? "enable" : "disable" })}
+        >
+          {row.disabled_at ? "Re-enable" : "Disable"}
+        </button>
+      ),
     },
   ];
 
@@ -501,7 +585,7 @@ export default function PushPage() {
             </CcCard>
             </CcSection>
 
-            <CcSection title="Native registrations" description="Read-only — iOS/Android app registrations across every user, including disabled ones. Never shows the raw device token.">
+            <CcSection title="Native registrations" description="iOS/Android app registrations across every user, including disabled ones. Never shows the raw device token.">
             <CcCard title="Native push devices">
               <CcTable
                 columns={nativeDeviceColumns}
@@ -549,6 +633,23 @@ export default function PushPage() {
         confirmLabel="Rotate keys"
         variant="destructive"
         onConfirm={(formData) => generateKeys(true, formData)}
+      />
+      <CcConfirmDialog
+        open={deviceAction?.kind === "disable"}
+        onClose={() => setDeviceAction(null)}
+        title="Disable registration"
+        description="This disables this MyKhaya push registration only. It does not change notification permissions on the user's phone. If notifications remain allowed on the device, the app may attempt to register again, but this registration will remain disabled until a Platform operator explicitly re-enables it."
+        confirmLabel={deviceActionBusy ? "Disabling…" : "Disable registration"}
+        variant="destructive"
+        onConfirm={submitDeviceAction}
+      />
+      <CcConfirmDialog
+        open={deviceAction?.kind === "enable"}
+        onClose={() => setDeviceAction(null)}
+        title="Re-enable registration"
+        description="This restores normal delivery eligibility for this MyKhaya push registration. If it was disabled by a Platform operator, delivery attempts will resume immediately."
+        confirmLabel={deviceActionBusy ? "Re-enabling…" : "Re-enable registration"}
+        onConfirm={submitDeviceAction}
       />
       {modal}
     </PlatformShell>
