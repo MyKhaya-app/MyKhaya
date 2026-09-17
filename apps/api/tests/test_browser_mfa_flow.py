@@ -12,12 +12,28 @@ from mykhaya.config import get_settings
 from mykhaya.consumer_mfa_policy import CONSUMER_MFA_POLICY_SETTING_KEY, ConsumerMfaPolicyError
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import ActionToken, PlatformSetting, Session, TokenPurpose, User
-from mykhaya.security import derived_token
+from mykhaya.models import ActionToken, PlatformSetting, Session, TokenPurpose, User, UserMfaMethod
 from mykhaya.routers import auth as auth_router
-
+from mykhaya.security import derived_token
 
 PASSWORD = "Correct horse battery staple!"
+
+
+def test_browser_mfa_methods_only_include_currently_usable_factors() -> None:
+    assert auth_router._usable_browser_mfa_methods(
+        {UserMfaMethod.email, UserMfaMethod.totp}, set(), True
+    ) == ["email"]
+    assert auth_router._usable_browser_mfa_methods(
+        {UserMfaMethod.email, UserMfaMethod.totp},
+        {UserMfaMethod.totp},
+        True,
+    ) == ["totp", "email"]
+    assert auth_router._usable_browser_mfa_methods(
+        {UserMfaMethod.totp}, set(), False
+    ) == []
+    assert auth_router._usable_browser_mfa_methods(
+        {UserMfaMethod.totp}, set(), False, allow_totp_enrolment=True
+    ) == ["totp"]
 
 
 @pytest.fixture
@@ -91,8 +107,11 @@ async def test_existing_session_can_read_mfa_status_without_fresh_auth(client: A
         "required": False,
         "allowed_methods": ["email", "totp"],
         "email_available": True,
+        "email_destination": "m******s@example.com",
         "totp_enabled": False,
         "can_disable_totp": False,
+        "usable_methods": ["email"],
+        "preferred_method": "email",
     }
 
 

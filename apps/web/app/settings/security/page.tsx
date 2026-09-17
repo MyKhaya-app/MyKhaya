@@ -32,8 +32,11 @@ type MfaStatus = {
   required: boolean;
   allowed_methods: ("totp" | "email")[];
   email_available: boolean;
+  email_destination: string | null;
   totp_enabled: boolean;
   can_disable_totp: boolean;
+  usable_methods: ("totp" | "email")[];
+  preferred_method: "totp" | "email" | null;
 };
 
 type TotpSetup = { provisioning_uri: string; manual_key: string };
@@ -54,6 +57,10 @@ export default function Security() {
   const [totpQr, setTotpQr] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [mfaBusy, setMfaBusy] = useState(false);
+  const [mfaError, setMfaError] = useState("");
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthBusy, setReauthBusy] = useState(false);
+  const [reauthNeeded, setReauthNeeded] = useState(false);
 
   const native = isNativeShell();
 
@@ -75,12 +82,18 @@ export default function Security() {
   async function setupAuthenticator() {
     setMfaBusy(true);
     setError("");
+    setMfaError("");
     try {
       const setup = await api.totpSetup();
       setTotpSetup(setup);
       setTotpQr(await QRCode.toDataURL(setup.provisioning_uri, { margin: 1, width: 220 }));
-    } catch {
-      setError("Could not start authenticator setup. Please try again.");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        setReauthNeeded(true);
+        setMfaError("For your security, please verify your identity before setting up an authenticator app.");
+      } else {
+        setMfaError("Could not start authenticator setup. Please try again.");
+      }
     } finally {
       setMfaBusy(false);
     }
@@ -90,6 +103,7 @@ export default function Security() {
     event.preventDefault();
     setMfaBusy(true);
     setError("");
+    setMfaError("");
     try {
       setMfaStatus(await api.totpVerify(totpCode));
       setTotpSetup(null);
@@ -97,7 +111,7 @@ export default function Security() {
       setTotpCode("");
       setMessage("Authenticator app is now set up.");
     } catch {
-      setError("That authenticator code isn't correct. Please try again.");
+      setMfaError("That authenticator code isn't correct. Please try again.");
     } finally {
       setMfaBusy(false);
     }
@@ -107,12 +121,45 @@ export default function Security() {
     if (!window.confirm("Turn off your authenticator app?")) return;
     setMfaBusy(true);
     setError("");
+    setMfaError("");
     try {
       await api.removeTotp();
       setMfaStatus((value) => value && { ...value, totp_enabled: false, can_disable_totp: false });
       setMessage("Authenticator app has been turned off.");
     } catch {
-      setError("Could not turn off authenticator app. Please try again.");
+      setMfaError("Could not turn off authenticator app. Please try again.");
+    } finally {
+      setMfaBusy(false);
+    }
+  }
+
+  async function reauthenticate(event: FormEvent) {
+    event.preventDefault();
+    setReauthBusy(true);
+    setMfaError("");
+    try {
+      await api.reauthenticate(reauthPassword);
+      setReauthPassword("");
+      setReauthNeeded(false);
+      await setupAuthenticator();
+    } catch (cause) {
+      setMfaError(cause instanceof ApiError ? cause.message : "We couldn't verify your identity.");
+    } finally {
+      setReauthBusy(false);
+    }
+  }
+
+  async function choosePreferred(method: "totp" | "email") {
+    setMfaBusy(true);
+    setMfaError("");
+    try {
+      setMfaStatus(await api.setMfaPreference(method));
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        setMfaError("For your security, please verify your identity before changing this preference.");
+      } else {
+        setMfaError(cause instanceof ApiError ? cause.message : "Could not update your preferred method.");
+      }
     } finally {
       setMfaBusy(false);
     }
@@ -262,14 +309,31 @@ export default function Security() {
             </form>
           )}
           <div className="security-mfa-status">
-            <div><strong>Email verification</strong><span>{mfaStatus.email_available ? "Available for verification codes" : "Not available"}</span></div>
+            <div><strong>Email verification</strong><span>{mfaStatus.email_available ? `${mfaStatus.email_destination ?? "Verified account email"} · Available for browser MFA` : "Unavailable for browser MFA"}</span></div>
           </div>
+          {mfaError && <p className="notice error" role="alert">{mfaError}</p>}
+          {reauthNeeded && (
+            <form className="mfa-reauth" onSubmit={(event) => void reauthenticate(event)}>
+              <p>For your security, please verify your identity before setting up an authenticator app.</p>
+              <label htmlFor="mfa-reauth-password">Password</label>
+              <input id="mfa-reauth-password" type="password" value={reauthPassword} onChange={(event) => setReauthPassword(event.target.value)} autoComplete="current-password" required />
+              <button disabled={reauthBusy}>{reauthBusy ? "Verifying…" : "Verify identity"}</button>
+            </form>
+          )}
+          {(mfaStatus.usable_methods ?? []).length > 0 && (
+            <fieldset className="mfa-preference">
+              <legend>Preferred MFA method</legend>
+              {(mfaStatus.usable_methods ?? []).map((item) => (
+                <label key={item}><input type="radio" name="preferred-mfa-method" checked={mfaStatus.preferred_method === item} onChange={() => void choosePreferred(item)} disabled={mfaBusy} />{item === "totp" ? "Authenticator app" : "Email verification"}</label>
+              ))}
+            </fieldset>
+          )}
         </section>
       )}
       {native && <QuickSignIn />}
       {!native && (
       <section className="card details">
-        <h2>Biometric sign-in</h2>
+        <h2>Passkeys</h2>
         {thisDevicePasskey ? (
           <>
             <p className="muted">{labelText} is enabled on this device.</p>
@@ -308,8 +372,8 @@ export default function Security() {
           <details>
             <summary>
               {otherPasskeys.length === 1
-                ? "1 other device with biometric sign-in"
-                : `${otherPasskeys.length} other devices with biometric sign-in`}
+                ? "1 other browser passkey"
+                : `${otherPasskeys.length} other browser passkeys`}
             </summary>
             {otherPasskeys.map((passkey) => (
               <div className="session" key={passkey.id}>

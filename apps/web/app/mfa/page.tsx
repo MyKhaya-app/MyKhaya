@@ -10,7 +10,7 @@ import { FormStatus } from "@/components/form-status";
 import { useAuth } from "@/components/auth-provider";
 
 type Method = "totp" | "email";
-type Options = { methods: Method[]; destination: string | null; onboarding: boolean };
+type Options = { methods: Method[]; destination: string | null; onboarding: boolean; preferred_method: Method | null };
 type Start = {
   method: Method;
   destination?: string | null;
@@ -47,7 +47,7 @@ export default function MfaPage() {
       .get<Options>(`/auth/mfa/options?transaction_id=${encodeURIComponent(transaction)}`)
       .then((value) => {
         setOptions(value);
-        setMethod(value.methods[0] ?? "email");
+        setMethod(value.preferred_method ?? value.methods[0] ?? "email");
       })
       .catch(() => returnToLogin());
   }, [returnToLogin, transaction]);
@@ -82,9 +82,9 @@ export default function MfaPage() {
   }, [method, transaction]);
 
   useEffect(() => {
-    if (options?.methods.length === 1 && !autoStartAttempted.current) {
+    if (options?.methods.length && !autoStartAttempted.current) {
       autoStartAttempted.current = true;
-      void begin(options.methods[0]);
+      void begin(options.preferred_method ?? options.methods[0]);
     }
   }, [begin, options]);
 
@@ -128,7 +128,8 @@ export default function MfaPage() {
   return (
     <AuthCard title="Verify it’s you" intro="For your security, we need to verify your identity.">
       {options && options.methods.length > 1 && (
-        <div className="auth-mfa-methods" role="group" aria-label="Verification method">
+        <div className="auth-mfa-methods" role="group" aria-label="Use another method">
+          {start && <p className="muted">Use another method:</p>}
           {options.methods.map((item) => (
             <button
               key={item}

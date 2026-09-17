@@ -281,6 +281,9 @@ class User(UuidTimeMixin, Base):
         server_default=ConsumerMfaPolicy.inherit.value,
     )
     mfa_allowed_methods: Mapped[list[str] | None] = mapped_column(JSON)
+    # A nullable preference is deliberately separate from policy: it is only
+    # honoured when the method remains allowed and usable for this user.
+    preferred_mfa_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
     timezone: Mapped[str | None] = mapped_column(String(100))
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)

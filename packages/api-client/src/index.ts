@@ -2,6 +2,17 @@ import type { Home, Member, User } from "@mykhaya/shared-types";
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
+export type ConsumerMfaStatus = {
+  required: boolean;
+  allowed_methods: ("totp" | "email")[];
+  email_available: boolean;
+  email_destination: string | null;
+  totp_enabled: boolean;
+  can_disable_totp: boolean;
+  usable_methods: ("totp" | "email")[];
+  preferred_method: "totp" | "email" | null;
+};
+
 function isFormDataBody(body: BodyInit | null | undefined): boolean {
   return Boolean(body && Object.prototype.toString.call(body) === "[object FormData]");
 }
@@ -142,13 +153,17 @@ export class MyKhayaClient {
   revokePasskey = (id: string) =>
     this.request<void>(`/auth/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
   mfaStatus = () =>
-    this.request<{
-      required: boolean;
-      allowed_methods: ("totp" | "email")[];
-      email_available: boolean;
-      totp_enabled: boolean;
-      can_disable_totp: boolean;
-    }>("/auth/mfa/status");
+    this.request<ConsumerMfaStatus>("/auth/mfa/status");
+  setMfaPreference = (method: "totp" | "email" | null) =>
+    this.request<ConsumerMfaStatus>("/auth/mfa/preference", {
+      method: "PATCH",
+      body: JSON.stringify({ method }),
+    });
+  reauthenticate = (password: string) =>
+    this.request<void>("/auth/reauthenticate", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
   totpSetup = () =>
     this.request<{
       method: "totp";
@@ -157,13 +172,7 @@ export class MyKhayaClient {
       enrolling: boolean;
     }>("/auth/mfa/totp/setup", { method: "POST", body: "{}" });
   totpVerify = (code: string) =>
-    this.request<{
-      required: boolean;
-      allowed_methods: ("totp" | "email")[];
-      email_available: boolean;
-      totp_enabled: boolean;
-      can_disable_totp: boolean;
-    }>("/auth/mfa/totp/verify", {
+    this.request<ConsumerMfaStatus>("/auth/mfa/totp/verify", {
       method: "POST",
       body: JSON.stringify({ code }),
     });

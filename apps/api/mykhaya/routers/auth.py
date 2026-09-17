@@ -56,8 +56,8 @@ from mykhaya.models import (
     Group,
     HouseholdRelationship,
     Invitation,
-    MfaEmailChallenge,
     Membership,
+    MfaEmailChallenge,
     Session,
     SessionKind,
     TokenPurpose,
@@ -80,19 +80,19 @@ from mykhaya.platform_mfa import (
     verify_family_registration,
 )
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.secrets_crypto import decrypt_user_mfa_totp, encrypt_user_mfa_totp
 from mykhaya.schemas import (
     AuthContinuationResponse,
     ChildLoginRequest,
     ConsumerMfaStatusResponse,
     ForgotRequest,
     LoginRequest,
+    MessageResponse,
     MfaOptionsResponse,
+    MfaPreferenceRequest,
     MfaStartRequest,
     MfaStartResponse,
     MfaTotpVerifyRequest,
     MfaVerifyRequest,
-    MessageResponse,
     MobileDeviceRenewRequest,
     MobileSessionResponse,
     PasskeyAuthenticationVerifyRequest,
@@ -100,6 +100,7 @@ from mykhaya.schemas import (
     PasskeyRegistrationVerifyRequest,
     PasskeyRenameRequest,
     PasskeyResponse,
+    ReauthenticateRequest,
     RegisterRequest,
     RegistrationResponse,
     ResetRequest,
@@ -108,6 +109,7 @@ from mykhaya.schemas import (
     TrustedDeviceResponse,
     UserResponse,
 )
+from mykhaya.secrets_crypto import decrypt_user_mfa_totp, encrypt_user_mfa_totp
 from mykhaya.security import (
     DUMMY_HASH,
     clear_auth_cookies,
@@ -236,6 +238,8 @@ def _usable_browser_mfa_methods(
     allowed: set[UserMfaMethod],
     active: set[UserMfaMethod],
     email_verified: bool,
+    *,
+    allow_totp_enrolment: bool = False,
 ) -> list[str]:
     """Return methods the consumer can use now, in stable UI order.
 
@@ -250,9 +254,14 @@ def _usable_browser_mfa_methods(
         for method in (UserMfaMethod.totp, UserMfaMethod.email)
         if method in usable
     ]
-    if not methods and allowed == {UserMfaMethod.totp}:
+    if allow_totp_enrolment and not methods and allowed == {UserMfaMethod.totp}:
         return [UserMfaMethod.totp.value]
     return methods
+
+
+def _preferred_browser_mfa_method(user: User, methods: list[str]) -> str | None:
+    preferred = user.preferred_mfa_method
+    return preferred if preferred in methods else (methods[0] if methods else None)
 
 
 @router.get("/mfa/options", response_model=MfaOptionsResponse)
@@ -266,7 +275,7 @@ async def browser_mfa_options(
     active = await _active_mfa_methods(db, user.id)
     allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
     methods = _usable_browser_mfa_methods(
-        allowed, active, user.email_verified_at is not None
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
     )
     return MfaOptionsResponse(
         methods=methods,
@@ -275,6 +284,7 @@ async def browser_mfa_options(
         policy="required" if policy.required else "optional",
         policy_source=policy.source,
         enrolment_required=not bool(active & allowed),
+        preferred_method=_preferred_browser_mfa_method(user, methods),
     )
 
 
@@ -287,7 +297,12 @@ async def browser_mfa_start(
 ) -> MfaStartResponse:
     state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
     policy = await _resolve_browser_mfa_policy(db, user.id, settings)
-    if body.method not in policy.allowed_methods:
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    usable = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
+    )
+    if body.method not in usable:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
     if body.method == UserMfaMethod.email.value:
         await enforce_rate_limit(request, settings, f"mfa-email-send:{user.id}", 3, 900)
@@ -537,13 +552,61 @@ async def authenticated_mfa_status(
         auth.user.email_verified_at is not None and "email" in policy.allowed_methods
     )
     totp_enabled = UserMfaMethod.totp in active
+    usable_methods = _usable_browser_mfa_methods(
+        {UserMfaMethod(method) for method in policy.allowed_methods},
+        active,
+        auth.user.email_verified_at is not None,
+    )
     return ConsumerMfaStatusResponse(
         required=policy.required,
         allowed_methods=sorted(policy.allowed_methods),
         email_available=email_available,
+        email_destination=_masked_email(auth.user.email) if email_available else None,
         totp_enabled=totp_enabled,
         can_disable_totp=totp_enabled and (not policy.required or email_available),
+        usable_methods=usable_methods,
+        preferred_method=_preferred_browser_mfa_method(auth.user, usable_methods),
     )
+
+
+@router.patch("/mfa/preference", response_model=ConsumerMfaStatusResponse)
+async def update_mfa_preference(
+    body: MfaPreferenceRequest,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    require_fresh_adult_auth(auth)
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    active = await _active_mfa_methods(db, auth.user.id)
+    usable = _usable_browser_mfa_methods(
+        {UserMfaMethod(method) for method in policy.allowed_methods},
+        active,
+        auth.user.email_verified_at is not None,
+    )
+    if body.method is not None and body.method not in usable:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose an available MFA method.")
+    auth.user.preferred_mfa_method = body.method
+    await db.commit()
+    return await authenticated_mfa_status(auth, db, settings)
+
+
+@router.post("/reauthenticate", response_model=MessageResponse)
+async def reauthenticate_consumer(
+    body: ReauthenticateRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_adult_session(auth)
+    await enforce_rate_limit(request, settings, f"consumer-reauth:{auth.user.id}", 8, 300)
+    identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == auth.user.id))
+    if not verify_password(body.password, identity.password_hash if identity else DUMMY_HASH):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The password is not correct.")
+    auth.session.fresh_auth_at = datetime.now(UTC)
+    await db.commit()
+    return MessageResponse(message="Identity verified.")
 
 
 @router.delete("/mfa/totp")

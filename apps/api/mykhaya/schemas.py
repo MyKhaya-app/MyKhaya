@@ -89,6 +89,7 @@ class MfaOptionsResponse(BaseModel):
     policy: Literal["optional", "required"] = "required"
     policy_source: str = "platform"
     enrolment_required: bool = False
+    preferred_method: Literal["totp", "email"] | None = None
 
 
 class MfaStartResponse(BaseModel):
@@ -103,8 +104,19 @@ class ConsumerMfaStatusResponse(BaseModel):
     required: bool
     allowed_methods: list[Literal["totp", "email"]]
     email_available: bool
+    email_destination: str | None = None
     totp_enabled: bool
     can_disable_totp: bool
+    usable_methods: list[Literal["totp", "email"]] = Field(default_factory=list)
+    preferred_method: Literal["totp", "email"] | None = None
+
+
+class MfaPreferenceRequest(StrictModel):
+    method: Literal["totp", "email"] | None
+
+
+class ReauthenticateRequest(StrictModel):
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenRequest(StrictModel):

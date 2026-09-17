@@ -58,6 +58,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       totpSetup: vi.fn(),
       totpVerify: vi.fn(),
       removeTotp: vi.fn(),
+      setMfaPreference: vi.fn(),
+      reauthenticate: vi.fn(),
     },
   };
 });
@@ -156,7 +158,7 @@ describe("Security — Biometric sign-in, not enrolled on this device", () => {
   it("shows Enable biometric sign-in with the platform-guessed label, no credential list by default", async () => {
     render(<Security />);
 
-    await screen.findByRole("heading", { name: /biometric sign-in/i });
+    await screen.findByRole("heading", { name: /passkeys/i });
     expect(screen.getByRole("button", { name: /enable face id/i })).toBeInTheDocument();
     expect(screen.getByText(/use face id, touch id or your device security/i)).toBeInTheDocument();
     expect(screen.queryByText(/webauthn/i)).not.toBeInTheDocument();
@@ -283,10 +285,10 @@ describe("Security — Biometric sign-in already enabled on this device", () => 
 
     await screen.findByText(/face id is enabled on this device/i);
     expect(screen.getByText("Work laptop")).not.toBeVisible();
-    await screen.findByText(/1 other device with biometric sign-in/i);
+    await screen.findByText(/1 other browser passkey/i);
 
     const user = userEvent.setup();
-    await user.click(screen.getByText(/1 other device with biometric sign-in/i));
+    await user.click(screen.getByText(/1 other browser passkey/i));
     expect(screen.getByText("Work laptop")).toBeInTheDocument();
   });
 });
@@ -304,7 +306,7 @@ describe("Security — native shell shows Quick Sign-In instead of the browser p
     nativeShell = false;
     render(<Security />);
 
-    await screen.findByText("Biometric sign-in");
+    await screen.findByText("Passkeys");
     expect(screen.queryByText("Quick Sign-In")).not.toBeInTheDocument();
   });
 
