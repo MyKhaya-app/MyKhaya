@@ -154,13 +154,13 @@ beforeEach(() => {
   (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(true);
 });
 
-describe("Security — Biometric sign-in, not enrolled on this device", () => {
-  it("shows Enable biometric sign-in with the platform-guessed label, no credential list by default", async () => {
+describe("Security — browser passkeys, not enrolled on this device", () => {
+  it("shows a generic Add passkey action inside the MFA card", async () => {
     render(<Security />);
 
-    await screen.findByRole("heading", { name: /passkeys/i });
-    expect(screen.getByRole("button", { name: /enable face id/i })).toBeInTheDocument();
-    expect(screen.getByText(/use face id, touch id or your device security/i)).toBeInTheDocument();
+    await screen.findByText("Passkeys");
+    expect(screen.getByRole("button", { name: "Add passkey" })).toBeInTheDocument();
+    expect(screen.getByText(/use a passkey to sign in securely/i)).toBeInTheDocument();
     expect(screen.queryByText(/webauthn/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/relying party/i)).not.toBeInTheDocument();
   });
@@ -169,7 +169,7 @@ describe("Security — Biometric sign-in, not enrolled on this device", () => {
     (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     render(<Security />);
 
-    await screen.findByText(/biometric sign-in isn't available/i);
+    await screen.findByText(/passkeys aren't available/i);
     expect(screen.queryByRole("button", { name: /enable/i })).not.toBeInTheDocument();
   });
 
@@ -205,9 +205,9 @@ describe("Security — Biometric sign-in, not enrolled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
-    await user.click(await screen.findByRole("button", { name: /enable face id/i }));
+    await user.click(await screen.findByRole("button", { name: "Add passkey" }));
 
-    await screen.findByText(/face id is enabled on this device/i);
+    await screen.findByText(/a passkey is enabled on this browser\/device/i);
     expect(passkeyClient.getEnrolledPasskeyId()).toBe("passkey-1");
     expect(passkeyClient.getBiometricHint()).toEqual({
       userId: "user-1",
@@ -226,13 +226,13 @@ describe("Security — Biometric sign-in, not enrolled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
-    await user.click(await screen.findByRole("button", { name: /enable face id/i }));
+    await user.click(await screen.findByRole("button", { name: "Add passkey" }));
 
     await screen.findByText(/setup was cancelled/i);
   });
 });
 
-describe("Security — Biometric sign-in already enabled on this device", () => {
+describe("Security — browser passkey already enabled on this device", () => {
   beforeEach(() => {
     passkeyClient.setEnrolledPasskeyId("passkey-1");
     passkeyClient.setBiometricHint({
@@ -246,7 +246,7 @@ describe("Security — Biometric sign-in already enabled on this device", () => 
   it("shows the enabled state and a Disable control, not a credential list", async () => {
     render(<Security />);
 
-    await screen.findByText(/face id is enabled on this device/i);
+    await screen.findByText(/a passkey is enabled on this browser\/device/i);
     expect(screen.getByRole("button", { name: /disable/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /enable/i })).not.toBeInTheDocument();
   });
@@ -283,7 +283,7 @@ describe("Security — Biometric sign-in already enabled on this device", () => 
     ]);
     render(<Security />);
 
-    await screen.findByText(/face id is enabled on this device/i);
+    await screen.findByText(/a passkey is enabled on this browser\/device/i);
     expect(screen.getByText("Work laptop")).not.toBeVisible();
     await screen.findByText(/1 other browser passkey/i);
 

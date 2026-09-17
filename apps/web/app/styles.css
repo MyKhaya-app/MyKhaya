@@ -1093,7 +1093,7 @@ textarea {
   margin: 1rem 0;
 }
 .security-mfa-status {
-  align-items: center;
+  align-items: flex-start;
   border-top: 1px solid var(--platform-line);
   display: flex;
   gap: 1rem;
@@ -1103,10 +1103,59 @@ textarea {
 .security-mfa-status div {
   display: grid;
   gap: 0.2rem;
+  min-width: 0;
 }
 .security-mfa-status span {
   color: var(--cc-neutral);
   font-size: 0.9rem;
+}
+.security-mfa-detail {
+  display: block;
+}
+.security-mfa-method-actions {
+  align-items: center;
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.security-mfa-preferred {
+  background: var(--platform-soft);
+  border-radius: 999px;
+  color: var(--platform-green) !important;
+  font-size: 0.8rem !important;
+  font-weight: 700;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+.security-mfa-prefer {
+  white-space: nowrap;
+}
+.security-mfa-passkeys {
+  border-top: 1px solid var(--platform-line);
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+}
+.security-mfa-passkeys > .security-mfa-status {
+  border-top: 0;
+  padding-top: 0.5rem;
+}
+.security-mfa-passkey-device {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0 0 0.85rem;
+}
+@media (max-width: 600px) {
+  .security-mfa-status,
+  .security-mfa-passkey-device {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .security-mfa-method-actions {
+    justify-content: flex-start;
+  }
 }
 .auth-biometric .tertiary {
   margin-top: 0.25rem;

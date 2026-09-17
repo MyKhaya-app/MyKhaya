@@ -45,6 +45,7 @@ export default function Security() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [error, setError] = useState("");
+  const [passkeyError, setPasskeyError] = useState("");
   const [message, setMessage] = useState("");
   const [biometricBusy, setBiometricBusy] = useState(false);
   // Undecided while the async platform check runs — deliberately not "no",
@@ -174,7 +175,7 @@ export default function Security() {
 
   async function enableBiometricSignIn() {
     setBiometricBusy(true);
-    setError("");
+    setPasskeyError("");
     try {
       const options = await api.passkeyRegistrationOptions();
       const credential = await createPasskey(options.options_json);
@@ -189,7 +190,7 @@ export default function Security() {
       });
       setMessage(`${labelText} is ready — you can use it next time you sign in.`);
     } catch (cause) {
-      setError(
+      setPasskeyError(
         passkeyWasCancelled(cause)
           ? "Biometric sign-in setup was cancelled."
           : cause instanceof ApiError
@@ -210,7 +211,7 @@ export default function Security() {
     )
       return;
     setBiometricBusy(true);
-    setError("");
+    setPasskeyError("");
     try {
       await api.revokePasskey(thisDevicePasskey.id);
       setPasskeys((value) => value.filter((item) => item.id !== thisDevicePasskey.id));
@@ -218,7 +219,7 @@ export default function Security() {
       clearBiometricHint();
       setMessage("Biometric sign-in has been turned off on this device.");
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not turn off biometric sign-in.");
+      setPasskeyError(cause instanceof ApiError ? cause.message : "Could not turn off this passkey.");
     } finally {
       setBiometricBusy(false);
     }
@@ -231,7 +232,7 @@ export default function Security() {
       const updated = await api.renamePasskey(passkey.id, label);
       setPasskeys((value) => value.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not rename this device.");
+      setPasskeyError(cause instanceof ApiError ? cause.message : "Could not rename this passkey.");
     }
   }
 
@@ -244,7 +245,7 @@ export default function Security() {
       await api.revokePasskey(passkey.id);
       setPasskeys((value) => value.filter((item) => item.id !== passkey.id));
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not remove that device.");
+      setPasskeyError(cause instanceof ApiError ? cause.message : "Could not remove that passkey.");
     }
   }
 
@@ -269,12 +270,8 @@ export default function Security() {
   }
 
   const otherPasskeys = passkeys.filter((row) => row.id !== enrolledId);
-  // The browser/PWA "Biometric sign-in" card below is a WebAuthn passkey
-  // feature — meaningless (and, per the native auth architecture, out of
-  // scope) inside the Capacitor shell, which gets its own native Face
-  // ID/Touch ID card (QuickSignIn) instead. Neither the passkey card's code
-  // nor its behaviour changes for an actual browser/PWA user — isNativeShell()
-  // is always false there.
+  const usableMfaMethods = mfaStatus?.usable_methods ?? [];
+  const multipleMfaMethods = usableMfaMethods.length > 1;
 
   return (
     <SettingsPage title="Security">
@@ -282,18 +279,27 @@ export default function Security() {
         <section className="card details" aria-labelledby="browser-mfa-heading">
           <h2 id="browser-mfa-heading">Multi-factor authentication</h2>
           <p className="muted">
-            Browser sign-in {mfaStatus.required ? "requires" : "can use"} an additional verification step.
+            {mfaStatus.required
+              ? "Multi-factor authentication is required when signing in through a web browser."
+              : "Browser sign-in can use an additional verification step."}
           </p>
           <div className="security-mfa-status">
             <div>
               <strong>Authenticator app</strong>
+              <span className="security-mfa-detail">Use codes from your authenticator app.</span>
               <span>{mfaStatus.totp_enabled ? "Set up" : "Not set up"}</span>
             </div>
-            {!totpSetup && (mfaStatus.totp_enabled ? (
-              mfaStatus.can_disable_totp && <button className="secondary" disabled={mfaBusy} onClick={() => void disableAuthenticator()}>Disable</button>
-            ) : (
-              <button className="secondary" disabled={mfaBusy} onClick={() => void setupAuthenticator()}>Set up authenticator</button>
-            ))}
+            <div className="security-mfa-method-actions">
+              {multipleMfaMethods && mfaStatus.preferred_method === "totp" && <span className="security-mfa-preferred">Preferred</span>}
+              {multipleMfaMethods && mfaStatus.preferred_method !== "totp" && usableMfaMethods.includes("totp") && (
+                <button className="tertiary security-mfa-prefer" disabled={mfaBusy} onClick={() => void choosePreferred("totp")}>Make preferred</button>
+              )}
+              {!totpSetup && (mfaStatus.totp_enabled ? (
+                mfaStatus.can_disable_totp && <button className="secondary" disabled={mfaBusy} onClick={() => void disableAuthenticator()}>Disable</button>
+              ) : (
+                <button className="secondary" disabled={mfaBusy} onClick={() => void setupAuthenticator()}>Set up authenticator</button>
+              ))}
+            </div>
           </div>
           {mfaStatus.totp_enabled && !mfaStatus.can_disable_totp && (
             <p className="muted">This authenticator app is required by your sign-in policy.</p>
@@ -308,10 +314,22 @@ export default function Security() {
               <button disabled={mfaBusy || totpCode.length !== 6}>{mfaBusy ? "Checking…" : "Confirm setup"}</button>
             </form>
           )}
-          <div className="security-mfa-status">
-            <div><strong>Email verification</strong><span>{mfaStatus.email_available ? `${mfaStatus.email_destination ?? "Verified account email"} · Available for browser MFA` : "Unavailable for browser MFA"}</span></div>
-          </div>
           {mfaError && <p className="notice error" role="alert">{mfaError}</p>}
+          <div className="security-mfa-status">
+            <div>
+              <strong>Email verification</strong>
+              <span className="security-mfa-detail">{mfaStatus.email_available ? (mfaStatus.email_destination ?? "Verified account email") : "No verified email address available"}</span>
+              <span>{mfaStatus.email_available ? "Available for browser MFA" : "Unavailable for browser MFA"}</span>
+            </div>
+            {mfaStatus.email_available && (
+              <div className="security-mfa-method-actions">
+                {multipleMfaMethods && mfaStatus.preferred_method === "email" && <span className="security-mfa-preferred">Preferred</span>}
+                {multipleMfaMethods && mfaStatus.preferred_method !== "email" && usableMfaMethods.includes("email") && (
+                  <button className="tertiary security-mfa-prefer" disabled={mfaBusy} onClick={() => void choosePreferred("email")}>Make preferred</button>
+                )}
+              </div>
+            )}
+          </div>
           {reauthNeeded && (
             <form className="mfa-reauth" onSubmit={(event) => void reauthenticate(event)}>
               <p>For your security, please verify your identity before setting up an authenticator app.</p>
@@ -320,18 +338,49 @@ export default function Security() {
               <button disabled={reauthBusy}>{reauthBusy ? "Verifying…" : "Verify identity"}</button>
             </form>
           )}
-          {(mfaStatus.usable_methods ?? []).length > 0 && (
-            <fieldset className="mfa-preference">
-              <legend>Preferred MFA method</legend>
-              {(mfaStatus.usable_methods ?? []).map((item) => (
-                <label key={item}><input type="radio" name="preferred-mfa-method" checked={mfaStatus.preferred_method === item} onChange={() => void choosePreferred(item)} disabled={mfaBusy} />{item === "totp" ? "Authenticator app" : "Email verification"}</label>
-              ))}
-            </fieldset>
+          {!native && (
+            <div className="security-mfa-passkeys">
+              <div className="security-mfa-status">
+                <div>
+                  <strong>Passkeys</strong>
+                  <span className="security-mfa-detail">Use a passkey to sign in securely in supported browsers and devices.</span>
+                  <span>{passkeys.length} {passkeys.length === 1 ? "passkey" : "passkeys"} set up</span>
+                </div>
+                <div className="security-mfa-method-actions">
+                  {thisDevicePasskey ? <span className="security-mfa-preferred">This device</span> : biometricAvailable && (
+                    <button className="secondary" disabled={biometricBusy} onClick={() => void enableBiometricSignIn()}>
+                      {biometricBusy ? "Setting up…" : "Add passkey"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {thisDevicePasskey ? (
+                <div className="security-mfa-passkey-device">
+                  <span className="muted">A passkey is enabled on this browser/device.</span>
+                  <button className="secondary" disabled={biometricBusy} onClick={() => void disableBiometricSignIn()}>{biometricBusy ? "Turning off…" : "Disable"}</button>
+                </div>
+              ) : biometricAvailable === false && (
+                <p className="muted">Passkeys aren't available on this browser or device. Your password still works as usual.</p>
+              )}
+              {passkeyError && <p className="notice error" role="alert">{passkeyError}</p>}
+              {otherPasskeys.length > 0 && (
+                <details>
+                  <summary>{otherPasskeys.length === 1 ? "1 other browser passkey" : `${otherPasskeys.length} other browser passkeys`}</summary>
+                  {otherPasskeys.map((passkey) => (
+                    <div className="session" key={passkey.id}>
+                      <div><strong>{passkey.label}</strong><small>Added {new Date(passkey.created_at).toLocaleDateString()}{passkey.last_used_at && ` · Last used ${new Date(passkey.last_used_at).toLocaleDateString()}`}</small></div>
+                      <span className="settings-inline-actions"><button className="tertiary" onClick={() => void renamePasskey(passkey)}>Rename</button><button className="secondary" onClick={() => void revokeOtherPasskey(passkey)}>Remove</button></span>
+                    </div>
+                  ))}
+                </details>
+              )}
+            </div>
           )}
         </section>
       )}
       {native && <QuickSignIn />}
-      {!native && (
+      {/* Passkeys are integrated into the browser MFA card above; native uses QuickSignIn. */}
+      {/* Legacy standalone passkey layout intentionally removed; passkeys now live in the MFA card.
       <section className="card details">
         <h2>Passkeys</h2>
         {thisDevicePasskey ? (
@@ -398,7 +447,7 @@ export default function Security() {
           </details>
         )}
       </section>
-      )}
+      */}
       <section className="card details" id="devices">
         <h2>Signed-in devices</h2>
         {devices.map((device) => (
