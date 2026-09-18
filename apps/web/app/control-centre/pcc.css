@@ -668,6 +668,431 @@
     grid-column: auto;
   }
 }
+
+/* TailAdmin FREE live-generation visual rebase.
+   Translated into PCC-owned CSS; no TailAdmin runtime or source is imported. */
+.pcc-root {
+  --cc-bg: #f1f5f9;
+  --cc-surface: #ffffff;
+  --cc-surface-elevated: #ffffff;
+  --cc-surface-muted: #f8fafc;
+  --cc-text: #1c2434;
+  --cc-text-muted: #64748b;
+  --cc-text-subtle: #94a3b8;
+  --cc-border: #e2e8f0;
+  --cc-border-strong: #cbd5e1;
+  --cc-primary: #465fff;
+  --cc-primary-hover: #3641d9;
+  --cc-accent: #465fff;
+  --cc-accent-hover: #3641d9;
+  --cc-success-bg: #ecfdf3;
+  --cc-success: #219653;
+  --cc-warning-bg: #fff8e1;
+  --cc-warning: #f59e0b;
+  --cc-danger-bg: #fef2f2;
+  --cc-danger: #d34053;
+  --cc-danger-strong: #b42318;
+  --cc-danger-zone-bg: #fff7f7;
+  --cc-danger-zone-border: #f2b8b5;
+  --cc-info-bg: #eff6ff;
+  --cc-info: #2563eb;
+  --cc-neutral-bg: #f1f5f9;
+  --cc-neutral: #475569;
+  --cc-nav-bg: #ffffff;
+  --cc-nav-bg-hover: #f1f5ff;
+  --cc-nav-active: #eff4ff;
+  --cc-nav-text: #344054;
+  --cc-nav-text-muted: #98a2b3;
+  --cc-nav-border: #e2e8f0;
+  --cc-table-head: #f8fafc;
+  --cc-row-hover: #f8fbff;
+  --cc-input-bg: #ffffff;
+  --cc-input-border: #d0d5dd;
+  --cc-focus-ring: #465fff;
+  --cc-radius-sm: 0.375rem;
+  --cc-radius-md: 0.5rem;
+  --cc-radius-lg: 0.75rem;
+  --cc-shadow-sm: 0 1px 3px rgb(16 24 40 / 10%), 0 1px 2px rgb(16 24 40 / 6%);
+  --cc-shadow-md: 0 4px 12px rgb(16 24 40 / 10%);
+  --cc-shadow-modal: 0 20px 35px rgb(16 24 40 / 18%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pcc-root.platform-shell {
+  background: var(--cc-bg);
+  grid-template-columns: 290px minmax(0, 1fr);
+}
+
+.pcc-root.platform-shell > aside {
+  background: var(--cc-nav-bg);
+  border-right: 1px solid var(--cc-border);
+  color: var(--cc-nav-text);
+  padding: 1.5rem 1.25rem;
+}
+
+.pcc-root .platform-brand {
+  gap: 0.75rem;
+  padding: 0 0.5rem;
+}
+
+.pcc-root .platform-brand > span {
+  background: var(--cc-primary);
+  border-radius: 0.5rem;
+  color: #fff;
+  height: 38px;
+  width: 38px;
+}
+
+.pcc-root .platform-brand strong,
+.pcc-root .platform-topbar-identity strong {
+  color: var(--cc-text);
+}
+
+.pcc-root .platform-brand small,
+.pcc-root .platform-nav-group-label {
+  color: var(--cc-text-subtle);
+}
+
+.pcc-root .privileged-indicator {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: var(--cc-radius-sm);
+  color: #c2410c;
+  margin: 1.5rem 0;
+}
+
+.pcc-root .platform-shell aside nav {
+  gap: 1.25rem;
+}
+
+.pcc-root .platform-nav-group-label,
+.pcc-root .platform-nav-group-toggle {
+  color: var(--cc-text-subtle);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+}
+
+.pcc-root .platform-nav-group-toggle {
+  min-height: 2rem;
+}
+
+.pcc-root .platform-shell aside nav a {
+  border-left: 0;
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-nav-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-height: 2.5rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.pcc-root .platform-shell aside nav a:hover {
+  background: var(--cc-nav-bg-hover);
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-shell aside nav a.active,
+.pcc-root .platform-nav-group-items a.active {
+  background: var(--cc-nav-active);
+  border-left: 0;
+  box-shadow: none;
+  color: var(--cc-primary);
+  font-weight: 600;
+}
+
+.pcc-root .platform-shell aside nav a.active svg,
+.pcc-root .platform-nav-group-items a.active svg {
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-main {
+  background: var(--cc-bg);
+}
+
+.pcc-root .platform-topbar {
+  background: var(--cc-surface);
+  border-bottom: 1px solid var(--cc-border);
+  border-radius: 0;
+  box-shadow: none;
+  height: 72px;
+  margin: 0;
+  padding-inline: 2rem;
+}
+
+.pcc-root .platform-topbar-identity strong {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pcc-root .platform-topbar-account .operator-identity strong {
+  color: var(--cc-text);
+}
+
+.pcc-root .platform-topbar-account .operator-identity small {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .platform-page {
+  max-width: 1440px;
+  padding: 2rem 2rem 3rem;
+}
+
+.pcc-root .cc-page-wide {
+  max-width: 1600px;
+}
+
+.pcc-root .cc-page-header {
+  margin-bottom: 1.5rem;
+}
+
+.pcc-root .cc-eyebrow,
+.pcc-root .overview-section-kicker {
+  color: var(--cc-primary);
+}
+
+.pcc-root .cc-page-header h1 {
+  color: var(--cc-text);
+  font-size: 1.875rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.pcc-root .cc-page-description,
+.pcc-root .cc-page-meta,
+.pcc-root .cc-section-description {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .cc-card,
+.pcc-root .cc-section,
+.pcc-root .overview-panel,
+.pcc-root .metric-grid article,
+.pcc-root .system-list,
+.pcc-root .primary-metrics > a,
+.pcc-root .primary-metrics > article,
+.pcc-root .diagnostic-list article {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+}
+
+.pcc-root .cc-card {
+  padding: 1.25rem;
+}
+
+.pcc-root .cc-card-header {
+  border-bottom-color: var(--cc-border);
+  margin-bottom: 1rem;
+  padding-bottom: 0.9rem;
+}
+
+.pcc-root .cc-card-header-text h2,
+.pcc-root .cc-section-heading h2 {
+  color: var(--cc-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pcc-root .cc-card-description {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root button,
+.pcc-root .button {
+  background: var(--cc-primary);
+  border: 1px solid var(--cc-primary);
+  border-radius: var(--cc-radius-sm);
+  box-shadow: none;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-height: 40px;
+  padding: 0.55rem 1rem;
+}
+
+.pcc-root button:hover,
+.pcc-root .button:hover {
+  background: var(--cc-primary-hover);
+  border-color: var(--cc-primary-hover);
+  box-shadow: var(--cc-shadow-sm);
+  transform: none;
+}
+
+.pcc-root .secondary {
+  background: var(--cc-surface);
+  border-color: var(--cc-border-strong);
+  color: var(--cc-text);
+}
+
+.pcc-root .secondary:hover {
+  background: var(--cc-nav-bg-hover);
+  border-color: #b9c6ff;
+  color: var(--cc-primary);
+}
+
+.pcc-root .tertiary,
+.pcc-root .link-button,
+.pcc-root .table-link {
+  color: var(--cc-primary);
+}
+
+.pcc-root input,
+.pcc-root select,
+.pcc-root textarea {
+  background: var(--cc-input-bg);
+  border: 1px solid var(--cc-input-border);
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-text);
+  font-size: 0.875rem;
+  min-height: 42px;
+  padding: 0.55rem 0.75rem;
+}
+
+.pcc-root input:focus,
+.pcc-root select:focus,
+.pcc-root textarea:focus {
+  border-color: var(--cc-focus-ring);
+  box-shadow: 0 0 0 3px rgb(70 95 255 / 15%);
+  outline: 0;
+}
+
+.pcc-root label {
+  color: var(--cc-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.pcc-root label small,
+.pcc-root .cc-field-help {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .table-scroll,
+.pcc-root .cc-table-scroll {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+}
+
+.pcc-root .table-scroll table {
+  font-size: 0.875rem;
+  min-width: 820px;
+}
+
+.pcc-root .table-scroll th {
+  background: var(--cc-table-head);
+  color: var(--cc-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.pcc-root .table-scroll th,
+.pcc-root .table-scroll td {
+  border-bottom-color: var(--cc-border);
+  padding: 0.85rem 1rem;
+}
+
+.pcc-root .cc-table-row:hover,
+.pcc-root .table-scroll tbody tr:hover {
+  background: var(--cc-row-hover);
+}
+
+.pcc-root .cc-badge,
+.pcc-root .state-label {
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.28rem 0.6rem;
+}
+
+.pcc-root .cc-notice,
+.pcc-root .notice {
+  border-radius: var(--cc-radius-sm);
+}
+
+.pcc-root .platform-modal {
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-modal);
+}
+
+.pcc-root .platform-modal-backdrop {
+  background: rgb(28 36 52 / 48%);
+}
+
+.pcc-root .platform-login {
+  background: var(--cc-bg);
+  padding: 2rem;
+}
+
+.pcc-root .platform-login section {
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-md);
+  max-width: 480px;
+  padding: 2rem;
+}
+
+.pcc-root .platform-login h1 {
+  color: var(--cc-text);
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.pcc-root .platform-login > section > p,
+.pcc-root .platform-login > section > small {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .cc-auth-brand > span {
+  background: var(--cc-primary);
+  border-radius: var(--cc-radius-sm);
+}
+
+.pcc-root .cc-user-detail .cc-user-card,
+.pcc-root .cc-user-detail .cc-user-actions-card {
+  box-shadow: var(--cc-shadow-sm);
+}
+
+.pcc-root .cc-user-detail .cc-user-card-heading h2 {
+  color: var(--cc-text);
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .pcc-root .platform-topbar {
+    padding-inline: 1.5rem;
+  }
+
+  .pcc-root .platform-page {
+    padding-inline: 1.5rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .pcc-root.platform-shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .pcc-root .platform-topbar {
+    height: 64px;
+    padding-inline: 1rem;
+  }
+
+  .pcc-root .platform-page {
+    padding: 1.25rem 1rem 2rem;
+  }
+
+  .pcc-root .platform-topbar-identity {
+    display: none;
+  }
+}
 @media (max-width: 680px) {
   .pcc-security-policy-grid,
   .pcc-security-policy-columns,
@@ -1785,8 +2210,8 @@
 @media (max-width: 1024px) { .cc-columns-2-1, .cc-columns-1-1 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .cc-page-header { flex-direction: column; } .cc-page-header-actions { flex-wrap: wrap; } .cc-metadata-grid { grid-template-columns: 1fr; } }
 
-/* Phase 2A.1 — Materio-equivalent PCC visual system. This is an original
-   implementation of the reference patterns, scoped to the PCC root. */
+/* Previous PCC visual foundation. The final TailAdmin FREE rebase below
+   supersedes its visual tokens while retaining the functional selectors. */
 .pcc-root {
   --cc-bg: #f4f5fa;
   --cc-surface: #ffffff;
@@ -2113,7 +2538,7 @@
   background: rgb(47 43 61 / 46%);
 }
 
-/* Users proof page: inline Materio-style filter card and a clear table card. */
+/* Users proof page: inline filter card and a clear table card. */
 .pcc-root .cc-users-proof .cc-toolbar {
   background: var(--cc-surface);
   border: 1px solid var(--cc-border);
@@ -2701,3 +3126,95 @@
     grid-column: auto;
   }
 }
+
+/* TailAdmin FREE final cascade: this is intentionally last so the rebase
+   cannot be overridden by legacy PCC/Materio-era declarations above. */
+.pcc-root {
+  --cc-bg: #f1f5f9;
+  --cc-surface: #fff;
+  --cc-surface-elevated: #fff;
+  --cc-surface-muted: #f8fafc;
+  --cc-text: #1c2434;
+  --cc-text-muted: #64748b;
+  --cc-text-subtle: #94a3b8;
+  --cc-border: #e2e8f0;
+  --cc-border-strong: #cbd5e1;
+  --cc-primary: #465fff;
+  --cc-primary-hover: #3641d9;
+  --cc-accent: #465fff;
+  --cc-accent-hover: #3641d9;
+  --cc-nav-bg: #fff;
+  --cc-nav-bg-hover: #f1f5ff;
+  --cc-nav-active: #eff4ff;
+  --cc-nav-text: #344054;
+  --cc-nav-text-muted: #98a2b3;
+  --cc-nav-border: #e2e8f0;
+  --cc-table-head: #f8fafc;
+  --cc-row-hover: #f8fbff;
+  --cc-input-bg: #fff;
+  --cc-input-border: #d0d5dd;
+  --cc-focus-ring: #465fff;
+  --cc-radius-sm: 0.375rem;
+  --cc-radius-md: 0.5rem;
+  --cc-radius-lg: 0.75rem;
+  --cc-shadow-sm: 0 1px 3px rgb(16 24 40 / 10%), 0 1px 2px rgb(16 24 40 / 6%);
+  --cc-shadow-md: 0 4px 12px rgb(16 24 40 / 10%);
+  --cc-shadow-modal: 0 20px 35px rgb(16 24 40 / 18%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pcc-root.platform-shell { background: var(--cc-bg); grid-template-columns: 290px minmax(0, 1fr); }
+.pcc-root.platform-shell > aside { background: var(--cc-nav-bg); border-right: 1px solid var(--cc-border); color: var(--cc-nav-text); padding: 1.5rem 1.25rem; }
+.pcc-root .platform-brand { padding: 0 0.5rem; }
+.pcc-root .platform-brand > span { background: var(--cc-primary); border-radius: 0.5rem; color: #fff; }
+.pcc-root .platform-brand strong, .pcc-root .platform-topbar-identity strong { color: var(--cc-text); }
+.pcc-root .platform-brand small, .pcc-root .platform-nav-group-label { color: var(--cc-text-subtle); }
+.pcc-root .privileged-indicator { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+.pcc-root .platform-shell aside nav { gap: 1.25rem; }
+.pcc-root .platform-nav-group-toggle { color: var(--cc-text-subtle); font-size: 0.6875rem; letter-spacing: 0.06em; }
+.pcc-root .platform-shell aside nav a { border-left: 0; border-radius: var(--cc-radius-sm); color: var(--cc-nav-text); font-size: 0.875rem; font-weight: 500; min-height: 2.5rem; padding: 0.65rem 0.8rem; }
+.pcc-root .platform-shell aside nav a:hover { background: var(--cc-nav-bg-hover); color: var(--cc-primary); }
+.pcc-root .platform-shell aside nav a.active, .pcc-root .platform-nav-group-items a.active { background: var(--cc-nav-active); border-left: 0; box-shadow: none; color: var(--cc-primary); font-weight: 600; }
+.pcc-root .platform-shell aside nav a.active svg, .pcc-root .platform-nav-group-items a.active svg { color: var(--cc-primary); }
+.pcc-root .platform-main { background: var(--cc-bg); }
+.pcc-root .platform-topbar { background: var(--cc-surface); border-bottom: 1px solid var(--cc-border); border-radius: 0; box-shadow: none; height: 72px; margin: 0; padding-inline: 2rem; }
+.pcc-root .platform-topbar-identity strong { font-size: 1rem; font-weight: 600; }
+.pcc-root .platform-topbar-account .operator-identity strong { color: var(--cc-text); }
+.pcc-root .platform-topbar-account .operator-identity small { color: var(--cc-text-muted); }
+.pcc-root .platform-page { max-width: 1440px; padding: 2rem 2rem 3rem; }
+.pcc-root .cc-page-wide { max-width: 1600px; }
+.pcc-root .cc-page-header { margin-bottom: 1.5rem; }
+.pcc-root .cc-eyebrow, .pcc-root .overview-section-kicker { color: var(--cc-primary); }
+.pcc-root .cc-page-header h1 { color: var(--cc-text); font-size: 1.875rem; font-weight: 600; letter-spacing: -0.025em; }
+.pcc-root .cc-page-description, .pcc-root .cc-page-meta, .pcc-root .cc-section-description { color: var(--cc-text-muted); }
+.pcc-root .cc-card, .pcc-root .cc-section, .pcc-root .overview-panel, .pcc-root .metric-grid article, .pcc-root .system-list, .pcc-root .primary-metrics > a, .pcc-root .primary-metrics > article, .pcc-root .diagnostic-list article { background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-sm); }
+.pcc-root .cc-card { padding: 1.25rem; }
+.pcc-root .cc-card-header { border-bottom-color: var(--cc-border); margin-bottom: 1rem; padding-bottom: 0.9rem; }
+.pcc-root .cc-card-header-text h2, .pcc-root .cc-section-heading h2 { color: var(--cc-text); font-size: 1rem; font-weight: 600; }
+.pcc-root .cc-card-description { color: var(--cc-text-muted); }
+.pcc-root button, .pcc-root .button { background: var(--cc-primary); border-color: var(--cc-primary); border-radius: var(--cc-radius-sm); box-shadow: none; color: #fff; font-size: 0.875rem; font-weight: 500; min-height: 40px; padding: 0.55rem 1rem; }
+.pcc-root button:hover, .pcc-root .button:hover { background: var(--cc-primary-hover); border-color: var(--cc-primary-hover); box-shadow: var(--cc-shadow-sm); transform: none; }
+.pcc-root .secondary { background: var(--cc-surface); border-color: var(--cc-border-strong); color: var(--cc-text); }
+.pcc-root .secondary:hover { background: var(--cc-nav-bg-hover); border-color: #b9c6ff; color: var(--cc-primary); }
+.pcc-root .tertiary, .pcc-root .link-button, .pcc-root .table-link { color: var(--cc-primary); }
+.pcc-root input, .pcc-root select, .pcc-root textarea { background: var(--cc-input-bg); border-color: var(--cc-input-border); border-radius: var(--cc-radius-sm); color: var(--cc-text); font-size: 0.875rem; min-height: 42px; padding: 0.55rem 0.75rem; }
+.pcc-root input:focus, .pcc-root select:focus, .pcc-root textarea:focus { border-color: var(--cc-focus-ring); box-shadow: 0 0 0 3px rgb(70 95 255 / 15%); outline: 0; }
+.pcc-root label { color: var(--cc-text); font-size: 0.8125rem; font-weight: 500; }
+.pcc-root label small, .pcc-root .cc-field-help { color: var(--cc-text-muted); }
+.pcc-root .table-scroll, .pcc-root .cc-table-scroll { background: var(--cc-surface); border-color: var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-sm); }
+.pcc-root .table-scroll table { font-size: 0.875rem; min-width: 820px; }
+.pcc-root .table-scroll th { background: var(--cc-table-head); color: var(--cc-text-muted); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.045em; text-transform: uppercase; }
+.pcc-root .table-scroll th, .pcc-root .table-scroll td { border-bottom-color: var(--cc-border); padding: 0.85rem 1rem; }
+.pcc-root .cc-table-row:hover, .pcc-root .table-scroll tbody tr:hover { background: var(--cc-row-hover); }
+.pcc-root .cc-badge, .pcc-root .state-label { border-radius: 999px; font-size: 0.6875rem; font-weight: 600; padding: 0.28rem 0.6rem; }
+.pcc-root .platform-modal { border-color: var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-modal); }
+.pcc-root .platform-modal-backdrop { background: rgb(28 36 52 / 48%); }
+.pcc-root .platform-login { background: var(--cc-bg); padding: 2rem; }
+.pcc-root .platform-login section { border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-md); max-width: 480px; padding: 2rem; }
+.pcc-root .platform-login h1 { color: var(--cc-text); font-size: 1.5rem; font-weight: 600; }
+.pcc-root .platform-login > section > p, .pcc-root .platform-login > section > small { color: var(--cc-text-muted); }
+.pcc-root .cc-auth-brand > span { background: var(--cc-primary); border-radius: var(--cc-radius-sm); }
+
+@media (max-width: 1100px) { .pcc-root .platform-topbar { padding-inline: 1.5rem; } .pcc-root .platform-page { padding-inline: 1.5rem; } }
+@media (max-width: 900px) { .pcc-root.platform-shell { grid-template-columns: 220px minmax(0, 1fr); } }
+@media (max-width: 760px) { .pcc-root .platform-topbar { height: 64px; padding-inline: 1rem; } .pcc-root .platform-page { padding: 1.25rem 1rem 2rem; } .pcc-root .platform-topbar-identity { display: none; } }
