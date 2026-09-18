@@ -239,7 +239,10 @@ function ManagedList({ section }: { section: "users" | "homes" }) {
     : 1;
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage
+        wide
+        className={`cc-managed-list ${section === "users" ? "cc-users-proof" : "cc-homes-list"}`}
+      >
         <CcPageHeader
           eyebrow="People"
           title={title}

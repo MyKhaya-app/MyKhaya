@@ -41,6 +41,12 @@ describe("PCC stylesheet ownership", () => {
     expect(globalCss).not.toContain(".pcc-root .cc-card");
   });
 
+  it("keeps the Users proof-page presentation in PCC CSS", () => {
+    expect(pccCss).toContain(".cc-users-proof .cc-toolbar");
+    expect(pccCss).toContain(".cc-users-proof .cc-list-toolbar-form");
+    expect(globalCss).not.toContain(".cc-users-proof");
+  });
+
   it("owns the legacy PCC shell and page selectors in the PCC stylesheet", () => {
     for (const selector of [
       ".platform-login",

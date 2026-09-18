@@ -1520,6 +1520,414 @@
 @media (max-width: 1024px) { .cc-columns-2-1, .cc-columns-1-1 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .cc-page-header { flex-direction: column; } .cc-page-header-actions { flex-wrap: wrap; } .cc-metadata-grid { grid-template-columns: 1fr; } }
 
+/* Phase 2A.1 — Materio-equivalent PCC visual system. This is an original
+   implementation of the reference patterns, scoped to the PCC root. */
+.pcc-root {
+  --cc-bg: #f4f5fa;
+  --cc-surface: #ffffff;
+  --cc-surface-elevated: #ffffff;
+  --cc-surface-muted: #f8f8fb;
+  --cc-text: #444050;
+  --cc-text-muted: #6f6b7d;
+  --cc-text-subtle: #a5a2ae;
+  --cc-border: #e6e6eb;
+  --cc-border-strong: #d9d9e2;
+  --cc-primary: #7367f0;
+  --cc-primary-hover: #685dd8;
+  --cc-accent: #7367f0;
+  --cc-accent-hover: #685dd8;
+  --cc-nav-bg: #ffffff;
+  --cc-nav-bg-hover: #f5f3ff;
+  --cc-nav-active: #eeeafd;
+  --cc-nav-text: #5d596c;
+  --cc-nav-text-muted: #a5a2ae;
+  --cc-nav-border: #e6e6eb;
+  --cc-table-head: #f8f8fa;
+  --cc-row-hover: #fafaff;
+  --cc-input-bg: #ffffff;
+  --cc-input-border: #d9d9e2;
+  --cc-focus-ring: #7367f0;
+  --cc-radius-sm: 0.375rem;
+  --cc-radius-md: 0.5rem;
+  --cc-radius-lg: 0.625rem;
+  --cc-shadow-sm: 0 2px 6px rgb(47 43 61 / 8%);
+  --cc-shadow-md: 0 4px 18px rgb(47 43 61 / 12%);
+  --cc-shadow-modal: 0 8px 30px rgb(47 43 61 / 20%);
+  --cc-space-xs: 0.375rem;
+  --cc-space-sm: 0.75rem;
+  --cc-space-md: 1rem;
+  --cc-space-lg: 1.5rem;
+  --cc-space-xl: 2rem;
+  --cc-transition-fast: 150ms ease;
+  --platform-blue: var(--cc-primary);
+  --platform-navy: var(--cc-nav-bg);
+  --platform-line: var(--cc-border);
+  --platform-surface: var(--cc-bg);
+}
+
+.pcc-root.platform-shell {
+  background: var(--cc-bg);
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+
+.pcc-root.platform-shell > aside {
+  background: var(--cc-nav-bg);
+  border-right: 1px solid var(--cc-border);
+  color: var(--cc-nav-text);
+  padding: 1.25rem 1rem;
+}
+
+.pcc-root .platform-brand {
+  padding: 0 0.5rem;
+}
+
+.pcc-root .platform-brand > span {
+  background: var(--cc-primary);
+  border-radius: var(--cc-radius-sm);
+  color: #fff;
+}
+
+.pcc-root .platform-brand strong {
+  color: var(--cc-text);
+}
+
+.pcc-root .platform-brand small,
+.pcc-root .platform-nav-group-label {
+  color: var(--cc-text-subtle);
+}
+
+.pcc-root .privileged-indicator {
+  background: #f5f3ff;
+  border-color: #e3defe;
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-shell aside nav {
+  gap: 1rem;
+}
+
+.pcc-root .platform-nav-group-label {
+  font-size: 0.68rem;
+  padding-inline: 0.75rem;
+}
+
+.pcc-root .platform-shell aside nav a {
+  border-left: 0;
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-nav-text);
+  font-size: 0.84rem;
+  font-weight: 500;
+  min-height: 2.35rem;
+  padding: 0.62rem 0.8rem;
+  transition: background var(--cc-transition-fast), color var(--cc-transition-fast);
+}
+
+.pcc-root .platform-shell aside nav a:hover {
+  background: var(--cc-nav-bg-hover);
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-shell aside nav a.active {
+  background: var(--cc-nav-active);
+  border-left: 0;
+  box-shadow: none;
+  color: var(--cc-primary);
+  font-weight: 650;
+}
+
+.pcc-root .platform-shell aside nav a.active svg {
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-main {
+  background: var(--cc-bg);
+}
+
+.pcc-root .platform-topbar {
+  background: rgb(255 255 255 / 92%);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  height: 64px;
+  margin: 1rem 1.5rem 0;
+  padding-inline: 1.25rem;
+}
+
+.pcc-root .platform-topbar-identity strong {
+  color: var(--cc-text);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.pcc-root .platform-topbar-account .operator-identity strong {
+  color: var(--cc-text);
+}
+
+.pcc-root .platform-page {
+  max-width: 1440px;
+  padding: 1.75rem 2rem 2.5rem;
+}
+
+.pcc-root .cc-page-wide {
+  max-width: 1600px;
+}
+
+.pcc-root .cc-page-header {
+  margin-bottom: 1.5rem;
+}
+
+.pcc-root .cc-eyebrow,
+.pcc-root .overview-section-kicker {
+  color: var(--cc-primary);
+}
+
+.pcc-root .cc-page-header h1 {
+  color: var(--cc-text);
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.pcc-root .cc-page-description,
+.pcc-root .cc-page-meta,
+.pcc-root .cc-section-description {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .cc-card,
+.pcc-root .cc-section,
+.pcc-root .overview-panel,
+.pcc-root .metric-grid article,
+.pcc-root .system-list,
+.pcc-root .primary-metrics > a,
+.pcc-root .primary-metrics > article,
+.pcc-root .diagnostic-list article {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+}
+
+.pcc-root .cc-card {
+  padding: 1.25rem;
+}
+
+.pcc-root .cc-card-header {
+  border-bottom-color: var(--cc-border);
+  margin-bottom: 1rem;
+  padding-bottom: 0.8rem;
+}
+
+.pcc-root .cc-card-header-text h2,
+.pcc-root .cc-section-heading h2 {
+  color: var(--cc-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pcc-root .cc-card-description {
+  color: var(--cc-text-muted);
+}
+
+.pcc-root button,
+.pcc-root .button {
+  background: var(--cc-primary);
+  border-radius: var(--cc-radius-sm);
+  box-shadow: none;
+  font-size: 0.84rem;
+  font-weight: 500;
+  min-height: 38px;
+  padding: 0.5rem 1rem;
+  transition: background var(--cc-transition-fast), box-shadow var(--cc-transition-fast), border-color var(--cc-transition-fast);
+}
+
+.pcc-root button:hover,
+.pcc-root .button:hover {
+  background: var(--cc-primary-hover);
+  box-shadow: 0 3px 8px rgb(115 103 240 / 22%);
+  transform: none;
+}
+
+.pcc-root .secondary {
+  background: var(--cc-surface);
+  border-color: var(--cc-border-strong);
+  color: var(--cc-text-muted);
+}
+
+.pcc-root .secondary:hover {
+  background: #f8f7ff;
+  border-color: #c7c0fb;
+  color: var(--cc-primary);
+}
+
+.pcc-root .tertiary,
+.pcc-root .link-button {
+  color: var(--cc-primary);
+}
+
+.pcc-root input,
+.pcc-root select,
+.pcc-root textarea {
+  background: var(--cc-input-bg);
+  border-color: var(--cc-input-border);
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-text);
+  font-size: 0.875rem;
+  min-height: 40px;
+  padding: 0.5rem 0.75rem;
+}
+
+.pcc-root input:focus,
+.pcc-root select:focus,
+.pcc-root textarea:focus {
+  border-color: var(--cc-focus-ring);
+  box-shadow: 0 0 0 3px rgb(115 103 240 / 14%);
+  outline: 0;
+}
+
+.pcc-root label {
+  color: var(--cc-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  gap: 0.35rem;
+}
+
+.pcc-root label small,
+.pcc-root .cc-field-help {
+  color: var(--cc-text-subtle);
+}
+
+.pcc-root .table-scroll,
+.pcc-root .cc-table-scroll {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+}
+
+.pcc-root .table-scroll table {
+  font-size: 0.8125rem;
+  min-width: 820px;
+}
+
+.pcc-root .table-scroll th {
+  background: var(--cc-table-head);
+  color: var(--cc-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.pcc-root .table-scroll th,
+.pcc-root .table-scroll td {
+  border-bottom-color: var(--cc-border);
+  padding: 0.72rem 0.85rem;
+}
+
+.pcc-root .cc-table-row:hover,
+.pcc-root .table-scroll tbody tr:hover {
+  background: var(--cc-row-hover);
+}
+
+.pcc-root .cc-badge,
+.pcc-root .state-label {
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.26rem 0.55rem;
+}
+
+.pcc-root .platform-modal {
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-modal);
+}
+
+.pcc-root .platform-modal-backdrop {
+  background: rgb(47 43 61 / 46%);
+}
+
+/* Users proof page: inline Materio-style filter card and a clear table card. */
+.pcc-root .cc-users-proof .cc-toolbar {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  margin-bottom: 1rem;
+  padding: 1rem;
+}
+
+.pcc-root .cc-users-proof .cc-list-toolbar-form {
+  align-items: end;
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(220px, 1.7fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) auto;
+}
+
+.pcc-root .cc-users-proof .cc-list-toolbar-form label {
+  min-width: 0;
+}
+
+.pcc-root .cc-users-proof .cc-list-toolbar-form input,
+.pcc-root .cc-users-proof .cc-list-toolbar-form select {
+  margin-top: 0.25rem;
+}
+
+.pcc-root .cc-users-proof .cc-list-toolbar-form button {
+  white-space: nowrap;
+}
+
+.pcc-root .cc-users-proof .cc-page-meta {
+  margin: 0 0 0.7rem;
+}
+
+.pcc-root .cc-users-proof .cc-table-scroll {
+  margin-top: 0;
+}
+
+@media (max-width: 1100px) {
+  .pcc-root .platform-topbar {
+    margin-inline: 1rem;
+  }
+
+  .pcc-root .platform-page {
+    padding-inline: 1.25rem;
+  }
+
+  .pcc-root .cc-users-proof .cc-list-toolbar-form {
+    grid-template-columns: minmax(190px, 1.4fr) repeat(2, minmax(135px, 0.8fr)) auto;
+  }
+}
+
+@media (max-width: 820px) {
+  .pcc-root .cc-users-proof .cc-list-toolbar-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pcc-root .cc-users-proof .cc-list-toolbar-form label:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .pcc-root .platform-topbar {
+    margin: 0.75rem 0.75rem 0;
+  }
+
+  .pcc-root .platform-page {
+    padding: 1rem 0.85rem 2rem;
+  }
+
+  .pcc-root .cc-users-proof .cc-list-toolbar-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pcc-root .cc-users-proof .cc-list-toolbar-form label:first-child {
+    grid-column: auto;
+  }
+}
+
 /* Phase 2B — Overview dashboard composition. These rules are deliberately
    page-scoped; the other PCC business pages retain their Phase 2A layout. */
 .platform-overview > .cc-page-header {
