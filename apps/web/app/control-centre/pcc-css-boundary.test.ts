@@ -12,7 +12,10 @@ describe("PCC stylesheet ownership", () => {
   });
 
   it("keeps PCC tokens and core component styles out of consumer global CSS", () => {
-    expect(pccCss).toContain("--cc-bg: #f4f7f8");
+    expect(pccCss).toContain("--cc-bg: #f3f6f8");
+    expect(pccCss).toContain("--cc-surface-elevated: #ffffff");
+    expect(pccCss).toContain("--cc-focus-ring: #2f6f6b");
+    expect(pccCss).toContain("--cc-shadow-modal: 0 24px 64px");
     expect(pccCss).toContain(".cc-page-header");
     expect(pccCss).toContain(".cc-card");
     expect(pccCss).toContain(".pcc-root button");
@@ -21,6 +24,21 @@ describe("PCC stylesheet ownership", () => {
     expect(globalCss).not.toContain("--cc-bg: #f4f7f8");
     expect(globalCss).not.toContain(".cc-page-header {");
     expect(globalCss).not.toContain("background: var(--cc-surface);\n  border: 1px solid var(--cc-border);\n  border-radius: var(--cc-radius-md);\n  padding: 1.1rem;");
+  });
+
+  it("keeps the Phase 2A foundation route-owned", () => {
+    for (const selector of [
+      ".pcc-root .platform-shell",
+      ".pcc-root .platform-topbar",
+      ".pcc-root .cc-page-header",
+      ".pcc-root .cc-card",
+      ".pcc-root .table-scroll",
+      ".pcc-root .platform-modal",
+    ]) {
+      expect(pccCss).toContain(selector);
+    }
+    expect(globalCss).not.toContain(".pcc-root .platform-shell");
+    expect(globalCss).not.toContain(".pcc-root .cc-card");
   });
 
   it("owns the legacy PCC shell and page selectors in the PCC stylesheet", () => {
