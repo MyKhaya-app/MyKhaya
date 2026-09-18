@@ -28,12 +28,30 @@ describe("PCC stylesheet ownership", () => {
       ".platform-login",
       ".platform-shell",
       ".platform-page",
+      ".platform-subnav",
+      ".platform-columns",
+      ".system-list",
       ".metric-grid",
       ".table-scroll",
+      ".table-link",
+      ".platform-settings-section",
+      ".settings-section-rows",
+      ".setting-row-heading",
       ".overview-grid",
+      ".overview-panel",
+      ".health-summary",
+      ".primary-metrics",
+      ".compact-metrics",
+      ".summary-groups",
+      ".test-email-form",
+      ".deployment-strip",
+      ".attention-panel",
+      ".overall-status",
       ".diagnostic-list",
       ".usage-metric-grid",
       ".platform-holiday-table",
+      ".platform-modal-backdrop",
+      ".platform-modal",
     ]) {
       expect(pccCss).toContain(selector);
       expect(globalCss).not.toMatch(new RegExp(`^${selector.replaceAll(".", "\\.")}\\s*\\{`, "m"));
@@ -53,6 +71,20 @@ describe("PCC stylesheet ownership", () => {
         new RegExp(`^${selector.replaceAll(".", "\\.")}\\s*[{,:]`, "m"),
       );
     }
+  });
+
+  it("retains shared and consumer-owned selectors in global CSS", () => {
+    for (const selector of [
+      ".quiet-state",
+      ".link-button",
+      ".state-label",
+      ".security-mfa-status",
+      ".security-mfa-preferred",
+    ]) {
+      expect(globalCss).toContain(selector);
+    }
+    expect(globalCss).not.toContain(".platform-modal");
+    expect(globalCss).not.toContain(".platform-subnav");
   });
 
   it("does not add a PCC stylesheet import to the shared root layout", () => {
