@@ -2261,3 +2261,178 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Phase 2A.2 — navigation and User form polish. */
+.pcc-root .platform-nav-group-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--cc-radius-sm);
+  color: var(--cc-text-subtle);
+  display: flex;
+  font-size: 0.68rem;
+  font-weight: 700;
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  text-align: left;
+  text-transform: uppercase;
+  width: 100%;
+}
+
+.pcc-root .platform-nav-group-toggle:hover {
+  background: var(--cc-nav-bg-hover);
+  box-shadow: none;
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-nav-group-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+.pcc-root .platform-nav-group-toggle svg {
+  color: var(--cc-text-subtle);
+  transition: transform var(--cc-transition-fast), color var(--cc-transition-fast);
+}
+
+.pcc-root .platform-nav-group-toggle svg.expanded {
+  transform: rotate(180deg);
+}
+
+.pcc-root .platform-nav-group-toggle:hover svg,
+.pcc-root .platform-nav-group-toggle[aria-expanded="true"] svg {
+  color: var(--cc-primary);
+}
+
+.pcc-root .platform-nav-group-items {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.2rem;
+}
+
+.pcc-root .platform-nav-group-items[hidden] {
+  display: none;
+}
+
+.pcc-root .platform-nav-group-items a.active {
+  background: #e9e5ff;
+  box-shadow: inset 3px 0 0 var(--cc-primary);
+  color: #5e50d9;
+  font-weight: 700;
+}
+
+.pcc-root .platform-nav-group-items a.active svg {
+  color: var(--cc-primary);
+}
+
+.pcc-root .cc-user-detail .cc-page-header {
+  margin-bottom: 1.25rem;
+}
+
+.pcc-root .cc-user-detail > .cc-columns {
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.pcc-root .cc-user-detail .cc-section {
+  margin-bottom: 1.25rem;
+}
+
+.pcc-root .cc-user-detail .cc-section-heading {
+  margin-bottom: 0.65rem;
+}
+
+.pcc-root .cc-user-detail .cc-section-heading h2 {
+  font-size: 0.82rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.pcc-root .cc-user-detail .cc-card {
+  box-shadow: var(--cc-shadow-sm);
+  padding: 1.1rem 1.2rem;
+}
+
+.pcc-root .cc-user-detail .cc-metadata-grid {
+  gap: 0.65rem 1.25rem;
+}
+
+.pcc-root .cc-user-detail .cc-metadata-grid > div {
+  border-top: 0;
+  background: var(--cc-surface-muted);
+  border-radius: var(--cc-radius-sm);
+  padding: 0.7rem 0.8rem;
+}
+
+.pcc-root .cc-user-detail .cc-metadata-grid dt {
+  color: var(--cc-text-subtle);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pcc-root .cc-user-detail .cc-metadata-grid dd {
+  color: var(--cc-text);
+  font-size: 0.84rem;
+  margin-top: 0.25rem;
+}
+
+.pcc-root .cc-user-detail .cc-user-security-section form {
+  gap: 0.85rem 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1rem;
+}
+
+.pcc-root .cc-user-detail .cc-user-security-section form button,
+.pcc-root .cc-user-detail .cc-user-security-section form + small {
+  grid-column: 1 / -1;
+}
+
+.pcc-root .cc-user-detail .cc-user-security-section form button {
+  justify-self: start;
+}
+
+.pcc-root .cc-user-detail .cc-user-security-section > .cc-card > small {
+  color: var(--cc-text-subtle);
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin-top: 0.8rem;
+}
+
+.pcc-root .cc-user-detail .cc-user-notes-section form {
+  gap: 0.65rem;
+  margin-top: 0;
+}
+
+.pcc-root .cc-user-detail .cc-user-notes-section textarea {
+  min-height: 92px;
+}
+
+.pcc-root .cc-user-detail .cc-user-actions-section .cc-action-bar {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  padding: 1rem;
+}
+
+.pcc-root .cc-user-detail .cc-danger-zone {
+  margin-top: 0.25rem;
+}
+
+.pcc-root .cc-user-detail .cc-danger-zone .cc-action-bar {
+  margin-top: 0.8rem;
+}
+
+@media (max-width: 900px) {
+  .pcc-root .cc-user-detail .cc-user-security-section form {
+    grid-template-columns: 1fr;
+  }
+
+  .pcc-root .cc-user-detail .cc-user-security-section form button,
+  .pcc-root .cc-user-detail .cc-user-security-section form + small {
+    grid-column: auto;
+  }
+}

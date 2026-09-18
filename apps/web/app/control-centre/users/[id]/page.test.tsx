@@ -71,6 +71,10 @@ describe("User detail", () => {
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Verified").length).toBeGreaterThan(0);
     expect(screen.getByText("Last active")).toBeInTheDocument();
+    expect(document.querySelector(".cc-user-detail")).toBeInTheDocument();
+    expect(document.querySelector(".cc-user-security-section")).toBeInTheDocument();
+    expect(document.querySelector(".cc-user-actions-section")).toBeInTheDocument();
+    expect(document.querySelector(".cc-danger-zone")).toBeInTheDocument();
   });
 
   it("shows Disabled status when the user is suspended", async () => {

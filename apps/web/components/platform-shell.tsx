@@ -8,6 +8,7 @@ import {
   BarChart3,
   Bell,
   CalendarDays,
+  ChevronDown,
   Clock,
   CreditCard,
   FlaskConical,
@@ -122,6 +123,45 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const path = usePathname().replace(/^\/control-centre/, "") || "/";
   const router = useRouter();
   const [actor, setActor] = useState<PlatformActor | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(navGroups.map((group) => [group.label, true])),
+  );
+  const [navStateHydrated, setNavStateHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("mykhaya.pcc.nav-groups");
+      if (stored) {
+        const parsed = JSON.parse(stored) as Record<string, unknown>;
+        setExpandedGroups((current) =>
+          Object.fromEntries(
+            navGroups.map((group) => [group.label, parsed[group.label] !== false && current[group.label] !== false]),
+          ),
+        );
+      }
+    } catch {
+      // A blocked or malformed local preference should never affect navigation.
+    } finally {
+      setNavStateHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const activeGroup = navGroups.find((group) => group.items.some((item) => isNavItemActive(path, item.href)));
+    if (activeGroup) {
+      setExpandedGroups((current) => ({ ...current, [activeGroup.label]: true }));
+    }
+  }, [path]);
+
+  useEffect(() => {
+    if (navStateHydrated) {
+      try {
+        window.localStorage.setItem("mykhaya.pcc.nav-groups", JSON.stringify(expandedGroups));
+      } catch {
+        // Persistence is optional; navigation remains usable if storage is blocked.
+      }
+    }
+  }, [expandedGroups, navStateHydrated]);
   useEffect(() => {
     platformApi
       .get<PlatformActor>("/auth/me")
@@ -157,14 +197,29 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         <p className="privileged-indicator">Privileged system</p>
         <nav aria-label="Control Centre navigation">
           <NavLink item={overviewItem} active={isNavItemActive(path, overviewItem.href)} />
-          {navGroups.map((group) => (
+          {navGroups.map((group) => {
+            const groupId = `pcc-nav-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+            const expanded = expandedGroups[group.label] !== false;
+            return (
             <div key={group.label} className="platform-nav-group">
-              <p className="platform-nav-group-label">{group.label}</p>
-              {group.items.map((item) => (
-                <NavLink key={item.href} item={item} active={isNavItemActive(path, item.href)} />
-              ))}
+              <button
+                type="button"
+                className="platform-nav-group-toggle"
+                aria-expanded={expanded}
+                aria-controls={groupId}
+                onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !expanded }))}
+              >
+                <span className="platform-nav-group-label">{group.label}</span>
+                <ChevronDown size={15} strokeWidth={2} aria-hidden className={expanded ? "expanded" : ""} />
+              </button>
+              <div id={groupId} className="platform-nav-group-items" hidden={!expanded}>
+                {group.items.map((item) => (
+                  <NavLink key={item.href} item={item} active={isNavItemActive(path, item.href)} />
+                ))}
+              </div>
             </div>
-          ))}
+            );
+          })}
         </nav>
       </aside>
       <div className="platform-main">

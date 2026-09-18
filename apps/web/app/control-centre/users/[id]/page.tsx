@@ -324,7 +324,7 @@ export default function PlatformUserDetail() {
 
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage wide className="cc-user-detail">
         <p>
           <a href="/users">&larr; Users</a>
         </p>
@@ -347,7 +347,7 @@ export default function PlatformUserDetail() {
             {error && <CcNotice tone="error">{error}</CcNotice>}
 
             <CcColumns ratio="2-1">
-              <CcSection title="Account details">
+              <CcSection title="Account details" className="cc-form-card cc-user-account-section">
                 <CcCard>
                   <CcMetadataGrid>
                     <CcMetadataItem label="Email verification">
@@ -366,7 +366,7 @@ export default function PlatformUserDetail() {
                 </CcCard>
               </CcSection>
 
-              <CcSection title="Status">
+              <CcSection title="Status" className="cc-user-status-section">
                 <CcStatusCard
                   tone={statusTone}
                   status={statusLabel}
@@ -375,7 +375,7 @@ export default function PlatformUserDetail() {
               </CcSection>
             </CcColumns>
 
-            <CcSection title="Homes and memberships">
+            <CcSection title="Homes and memberships" className="cc-form-card cc-user-membership-section">
               <CcRecordList variant="grid" emptyMessage="Not a member of any Home.">
                 {data.homes.map((home) => (
                   <CcRecordCard key={home.id} title={home.name} meta={[home.role.replaceAll("_", " ")]} />
@@ -383,7 +383,7 @@ export default function PlatformUserDetail() {
               </CcRecordList>
             </CcSection>
 
-            <CcSection title="Authentication & MFA">
+            <CcSection title="Authentication & MFA" className="cc-form-card cc-user-security-section">
               <CcCard>
                 <CcMetadataGrid>
                   <CcMetadataItem label="Configured">{data.authentication_mfa.configured}</CcMetadataItem>
@@ -410,7 +410,7 @@ export default function PlatformUserDetail() {
               </CcCard>
             </CcSection>
 
-            <CcSection title="Active sessions">
+            <CcSection title="Active sessions" className="cc-user-sessions-section">
               <CcRecordList variant="grid" emptyMessage="No active sessions.">
                 {data.sessions.map((session) => (
                   <CcRecordCard
@@ -422,7 +422,7 @@ export default function PlatformUserDetail() {
               </CcRecordList>
             </CcSection>
 
-            <CcSection title="Administrative notes">
+            <CcSection title="Administrative notes" className="cc-form-card cc-user-notes-section">
               <CcCard>
                 <form onSubmit={addNote}>
                   <CcField label="New internal note">
@@ -442,7 +442,7 @@ export default function PlatformUserDetail() {
               </CcRecordList>
             </CcSection>
 
-            <CcSection title="Actions">
+            <CcSection title="Actions" className="cc-user-actions-section">
               <CcActionBar actions={actions} />
             </CcSection>
 
