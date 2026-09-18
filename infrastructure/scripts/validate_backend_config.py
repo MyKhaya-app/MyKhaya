@@ -11,12 +11,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
-COMPOSE = (
+COMPOSE_FILES = (
     "docker",
     "compose",
     "-f",
@@ -26,6 +29,7 @@ COMPOSE = (
 )
 SERVICES = ("api", "worker", "scheduler", "migrate")
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
+PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,55 @@ class RuntimeConfig:
     smtp_host: str
     smtp_port: int
     apns_delivery_configured: bool
+
+
+@dataclass(frozen=True)
+class ProbeContext:
+    project_name: str
+    compose_args: tuple[str, ...]
+    override_path: Path
+
+
+def probe_project_name() -> str:
+    """Return a valid, per-process Compose project name.
+
+    A unique project prevents a validator run from joining or removing the
+    persistent ``mykhaya`` networks and one-off containers. The PID also keeps
+    concurrent local validation runs independent without leaving a fixed,
+    reusable project name behind.
+    """
+    return f"{PROBE_PROJECT_PREFIX}-{os.getpid()}"
+
+
+def compose_command(project_name: str | None = None) -> list[str]:
+    command = list(COMPOSE_FILES)
+    if project_name is not None:
+        command[2:2] = ["-p", project_name]
+    return command
+
+
+def sanitize_diagnostics(output: str, limit: int = 4000) -> str:
+    """Keep Compose failures useful without echoing connection credentials."""
+    sanitized = re.sub(
+        r"(?i)(postgres(?:ql)?(?:\+[^:/\s]+)?://)[^\s'\"]+",
+        r"\1<redacted>",
+        output,
+    )
+    sanitized = re.sub(r"(?i)(redis://)[^\s'\"]+", r"\1<redacted>", sanitized)
+    sanitized = re.sub(
+        r"(?i)(password|secret|token|private[_-]?key)(\s*[=:]\s*)[^\s,;]+",
+        r"\1\2<redacted>",
+        sanitized,
+    )
+    sanitized = sanitized.strip()
+    if len(sanitized) > limit:
+        return sanitized[:limit] + "…"
+    return sanitized or "(no diagnostic output)"
+
+
+def compose_failure(action: str, result: subprocess.CompletedProcess[str]) -> RuntimeError:
+    details = sanitize_diagnostics("\n".join(part for part in (result.stdout, result.stderr) if part))
+    return RuntimeError(f"{action} failed with exit code {result.returncode}: {details}")
 
 
 def fingerprint(value: object) -> tuple[str, int]:
@@ -75,7 +128,88 @@ def parse_config(service: str, output: str) -> RuntimeConfig:
     )
 
 
-def container_probe(service: str) -> RuntimeConfig:
+def resolved_service_images() -> dict[str, str]:
+    """Resolve images from the normal merged project without printing config."""
+    result = subprocess.run(
+        [*compose_command(), "config", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise compose_failure("Compose configuration inspection", result)
+    try:
+        resolved = json.loads(result.stdout)
+        services = resolved["services"]
+        project_name = resolved.get("name") or os.environ.get("COMPOSE_PROJECT_NAME", "mykhaya")
+        images = {
+            service: services[service].get("image") or f"{project_name}-{service}"
+            for service in SERVICES
+        }
+        if any("build" not in services[service] and "image" not in services[service] for service in SERVICES):
+            raise KeyError("a probe service has neither image nor build")
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Compose configuration did not resolve probe images: {exc}") from exc
+    return images
+
+
+def create_probe_context() -> ProbeContext:
+    """Create an isolated project override that reuses freshly built images."""
+    project_name = probe_project_name()
+    images = resolved_service_images()
+    temporary_directory = Path(tempfile.mkdtemp(prefix="mykhaya-config-probe-"))
+    override_path = temporary_directory / "images.yml"
+    # This is YAML because Compose's !reset tag is needed to remove the
+    # persistent dev stack's fixed 10.77.x IPAM pools. The override changes
+    # only image selection and probe networking; all service environment,
+    # volumes and commands remain from the merged Compose files.
+    lines = ["services:"]
+    for service, image in images.items():
+        lines.extend([f"  {service}:", f"    image: {json.dumps(image)}"])
+    lines.extend(
+        [
+            "networks:",
+            "  edge:",
+            "    ipam:",
+            "      config: !reset []",
+            "  app:",
+            "    ipam:",
+            "      config: !reset []",
+            "  data:",
+            "    ipam:",
+            "      config: !reset []",
+        ]
+    )
+    override_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return ProbeContext(
+        project_name=project_name,
+        compose_args=(*compose_command(project_name), "-f", str(override_path)),
+        override_path=override_path,
+    )
+
+
+def cleanup_probe(context: ProbeContext) -> None:
+    """Remove only resources belonging to this validator's project."""
+    result = subprocess.run(
+        [*context.compose_args, "down", "--remove-orphans", "--volumes"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(
+            "Warning: isolated backend-config probe cleanup failed: "
+            + sanitize_diagnostics(f"{result.stdout}\n{result.stderr}"),
+            file=sys.stderr,
+        )
+    try:
+        context.override_path.unlink(missing_ok=True)
+        context.override_path.parent.rmdir()
+    except OSError:
+        pass
+
+
+def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
     code = (
         "import hashlib, json; "
         "from mykhaya.config import get_settings; "
@@ -92,13 +226,23 @@ def container_probe(service: str) -> RuntimeConfig:
         "'apns_delivery_configured':s.apns_delivery_configured}))"
     )
     result = subprocess.run(
-        [*COMPOSE, "run", "--rm", "--no-deps", "--entrypoint", "python", service, "-c", code],
+        [
+            *context.compose_args,
+            "run",
+            "--rm",
+            "--no-deps",
+            "--entrypoint",
+            "python",
+            service,
+            "-c",
+            code,
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"{service} probe failed with exit code {result.returncode}")
+        raise compose_failure(f"{service} backend configuration probe", result)
     return parse_config(service, result.stdout)
 
 
@@ -138,12 +282,17 @@ def validate(configs: list[RuntimeConfig]) -> list[str]:
 
 
 def main() -> int:
+    context: ProbeContext | None = None
     try:
-        configs = [container_probe(service) for service in SERVICES]
+        context = create_probe_context()
+        configs = [container_probe(service, context) for service in SERVICES]
         errors = validate(configs)
     except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"Backend runtime configuration validation failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if context is not None:
+            cleanup_probe(context)
     if errors:
         print("Backend runtime configuration validation failed:", file=sys.stderr)
         for error in errors:

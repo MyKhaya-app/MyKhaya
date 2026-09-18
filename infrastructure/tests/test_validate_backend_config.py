@@ -1,9 +1,11 @@
 """Regression tests for merged backend runtime configuration validation."""
 
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -79,6 +81,70 @@ class BackendConfigTests(unittest.TestCase):
         output = "\n".join(module.validate(values))
         self.assertNotIn(secret_db, output)
         self.assertNotIn("secret-password", output)
+
+    def test_probe_project_isolated_per_process(self):
+        project = module.probe_project_name()
+        self.assertTrue(project.startswith("mykhaya-config-probe-"))
+        self.assertNotEqual(project, "mykhaya")
+
+    def test_compose_command_keeps_exact_merged_files_and_isolates_project(self):
+        command = module.compose_command("mykhaya-config-probe-123")
+        self.assertEqual(
+            command,
+            [
+                "docker",
+                "compose",
+                "-p",
+                "mykhaya-config-probe-123",
+                "-f",
+                "compose.yml",
+                "-f",
+                "compose.dev.yml",
+            ],
+        )
+
+    def test_probe_command_reuses_image_without_requesting_a_build(self):
+        context = module.ProbeContext(
+            "mykhaya-config-probe-123",
+            (
+                "docker",
+                "compose",
+                "-p",
+                "mykhaya-config-probe-123",
+                "-f",
+                "compose.yml",
+                "-f",
+                "compose.dev.yml",
+                "-f",
+                "C:/temp/images.yml",
+            ),
+            Path("C:/temp/images.yml"),
+        )
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='MYKHAYA_RUNTIME_CONFIG={"database_hash":"db","database_length":2,"database_target":"postgresql://postgres:5432/db","redis_hash":"r","redis_length":1,"secret_hash":"s","secret_length":1,"smtp_host":"mailpit","smtp_port":1025,"apns_delivery_configured":false}\n',
+            stderr="",
+        )
+        with mock.patch.object(module.subprocess, "run", return_value=completed) as run:
+            module.container_probe("api", context)
+        command = run.call_args.args[0]
+        self.assertNotIn("--build", command)
+        self.assertIn("--no-deps", command)
+        self.assertIn("--rm", command)
+        self.assertIn("mykhaya-config-probe-123", command)
+
+    def test_compose_failure_diagnostics_redact_connection_values(self):
+        result = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="failed redis://user:password@redis:6379/0 password=secret-value",
+        )
+        error = module.compose_failure("probe", result)
+        self.assertIn("probe failed with exit code 1", str(error))
+        self.assertNotIn("user:password@redis", str(error))
+        self.assertNotIn("secret-value", str(error))
 
 
 if __name__ == "__main__":
