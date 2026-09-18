@@ -8,7 +8,6 @@ import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
-import { CcSection, CcCard, CcColumns } from "@/components/control-centre/section";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcStatusCard } from "@/components/control-centre/status-card";
 import { CcActionBar, type CcAction } from "@/components/control-centre/action-bar";
@@ -325,66 +324,66 @@ export default function PlatformUserDetail() {
   return (
     <PlatformShell>
       <CcPage wide className="cc-user-detail">
-        <p>
-          <a href="/users">&larr; Users</a>
-        </p>
+        <a className="cc-user-back-link" href="/users">&larr; Users</a>
         {loading ? (
           <CcLoadingState label="Loading user…" />
         ) : !data ? (
           <CcErrorState>{error || "User not found."}</CcErrorState>
         ) : (
           <>
-            <CcPageHeader
-              eyebrow="User account"
-              title={
-                <>
-                  {data.display_name} <CcBadge tone={statusTone}>{statusLabel}</CcBadge>
-                </>
-              }
-              description={data.email}
-            />
+            <div className="cc-user-record-header">
+              <CcPageHeader
+                eyebrow="User account"
+                title={data.display_name}
+                description={data.email}
+              />
+              <CcBadge tone={statusTone}>{statusLabel}</CcBadge>
+            </div>
             {message && <CcNotice tone="success">{message}</CcNotice>}
             {error && <CcNotice tone="error">{error}</CcNotice>}
 
-            <CcColumns ratio="2-1">
-              <CcSection title="Account details" className="cc-form-card cc-user-account-section">
-                <CcCard>
-                  <CcMetadataGrid>
-                    <CcMetadataItem label="Email verification">
-                      <CcBadge tone={data.verified ? "success" : "warning"}>
-                        {data.verified ? "Verified" : "Unverified"}
-                      </CcBadge>
-                    </CcMetadataItem>
-                    <CcMetadataItem label="Created">{readableDate(data.created_at)}</CcMetadataItem>
-                    <CcMetadataItem label="Last login">
-                      {data.last_login_at ? readableDate(data.last_login_at) : "Never"}
-                    </CcMetadataItem>
-                    <CcMetadataItem label="Last active">
-                      {data.last_activity_at ? readableDate(data.last_activity_at) : "Never"}
-                    </CcMetadataItem>
-                  </CcMetadataGrid>
-                </CcCard>
-              </CcSection>
-
-              <CcSection title="Status" className="cc-user-status-section">
+            <div className="cc-user-primary-grid">
+              <section className="cc-user-card cc-user-account-card">
+                <div className="cc-user-card-heading">
+                  <div>
+                    <span className="cc-user-card-kicker">Account</span>
+                    <h2>Account details</h2>
+                  </div>
+                  <CcBadge tone={data.verified ? "success" : "warning"}>
+                    {data.verified ? "Verified" : "Unverified"}
+                  </CcBadge>
+                </div>
                 <CcStatusCard
                   tone={statusTone}
                   status={statusLabel}
                   items={[{ label: "Email verification", value: data.verified ? "Verified" : "Unverified" }]}
                 />
-              </CcSection>
-            </CcColumns>
+                <dl className="cc-user-metadata-list">
+                  <div><dt>Created</dt><dd>{readableDate(data.created_at)}</dd></div>
+                  <div><dt>Last login</dt><dd>{data.last_login_at ? readableDate(data.last_login_at) : "Never"}</dd></div>
+                  <div><dt>Last active</dt><dd>{data.last_activity_at ? readableDate(data.last_activity_at) : "Never"}</dd></div>
+                </dl>
+              </section>
 
-            <CcSection title="Homes and memberships" className="cc-form-card cc-user-membership-section">
-              <CcRecordList variant="grid" emptyMessage="Not a member of any Home.">
-                {data.homes.map((home) => (
-                  <CcRecordCard key={home.id} title={home.name} meta={[home.role.replaceAll("_", " ")]} />
-                ))}
-              </CcRecordList>
-            </CcSection>
+              <section className="cc-user-card cc-user-membership-card">
+                <div className="cc-user-card-heading">
+                  <div><span className="cc-user-card-kicker">Access</span><h2>Homes and memberships</h2></div>
+                </div>
+                <div className="cc-user-membership-list">
+                  <CcRecordList variant="grid" emptyMessage="Not a member of any Home.">
+                    {data.homes.map((home) => (
+                      <CcRecordCard key={home.id} title={home.name} meta={[home.role.replaceAll("_", " ")]} />
+                    ))}
+                  </CcRecordList>
+                </div>
+              </section>
+            </div>
 
-            <CcSection title="Authentication & MFA" className="cc-form-card cc-user-security-section">
-              <CcCard>
+            <section className="cc-user-card cc-user-security-card cc-user-security-section">
+              <div className="cc-user-card-heading">
+                <div><span className="cc-user-card-kicker">Security</span><h2>Authentication &amp; MFA</h2></div>
+              </div>
+              <div className="cc-user-mfa-summary">
                 <CcMetadataGrid>
                   <CcMetadataItem label="Configured">{data.authentication_mfa.configured}</CcMetadataItem>
                   <CcMetadataItem label="Effective">{data.authentication_mfa.effective}</CcMetadataItem>
@@ -393,7 +392,9 @@ export default function PlatformUserDetail() {
                     {data.authentication_mfa.methods.filter((method) => method.enabled).map((method) => method.method).join(", ") || "None"}
                   </CcMetadataItem>
                 </CcMetadataGrid>
-                <form onSubmit={updateMfaPolicy}>
+              </div>
+              <div className="cc-user-form-divider" />
+                <form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}>
                   <CcField label="User policy override">
                     <select name="policy" defaultValue={data.authentication_mfa.configured}>
                       <option value="inherit">Inherit</option>
@@ -406,25 +407,22 @@ export default function PlatformUserDetail() {
                   </CcField>
                   <button disabled={Boolean(busy)}>Save MFA policy</button>
                 </form>
-                <small>Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.</small>
-              </CcCard>
-            </CcSection>
+                <small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.</small>
+            </section>
 
-            <CcSection title="Active sessions" className="cc-user-sessions-section">
-              <CcRecordList variant="grid" emptyMessage="No active sessions.">
-                {data.sessions.map((session) => (
-                  <CcRecordCard
-                    key={session.id}
-                    title={session.user_agent}
-                    meta={[`Last seen ${new Date(session.last_seen_at).toLocaleString()}`]}
-                  />
-                ))}
-              </CcRecordList>
-            </CcSection>
+            <div className="cc-user-secondary-grid">
+              <section className="cc-user-card cc-user-sessions-card cc-user-sessions-section">
+                <div className="cc-user-card-heading"><div><span className="cc-user-card-kicker">Access history</span><h2>Active sessions</h2></div></div>
+                <CcRecordList variant="grid" emptyMessage="No active sessions.">
+                  {data.sessions.map((session) => (
+                    <CcRecordCard key={session.id} title={session.user_agent} meta={[`Last seen ${new Date(session.last_seen_at).toLocaleString()}`]} />
+                  ))}
+                </CcRecordList>
+              </section>
 
-            <CcSection title="Administrative notes" className="cc-form-card cc-user-notes-section">
-              <CcCard>
-                <form onSubmit={addNote}>
+              <section className="cc-user-card cc-user-notes-card cc-user-notes-section">
+                <div className="cc-user-card-heading"><div><span className="cc-user-card-kicker">Internal record</span><h2>Administrative notes</h2></div></div>
+                <form className="cc-user-note-form" onSubmit={addNote}>
                   <CcField label="New internal note">
                     <textarea name="note" minLength={2} maxLength={1000} required />
                   </CcField>
@@ -432,7 +430,6 @@ export default function PlatformUserDetail() {
                     <button className="cc-action cc-action-primary">Add administrative note</button>
                   </div>
                 </form>
-              </CcCard>
               <CcRecordList emptyMessage="No administrative notes yet.">
                 {data.notes.map((note) => (
                   <CcRecordCard key={note.id} title={new Date(note.created_at).toLocaleString()}>
@@ -440,14 +437,17 @@ export default function PlatformUserDetail() {
                   </CcRecordCard>
                 ))}
               </CcRecordList>
-            </CcSection>
+              </section>
+            </div>
 
-            <CcSection title="Actions" className="cc-user-actions-section">
+            <section className="cc-user-card cc-user-actions-card cc-user-actions-section">
+              <div className="cc-user-card-heading"><div><span className="cc-user-card-kicker">Administration</span><h2>Actions</h2></div></div>
               <CcActionBar actions={actions} />
-            </CcSection>
+            </section>
 
-            {data.lifecycle !== "archived" && data.lifecycle !== "anonymised" && (
-              <CcDangerZone
+            <div className="cc-user-danger-zone">
+              {data.lifecycle !== "archived" && data.lifecycle !== "anonymised" && (
+                <CcDangerZone
                 title="Suspend or archive user"
                 description="Suspending this user signs them out everywhere and blocks sign-in until reactivated. Archiving does the same but also retires the account from normal operational views — restore it later to bring it back."
               >
@@ -475,11 +475,11 @@ export default function PlatformUserDetail() {
                     },
                   ]}
                 />
-              </CcDangerZone>
-            )}
+                </CcDangerZone>
+              )}
 
-            {data.lifecycle === "archived" && (
-              <CcDangerZone
+              {data.lifecycle === "archived" && (
+                <CcDangerZone
                 title="Anonymise user"
                 description="This permanently removes the user's identifying account information and sign-in credentials while retaining historical household records under an anonymised identity. This cannot be undone."
               >
@@ -495,8 +495,9 @@ export default function PlatformUserDetail() {
                     },
                   ]}
                 />
-              </CcDangerZone>
-            )}
+                </CcDangerZone>
+              )}
+            </div>
           </>
         )}
       </CcPage>

@@ -403,6 +403,271 @@
     padding-left: 0;
   }
 }
+
+/* Phase 2A.3: user record composition. Kept local to the PCC detail route. */
+.pcc-root .cc-user-detail {
+  max-width: 1180px;
+}
+
+.pcc-root .cc-user-detail .cc-user-back-link {
+  color: var(--cc-text-muted);
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-bottom: 0.7rem;
+  text-decoration: none;
+}
+
+.pcc-root .cc-user-detail .cc-user-back-link:hover {
+  color: var(--cc-primary);
+}
+
+.pcc-root .cc-user-record-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.35rem;
+}
+
+.pcc-root .cc-user-record-header .cc-page-header {
+  margin: 0;
+}
+
+.pcc-root .cc-user-record-header > .cc-badge {
+  margin-top: 0.35rem;
+}
+
+.pcc-root .cc-user-primary-grid,
+.pcc-root .cc-user-secondary-grid {
+  align-items: stretch;
+  display: grid;
+  gap: 1.1rem;
+}
+
+.pcc-root .cc-user-primary-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(290px, 0.85fr);
+  margin-top: 1.1rem;
+}
+
+.pcc-root .cc-user-secondary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1.1rem;
+}
+
+.pcc-root .cc-user-card {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  min-width: 0;
+  padding: 1.25rem;
+}
+
+.pcc-root .cc-user-card-heading {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--cc-border);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+}
+
+.pcc-root .cc-user-card-heading h2 {
+  color: var(--cc-text);
+  font-size: 1rem;
+  line-height: 1.3;
+  margin: 0.18rem 0 0;
+}
+
+.pcc-root .cc-user-card-kicker {
+  color: var(--cc-text-subtle);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pcc-root .cc-user-account-card .cc-status-card {
+  border: 0;
+  box-shadow: none;
+  margin: 0 0 0.85rem;
+  padding: 0;
+}
+
+.pcc-root .cc-user-account-card .cc-status-card .cc-status-card-header {
+  padding-bottom: 0.65rem;
+}
+
+.pcc-root .cc-user-metadata-list {
+  border-top: 1px solid var(--cc-border);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  padding-top: 0.85rem;
+}
+
+.pcc-root .cc-user-metadata-list > div {
+  min-width: 0;
+  padding-right: 0.75rem;
+}
+
+.pcc-root .cc-user-metadata-list > div + div {
+  border-left: 1px solid var(--cc-border);
+  padding-left: 0.75rem;
+}
+
+.pcc-root .cc-user-metadata-list dt {
+  color: var(--cc-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.pcc-root .cc-user-metadata-list dd {
+  color: var(--cc-text);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.pcc-root .cc-user-membership-list .cc-record-list,
+.pcc-root .cc-user-sessions-card .cc-record-list,
+.pcc-root .cc-user-notes-card .cc-record-list {
+  gap: 0.55rem;
+}
+
+.pcc-root .cc-user-membership-list .cc-record-card,
+.pcc-root .cc-user-sessions-card .cc-record-card,
+.pcc-root .cc-user-notes-card .cc-record-card {
+  box-shadow: none;
+  padding: 0.75rem;
+}
+
+.pcc-root .cc-user-security-card {
+  margin-top: 1.1rem;
+  max-width: 920px;
+}
+
+.pcc-root .cc-user-mfa-summary .cc-metadata-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pcc-root .cc-user-mfa-summary .cc-metadata-grid > div {
+  background: var(--cc-surface-muted);
+  border: 0;
+  border-radius: var(--cc-radius-sm);
+  padding: 0.7rem 0.8rem;
+}
+
+.pcc-root .cc-user-form-divider {
+  border-top: 1px solid var(--cc-border);
+  margin: 1.1rem 0;
+}
+
+.pcc-root .cc-user-security-card .cc-user-mfa-form {
+  display: grid;
+  gap: 0.9rem 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.pcc-root .cc-user-security-card .cc-user-mfa-form button,
+.pcc-root .cc-user-security-note {
+  grid-column: 1 / -1;
+}
+
+.pcc-root .cc-user-security-card .cc-user-mfa-form button {
+  justify-self: start;
+}
+
+.pcc-root .cc-user-security-note {
+  color: var(--cc-text-subtle);
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin-top: 0.8rem;
+}
+
+.pcc-root .cc-user-note-form {
+  margin: 0 0 1rem;
+}
+
+.pcc-root .cc-user-note-form textarea {
+  min-height: 84px;
+}
+
+.pcc-root .cc-user-actions-card {
+  margin-top: 1.1rem;
+}
+
+.pcc-root .cc-user-actions-card .cc-action-bar {
+  margin: 0;
+}
+
+.pcc-root .cc-user-danger-zone {
+  margin-top: 1.1rem;
+}
+
+.pcc-root .cc-user-danger-zone .cc-danger-zone {
+  margin-top: 0;
+}
+
+@media (max-width: 1100px) {
+  .pcc-root .cc-user-primary-grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
+  }
+
+  .pcc-root .cc-user-mfa-summary .cc-metadata-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .pcc-root .cc-user-primary-grid,
+  .pcc-root .cc-user-secondary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pcc-root .cc-user-security-card {
+    max-width: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .pcc-root .cc-user-record-header {
+    display: block;
+  }
+
+  .pcc-root .cc-user-record-header > .cc-badge {
+    display: inline-flex;
+    margin-top: 0.75rem;
+  }
+
+  .pcc-root .cc-user-metadata-list {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .pcc-root .cc-user-metadata-list > div,
+  .pcc-root .cc-user-metadata-list > div + div {
+    border-left: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .pcc-root .cc-user-mfa-summary .cc-metadata-grid,
+  .pcc-root .cc-user-security-card .cc-user-mfa-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pcc-root .cc-user-security-card .cc-user-mfa-form button,
+  .pcc-root .cc-user-security-note {
+    grid-column: auto;
+  }
+}
 @media (max-width: 680px) {
   .pcc-security-policy-grid,
   .pcc-security-policy-columns,
