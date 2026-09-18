@@ -28,6 +28,10 @@ type Overview = {
   deployment: Record<string, string>;
 };
 
+function stateClass(value: string) {
+  return value.toLowerCase().replace(/\s+/g, "-");
+}
+
 export default function PlatformOverview() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
@@ -70,35 +74,35 @@ export default function PlatformOverview() {
           <p role="status">Loading platform state…</p>
         ) : (
           <>
-            <section className={`overall-status state-${data.status.state.toLowerCase().replace(" ", "-")}`}>
-              <div>
+            <section className={`overview-system-status overall-status state-${stateClass(data.status.state)}`}>
+              <div className="overview-system-status-main">
                 <span className="status-dot" aria-hidden="true" />
                 <div>
                   <small>Overall system state</small>
                   <strong>{data.status.state}</strong>
                 </div>
               </div>
-              <small>Updated {relativeTime(data.status.checked_at)}</small>
+              <small className="overview-system-status-meta">Updated {relativeTime(data.status.checked_at)}</small>
             </section>
 
-            <section className="primary-metrics" aria-label="Core platform metrics">
+            <section className="overview-metric-grid primary-metrics" aria-label="Core platform metrics">
               {[
                 ["Users", data.metrics.users, "/users"],
                 ["Homes", data.metrics.homes, "/homes"],
                 ["Active sessions", data.metrics.active_sessions, "/security"],
                 ["Failed jobs", data.metrics.failed_jobs, "/jobs"],
               ].map(([label, value, href]) => (
-                <Link href={String(href)} key={String(label)}>
+                <Link href={String(href)} key={String(label)} className="overview-metric-card">
                   <strong>{value}</strong>
-                  <span>{label}</span>
+                  <span className="overview-metric-label">{label}</span>
                 </Link>
               ))}
             </section>
 
             {data.actions.length > 0 && (
-              <section className="attention-panel">
+              <section className="overview-attention-panel attention-panel">
                 <h2>Action required</h2>
-                <div className="attention-list">
+                <div className="overview-attention-list attention-list">
                   {data.actions.map((item) => (
                     <Link href={item.href} key={item.title} className={`attention-${item.severity}`}>
                       <div>
@@ -112,9 +116,9 @@ export default function PlatformOverview() {
               </section>
             )}
 
-            <div className="overview-grid">
-              <section className="overview-panel">
-                <div className="section-heading">
+            <div className="overview-dashboard-grid overview-grid">
+              <section className="overview-panel overview-summary-panel">
+                <div className="overview-panel-heading">
                   <h2>Platform summary</h2>
                 </div>
                 <div className="summary-groups">
@@ -159,8 +163,8 @@ export default function PlatformOverview() {
                 </div>
               </section>
 
-              <section className="overview-panel">
-                <div className="section-heading">
+              <section className="overview-panel overview-health-panel">
+                <div className="overview-panel-heading">
                   <h2>Platform health</h2>
                   <Link href="/health">Diagnostics</Link>
                 </div>
@@ -178,8 +182,8 @@ export default function PlatformOverview() {
                 </div>
               </section>
 
-              <section className="overview-panel">
-                <div className="section-heading">
+              <section className="overview-panel overview-security-panel">
+                <div className="overview-panel-heading">
                   <h2>Security</h2>
                   <Link href="/security">Security events</Link>
                 </div>
@@ -205,8 +209,8 @@ export default function PlatformOverview() {
                 </dl>
               </section>
 
-              <section className="overview-panel recent-activity">
-                <div className="section-heading">
+              <section className="overview-panel overview-activity-panel recent-activity">
+                <div className="overview-panel-heading">
                   <h2>Recent activity</h2>
                   <Link href="/audit">Full audit log</Link>
                 </div>

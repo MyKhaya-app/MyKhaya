@@ -1519,3 +1519,337 @@
 @media (max-width: 720px) { .cc-move-member-grid, .cc-move-member-row { grid-template-columns: 1fr; } }
 @media (max-width: 1024px) { .cc-columns-2-1, .cc-columns-1-1 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .cc-page-header { flex-direction: column; } .cc-page-header-actions { flex-wrap: wrap; } .cc-metadata-grid { grid-template-columns: 1fr; } }
+
+/* Phase 2B — Overview dashboard composition. These rules are deliberately
+   page-scoped; the other PCC business pages retain their Phase 2A layout. */
+.platform-overview > .cc-page-header {
+  margin-bottom: 1.35rem;
+}
+
+.platform-overview > .cc-page-header h1 {
+  font-size: clamp(1.8rem, 2.4vw, 2.35rem);
+}
+
+.platform-overview > .overview-system-status {
+  align-items: center;
+  background: var(--cc-surface-elevated);
+  border: 1px solid var(--cc-border);
+  border-left: 4px solid var(--cc-accent);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 0.95rem 1.15rem;
+}
+
+.platform-overview > .overview-system-status.state-warning,
+.platform-overview > .overview-system-status.state-degraded,
+.platform-overview > .overview-system-status.state-critical,
+.platform-overview > .overview-system-status.state-unavailable {
+  border-left-color: var(--cc-warning);
+}
+
+.overview-system-status-main,
+.overview-system-status-meta {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.overview-system-status-main small,
+.overview-system-status-meta span {
+  color: var(--cc-text-muted);
+  display: block;
+  font-size: 0.72rem;
+}
+
+.overview-system-status-main strong,
+.overview-system-status-meta strong {
+  color: var(--cc-text);
+  display: block;
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+.overview-system-status-meta {
+  color: var(--cc-text-muted);
+  display: block;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  text-align: right;
+}
+
+.platform-overview > .overview-metric-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 1.15rem;
+}
+
+.overview-metric-card {
+  background: var(--cc-surface-elevated);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  color: var(--cc-text);
+  display: grid;
+  gap: 0.22rem;
+  min-height: 7.5rem;
+  padding: 1.05rem 1.15rem;
+  text-decoration: none;
+  transition: border-color var(--cc-transition-fast), box-shadow var(--cc-transition-fast), transform var(--cc-transition-fast);
+}
+
+.overview-metric-card:hover {
+  border-color: var(--cc-accent);
+  box-shadow: var(--cc-shadow-md);
+  color: var(--cc-text);
+  transform: translateY(-1px);
+}
+
+.overview-metric-card:nth-child(-n + 2) {
+  border-top: 3px solid var(--cc-accent);
+}
+
+.overview-metric-card.overview-metric-warning {
+  border-top: 3px solid var(--cc-warning);
+}
+
+.overview-metric-label {
+  color: var(--cc-text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.overview-metric-card strong {
+  font-size: clamp(1.7rem, 2.4vw, 2.15rem);
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.overview-metric-card small {
+  color: var(--cc-text-subtle);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.platform-overview > .overview-attention-panel {
+  background: #fffaf0;
+  border: 1px solid #e4c681;
+  border-radius: var(--cc-radius-md);
+  margin-bottom: 1.15rem;
+  padding: 1rem 1.15rem;
+}
+
+.platform-overview > .overview-attention-panel h2 {
+  letter-spacing: -0.01em;
+  margin: 0;
+  text-transform: none;
+}
+
+.overview-panel-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.9rem;
+}
+
+.overview-panel-heading h2 {
+  letter-spacing: -0.01em;
+  margin: 0.18rem 0 0;
+  text-transform: none;
+}
+
+.overview-panel-heading a {
+  color: var(--cc-accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.overview-section-kicker {
+  color: var(--cc-text-subtle);
+  display: block;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.overview-attention-panel > .overview-panel-heading > strong {
+  background: var(--cc-warning-bg);
+  border-radius: 999px;
+  color: var(--cc-warning);
+  font-size: 0.76rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.platform-overview .overview-attention-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.platform-overview .overview-attention-list a {
+  align-items: center;
+  background: var(--cc-surface-elevated);
+  border-left: 3px solid var(--cc-warning);
+  color: var(--cc-text);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.7rem 0.85rem;
+  text-decoration: none;
+}
+
+.platform-overview .overview-attention-list a:hover {
+  background: #fffdf8;
+  color: var(--cc-text);
+}
+
+.platform-overview .overview-attention-list a.attention-critical {
+  border-left-color: var(--cc-danger);
+}
+
+.platform-overview .overview-attention-list p {
+  color: var(--cc-text-muted);
+  font-size: 0.78rem;
+  margin: 0.2rem 0 0;
+}
+
+.platform-overview > .overview-dashboard-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.platform-overview > .overview-dashboard-grid > .overview-panel {
+  background: var(--cc-surface-elevated);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  box-shadow: var(--cc-shadow-sm);
+  margin: 0;
+  padding: 1.2rem 1.3rem;
+}
+
+.platform-overview .overview-health-panel,
+.platform-overview .overview-summary-panel {
+  grid-column: span 7;
+}
+
+.platform-overview .overview-security-panel,
+.platform-overview .overview-activity-panel {
+  grid-column: span 5;
+}
+
+.platform-overview .overview-health-summary {
+  display: grid;
+  gap: 0;
+}
+
+.platform-overview .overview-health-summary > div {
+  align-items: center;
+  border-top: 1px solid var(--cc-border);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 2.75rem;
+  padding: 0.55rem 0;
+}
+
+.platform-overview .overview-health-summary > div:first-child {
+  border-top: 0;
+}
+
+.platform-overview .overview-health-summary strong {
+  font-size: 0.76rem;
+  text-transform: capitalize;
+}
+
+.platform-overview .overview-security-panel dl > div,
+.platform-overview .overview-summary-panel dl > div {
+  border-top-color: var(--cc-border);
+  padding: 0.68rem 0;
+}
+
+.platform-overview .overview-security-panel dt,
+.platform-overview .overview-summary-panel dt {
+  color: var(--cc-text-muted);
+  font-size: 0.78rem;
+}
+
+.platform-overview .overview-security-panel dd,
+.platform-overview .overview-summary-panel dd {
+  color: var(--cc-text);
+  font-weight: 750;
+}
+
+.platform-overview .overview-activity-panel ol {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.platform-overview .overview-activity-panel li {
+  border-top-color: var(--cc-border);
+  padding: 0.7rem 0;
+}
+
+.platform-overview .overview-activity-panel li:first-child {
+  border-top: 0;
+}
+
+.platform-overview .overview-activity-panel li small {
+  color: var(--cc-text-subtle);
+}
+
+.platform-overview > .overview-deployment-panel {
+  background: var(--cc-surface-muted);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius-md);
+  margin-top: 1rem;
+  padding: 1rem 1.3rem;
+}
+
+.platform-overview > .overview-deployment-panel h2 {
+  margin-bottom: 0;
+}
+
+@media (max-width: 1100px) {
+  .platform-overview > .overview-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .platform-overview > .overview-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-overview .overview-health-panel,
+  .platform-overview .overview-summary-panel,
+  .platform-overview .overview-security-panel,
+  .platform-overview .overview-activity-panel {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .platform-overview > .overview-system-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .overview-system-status-meta {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .platform-overview > .overview-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}

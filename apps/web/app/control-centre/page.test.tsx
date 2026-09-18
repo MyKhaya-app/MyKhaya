@@ -73,6 +73,9 @@ describe("PlatformOverview", () => {
     );
     render(<PlatformOverview />);
     await waitFor(() => expect(screen.getByText("Healthy")).toBeInTheDocument());
+    expect(document.querySelector(".overview-system-status")).toBeInTheDocument();
+    expect(document.querySelector(".overview-metric-grid")).toBeInTheDocument();
+    expect(document.querySelector(".overview-dashboard-grid")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Users" })).toBeInTheDocument();
     expect(screen.getByText("Failed jobs")).toBeInTheDocument();
   });
