@@ -60,6 +60,7 @@ describe("PlatformOverview", () => {
       path === "/auth/me" ? Promise.resolve(actor) : new Promise(() => {}),
     );
     render(<PlatformOverview />);
+    expect(document.querySelector(".pcc-root.platform-shell")).toBeInTheDocument();
     expect(screen.getByText("Loading platform state…")).toBeInTheDocument();
     // Let PlatformShell's own /auth/me resolution settle before the test ends,
     // so it doesn't log an act() warning against the next test.

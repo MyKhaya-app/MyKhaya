@@ -148,7 +148,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   }
   return (
-    <div className="platform-shell">
+    <div className="pcc-root platform-shell">
       <aside>
         <div className="platform-brand">
           <span aria-hidden="true">MK</span>

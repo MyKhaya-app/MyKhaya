@@ -18,7 +18,7 @@ export function CcAuthShell({
   children?: ReactNode;
 }) {
   return (
-    <main className="platform-login">
+    <main className="pcc-root platform-login">
       <section>
         <div className="cc-auth-brand">
           <span aria-hidden="true">

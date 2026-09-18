@@ -210,6 +210,7 @@ describe("AppShell — authenticated navigation", () => {
     expect(document.querySelector(".bottom-nav")).not.toBeNull();
     expect(screen.getByTestId("around-house-dock")).toBeInTheDocument();
     expect(document.querySelector(".app-shell")).not.toHaveClass("native-shell-app");
+    expect(document.querySelector(".pcc-root")).toBeNull();
   });
 
   it("does not mount the browser wide-screen rail in the native shell", async () => {

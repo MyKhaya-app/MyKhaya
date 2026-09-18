@@ -9,6 +9,7 @@ describe("CcAuthShell", () => {
         <h1>Test heading</h1>
       </CcAuthShell>,
     );
+    expect(screen.getByRole("main")).toHaveClass("pcc-root");
     expect(screen.getByText("MyKhaya")).toBeInTheDocument();
     expect(screen.getByText("Platform Control Centre")).toBeInTheDocument();
     expect(screen.getByText("Restricted management plane")).toBeInTheDocument();
