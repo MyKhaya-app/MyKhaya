@@ -32,6 +32,21 @@ describe("hostname security boundaries", () => {
     );
   });
 
+  it.each(["/manifest.webmanifest", "/sw.js"])(
+    "fails closed for consumer PWA asset %s on the admin host",
+    (pathname) => {
+      const response = middleware(
+        new NextRequest(`http://admin.localhost${pathname}`, {
+          headers: { host: "admin.localhost" },
+        }),
+      );
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+      expect(response.headers.get("content-type")).toContain("text/plain");
+    },
+  );
+
   it("rewrites status to the isolated public status route", () => {
     const response = middleware(
       new NextRequest("http://status.localhost/anything", {

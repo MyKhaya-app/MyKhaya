@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-export default function manifest(): MetadataRoute.Manifest {
+export default function manifestDefinition(): MetadataRoute.Manifest {
   return {
     name: "MyKhaya — Your family's digital home",
     short_name: "MyKhaya",

@@ -84,6 +84,8 @@ compose-check:
 	docker compose config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "local dev"
 	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "persistent dev server"
 	docker compose -f compose.yml -f compose.production.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "production"
+	docker compose config --format json | python3 infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py "local dev"
+	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py "persistent dev server"
 caddy-check:
 	docker run --rm \
 		-e MYKHAYA_DEV_PROXY_TRUSTED_CIDRS=100.64.0.0/10 \

@@ -20,7 +20,13 @@ x-dev-api-environment: &dev-api-environment
   # already in use by another app on this machine.
   MYKHAYA_CORS_ORIGINS: '["https://dev.mykhaya.app","https://admin.dev.mykhaya.app","https://status.dev.mykhaya.app","http://localhost:8089","http://127.0.0.1:8089"]'
   MYKHAYA_TRUSTED_HOSTS: '["dev.mykhaya.app","admin.dev.mykhaya.app","status.dev.mykhaya.app","api.dev.mykhaya.app","localhost","127.0.0.1","api"]'
-  MYKHAYA_TRUSTED_PROXY_CIDRS: '${MYKHAYA_TRUSTED_PROXY_CIDRS:-["172.16.0.0/12"]}'
+  # Pinned to Caddy's own exact, static addresses on the `edge`/`app`
+  # networks below (each network's own gateway plus every other container's
+  # auto-assigned address are deliberately NOT included) — see the
+  # `networks:`/`caddy.networks` block's comment for the full rationale,
+  # including why trusting the whole subnet (an earlier draft of this fix)
+  # was still spoofable via the network's own gateway address.
+  MYKHAYA_TRUSTED_PROXY_CIDRS: '${MYKHAYA_TRUSTED_PROXY_CIDRS:-["10.77.0.250/32","10.77.1.250/32"]}'
   MYKHAYA_ADMIN_ALLOWED_NETWORKS: '${MYKHAYA_ADMIN_ALLOWED_NETWORKS:-["100.64.0.0/10"]}'
   MYKHAYA_ADMIN_MFA_REQUIRED: "true"
   MYKHAYA_DEFAULT_TIMEZONE: "${MYKHAYA_DEFAULT_TIMEZONE:-Europe/London}"
@@ -33,6 +39,15 @@ services:
       - "${MYKHAYA_DEV_BIND_ADDRESS:-0.0.0.0}:${MYKHAYA_DEV_HOST_PORT:-8089}:8080"
     environment:
       MYKHAYA_DEV_PROXY_TRUSTED_CIDRS: "${MYKHAYA_DEV_PROXY_TRUSTED_CIDRS:-100.64.0.0/10}"
+    # Deliberately high (.250, not .2/.3/...) so it never collides with the
+    # low addresses Docker auto-assigns to api/web/worker/scheduler/migrate
+    # in whatever order they happen to start — see the `networks:` block
+    # below for why a static IP is needed here at all.
+    networks:
+      edge:
+        ipv4_address: 10.77.0.250
+      app:
+        ipv4_address: 10.77.1.250
     volumes:
       - "./infrastructure/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro"
       - "caddy_data:/data"
@@ -65,3 +80,33 @@ services:
   mailpit:
     ports:
       - "127.0.0.1:${MYKHAYA_DEV_MAILPIT_PORT:-8025}:8025"
+
+# Pin the `edge`/`app` subnets compose.yml declares with no `ipam`, purely so
+# caddy above can be given a static, known-in-advance address on each — that
+# static /32 (not the subnet itself) is what MYKHAYA_TRUSTED_PROXY_CIDRS
+# actually trusts. Trusting the whole subnet was tried and rejected: `edge`
+# is non-internal (it needs a real gateway for api/worker/scheduler's
+# outbound SMTP/APNs/FCM traffic), and that gateway address — the address
+# Docker's own NAT makes ALL host-published-port traffic appear to originate
+# from — sits inside that same subnet. A chain-walking client-IP resolver
+# (mykhaya.security.resolve_client_ip) that trusted the whole /24 would
+# therefore treat the gateway as just another trusted hop and keep walking
+# an attacker-supplied X-Forwarded-For chain straight past it — confirmed
+# live with a forged header before switching to the /32-per-container form
+# below. Both networks are pinned (not just `edge`, which Caddy's connection
+# to `api` is currently observed to use — confirmed via `docker logs`/
+# `request.client`), because which of a multi-homed container's networks
+# Docker's embedded DNS/routing picks for outbound connections is an
+# implementation detail of container attach order, not a documented
+# contract. `data` is deliberately left unpinned: it never carries the
+# Caddy->api hop this trust boundary is about. See
+# docs/architecture/deployment-model.md.
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  app:
+    ipam:
+      config:
+        - subnet: 10.77.1.0/24

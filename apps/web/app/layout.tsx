@@ -8,11 +8,23 @@ import { PersistentAppShell } from "../components/app-shell";
 import { isPlatformControlCentreHost } from "../components/application-host";
 import { headers } from "next/headers";
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = {
+export function metadataForSurface(platformSurface: boolean): Metadata {
+  const metadata: Metadata = {
   title: { default: "MyKhaya", template: "%s · MyKhaya" },
   description: "Your family's digital home",
-  appleWebApp: { title: "MyKhaya", statusBarStyle: "default" },
-};
+  };
+  if (!platformSurface) {
+    metadata.manifest = "/manifest.webmanifest";
+    metadata.appleWebApp = { title: "MyKhaya", statusBarStyle: "default" };
+    metadata.icons = { apple: "/images/mykhaya-apple-icon.png" };
+  }
+  return metadata;
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const host = (await headers()).get("host") ?? "";
+  return metadataForSurface(isPlatformControlCentreHost(host));
+}
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -44,7 +56,7 @@ export default async function RootLayout({
     <html lang="en">
       <body>
         {application}
-        <ServiceWorkerRegister />
+        {!platformSurface && <ServiceWorkerRegister />}
         <NativeBackButton />
       </body>
     </html>

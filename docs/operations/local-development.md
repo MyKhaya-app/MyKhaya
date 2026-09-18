@@ -43,6 +43,16 @@ With the default port 8080:
 - Public status: `http://status.localhost:8080`
 - Mailpit (loopback only): `http://localhost:8025`
 
+## Trusted-proxy / forwarded-header configuration
+
+`compose.override.yml.example` pins the `edge`/`app` Docker networks to fixed
+subnets and gives Caddy a static address on each, and `.env.example` trusts
+exactly that address (`MYKHAYA_TRUSTED_PROXY_CIDRS`) — a fresh checkout gets
+the same reproducible trust boundary without discovering container IPs by
+hand. See `docs/architecture/deployment-model.md`'s "Trusted-proxy boundary"
+section for the full rationale, including why a pinned single address is
+used instead of trusting the whole subnet.
+
 ## Other commands
 
 `make down`, `make logs`, `make build`, `make backend-rebuild`, `make migrate`,

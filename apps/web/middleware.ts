@@ -6,6 +6,12 @@ export function middleware(request: NextRequest) {
   const adminHost = hostKind === "admin";
   const statusHost = hostKind === "status";
   if (hostKind === "unknown") return new NextResponse("Misdirected Request", { status: 421 });
+  if (adminHost && ["/manifest.webmanifest", "/sw.js"].includes(request.nextUrl.pathname)) {
+    return new NextResponse("Not found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
   const internalAdminPath =
     request.nextUrl.pathname.startsWith("/control-centre");
   const internalStatusPath =

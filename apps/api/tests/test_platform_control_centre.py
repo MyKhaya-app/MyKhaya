@@ -648,6 +648,43 @@ def test_untrusted_proxy_header_cannot_change_client_address() -> None:
     assert resolve_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings) == "198.51.100.3"
 
 
+def test_trusting_a_whole_subnet_lets_a_forged_chain_walk_past_a_gateway_address() -> None:
+    """Characterises the exact regression the local-dev Compose trusted-proxy
+    fix was written to avoid (see docs/architecture/deployment-model.md's
+    "Trusted-proxy boundary" section, and
+    infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py, which fails
+    CI if MYKHAYA_TRUSTED_PROXY_CIDRS is ever widened back to a subnet for
+    local development). resolve_client_ip's right-to-left chain walk is
+    intentionally "trust every hop inside trusted_proxy_cidrs" — that is
+    correct for a real multi-hop proxy chain, but it means any address inside
+    a *subnet-wide* trusted range (not just the actual proxy's own address)
+    is treated as just another trusted hop, including a Docker bridge
+    network's own gateway address — which is what every host-published-port
+    request appears to come from after Docker's NAT. A narrower, host-only
+    trusted_proxy_cidrs (a /32 per proxy, as local dev now uses) closes this
+    by construction: the gateway address is simply never inside it.
+    """
+    # Proxy (Caddy) itself at .5; the network's own gateway at .1 forwarded
+    # the request onward with an attacker-supplied value further left in the
+    # chain — exactly Docker's own X-Forwarded-For append behaviour for a
+    # request that arrived at the gateway already carrying a forged header.
+    forwarded_chain = "203.0.113.99, 10.77.0.1"
+
+    subnet_trust = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.77.0.0/24"]})
+    assert (
+        resolve_client_ip(make_request("10.77.0.5", forwarded_chain), subnet_trust)
+        == "203.0.113.99"
+    ), "documents the vulnerable behaviour a subnet-wide trust range produces"
+
+    host_only_trust = get_settings().model_copy(
+        update={"trusted_proxy_cidrs": ["10.77.0.5/32"]}
+    )
+    assert (
+        resolve_client_ip(make_request("10.77.0.5", forwarded_chain), host_only_trust)
+        == "10.77.0.1"
+    ), "a host-only trusted_proxy_cidrs stops at the first untrusted hop, never the forged value"
+
+
 def test_admin_client_ip_requires_trusted_proxy_and_valid_chain() -> None:
     from mykhaya.security import resolve_admin_client_ip
 
