@@ -269,8 +269,36 @@ health_checks() {
   die "liveness/readiness checks failed; the previous data volumes were not deleted"
 }
 
+check_network_drift() {
+  if ! compose config --format json | "$PYTHON" infrastructure/scripts/check_dev_networks.py; then
+    die "network drift detected; no application services were stopped. Run '$SCRIPT_DIR/dev-deploy.sh migrate-networks' during a planned application-tier maintenance window"
+  fi
+}
+
+migrate_networks() {
+  preflight
+  if compose config --format json | "$PYTHON" infrastructure/scripts/check_dev_networks.py; then
+    say "Development networks already match; no migration required"
+    return 0
+  fi
+
+  say "Stopping only the application/proxy tier for declared network migration"
+  compose stop caddy web api worker scheduler
+  compose rm --force caddy web api worker scheduler
+  docker network rm mykhaya_edge mykhaya_app
+  compose up -d --no-build --no-deps api worker scheduler
+  wait_healthy api
+  compose up -d --no-build --no-deps web
+  wait_healthy web
+  compose up -d --no-build --no-deps caddy
+  wait_healthy caddy
+  check_network_drift
+  say "Development network migration completed; data services and volumes were preserved"
+}
+
 deploy() {
   preflight
+  check_network_drift
   report_new_env_variables
   set_build_metadata
 
@@ -353,5 +381,6 @@ case "${1:-}" in
     [ -f .env ] || die "missing .env"
     health_checks
     ;;
-  *) die "usage: $0 {preflight|up|update|down|logs|health}" ;;
+  migrate-networks) migrate_networks ;;
+  *) die "usage: $0 {preflight|up|update|down|logs|health|migrate-networks}" ;;
 esac
