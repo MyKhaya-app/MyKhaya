@@ -19,19 +19,22 @@ export function CcAuthShell({
 }) {
   return (
     <main className="pcc-root platform-login">
-      <section>
-        <div className="cc-auth-brand">
-          <span aria-hidden="true">
-            <ShieldCheck size={20} strokeWidth={2} />
-          </span>
-          <div>
-            <strong>MyKhaya</strong>
-            <small>Platform Control Centre</small>
+      <div className="tailadmin-auth-layout">
+        <aside className="tailadmin-auth-art" aria-label="MyKhaya Platform Control Centre">
+          <div className="tailadmin-auth-mark">MK</div>
+          <strong>MyKhaya</strong>
+          <span>Platform Control Centre</span>
+          <p>Secure operational access for authorised platform administrators.</p>
+        </aside>
+        <section>
+          <div className="cc-auth-brand">
+            <span aria-hidden="true"><ShieldCheck size={20} strokeWidth={2} /></span>
+            <div><strong>MyKhaya</strong><small>Platform Control Centre</small></div>
           </div>
-        </div>
-        {kicker && <p className="platform-kicker">{kicker}</p>}
-        {children}
-      </section>
+          {kicker && <p className="platform-kicker">{kicker}</p>}
+          {children}
+        </section>
+      </div>
     </main>
   );
 }

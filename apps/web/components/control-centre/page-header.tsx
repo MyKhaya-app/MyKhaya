@@ -26,6 +26,9 @@ export function CcPageHeader({
   return (
     <header className="cc-page-header">
       <div className="cc-page-header-main">
+        <nav className="tailadmin-breadcrumb" aria-label="Breadcrumb">
+          <a href="/">Overview</a><span aria-hidden="true">/</span><span>{title}</span>
+        </nav>
         {eyebrow && <p className="cc-eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>
         {description && <p className="cc-page-description">{description}</p>}

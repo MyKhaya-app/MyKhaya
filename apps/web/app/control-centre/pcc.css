@@ -3218,3 +3218,115 @@
 @media (max-width: 1100px) { .pcc-root .platform-topbar { padding-inline: 1.5rem; } .pcc-root .platform-page { padding-inline: 1.5rem; } }
 @media (max-width: 900px) { .pcc-root.platform-shell { grid-template-columns: 220px minmax(0, 1fr); } }
 @media (max-width: 760px) { .pcc-root .platform-topbar { height: 64px; padding-inline: 1rem; } .pcc-root .platform-page { padding: 1.25rem 1rem 2rem; } .pcc-root .platform-topbar-identity { display: none; } }
+
+/* TailAdmin FREE structural adoption. The values below mirror the free
+   AppSidebar/AppHeader implementation: 290px rail, 20px rail padding,
+   32px logo block, 16px group rhythm, 40px controls and #465fff active UI.
+   All selectors are PCC-scoped so consumer/native presentation is untouched. */
+.pcc-root {
+  --cc-bg: #f9fafb;
+  --cc-surface: #fff;
+  --cc-text: #1c2434;
+  --cc-text-muted: #667085;
+  --cc-text-subtle: #98a2b3;
+  --cc-border: #e4e7ec;
+  --cc-border-strong: #d0d5dd;
+  --cc-primary: #465fff;
+  --cc-primary-hover: #3641d9;
+  --cc-nav-bg: #fff;
+  --cc-nav-bg-hover: #f2f4f7;
+  --cc-nav-active: #ecf3ff;
+  --cc-nav-text: #344054;
+  --cc-shadow-sm: 0 1px 3px rgb(16 24 40 / 10%), 0 1px 2px rgb(16 24 40 / 6%);
+  --cc-shadow-md: 0 4px 12px rgb(16 24 40 / 10%);
+  font-family: "Outfit", Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.pcc-root.platform-shell { background: var(--cc-bg); display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 100vh; }
+.pcc-root .tailadmin-sidebar { background: #fff; border-right: 1px solid #e4e7ec; color: var(--cc-text); display: flex; flex-direction: column; height: 100vh; left: 0; padding: 0 20px; position: sticky; top: 0; transition: width 0.3s ease, transform 0.3s ease; z-index: 50; }
+.pcc-root .tailadmin-brand { align-items: flex-start; display: flex; min-height: 104px; padding: 32px 0; }
+.pcc-root .tailadmin-brand > a { align-items: center; color: inherit; display: flex; gap: 12px; text-decoration: none; }
+.pcc-root .platform-brand-mark { align-items: center; background: var(--cc-primary); border-radius: 8px; color: #fff; display: inline-flex; font-size: 14px; font-weight: 700; height: 40px; justify-content: center; width: 40px; }
+.pcc-root .platform-brand-copy { display: grid; gap: 2px; }
+.pcc-root .platform-brand-copy strong { color: var(--cc-text); font-size: 18px; font-weight: 600; line-height: 1; }
+.pcc-root .platform-brand-copy small { color: var(--cc-text-muted); font-size: 11px; line-height: 1.2; }
+.pcc-root .privileged-indicator { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; color: #c2410c; font-size: 11px; margin: 0 0 24px; padding: 7px 10px; }
+.pcc-root .tailadmin-sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 24px; }
+.pcc-root .tailadmin-nav-section + .tailadmin-nav-section { margin-top: 28px; }
+.pcc-root .tailadmin-nav-section h2 { color: #98a2b3; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; line-height: 20px; margin: 0 0 16px; text-transform: uppercase; }
+.pcc-root .tailadmin-nav-list, .pcc-root .menu-dropdown-list { display: flex; flex-direction: column; gap: 16px; list-style: none; margin: 0; padding: 0; }
+.pcc-root .tailadmin-nav-group { display: block; }
+.pcc-root .menu-item { align-items: center; background: transparent; border: 0; border-radius: 8px; color: var(--cc-nav-text); display: flex; font-size: 14px; font-weight: 500; gap: 12px; line-height: 20px; min-height: 44px; padding: 10px 14px; text-align: left; text-decoration: none; transition: background 0.2s ease, color 0.2s ease; width: 100%; }
+.pcc-root .menu-item svg { color: #667085; flex: 0 0 auto; }
+.pcc-root .menu-item:hover, .pcc-root .menu-item:focus-visible { background: var(--cc-nav-bg-hover); color: var(--cc-primary); }
+.pcc-root .menu-item-active { background: var(--cc-nav-active); color: var(--cc-primary); font-weight: 600; }
+.pcc-root .menu-item-active svg { color: var(--cc-primary); }
+.pcc-root .menu-item-group { justify-content: space-between; }
+.pcc-root .menu-item-group svg { transition: transform 0.2s ease; }
+.pcc-root .menu-item-group svg.expanded { transform: rotate(180deg); }
+.pcc-root .menu-dropdown-wrap { overflow: hidden; }
+.pcc-root .menu-dropdown-list { gap: 4px; margin-top: 8px; padding-left: 36px; }
+.pcc-root .menu-dropdown-item { font-size: 13px; min-height: 36px; padding: 8px 12px; }
+.pcc-root .menu-dropdown-item span { white-space: nowrap; }
+.pcc-root .platform-main { background: var(--cc-bg); min-width: 0; }
+.pcc-root .platform-topbar { align-items: center; background: #fff; border-bottom: 1px solid #e4e7ec; display: flex; height: 72px; justify-content: space-between; margin: 0; padding: 0 24px; }
+.pcc-root .tailadmin-header-left, .pcc-root .platform-topbar-account, .pcc-root .operator-identity, .pcc-root .tailadmin-search { align-items: center; display: flex; }
+.pcc-root .tailadmin-header-left { gap: 16px; min-width: 0; }
+.pcc-root .tailadmin-sidebar-toggle { align-items: center; background: #fff; border: 1px solid var(--cc-border); border-radius: 8px; color: #667085; display: inline-flex; height: 44px; justify-content: center; padding: 0; width: 44px; }
+.pcc-root .tailadmin-search { color: #98a2b3; gap: 10px; max-width: 430px; position: relative; width: min(430px, 42vw); }
+.pcc-root .tailadmin-search input { background: transparent; border: 1px solid var(--cc-border); border-radius: 8px; height: 44px; min-height: 44px; padding: 10px 58px 10px 40px; width: 100%; }
+.pcc-root .tailadmin-search > svg { left: 12px; position: absolute; }
+.pcc-root .tailadmin-search kbd { background: #f9fafb; border: 1px solid var(--cc-border); border-radius: 6px; color: #667085; font-size: 11px; padding: 4px 7px; position: absolute; right: 8px; }
+.pcc-root .platform-topbar-account { gap: 16px; }
+.pcc-root .operator-identity { color: inherit; gap: 10px; text-align: left; text-decoration: none; }
+.pcc-root .operator-avatar { align-items: center; background: #ecf3ff; border-radius: 50%; color: var(--cc-primary); display: inline-flex; font-size: 13px; font-weight: 600; height: 36px; justify-content: center; width: 36px; }
+.pcc-root .operator-identity > span:not(.operator-avatar) { display: grid; gap: 2px; }
+.pcc-root .operator-identity strong { color: var(--cc-text); font-size: 13px; font-weight: 500; }
+.pcc-root .operator-identity small { color: var(--cc-text-muted); font-size: 11px; text-transform: capitalize; }
+.pcc-root .platform-page { max-width: 1440px; padding: 32px; }
+.pcc-root .tailadmin-breadcrumb { align-items: center; color: #98a2b3; display: flex; font-size: 13px; gap: 8px; margin-bottom: 12px; }
+.pcc-root .tailadmin-breadcrumb a { color: #667085; text-decoration: none; }
+.pcc-root .tailadmin-breadcrumb a:hover { color: var(--cc-primary); }
+.pcc-root .cc-page-header { margin-bottom: 24px; }
+.pcc-root .cc-page-header h1 { color: var(--cc-text); font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 38px; }
+.pcc-root .cc-eyebrow { color: var(--cc-primary); font-size: 12px; }
+.pcc-root .cc-page-description, .pcc-root .cc-page-meta { color: var(--cc-text-muted); }
+.pcc-root .cc-card, .pcc-root .cc-section, .pcc-root .overview-panel, .pcc-root .overview-metric-card, .pcc-root .table-scroll, .pcc-root .cc-table-scroll { border-color: var(--cc-border); border-radius: 8px; box-shadow: var(--cc-shadow-sm); }
+.pcc-root button, .pcc-root .button { border-radius: 8px; font-size: 14px; font-weight: 500; min-height: 40px; }
+.pcc-root input, .pcc-root select, .pcc-root textarea { border-color: #d0d5dd; border-radius: 8px; font-size: 14px; min-height: 44px; }
+.pcc-root .table-scroll th { background: #f9fafb; color: #667085; font-size: 12px; font-weight: 500; }
+.pcc-root .table-scroll th, .pcc-root .table-scroll td { border-bottom-color: var(--cc-border); padding: 14px 16px; }
+.pcc-root .platform-login { background: #f9fafb; min-height: 100vh; padding: 0; }
+.pcc-root .tailadmin-auth-layout { align-items: stretch; display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr); min-height: 100vh; }
+.pcc-root .tailadmin-auth-art { align-items: flex-start; background: linear-gradient(145deg, #101828 0%, #1d2939 52%, #344054 100%); color: #fff; display: flex; flex-direction: column; justify-content: center; padding: 64px clamp(32px, 8vw, 120px); }
+.pcc-root .tailadmin-auth-mark { align-items: center; background: var(--cc-primary); border-radius: 12px; display: flex; font-size: 24px; font-weight: 700; height: 64px; justify-content: center; margin-bottom: 24px; width: 64px; }
+.pcc-root .tailadmin-auth-art strong { font-size: 32px; font-weight: 600; }
+.pcc-root .tailadmin-auth-art span { color: #d0d5dd; font-size: 16px; margin-top: 8px; }
+.pcc-root .tailadmin-auth-art p { color: #98a2b3; line-height: 1.6; margin-top: 28px; max-width: 28rem; }
+.pcc-root .tailadmin-auth-layout > section { align-self: center; background: #fff; border: 1px solid var(--cc-border); border-radius: 12px; box-shadow: var(--cc-shadow-md); justify-self: center; max-width: 480px; padding: 40px; width: calc(100% - 48px); }
+.pcc-root .cc-auth-brand > span { background: var(--cc-primary); border-radius: 8px; }
+.pcc-root .cc-auth-brand strong { color: var(--cc-text); }
+.pcc-root .cc-auth-brand small { color: var(--cc-text-muted); }
+.pcc-root .tailadmin-sidebar-backdrop { background: rgb(16 24 40 / 35%); border: 0; inset: 0; position: fixed; z-index: 40; }
+@media (min-width: 1024px) {
+  .pcc-root.platform-shell.sidebar-collapsed { grid-template-columns: 90px minmax(0, 1fr); }
+  .pcc-root.sidebar-collapsed .tailadmin-sidebar { padding-inline: 20px; }
+  .pcc-root.sidebar-collapsed .platform-brand-copy, .pcc-root.sidebar-collapsed .privileged-indicator, .pcc-root.sidebar-collapsed .tailadmin-nav-section h2, .pcc-root.sidebar-collapsed .menu-item span, .pcc-root.sidebar-collapsed .menu-item-group svg, .pcc-root.sidebar-collapsed .menu-dropdown-wrap { display: none; }
+  .pcc-root.sidebar-collapsed .tailadmin-brand > a, .pcc-root.sidebar-collapsed .menu-item { justify-content: center; }
+  .pcc-root.sidebar-collapsed .tailadmin-nav-list { gap: 12px; }
+}
+@media (max-width: 1023px) {
+  .pcc-root.platform-shell { display: block; }
+  .pcc-root .tailadmin-sidebar { box-shadow: 12px 0 30px rgb(16 24 40 / 12%); position: fixed; transform: translateX(-100%); width: 290px; }
+  .pcc-root.mobile-sidebar-open .tailadmin-sidebar { transform: translateX(0); }
+  .pcc-root .platform-topbar { padding-inline: 16px; }
+  .pcc-root .tailadmin-search { display: none; }
+  .pcc-root .platform-page { padding: 24px 20px 32px; }
+}
+@media (max-width: 700px) {
+  .pcc-root .platform-topbar-account .secondary { font-size: 0; padding: 0 10px; }
+  .pcc-root .platform-topbar-account .secondary svg { margin: 0; }
+  .pcc-root .operator-identity > span:not(.operator-avatar), .pcc-root .operator-identity > svg { display: none; }
+  .pcc-root .tailadmin-auth-layout { display: block; padding: 24px 0; }
+  .pcc-root .tailadmin-auth-art { display: none; }
+  .pcc-root .tailadmin-auth-layout > section { margin: 0 auto; }
+}
