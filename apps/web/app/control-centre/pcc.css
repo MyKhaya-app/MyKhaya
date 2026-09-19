@@ -3251,7 +3251,23 @@
 .pcc-root .platform-brand-copy small { color: var(--cc-text-muted); font-size: 11px; line-height: 1.2; }
 .pcc-root .privileged-indicator { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; color: #c2410c; font-size: 11px; margin: 0 0 24px; padding: 7px 10px; }
 .pcc-root .tailadmin-sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 24px; }
-.pcc-root .tailadmin-nav-section + .tailadmin-nav-section { margin-top: 28px; }
+.pcc-root.platform-shell > .tailadmin-sidebar > .tailadmin-sidebar-scroll {
+  align-content: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  justify-content: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.pcc-root.platform-shell > .tailadmin-sidebar > .tailadmin-sidebar-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.pcc-root.platform-shell > .tailadmin-sidebar > .tailadmin-sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
+.pcc-root .tailadmin-nav-section + .tailadmin-nav-section { margin-top: 0; }
 .pcc-root .tailadmin-nav-section h2 { color: #98a2b3; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; line-height: 20px; margin: 0 0 16px; text-transform: uppercase; }
 .pcc-root .tailadmin-nav-list, .pcc-root .menu-dropdown-list { display: flex; flex-direction: column; gap: 16px; list-style: none; margin: 0; padding: 0; }
 .pcc-root .tailadmin-nav-group { display: block; }

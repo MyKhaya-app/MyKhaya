@@ -223,7 +223,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           </Link>
         </div>
         <p className="privileged-indicator">Privileged system</p>
-        <nav className="tailadmin-sidebar-scroll" aria-label="Control Centre navigation">
+        <nav className="tailadmin-sidebar-scroll" aria-label="Control Centre navigation" tabIndex={0}>
           <section className="tailadmin-nav-section"><h2>Menu</h2><ul className="tailadmin-nav-list"><li><NavLink item={overviewItem} active={isNavItemActive(path, overviewItem.href)} /></li>{navGroups.slice(0, 4).map(renderGroup)}</ul></section>
           <section className="tailadmin-nav-section"><h2>Others</h2><ul className="tailadmin-nav-list">{navGroups.slice(4).map(renderGroup)}</ul></section>
         </nav>
