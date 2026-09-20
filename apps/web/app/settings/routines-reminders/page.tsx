@@ -37,7 +37,7 @@ import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
-import { routineDueLabel } from "@/app/home/routine-utils";
+import { dueCountdownSuffix, routineDueLabel } from "@/app/home/routine-utils";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { Toast } from "@/components/toast";
 
@@ -131,7 +131,8 @@ function dueLine(item: UiItem): string | null {
   if (!date) return null;
   const dueLabel = routineDueLabel(date);
   const time = item.kind === "reminder" ? ` at ${item.data.due_time.slice(0, 5)}` : "";
-  return `${dueLabel}${time}`;
+  const suffix = dueCountdownSuffix(date);
+  return `${dueLabel}${time}${suffix ? ` · ${suffix}` : ""}`;
 }
 
 function itemIcon(item: UiItem) {

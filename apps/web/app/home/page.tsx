@@ -40,7 +40,7 @@ import {
   upcomingBirthdayIcon,
   upcomingBirthdayLabel,
 } from "./birthday-utils";
-import { nudgeCardDateLabel } from "./routine-utils";
+import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
 import {
   FALLBACK_TIMEZONE,
   calendarDateAfter,
@@ -602,6 +602,7 @@ export default function HomePage() {
                     : "/settings/routines-reminders?type=reminders";
                 const scopeLabel = data.scope === "household" ? "Household" : "Personal";
                 const kindLabel = item.kind === "routine" ? "Routine" : "Reminder";
+                const dueSuffix = dueCountdownSuffix(data.home_occurrence_date);
                 return (
                   <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={item.id}>
                     <button
@@ -630,6 +631,7 @@ export default function HomePage() {
                         <>
                           <small className="home-nudge-date">
                             {nudgeCardDateLabel(data.home_occurrence_date)}
+                            {dueSuffix && ` · ${dueSuffix}`}
                           </small>
                           <small className="home-todo-kind">
                             {scopeLabel} · {kindLabel}

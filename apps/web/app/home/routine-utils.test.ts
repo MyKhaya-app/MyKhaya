@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { localIsoDate, nudgeCardDateLabel, routineDueLabel } from "./routine-utils";
+import { dueCountdownSuffix, localIsoDate, nudgeCardDateLabel, routineDueLabel } from "./routine-utils";
 
 // Regression coverage for the Home "To do" card's due-date label. It used to
 // compute "today" via `new Date().toISOString().slice(0, 10)` — an ISO
@@ -66,6 +66,42 @@ describe("nudgeCardDateLabel — Home Nudges card's weekday-aware due-date line"
   it("handles a month/year boundary when computing 'tomorrow'", () => {
     // 2027-01-01 is a Friday.
     expect(nudgeCardDateLabel("2027-01-01", "2026-12-31")).toBe("Tomorrow · Friday");
+  });
+});
+
+describe("dueCountdownSuffix — countdown appended to an existing due-date line", () => {
+  it("returns null when there is no occurrence date", () => {
+    expect(dueCountdownSuffix(null, "2026-08-21")).toBeNull();
+    expect(dueCountdownSuffix(undefined, "2026-08-21")).toBeNull();
+  });
+
+  it("returns null for today (the base label already says 'Today')", () => {
+    expect(dueCountdownSuffix("2026-08-21", "2026-08-21")).toBeNull();
+  });
+
+  it("returns null for tomorrow (the base label already says 'Tomorrow', not 'in 1 day')", () => {
+    expect(dueCountdownSuffix("2026-08-22", "2026-08-21")).toBeNull();
+  });
+
+  it("returns 'in 2 days' two days out", () => {
+    expect(dueCountdownSuffix("2026-08-23", "2026-08-21")).toBe("in 2 days");
+  });
+
+  it("returns 'in 6 days' for a date further out, in days rather than weeks", () => {
+    expect(dueCountdownSuffix("2026-08-27", "2026-08-21")).toBe("in 6 days");
+  });
+
+  it("returns '1 day overdue' for yesterday", () => {
+    expect(dueCountdownSuffix("2026-08-20", "2026-08-21")).toBe("1 day overdue");
+  });
+
+  it("returns '4 days overdue' for a date several days in the past", () => {
+    expect(dueCountdownSuffix("2026-08-17", "2026-08-21")).toBe("4 days overdue");
+  });
+
+  it("handles a month/year boundary without an off-by-one", () => {
+    expect(dueCountdownSuffix("2027-01-02", "2026-12-31")).toBe("in 2 days");
+    expect(dueCountdownSuffix("2026-12-29", "2026-12-31")).toBe("2 days overdue");
   });
 });
 

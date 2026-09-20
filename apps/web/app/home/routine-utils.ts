@@ -53,3 +53,30 @@ export function nudgeCardDateLabel(
   if (homeOccurrenceDate < today) return `Overdue · ${weekday} · ${dayMonth}`;
   return `${weekday} · ${dayMonth}`;
 }
+
+function daysBetweenIso(fromIso: string, toIso: string): number {
+  const from = new Date(`${fromIso}T00:00:00Z`);
+  const to = new Date(`${toIso}T00:00:00Z`);
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+// Appends onto an existing due-date line (nudgeCardDateLabel's or dueLine's)
+// without repeating what that line already says in words — "Today" and
+// "Tomorrow" carry no extra information there, so this returns null for
+// those and only surfaces a suffix where the base label is silent about how
+// soon/overdue something is: a bare weekday/date ("in 6 days") or an
+// "Overdue" label that doesn't yet say by how many days.
+export function dueCountdownSuffix(
+  homeOccurrenceDate: string | null | undefined,
+  today: string = localIsoDate(),
+): string | null {
+  if (!homeOccurrenceDate) return null;
+  if (homeOccurrenceDate === today) return null;
+  if (homeOccurrenceDate === addIsoDays(today, 1)) return null;
+  if (homeOccurrenceDate < today) {
+    const days = daysBetweenIso(homeOccurrenceDate, today);
+    return `${days} day${days === 1 ? "" : "s"} overdue`;
+  }
+  const days = daysBetweenIso(today, homeOccurrenceDate);
+  return `in ${days} days`;
+}
