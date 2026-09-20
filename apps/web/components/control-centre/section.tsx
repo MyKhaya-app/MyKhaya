@@ -34,7 +34,7 @@ export function CcSection({
           {actions && <div className="cc-section-actions">{actions}</div>}
         </div>
       )}
-      {children}
+      <div className="cc-section-body">{children}</div>
     </section>
   );
 }
@@ -76,7 +76,7 @@ export function CcCard({
           {actions && <div className="cc-card-actions">{actions}</div>}
         </div>
       )}
-      {children}
+      <div className="cc-card-body">{children}</div>
     </div>
   );
 }

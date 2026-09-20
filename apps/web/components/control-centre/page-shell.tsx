@@ -15,7 +15,7 @@ export function CcPage({
   className?: string;
 }) {
   return (
-    <main className={`platform-page cc-page ${wide ? "cc-page-wide" : ""} ${className}`.trim()}>
+    <main className={`platform-page cc-page cc-page-full ${wide ? "cc-page-wide" : ""} ${className}`.trim()}>
       {children}
     </main>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { readableDate } from "@/components/platform-format";
 import { PlatformShell } from "@/components/platform-shell";
@@ -10,15 +10,19 @@ import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcStatusCard } from "@/components/control-centre/status-card";
+import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { CcActionBar, type CcAction } from "@/components/control-centre/action-bar";
 import { CcDangerZone } from "@/components/control-centre/danger-zone";
 import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
 import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-centre/status-message";
 import { CcField } from "@/components/control-centre/form-field";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
-import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { MoveMemberDialog } from "@/components/control-centre/move-member-dialog";
-import { Archive, ArchiveRestore, KeyRound, Mail, Power, ShieldOff, Shuffle, UserX } from "lucide-react";
+import {
+  Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock3, Copy,
+  FileText, Home, KeyRound, Mail, Power, Shield, ShieldOff,
+  Shuffle, UserRound, UserRoundCog, UsersRound, UserX,
+} from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived" | "anonymised";
 type UserMfaState = {
@@ -58,8 +62,34 @@ type GatedAction =
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
+function detailDate(value: string | null) {
+  return value ? new Date(value).toLocaleString(undefined, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "Never";
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
+
+function methodLabel(method: string) {
+  return method.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function PlatformUserDetail() {
   const { id } = useParams<{ id: string }>();
+  const pathname = usePathname();
+  const activeTab = pathname.endsWith("/account")
+    ? "account"
+    : pathname.endsWith("/authentication")
+      ? "authentication"
+      : pathname.endsWith("/homes")
+        ? "homes"
+        : pathname.endsWith("/permissions")
+          ? "permissions"
+          : pathname.endsWith("/activity")
+            ? "activity"
+            : pathname.endsWith("/notes")
+              ? "notes"
+              : "overview";
   const [data, setData] = useState<UserDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -321,9 +351,39 @@ export default function PlatformUserDetail() {
     },
   };
 
+  function UserProfileView() {
+    if (loading) return <CcLoadingState label="Loading user…" />;
+    if (!data) return <CcErrorState>{error || "User not found."}</CcErrorState>;
+
+    return (
+      <>
+        <div className="cc-user-profile-breadcrumb"><a href="/users"><span aria-hidden="true">←</span> Users</a><ChevronRight aria-hidden="true" size={15} /><span>{data.display_name}</span></div>
+        <header className="cc-user-profile-header">
+          <div className="cc-user-profile-identity"><div className="cc-user-profile-icon" aria-hidden="true"><UserRound size={27} /></div><div><div className="cc-user-profile-name"><h1>{data.display_name}</h1><CcBadge tone={statusTone}>{statusLabel}</CcBadge></div><p>{data.email}</p><div className="cc-user-profile-id"><span>User ID: {data.id}</span><button type="button" aria-label="Copy user ID" onClick={() => void navigator.clipboard?.writeText(data.id)}><Copy size={16} /></button></div></div></div>
+          <div className="cc-user-profile-header-side"><div className="cc-user-profile-actions"><a className="cc-user-profile-secondary" href="/users">←&nbsp; Back to Users</a></div><dl className="cc-user-profile-meta"><div><dt>Created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div></dl></div>
+        </header>
+        {message && <CcNotice tone="success">{message}</CcNotice>}{error && <CcNotice tone="error">{error}</CcNotice>}
+        <nav className="cc-user-profile-tabs-route-top" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
+        <nav className="cc-user-profile-tabs" aria-label="User detail sections"><a className="is-active" href="#overview"><Clock3 size={17} /> Overview</a><a href="#account"><UserRoundCog size={17} /> Account</a><a href="#authentication"><Shield size={17} /> Authentication</a><a href="#homes"><Home size={17} /> Homes</a><a href="#permissions"><UsersRound size={17} /> Permissions</a><a href="#activity"><Clock3 size={17} /> Activity</a><a href="#notes"><FileText size={17} /> Notes</a></nav>
+        <section className="cc-user-summary" id="overview"><div className="cc-user-summary-person"><span className="cc-user-summary-avatar">{initials(data.display_name)}</span><div><strong>{data.display_name}</strong><span>{data.email}</span></div></div><div className="cc-user-summary-item"><span>Status</span><strong><CcBadge tone={statusTone}>{statusLabel}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Email</span><strong><Mail size={16} /><CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></strong></div><div className="cc-user-summary-item"><span>MFA</span><strong><Shield size={16} /><CcBadge tone="info">{methodLabel(data.authentication_mfa.effective)}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Homes</span><strong><Home size={16} /> {data.homes.length}</strong></div><div className="cc-user-summary-item"><span>Member since</span><strong><CalendarDays size={16} /> {detailDate(data.created_at)}</strong></div></section>
+        <nav className="cc-user-profile-tabs-route" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
+        <div className="cc-user-detail-grid">
+          <section className="cc-user-profile-card" id="account"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UserRoundCog size={19} /></span><h2>Account Details</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>Full name</dt><dd>{data.display_name}</dd></div><div><dt>Email address</dt><dd>{data.email} <CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></dd></div><div><dt>Phone number</dt><dd className="is-muted">Not provided</dd></div><div><dt>Date of birth</dt><dd className="is-muted">Not provided</dd></div><div><dt>Account created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div><div><dt>Status</dt><dd><CcBadge tone={statusTone}>{statusLabel}</CcBadge></dd></div></dl></section>
+          <section className="cc-user-profile-card" id="authentication"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Shield size={19} /></span><h2>Authentication &amp; MFA</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>MFA status</dt><dd><CcBadge tone="warning">{methodLabel(data.authentication_mfa.effective)}</CcBadge><small>This user has not enabled two-factor authentication.</small></dd></div><div><dt>Policy override</dt><dd>{data.authentication_mfa.configured === "inherit" ? "Inherit from Home" : methodLabel(data.authentication_mfa.configured)}</dd></div><div><dt>Allowed methods</dt><dd><span className="cc-user-chip-list">{data.authentication_mfa.allowed_methods.map((method) => <span className="cc-user-chip" key={method}>{methodLabel(method)}</span>)}</span></dd></div><div><dt>Enrolled methods</dt><dd>{data.authentication_mfa.methods.filter((method) => method.enabled).map((method) => methodLabel(method.method)).join(", ") || "None"}</dd></div></dl><form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}><CcField label="User policy override"><select name="policy" defaultValue={data.authentication_mfa.configured}><option value="inherit">Inherit</option><option value="optional">Optional</option><option value="required">Force MFA</option></select></CcField><CcField label="Reason for this change"><input name="reason" minLength={10} maxLength={500} required /></CcField><button disabled={Boolean(busy)}><Mail size={16} /> Save MFA policy</button></form><small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.</small></section>
+          <div className="cc-user-profile-side-column"><section className="cc-user-profile-card" id="homes"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Home size={19} /></span><h2>Homes &amp; Memberships</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><div className="cc-user-profile-card-body"><strong>{data.homes.length} {data.homes.length === 1 ? "home" : "homes"}</strong>{data.homes.length ? data.homes.map((home) => <div className="cc-user-home-item" key={home.id}><Home size={19} /><span><strong>{home.name}</strong><small>{methodLabel(home.role)}</small></span><CcBadge tone="info">{home.role.replaceAll("_", " ")}</CcBadge></div>) : <p className="is-muted">Not a member of any Home.</p>}</div></section><section className="cc-user-profile-card" id="permissions"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UsersRound size={19} /></span><h2>Roles &amp; Permissions</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><dl className="cc-user-profile-list cc-user-permissions-list"><div><dt>Home role</dt><dd>{data.homes[0] ? methodLabel(data.homes[0].role) : "None"}</dd></div><div><dt>Home memberships</dt><dd>{data.homes.length}</dd></div><div><dt>Platform access</dt><dd>Not part of this user record</dd></div></dl></section></div>
+        </div>
+        <div className="cc-user-bottom-grid"><section className="cc-user-profile-card" id="activity"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Clock3 size={19} /></span><h2>Recent Activity</h2><a className="cc-user-profile-link-button" href="#activity">View all</a></div><div className="cc-user-activity-list">{data.sessions.length ? data.sessions.map((session) => <div className="cc-user-activity-item" key={session.id}><span className="cc-user-activity-dot" /><div><strong>User session active</strong><small>{detailDate(session.last_seen_at)} · {session.user_agent}</small></div></div>) : <p className="cc-user-profile-empty">No recent activity available.</p>}</div></section><section className="cc-user-profile-card" id="notes"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FileText size={19} /></span><h2>Administrative Notes</h2><button type="submit" form="cc-user-note-form" className="cc-user-profile-link-button">Add note</button></div><form className="cc-user-note-form" id="cc-user-note-form" onSubmit={addNote}><CcField label=""><textarea name="note" minLength={2} maxLength={1000} required placeholder="Add an internal note about this user…" /></CcField><div className="cc-user-note-footer"><span>Notes are only visible to PCC administrators.</span><span>0/500</span></div></form><div className="cc-user-notes-list">{data.notes.length ? data.notes.map((note) => <article key={note.id}><strong>{detailDate(note.created_at)}</strong><p>{note.body}</p></article>) : <p className="cc-user-profile-empty">No administrative notes yet.</p>}</div></section></div>
+        <section className="cc-user-card cc-user-actions-card cc-user-actions-section"><div className="cc-user-card-heading"><div><span className="cc-user-card-kicker">Administration</span><h2>Actions</h2></div></div><CcActionBar actions={actions} /></section>
+        <div className="cc-user-danger-zone">{data.lifecycle !== "archived" && data.lifecycle !== "anonymised" && <CcDangerZone title="Suspend or archive user" description="Suspending this user signs them out everywhere and blocks sign-in until reactivated. Archiving does the same but also retires the account from normal operational views — restore it later to bring it back."><CcActionBar actions={[...(data.lifecycle === "active" ? [{ key: "suspend", label: "Suspend user", icon: ShieldOff, variant: "destructive" as const, disabled: Boolean(busy), onClick: () => setOpenDialog("suspend") }] : []), { key: "archive", label: "Archive user", icon: Archive, variant: "destructive", disabled: Boolean(busy), onClick: () => setOpenDialog("archive") }]} /></CcDangerZone>}{data.lifecycle === "archived" && <CcDangerZone title="Anonymise user" description="This permanently removes the user's identifying account information and sign-in credentials while retaining historical household records under an anonymised identity. This cannot be undone."><CcActionBar actions={[{ key: "anonymise", label: "Anonymise user", icon: UserX, variant: "destructive", disabled: Boolean(busy), onClick: () => void openAnonymise() }]} /></CcDangerZone>}</div>
+      </>
+    );
+  }
+
   return (
     <PlatformShell>
-      <CcPage wide className="cc-user-detail">
+      <CcPage wide className={`cc-user-detail cc-user-profile-page is-tab-${activeTab}`}>
+        <UserProfileView />
+        <div className="cc-user-legacy-content">
         <a className="cc-user-back-link" href="/users">&larr; Users</a>
         {loading ? (
           <CcLoadingState label="Loading user…" />
@@ -500,6 +560,7 @@ export default function PlatformUserDetail() {
             </div>
           </>
         )}
+        </div>
       </CcPage>
 
       {(Object.keys(dialogCopy) as GatedAction[]).map((action) => (
