@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ApiError } from "@mykhaya/api-client";
 import { BudgetModule } from "./budget-module-wired";
 
 const push = vi.fn();
@@ -79,6 +80,21 @@ describe("Budget consumer API wiring", () => {
     fireEvent.change(screen.getByLabelText("Received"), { target: { value: "4300" } });
     fireEvent.click(screen.getByRole("button", { name: "Save income" }));
     await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4900, received_amount: 4300 }));
+  });
+
+  it("shows a friendly duplicate income-source error and keeps the entered name", async () => {
+    apiMock.createBudgetIncomeSource.mockRejectedValueOnce(
+      new ApiError(409, "Income source already exists"),
+    );
+    render(<BudgetModule screen="income" />);
+    const input = await screen.findByLabelText("Add income source");
+    fireEvent.change(input, { target: { value: "NNUH" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Income source already exists",
+    );
+    expect(input).toHaveValue("NNUH");
+    expect(screen.getByRole("button", { name: "Add" })).not.toBeDisabled();
   });
 
   it("loads and saves user-owned Budget settings", async () => {

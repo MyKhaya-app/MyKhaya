@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -219,6 +220,57 @@ async def _reconcile_month_categories(
     return len(missing)
 
 
+async def _reconcile_month_income(
+    db: AsyncSession,
+    profile_id: uuid.UUID,
+    month: BudgetMonth,
+    request: Request | None,
+    actor_id: uuid.UUID,
+) -> int:
+    """Add newly-created sources to current/future snapshots only."""
+    if not _is_current_or_future_month(month.year, month.month):
+        return 0
+    sources = (
+        await db.scalars(
+            select(BudgetIncomeSource).where(
+                BudgetIncomeSource.profile_id == profile_id,
+                BudgetIncomeSource.archived_at.is_(None),
+            )
+        )
+    ).all()
+    existing_ids = set(
+        (
+            await db.scalars(
+                select(BudgetMonthIncome.source_id).where(
+                    BudgetMonthIncome.month_id == month.id,
+                )
+            )
+        ).all()
+    )
+    missing = [source for source in sources if source.id not in existing_ids]
+    for source in missing:
+        db.add(
+            BudgetMonthIncome(
+                month_id=month.id,
+                source_id=source.id,
+                source_name=source.name,
+            )
+        )
+    if missing:
+        await db.flush()
+        if request is not None:
+            audit(
+                db,
+                request,
+                "budget.month.income.reconciled",
+                actor_id,
+                target_type="budget_month",
+                target_id=month.id,
+                metadata={"source_count": len(missing), "reason": "income_source_created"},
+            )
+    return len(missing)
+
+
 async def _month_response(
     db: AsyncSession, month: BudgetMonth, *, include_categories: bool = True
 ) -> BudgetMonthResponse:
@@ -413,11 +465,33 @@ async def create_income_source(
 ) -> BudgetIncomeSourceResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = BudgetIncomeSource(profile_id=profile.id, name=body.name.strip(), sort_order=body.sort_order)
+    name = body.name.strip()
+    row = BudgetIncomeSource(profile_id=profile.id, name=name, sort_order=body.sort_order)
     db.add(row)
-    await db.flush()
-    audit(db, request, "budget.income_source.created", auth.user.id, target_type="budget_income_source", target_id=row.id)
-    await db.commit()
+    try:
+        await db.flush()
+        if body.year is not None and body.month is not None:
+            month_row = await db.scalar(
+                select(BudgetMonth).where(
+                    BudgetMonth.profile_id == profile.id,
+                    BudgetMonth.year == body.year,
+                    BudgetMonth.month == body.month,
+                    BudgetMonth.archived_at.is_(None),
+                )
+            )
+            if month_row is None:
+                month_row = await _create_month_snapshot(
+                    db, profile, body.year, body.month, request, auth.user.id
+                )
+            await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
+        audit(db, request, "budget.income_source.created", auth.user.id, target_type="budget_income_source", target_id=row.id)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
+        ) from None
     return BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
 
 
@@ -457,6 +531,7 @@ async def get_month(
     profile = await _profile(db, auth.user.id)
     month_row = await _month_for_owner(db, profile.id, year, month)
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
+    await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
     await db.commit()
     return await _month_response(db, month_row)
 

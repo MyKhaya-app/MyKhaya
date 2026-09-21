@@ -53,6 +53,14 @@ class BudgetCategoryResponse(BaseModel):
 class BudgetIncomeSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = Field(default=0, ge=0, le=10000)
+    year: int | None = Field(default=None, ge=1)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "BudgetIncomeSourceCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
 
 
 class BudgetIncomeSourceResponse(BaseModel):

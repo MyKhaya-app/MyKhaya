@@ -329,7 +329,10 @@ export class MyKhayaClient {
     this.request<BudgetIncomeSource[]>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
     );
-  createBudgetIncomeSource = (homeId: string, body: { name: string; sort_order?: number }) =>
+  createBudgetIncomeSource = (
+    homeId: string,
+    body: { name: string; sort_order?: number; year?: number; month?: number },
+  ) =>
     this.request<BudgetIncomeSource>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
       { method: "POST", body: JSON.stringify(body) },

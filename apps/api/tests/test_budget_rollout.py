@@ -12,7 +12,7 @@ from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import AuditEvent, BudgetCategory, BudgetMonthCategory
+from mykhaya.models import AuditEvent, BudgetCategory, BudgetMonthCategory, BudgetMonthIncome
 
 
 @pytest.fixture
@@ -284,3 +284,64 @@ async def test_current_snapshot_reconciles_pre_fix_missing_category_without_touc
     )
     assert later.status_code == 201
     assert all(row["category_id"] != str(category_id) for row in later.json()["categories"])
+
+
+@pytest.mark.asyncio
+async def test_income_source_creation_reconciles_selected_month_and_handles_duplicates(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-income-{suffix}@example.com", "Income Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Income Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Income lifecycle coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+
+    current = datetime.now(UTC)
+    year, month = current.year, current.month
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/income-sources",
+        json={"name": "NNUH", "year": year, "month": month},
+    )
+    assert created.status_code == 201
+    source_id = created.json()["id"]
+
+    loaded = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    assert loaded.status_code == 200
+    assert any(row["source_id"] == source_id for row in loaded.json()["income"])
+
+    duplicate = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/income-sources",
+        json={"name": "NNUH", "year": year, "month": month},
+    )
+    assert duplicate.status_code == 409
+    assert "Income source already exists" in duplicate.json()["detail"]
+    assert "uq_budget_income_source_name" not in duplicate.text
+
+    previous_month = month - 1 or 12
+    previous_year = year if month > 1 else year - 1
+    historical = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}",
+    )
+    assert historical.status_code == 201
+    assert all(row["source_id"] != source_id for row in historical.json()["income"])
+
+    async with SessionFactory() as db:
+        memberships = (
+            await db.scalars(
+                select(BudgetMonthIncome).where(BudgetMonthIncome.source_id == uuid.UUID(source_id))
+            )
+        ).all()
+    assert len(memberships) == 1
