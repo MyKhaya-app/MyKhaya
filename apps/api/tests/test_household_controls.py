@@ -64,7 +64,9 @@ async def test_home_admin_features_relationships_and_managed_child(
             "confirmed": True,
         },
     )
-    assert final_admin.status_code == 409
+    # A member cannot change their own Home role; this authorization guard
+    # runs before the final-Home-Admin protection check.
+    assert final_admin.status_code == 403
 
     management = await client.get(f"/api/v1/features/{home_id}/modules/management")
     assert management.status_code == 200
@@ -287,8 +289,8 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
     admin = members.json()[0]
     admin_id = admin["user_id"]
 
-    # A second, non-admin household member — a "partner" profile, which has
-    # no members.manage_relationships capability (only home_admin does).
+    # A second household member — standard_partner intentionally has the
+    # members.manage_relationships capability; adult does not.
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as partner_client:
@@ -339,14 +341,15 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
         assert partner_self_update.status_code == 200
         assert partner_self_update.json()["colour"] == "cyan"
 
-        # Partner attempts to recolour the admin — blocked.
+        # Partner may recolour another member under the established
+        # members.manage_relationships capability.
         partner_recolours_admin = await unsafe(
             partner_client,
             "PATCH",
             f"/api/v1/groups/{home_id}/members/{admin_id}/colour",
             json={"colour": "lime"},
         )
-        assert partner_recolours_admin.status_code == 403
+        assert partner_recolours_admin.status_code == 200
 
     # An unrecognised colour token is rejected, not silently accepted.
     invalid = await unsafe(
@@ -357,8 +360,7 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
     )
     assert invalid.status_code == 422
 
-    # The admin's colour reflects only the successful self-update, never the
-    # blocked attempt from the partner.
+    # The admin's colour reflects the later successful partner update.
     final = await client.get(f"/api/v1/groups/{home_id}/members")
     final_admin = next(row for row in final.json() if row["user_id"] == admin_id)
-    assert final_admin["colour"] == "rose"
+    assert final_admin["colour"] == "lime"

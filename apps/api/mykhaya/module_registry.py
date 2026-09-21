@@ -165,6 +165,18 @@ MODULES: tuple[ModuleDefinition, ...] = (
         route="/settings/routines-reminders",
     ),
     ModuleDefinition(
+        FeatureKey.budget.value,
+        "Budget",
+        "Plan personal spending, income and optional partner sharing.",
+        "Personal",
+        ReleaseState.released,
+        False,
+        "0.9.0",
+        dependencies=(),
+        permissions=(),
+        route="/budget",
+    ),
+    ModuleDefinition(
         FeatureKey.notifications.value,
         "Notifications",
         "Push, email and in-app reminders — event reminders, daily briefings and "

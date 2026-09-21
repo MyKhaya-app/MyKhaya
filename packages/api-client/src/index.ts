@@ -13,6 +13,77 @@ export type ConsumerMfaStatus = {
   preferred_method: "totp" | "email" | null;
 };
 
+export type BudgetProfile = {
+  id: string;
+  owner_user_id: string;
+  currency: string;
+  month_start_day: number;
+  archived: boolean;
+};
+
+export type BudgetCategory = {
+  id: string;
+  name: string;
+  sort_order: number;
+  archived: boolean;
+};
+
+export type BudgetMonthCategory = {
+  id: string;
+  category_id: string;
+  category_name: string;
+  planned_amount: number;
+  actual_source: "manual" | "entries";
+  manual_actual: number | null;
+  entries_actual: number;
+  actual_amount: number;
+};
+
+export type BudgetMonthIncome = {
+  id: string;
+  source_id: string;
+  source_name: string;
+  expected_amount: number;
+  received_amount: number;
+};
+
+export type BudgetMonth = {
+  id: string;
+  year: number;
+  month: number;
+  categories: BudgetMonthCategory[];
+  income: BudgetMonthIncome[];
+};
+
+export type BudgetIncomeSource = {
+  id: string;
+  name: string;
+  sort_order: number;
+  archived: boolean;
+};
+
+export type BudgetSpendingEntry = {
+  id: string;
+  category_id: string;
+  description: string;
+  amount: number;
+  spent_on: string;
+};
+
+export type BudgetPartnerShare = {
+  id: string;
+  partner_user_id: string;
+  level: "summary" | "categories" | "full";
+  active: boolean;
+};
+
+export type BudgetIncomingShare = {
+  home_id: string;
+  owner_user_id: string;
+  owner_display_name: string;
+  level: "summary" | "categories" | "full";
+};
+
 function isFormDataBody(body: BodyInit | null | undefined): boolean {
   return Boolean(body && Object.prototype.toString.call(body) === "[object FormData]");
 }
@@ -231,6 +302,140 @@ export class MyKhayaClient {
   featureManagement = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdModule[]>(
       `/features/${encodeURIComponent(homeId)}/modules/management`,
+    );
+  budgetProfile = (homeId: string) =>
+    this.request<BudgetProfile>(`/homes/${encodeURIComponent(homeId)}/budget`);
+  budgetSettings = (homeId: string) =>
+    this.request<BudgetProfile>(`/homes/${encodeURIComponent(homeId)}/budget/settings`);
+  updateBudgetSettings = (
+    homeId: string,
+    body: { currency: string; month_start_day: number },
+  ) =>
+    this.request<BudgetProfile>(`/homes/${encodeURIComponent(homeId)}/budget/settings`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  budgetCategories = (homeId: string) =>
+    this.request<BudgetCategory[]>(`/homes/${encodeURIComponent(homeId)}/budget/categories`);
+  createBudgetCategory = (homeId: string, body: { name: string; sort_order?: number }) =>
+    this.request<BudgetCategory>(`/homes/${encodeURIComponent(homeId)}/budget/categories`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  budgetIncomeSources = (homeId: string) =>
+    this.request<BudgetIncomeSource[]>(
+      `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
+    );
+  createBudgetIncomeSource = (homeId: string, body: { name: string; sort_order?: number }) =>
+    this.request<BudgetIncomeSource>(
+      `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  budgetMonth = (homeId: string, year: number, month: number) =>
+    this.request<BudgetMonth>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}`,
+    );
+  createBudgetMonth = (homeId: string, year: number, month: number) =>
+    this.request<BudgetMonth>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}`,
+      { method: "POST", body: "{}" },
+    );
+  createBudgetEntry = (
+    homeId: string,
+    body: { category_id: string; description: string; amount: number; spent_on: string },
+  ) =>
+    this.request<BudgetSpendingEntry>(`/homes/${encodeURIComponent(homeId)}/budget/entries`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  budgetEntries = (homeId: string, params?: { year?: number; month?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.year !== undefined) search.set("year", String(params.year));
+    if (params?.month !== undefined) search.set("month", String(params.month));
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return this.request<BudgetSpendingEntry[]>(
+      `/homes/${encodeURIComponent(homeId)}/budget/entries${suffix}`,
+    );
+  };
+  budgetEntry = (homeId: string, entryId: string) =>
+    this.request<BudgetSpendingEntry>(
+      `/homes/${encodeURIComponent(homeId)}/budget/entries/${encodeURIComponent(entryId)}`,
+    );
+  updateBudgetEntry = (
+    homeId: string,
+    entryId: string,
+    body: { category_id: string; description: string; amount: number; spent_on: string },
+  ) =>
+    this.request<BudgetSpendingEntry>(
+      `/homes/${encodeURIComponent(homeId)}/budget/entries/${encodeURIComponent(entryId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  deleteBudgetEntry = (homeId: string, entryId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/budget/entries/${encodeURIComponent(entryId)}`,
+      { method: "DELETE" },
+    );
+  updateBudgetActual = (
+    homeId: string,
+    year: number,
+    month: number,
+    categoryId: string,
+    body: { source: "manual" | "entries"; manual_actual?: number },
+  ) =>
+    this.request<BudgetMonthCategory>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/categories/${encodeURIComponent(categoryId)}/actual`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  updateBudgetPlan = (
+    homeId: string,
+    year: number,
+    month: number,
+    categoryId: string,
+    plannedAmount: number,
+  ) =>
+    this.request<BudgetMonthCategory>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/categories/${encodeURIComponent(categoryId)}/plan`,
+      { method: "PUT", body: JSON.stringify({ planned_amount: plannedAmount }) },
+    );
+  updateBudgetMonthIncome = (
+    homeId: string,
+    year: number,
+    month: number,
+    sourceId: string,
+    body: { expected_amount: number; received_amount: number },
+  ) =>
+    this.request<BudgetMonthIncome>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/income/${encodeURIComponent(sourceId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  budgetShares = (homeId: string) =>
+    this.request<BudgetPartnerShare[]>(`/homes/${encodeURIComponent(homeId)}/budget/shares`);
+  setBudgetShare = (
+    homeId: string,
+    partnerUserId: string,
+    level: BudgetPartnerShare["level"],
+  ) =>
+    this.request<BudgetPartnerShare>(
+      `/homes/${encodeURIComponent(homeId)}/budget/shares/${encodeURIComponent(partnerUserId)}`,
+      { method: "PUT", body: JSON.stringify({ partner_user_id: partnerUserId, level }) },
+    );
+  revokeBudgetShare = (homeId: string, partnerUserId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/budget/shares/${encodeURIComponent(partnerUserId)}`,
+      { method: "DELETE" },
+    );
+  incomingBudgetShares = (homeId: string) =>
+    this.request<BudgetIncomingShare[]>(
+      `/homes/${encodeURIComponent(homeId)}/budget/shared-with-me`,
+    );
+  sharedBudgetMonth = (
+    homeId: string,
+    ownerUserId: string,
+    year: number,
+    month: number,
+  ) =>
+    this.request<BudgetMonth>(
+      `/homes/${encodeURIComponent(homeId)}/budget/shared/${encodeURIComponent(ownerUserId)}/months/${year}/${month}`,
     );
   navigationModules = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").HouseholdModule[]>(

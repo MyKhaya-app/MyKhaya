@@ -26,7 +26,7 @@ export function BottomNav({
     <nav className="bottom-nav" aria-label="Primary navigation">
       {items.map(({ id, href, label }) => {
         const Icon = ICONS[id];
-        const active = path === href || path.startsWith(`${href}/`);
+        const active = path === href || path.startsWith(`${href}/`) || (id === "more" && (path === "/budget" || path.startsWith("/budget/")));
         return (
           <Link
             key={href}

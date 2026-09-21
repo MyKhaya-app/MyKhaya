@@ -210,6 +210,7 @@ class FeatureKey(StrEnum):
     notifications = "notifications"
     external_sharing = "external_sharing"
     nudges = "nudges"
+    budget = "budget"
 
 
 class ProductUsagePlatform(StrEnum):
@@ -1391,6 +1392,131 @@ class FeatureOverride(UuidTimeMixin, Base):
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+
+
+class BudgetActualSource(StrEnum):
+    manual = "manual"
+    entries = "entries"
+
+
+class BudgetSharingLevel(StrEnum):
+    summary = "summary"
+    categories = "categories"
+    full = "full"
+
+
+class BudgetProfile(UuidTimeMixin, Base):
+    """A personal Budget owned by one adult User, never by a Home."""
+
+    __tablename__ = "budget_profiles"
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="GBP", server_default="GBP")
+    month_start_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetMonth(UuidTimeMixin, Base):
+    __tablename__ = "budget_months"
+    __table_args__ = (UniqueConstraint("profile_id", "year", "month", name="uq_budget_month"),)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetCategory(UuidTimeMixin, Base):
+    __tablename__ = "budget_categories"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_budget_category_name"),
+        Index("ix_budget_category_profile_active", "profile_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetIncomeSource(UuidTimeMixin, Base):
+    __tablename__ = "budget_income_sources"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_budget_income_source_name"),
+        Index("ix_budget_income_source_profile_active", "profile_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetMonthCategory(UuidTimeMixin, Base):
+    __tablename__ = "budget_month_categories"
+    __table_args__ = (UniqueConstraint("month_id", "category_id", name="uq_budget_month_category"),)
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    category_name: Mapped[str] = mapped_column(String(100))
+    planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    actual_source: Mapped[BudgetActualSource] = mapped_column(
+        Enum(BudgetActualSource, name="budget_actual_source", values_callable=lambda enum: [item.value for item in enum]),
+        default=BudgetActualSource.manual,
+        server_default=BudgetActualSource.manual.value,
+    )
+    manual_actual: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+
+
+class BudgetMonthIncome(UuidTimeMixin, Base):
+    __tablename__ = "budget_month_income"
+    __table_args__ = (UniqueConstraint("month_id", "source_id", name="uq_budget_month_income"),)
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_income_sources.id", ondelete="RESTRICT"), index=True
+    )
+    source_name: Mapped[str] = mapped_column(String(100))
+    expected_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    received_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+
+
+class BudgetSpendingEntry(UuidTimeMixin, Base):
+    __tablename__ = "budget_spending_entries"
+    month_category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_month_categories.id", ondelete="CASCADE"), index=True
+    )
+    description: Mapped[str] = mapped_column(String(200))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    spent_on: Mapped[date] = mapped_column(Date)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetPartnerShare(UuidTimeMixin, Base):
+    __tablename__ = "budget_partner_shares"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "partner_user_id", name="uq_budget_partner_share"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    partner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    level: Mapped[BudgetSharingLevel] = mapped_column(
+        Enum(BudgetSharingLevel, name="budget_sharing_level", values_callable=lambda enum: [item.value for item in enum]),
+        default=BudgetSharingLevel.summary,
+        server_default=BudgetSharingLevel.summary.value,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ChildProfile(UuidTimeMixin, Base):

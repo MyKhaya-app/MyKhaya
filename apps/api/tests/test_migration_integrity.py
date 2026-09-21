@@ -23,8 +23,20 @@ def _migration_values(path: Path) -> tuple[str, str | tuple[str, ...] | None]:
     values: dict[str, object] = {}
     for node in tree.body:
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id in {"revision", "down_revision"} and node.value is not None:
-                values[node.target.id] = ast.literal_eval(node.value)
+            target_name = node.target.id
+            value_node = node.value
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target_name = node.targets[0].id
+            value_node = node.value
+        else:
+            continue
+
+        if target_name in {"revision", "down_revision"} and value_node is not None:
+            values[target_name] = ast.literal_eval(value_node)
     revision = values.get("revision")
     down_revision = values.get("down_revision")
     assert isinstance(revision, str), f"{path.name} must define a string revision"
