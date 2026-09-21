@@ -8,10 +8,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from test_journey import ORIGIN, create_verified_user, unsafe
+
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import AuditEvent
-from test_journey import ORIGIN, create_verified_user, unsafe
 
 
 @pytest.fixture
@@ -99,3 +100,70 @@ async def test_budget_home_rollout_preserves_profile_and_audits_enable_disable(
         "feature.disabled",
         "feature.enabled",
     ]
+
+
+@pytest.mark.asyncio
+async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-category-{suffix}@example.com", "Category Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Category Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Enable category regression coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+
+    # Establish an earlier snapshot before the category exists.
+    historical = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/2025/9",
+    )
+    assert historical.status_code == 201
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/categories",
+        json={"name": "Housing", "year": 2026, "month": 9},
+    )
+    assert created.status_code == 201
+    category_id = created.json()["id"]
+
+    current = await client.get(f"/api/v1/homes/{home_id}/budget/months/2026/9")
+    assert current.status_code == 200
+    current_category = next(
+        row for row in current.json()["categories"] if row["category_id"] == category_id
+    )
+    assert current_category["planned_amount"] == 0
+    assert current_category["actual_amount"] == 0
+
+    planned = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/months/2026/9/categories/{category_id}/plan",
+        json={"planned_amount": 1150},
+    )
+    assert planned.status_code == 200
+    reloaded = await client.get(f"/api/v1/homes/{home_id}/budget/months/2026/9")
+    assert (
+        next(row for row in reloaded.json()["categories"] if row["category_id"] == category_id)["planned_amount"]
+        == 1150
+    )
+
+    unchanged_historical = await client.get(f"/api/v1/homes/{home_id}/budget/months/2025/9")
+    assert unchanged_historical.status_code == 200
+    assert all(
+        row["category_id"] != category_id for row in unchanged_historical.json()["categories"]
+    )
+
+    future = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/budget/months/2026/10")
+    assert future.status_code == 201
+    assert any(row["category_id"] == category_id for row in future.json()["categories"])

@@ -5852,6 +5852,8 @@ button.danger,
    model, typography and button tokens remain the source of truth. */
 .budget-page {
   max-width: 640px;
+  min-width: 0;
+  overflow-x: clip;
 }
 .budget-breadcrumb {
   margin-bottom: .65rem;
@@ -5871,6 +5873,7 @@ button.danger,
   gap: 1rem;
   justify-content: space-between;
   margin-bottom: 1rem;
+  min-width: 0;
   min-height: 142px;
 }
 .budget-hero > div:first-child {
@@ -5917,6 +5920,7 @@ button.danger,
   gap: .25rem;
   grid-template-columns: repeat(4, 1fr);
   margin: 1rem 0 1.1rem;
+  min-width: 0;
   padding: .25rem;
 }
 .budget-tabs a {
@@ -6065,6 +6069,7 @@ button.danger,
 .budget-inline-form > div {
   display: flex;
   gap: .5rem;
+  min-width: 0;
 }
 .budget-inline-form input,
 .budget-form-card input,
@@ -6080,6 +6085,16 @@ button.danger,
   min-height: 2.75rem;
   padding: .65rem .75rem;
   width: 100%;
+}
+.budget-inline-form input {
+  min-width: 0;
+}
+@media (max-width: 800px) {
+  .budget-page input,
+  .budget-page select,
+  .budget-page textarea {
+    font-size: 16px;
+  }
 }
 .budget-inline-form button,
 .budget-form-card button,

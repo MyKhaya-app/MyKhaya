@@ -30,10 +30,10 @@ from mykhaya.budget_schemas import (
     BudgetPartnerShareResponse,
     BudgetPlanAmountUpdate,
     BudgetProfileResponse,
+    BudgetSettingsUpdate,
     BudgetSpendingEntryCreate,
     BudgetSpendingEntryResponse,
     BudgetSpendingEntryUpdate,
-    BudgetSettingsUpdate,
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
@@ -120,6 +120,46 @@ async def _month_for_owner(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget month not found")
+    return row
+
+
+async def _create_month_snapshot(
+    db: AsyncSession,
+    profile: BudgetProfile,
+    year: int,
+    month: int,
+    request: Request,
+    user_id: uuid.UUID,
+) -> BudgetMonth:
+    """Create one independent month snapshot seeded from current masters."""
+    if not 1 <= month <= 12:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Month must be between 1 and 12")
+    row = BudgetMonth(profile_id=profile.id, year=year, month=month)
+    db.add(row)
+    await db.flush()
+    categories = (
+        await db.scalars(
+            select(BudgetCategory).where(
+                BudgetCategory.profile_id == profile.id,
+                BudgetCategory.archived_at.is_(None),
+            )
+        )
+    ).all()
+    for category in categories:
+        db.add(
+            BudgetMonthCategory(month_id=row.id, category_id=category.id, category_name=category.name)
+        )
+    income_sources = (
+        await db.scalars(
+            select(BudgetIncomeSource).where(
+                BudgetIncomeSource.profile_id == profile.id,
+                BudgetIncomeSource.archived_at.is_(None),
+            )
+        )
+    ).all()
+    for source in income_sources:
+        db.add(BudgetMonthIncome(month_id=row.id, source_id=source.id, source_name=source.name))
+    audit(db, request, "budget.month.created", user_id, target_type="budget_month", target_id=row.id)
     return row
 
 
@@ -254,6 +294,33 @@ async def create_category(
     row = BudgetCategory(profile_id=profile.id, name=body.name.strip(), sort_order=body.sort_order)
     db.add(row)
     await db.flush()
+    if body.year is not None and body.month is not None:
+        month_row = await db.scalar(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id,
+                BudgetMonth.year == body.year,
+                BudgetMonth.month == body.month,
+                BudgetMonth.archived_at.is_(None),
+            )
+        )
+        if month_row is None:
+            month_row = await _create_month_snapshot(
+                db, profile, body.year, body.month, request, auth.user.id
+            )
+        existing_membership = await db.scalar(
+            select(BudgetMonthCategory).where(
+                BudgetMonthCategory.month_id == month_row.id,
+                BudgetMonthCategory.category_id == row.id,
+            )
+        )
+        if existing_membership is None:
+            db.add(
+                BudgetMonthCategory(
+                    month_id=month_row.id,
+                    category_id=row.id,
+                    category_name=row.name,
+                )
+            )
     audit(db, request, "budget.category.created", auth.user.id, target_type="budget_category", target_id=row.id)
     await db.commit()
     return BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
@@ -316,27 +383,7 @@ async def create_month(
     )
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "That budget month already exists")
-    row = BudgetMonth(profile_id=profile.id, year=year, month=month)
-    db.add(row)
-    await db.flush()
-    categories = (
-        await db.scalars(
-            select(BudgetCategory).where(BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None))
-        )
-    ).all()
-    for category in categories:
-        db.add(BudgetMonthCategory(month_id=row.id, category_id=category.id, category_name=category.name))
-    income_sources = (
-        await db.scalars(
-            select(BudgetIncomeSource).where(
-                BudgetIncomeSource.profile_id == profile.id,
-                BudgetIncomeSource.archived_at.is_(None),
-            )
-        )
-    ).all()
-    for source in income_sources:
-        db.add(BudgetMonthIncome(month_id=row.id, source_id=source.id, source_name=source.name))
-    audit(db, request, "budget.month.created", auth.user.id, target_type="budget_month", target_id=row.id)
+    row = await _create_month_snapshot(db, profile, year, month, request, auth.user.id)
     await db.commit()
     return await _month_response(db, row)
 

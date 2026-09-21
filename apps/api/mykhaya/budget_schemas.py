@@ -31,6 +31,16 @@ class BudgetIncomingShareResponse(BaseModel):
 class BudgetCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = Field(default=0, ge=0, le=10000)
+    # The selected month is explicit so creating a category can add exactly
+    # one snapshot membership without mutating historical months.
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetCategoryCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
 
 
 class BudgetCategoryResponse(BaseModel):

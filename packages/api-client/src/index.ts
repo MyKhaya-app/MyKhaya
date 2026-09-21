@@ -317,7 +317,10 @@ export class MyKhayaClient {
     });
   budgetCategories = (homeId: string) =>
     this.request<BudgetCategory[]>(`/homes/${encodeURIComponent(homeId)}/budget/categories`);
-  createBudgetCategory = (homeId: string, body: { name: string; sort_order?: number }) =>
+  createBudgetCategory = (
+    homeId: string,
+    body: { name: string; sort_order?: number; year?: number; month?: number },
+  ) =>
     this.request<BudgetCategory>(`/homes/${encodeURIComponent(homeId)}/budget/categories`, {
       method: "POST",
       body: JSON.stringify(body),
