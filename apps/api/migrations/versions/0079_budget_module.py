@@ -16,7 +16,13 @@ def upgrade() -> None:
     # FeatureKey is a PostgreSQL enum. The absent FeatureFlag row is
     # intentional: features.py fails closed, so Budget remains globally off
     # until a platform operator explicitly promotes it.
-    op.execute("ALTER TYPE feature_key ADD VALUE IF NOT EXISTS 'budget'")
+    # PostgreSQL does not allow a newly-added enum value to be used until the
+    # transaction that adds it has committed. Alembic runs the whole upgrade
+    # chain transactionally, so commit only this enum DDL before later
+    # migrations insert the Budget feature flag row. The schema DDL below and
+    # all subsequent migration work remain transactional.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE feature_key ADD VALUE IF NOT EXISTS 'budget'")
     budget_actual_source = postgresql.ENUM(
         "manual", "entries", name="budget_actual_source", create_type=False
     )
