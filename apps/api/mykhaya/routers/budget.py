@@ -163,6 +163,62 @@ async def _create_month_snapshot(
     return row
 
 
+def _is_current_or_future_month(year: int, month: int) -> bool:
+    now = datetime.now(UTC)
+    return (year, month) >= (now.year, now.month)
+
+
+async def _reconcile_month_categories(
+    db: AsyncSession,
+    profile_id: uuid.UUID,
+    month: BudgetMonth,
+    request: Request | None,
+    actor_id: uuid.UUID,
+) -> int:
+    """Repair only current/future snapshots left incomplete by the old flow."""
+    if not _is_current_or_future_month(month.year, month.month):
+        return 0
+    categories = (
+        await db.scalars(
+            select(BudgetCategory).where(
+                BudgetCategory.profile_id == profile_id,
+                BudgetCategory.archived_at.is_(None),
+            )
+        )
+    ).all()
+    existing_ids = set(
+        (
+            await db.scalars(
+                select(BudgetMonthCategory.category_id).where(
+                    BudgetMonthCategory.month_id == month.id,
+                )
+            )
+        ).all()
+    )
+    missing = [category for category in categories if category.id not in existing_ids]
+    for category in missing:
+        db.add(
+            BudgetMonthCategory(
+                month_id=month.id,
+                category_id=category.id,
+                category_name=category.name,
+            )
+        )
+    if missing:
+        await db.flush()
+        if request is not None:
+            audit(
+                db,
+                request,
+                "budget.month.categories.reconciled",
+                actor_id,
+                target_type="budget_month",
+                target_id=month.id,
+                metadata={"category_count": len(missing), "reason": "legacy_snapshot_repair"},
+            )
+    return len(missing)
+
+
 async def _month_response(
     db: AsyncSession, month: BudgetMonth, *, include_categories: bool = True
 ) -> BudgetMonthResponse:
@@ -393,12 +449,16 @@ async def get_month(
     home_id: uuid.UUID,
     year: int,
     month: int,
+    request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> BudgetMonthResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    return await _month_response(db, await _month_for_owner(db, profile.id, year, month))
+    month_row = await _month_for_owner(db, profile.id, year, month)
+    await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
+    await db.commit()
+    return await _month_response(db, month_row)
 
 
 @router.post("/{home_id}/budget/entries", response_model=BudgetSpendingEntryResponse, status_code=status.HTTP_201_CREATED)
@@ -417,6 +477,7 @@ async def create_entry(
     month = await db.scalar(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.year == body.spent_on.year, BudgetMonth.month == body.spent_on.month, BudgetMonth.archived_at.is_(None)))
     if month is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget month not found")
+    await _reconcile_month_categories(db, profile.id, month, request, auth.user.id)
     month_category = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == category.id))
     if month_category is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
@@ -564,6 +625,7 @@ async def update_actual(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     month_row = await _month_for_owner(db, profile.id, year, month)
+    await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
     row = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month_row.id, BudgetMonthCategory.category_id == category_id))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
@@ -589,6 +651,7 @@ async def update_planned_amount(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     month_row = await _month_for_owner(db, profile.id, year, month)
+    await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
     row = await db.scalar(
         select(BudgetMonthCategory).where(
             BudgetMonthCategory.month_id == month_row.id,

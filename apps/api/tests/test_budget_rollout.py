@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import AuditEvent
+from mykhaya.models import AuditEvent, BudgetCategory, BudgetMonthCategory
 
 
 @pytest.fixture
@@ -167,3 +167,120 @@ async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
     future = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/budget/months/2026/10")
     assert future.status_code == 201
     assert any(row["category_id"] == category_id for row in future.json()["categories"])
+
+
+@pytest.mark.asyncio
+async def test_current_snapshot_reconciles_pre_fix_missing_category_without_touching_history(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-repair-{suffix}@example.com", "Repair Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Repair Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Enable repair regression coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+
+    now = datetime.now(UTC)
+    current_index = now.year * 12 + now.month - 1
+
+    def period(offset: int) -> tuple[int, int]:
+        value = current_index + offset
+        return value // 12, value % 12 + 1
+
+    previous_year, previous_month = period(-1)
+    current_year, current_month = period(0)
+    future_year, future_month = period(1)
+    later_year, later_month = period(2)
+
+    # This is the pre-fix shape: the master category is created after the
+    # previous snapshot, then the current snapshot is missing its membership.
+    previous = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}",
+    )
+    assert previous.status_code == 201
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/categories",
+        json={"name": "Housing"},
+    )
+    assert created.status_code == 201
+    category_id = uuid.UUID(created.json()["id"])
+    current = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/{current_year}/{current_month}",
+    )
+    assert current.status_code == 201
+    current_month_id = uuid.UUID(current.json()["id"])
+
+    async with SessionFactory() as db:
+        await db.execute(
+            delete(BudgetMonthCategory).where(BudgetMonthCategory.month_id == current_month_id)
+        )
+        await db.commit()
+
+    categories = await client.get(f"/api/v1/homes/{home_id}/budget/categories")
+    assert categories.status_code == 200
+    assert any(row["id"] == str(category_id) for row in categories.json())
+
+    # The UI's month load is the compatibility/reconciliation path.
+    loaded = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{current_year}/{current_month}"
+    )
+    assert loaded.status_code == 200
+    repaired = next(
+        row for row in loaded.json()["categories"] if row["category_id"] == str(category_id)
+    )
+    assert repaired["planned_amount"] == 0
+    assert repaired["actual_amount"] == 0
+
+    planned = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/months/{current_year}/{current_month}/categories/{category_id}/plan",
+        json={"planned_amount": 500},
+    )
+    assert planned.status_code == 200
+    reloaded = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{current_year}/{current_month}"
+    )
+    assert next(
+        row for row in reloaded.json()["categories"] if row["category_id"] == str(category_id)
+    )["planned_amount"] == 500
+
+    historical = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
+    )
+    assert historical.status_code == 200
+    assert all(row["category_id"] != str(category_id) for row in historical.json()["categories"])
+
+    future = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/{future_year}/{future_month}",
+    )
+    assert future.status_code == 201
+    assert any(row["category_id"] == str(category_id) for row in future.json()["categories"])
+
+    async with SessionFactory() as db:
+        category = await db.get(BudgetCategory, category_id)
+        assert category is not None
+        category.archived_at = datetime.now(UTC)
+        await db.commit()
+
+    later = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/months/{later_year}/{later_month}",
+    )
+    assert later.status_code == 201
+    assert all(row["category_id"] != str(category_id) for row in later.json()["categories"])
