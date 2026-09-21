@@ -6178,6 +6178,163 @@ button.danger,
   padding: .6rem .8rem;
 }
 
+/* Budget correction pass: compact, sequential cards on narrow screens. */
+.budget-page .budget-hero {
+  min-height: 0;
+  margin-bottom: .75rem;
+}
+.budget-page .budget-hero h1 {
+  font-size: clamp(2rem, 9vw, 3.2rem);
+}
+.budget-page .budget-artwork {
+  flex-basis: 88px;
+  height: 88px;
+  border-radius: 1rem;
+}
+.budget-page .budget-tabs {
+  gap: .15rem;
+  margin: .5rem 0 .8rem;
+  padding: .2rem;
+}
+.budget-page .budget-tabs a {
+  font-size: .82rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: .65rem .2rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.budget-page .budget-period-control {
+  background: var(--colour-white);
+  margin-bottom: .9rem;
+  min-height: 3.35rem;
+}
+.budget-page .budget-period-control strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.budget-summary-grid,
+.budget-income-summary,
+.budget-plan-summary {
+  display: grid;
+  gap: .6rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+.budget-page .budget-stat-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+.budget-page .budget-stat-card {
+  gap: .45rem;
+  padding: .65rem;
+}
+.budget-page .budget-stat-card .budget-icon {
+  flex-basis: 36px;
+  height: 36px;
+  width: 36px;
+}
+.budget-page .budget-stat-card strong {
+  font-size: clamp(.86rem, 3.8vw, 1.05rem);
+  overflow: visible;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+.budget-page .budget-stat-card em {
+  color: var(--colour-muted);
+  display: block;
+  font-size: .72rem;
+  font-style: normal;
+}
+.budget-page .budget-section-heading {
+  margin: .9rem 0 .55rem;
+}
+.budget-page .budget-section-heading h2,
+.budget-page .budget-section-title {
+  font-size: 1.25rem;
+}
+.budget-page .budget-list {
+  gap: .5rem;
+}
+.budget-page .budget-list-row,
+.budget-page .budget-action-row,
+.budget-page .budget-plan-row {
+  border-radius: .95rem;
+  padding: .65rem;
+}
+.budget-page .budget-row-copy strong {
+  font-size: 1rem;
+}
+.budget-page .budget-row-copy small {
+  font-size: .78rem;
+}
+.budget-page .budget-action-row {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  cursor: pointer;
+  width: 100%;
+}
+.budget-page .budget-inline-form,
+.budget-page .budget-form-card {
+  border-radius: 1rem;
+  margin-top: .85rem;
+  padding: .85rem;
+}
+.budget-page .budget-inline-form input,
+.budget-page .budget-form-card input,
+.budget-page .budget-form-card select,
+.budget-page .budget-share-card select,
+.budget-page .budget-search-row input,
+.budget-page .budget-plan-row input {
+  min-width: 0;
+}
+.budget-page .budget-search-row input {
+  flex: 1;
+}
+.budget-page .budget-share-card {
+  border-radius: 1rem;
+  padding: .8rem;
+}
+.budget-page .budget-share-card select {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 430px) {
+  .budget-page .budget-hero {
+    gap: .55rem;
+  }
+  .budget-page .budget-artwork {
+    flex-basis: 72px;
+    height: 72px;
+  }
+  .budget-page .budget-hero h1 {
+    font-size: clamp(1.85rem, 9vw, 2.45rem);
+  }
+  .budget-page .budget-hero p:last-child {
+    font-size: .92rem;
+  }
+  .budget-page .budget-stat-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .budget-page .budget-stat-card strong {
+    font-size: .92rem;
+  }
+}
+
+@media (min-width: 760px) {
+  .budget-page .budget-artwork {
+    flex-basis: 150px;
+    height: 130px;
+  }
+  .budget-summary-grid,
+  .budget-income-summary,
+  .budget-plan-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 @media (min-width: 760px) {
   .app-shell:not(.native-shell-app) .standard-page.budget-page {
     max-width: 1100px;
