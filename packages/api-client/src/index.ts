@@ -39,6 +39,30 @@ export type BudgetMonthCategory = {
   entries_actual: number;
   actual_amount: number;
   note?: string | null;
+  fixed_planned_amount: number;
+  variable_planned_amount: number;
+  items: BudgetMonthItem[];
+};
+
+export type BudgetItem = {
+  id: string;
+  category_id: string;
+  name: string;
+  item_type: "fixed" | "variable";
+  default_amount: number;
+  recurring: boolean;
+  starts_on: string;
+  archived: boolean;
+};
+
+export type BudgetMonthItem = {
+  id: string;
+  budget_item_id: string | null;
+  category_id: string;
+  name: string;
+  item_type: "fixed" | "variable";
+  planned_amount: number;
+  note?: string | null;
 };
 
 export type BudgetMonthIncome = {
@@ -70,6 +94,7 @@ export type BudgetSpendingEntry = {
   description: string;
   amount: number;
   spent_on: string;
+  note?: string | null;
 };
 
 export type BudgetPartnerShare = {
@@ -373,9 +398,47 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}`,
       { method: "POST", body: "{}" },
     );
+  budgetItems = (homeId: string, categoryId?: string) => {
+    const suffix = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : "";
+    return this.request<BudgetItem[]>(
+      `/homes/${encodeURIComponent(homeId)}/budget/items${suffix}`,
+    );
+  };
+  createBudgetItem = (
+    homeId: string,
+    body: { category_id: string; name: string; item_type: "fixed" | "variable"; default_amount: number; recurring: boolean; starts_on: string; year?: number; month?: number },
+  ) =>
+    this.request<BudgetItem>(`/homes/${encodeURIComponent(homeId)}/budget/items`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  updateBudgetItem = (
+    homeId: string,
+    itemId: string,
+    body: { name: string; default_amount: number; recurring: boolean; starts_on: string; year?: number; month?: number; planned_amount?: number },
+  ) =>
+    this.request<BudgetItem>(
+      `/homes/${encodeURIComponent(homeId)}/budget/items/${encodeURIComponent(itemId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  deleteBudgetItem = (homeId: string, itemId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/budget/items/${encodeURIComponent(itemId)}`,
+      { method: "DELETE" },
+    );
+  copyBudgetMonth = (
+    homeId: string,
+    year: number,
+    month: number,
+    body: { copy_fixed_items: boolean; copy_variable_items: boolean; copy_income_sources: boolean },
+  ) =>
+    this.request<BudgetMonth>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/copy`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
   createBudgetEntry = (
     homeId: string,
-    body: { category_id: string; description: string; amount: number; spent_on: string },
+    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null },
   ) =>
     this.request<BudgetSpendingEntry>(`/homes/${encodeURIComponent(homeId)}/budget/entries`, {
       method: "POST",
@@ -397,7 +460,7 @@ export class MyKhayaClient {
   updateBudgetEntry = (
     homeId: string,
     entryId: string,
-    body: { category_id: string; description: string; amount: number; spent_on: string },
+    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null },
   ) =>
     this.request<BudgetSpendingEntry>(
       `/homes/${encodeURIComponent(homeId)}/budget/entries/${encodeURIComponent(entryId)}`,

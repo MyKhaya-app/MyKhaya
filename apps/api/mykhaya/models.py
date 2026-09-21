@@ -1399,6 +1399,11 @@ class BudgetActualSource(StrEnum):
     entries = "entries"
 
 
+class BudgetItemType(StrEnum):
+    fixed = "fixed"
+    variable = "variable"
+
+
 class BudgetSharingLevel(StrEnum):
     summary = "summary"
     categories = "categories"
@@ -1443,6 +1448,31 @@ class BudgetCategory(UuidTimeMixin, Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class BudgetItem(UuidTimeMixin, Base):
+    """Reusable planned item inside a personal Budget category."""
+
+    __tablename__ = "budget_items"
+    __table_args__ = (
+        Index("ix_budget_item_profile_active", "profile_id", "archived_at"),
+        Index("ix_budget_item_category_active", "category_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    item_type: Mapped[BudgetItemType] = mapped_column(
+        Enum(BudgetItemType, name="budget_item_type", values_callable=lambda enum: [item.value for item in enum]),
+        nullable=False,
+    )
+    default_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    recurring: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    starts_on: Mapped[date] = mapped_column(Date)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class BudgetIncomeSource(UuidTimeMixin, Base):
     __tablename__ = "budget_income_sources"
     __table_args__ = (
@@ -1477,6 +1507,34 @@ class BudgetMonthCategory(UuidTimeMixin, Base):
     note: Mapped[str | None] = mapped_column(String(1000))
 
 
+class BudgetMonthItem(UuidTimeMixin, Base):
+    """Historical planned-item snapshot; never used for actual calculations."""
+
+    __tablename__ = "budget_month_items"
+    __table_args__ = (
+        UniqueConstraint("month_id", "budget_item_id", name="uq_budget_month_item"),
+        Index("ix_budget_month_item_month_id", "month_id"),
+        Index("ix_budget_month_item_budget_item_id", "budget_item_id"),
+    )
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    budget_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("budget_items.id", ondelete="SET NULL"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    name_snapshot: Mapped[str] = mapped_column(String(160))
+    item_type_snapshot: Mapped[BudgetItemType] = mapped_column(
+        Enum(BudgetItemType, name="budget_item_type", values_callable=lambda enum: [item.value for item in enum]),
+        nullable=False,
+    )
+    planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    note: Mapped[str | None] = mapped_column(String(1000))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class BudgetMonthIncome(UuidTimeMixin, Base):
     __tablename__ = "budget_month_income"
     __table_args__ = (UniqueConstraint("month_id", "source_id", name="uq_budget_month_income"),)
@@ -1499,6 +1557,7 @@ class BudgetSpendingEntry(UuidTimeMixin, Base):
     description: Mapped[str] = mapped_column(String(200))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     spent_on: Mapped[date] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(1000))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

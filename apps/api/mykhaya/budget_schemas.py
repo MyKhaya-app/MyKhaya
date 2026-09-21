@@ -5,7 +5,7 @@ from datetime import date
 
 from pydantic import BaseModel, Field, model_validator
 
-from mykhaya.models import BudgetActualSource, BudgetSharingLevel
+from mykhaya.models import BudgetActualSource, BudgetItemType, BudgetSharingLevel
 
 
 class BudgetProfileResponse(BaseModel):
@@ -57,6 +57,66 @@ class BudgetCategoryResponse(BaseModel):
     archived: bool
 
 
+class BudgetItemCreate(BaseModel):
+    category_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=160)
+    item_type: BudgetItemType
+    default_amount: float = Field(ge=0, le=100000000)
+    recurring: bool = False
+    starts_on: date
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetItemCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+
+class BudgetItemUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    default_amount: float = Field(ge=0, le=100000000)
+    recurring: bool
+    starts_on: date
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+    planned_amount: float | None = Field(default=None, ge=0, le=100000000)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetItemUpdate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+
+class BudgetItemResponse(BaseModel):
+    id: uuid.UUID
+    category_id: uuid.UUID
+    name: str
+    item_type: BudgetItemType
+    default_amount: float
+    recurring: bool
+    starts_on: date
+    archived: bool
+
+
+class BudgetMonthItemResponse(BaseModel):
+    id: uuid.UUID
+    budget_item_id: uuid.UUID | None
+    category_id: uuid.UUID
+    name: str
+    item_type: BudgetItemType
+    planned_amount: float
+    note: str | None = None
+
+
+class BudgetMonthCopyRequest(BaseModel):
+    copy_fixed_items: bool = True
+    copy_variable_items: bool = False
+    copy_income_sources: bool = True
+
+
 class BudgetIncomeSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = Field(default=0, ge=0, le=10000)
@@ -100,6 +160,9 @@ class BudgetMonthCategoryResponse(BaseModel):
     entries_actual: float
     actual_amount: float
     note: str | None = None
+    fixed_planned_amount: float = 0
+    variable_planned_amount: float = 0
+    items: list[BudgetMonthItemResponse] = Field(default_factory=list)
 
 
 class BudgetCategoryNoteUpdate(BaseModel):
@@ -119,6 +182,7 @@ class BudgetSpendingEntryCreate(BaseModel):
     description: str = Field(min_length=1, max_length=200)
     amount: float = Field(gt=0, le=100000000)
     spent_on: date
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class BudgetSpendingEntryUpdate(BaseModel):
@@ -126,6 +190,7 @@ class BudgetSpendingEntryUpdate(BaseModel):
     description: str = Field(min_length=1, max_length=200)
     amount: float = Field(gt=0, le=100000000)
     spent_on: date
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class BudgetSpendingEntryResponse(BaseModel):
@@ -134,6 +199,7 @@ class BudgetSpendingEntryResponse(BaseModel):
     description: str
     amount: float
     spent_on: date
+    note: str | None = None
 
 
 class BudgetActualUpdate(BaseModel):

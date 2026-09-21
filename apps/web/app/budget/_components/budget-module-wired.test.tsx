@@ -4,6 +4,7 @@ import { ApiError } from "@mykhaya/api-client";
 import { BudgetModule } from "./budget-module-wired";
 
 const push = vi.fn();
+const pathname = vi.hoisted(() => ({ value: "/budget" }));
 const apiMock = vi.hoisted(() => ({
   budgetProfile: vi.fn(),
   budgetCategories: vi.fn(),
@@ -33,6 +34,7 @@ const apiMock = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
   useSearchParams: () => new URLSearchParams(),
+  usePathname: () => pathname.value,
 }));
 vi.mock("@/components/use-active-home", () => ({
   useActiveHome: () => ({ activeHomeId: "home-1" }),

@@ -6,13 +6,15 @@ from pydantic import ValidationError
 
 from mykhaya.budget_schemas import (
     BudgetActualUpdate,
+    BudgetItemCreate,
+    BudgetMonthCopyRequest,
     BudgetIncomingShareResponse,
     BudgetMonthIncomeUpdate,
     BudgetSettingsUpdate,
     BudgetSpendingEntryUpdate,
 )
 from mykhaya.main import app
-from mykhaya.models import BudgetActualSource, BudgetSharingLevel, FeatureKey
+from mykhaya.models import BudgetActualSource, BudgetItemType, BudgetSharingLevel, FeatureKey
 from mykhaya.module_registry import ReleaseState, module_definition
 from mykhaya.routers.budget import calculate_actual_amount
 
@@ -74,6 +76,11 @@ def test_phase_3b_budget_endpoints_are_registered() -> None:
         ("/api/v1/homes/{home_id}/budget/entries/{entry_id}", "DELETE"),
         ("/api/v1/homes/{home_id}/budget/months/{year}/{month}/income/{source_id}", "PUT"),
         ("/api/v1/homes/{home_id}/budget/shared-with-me", "GET"),
+        ("/api/v1/homes/{home_id}/budget/items", "GET"),
+        ("/api/v1/homes/{home_id}/budget/items", "POST"),
+        ("/api/v1/homes/{home_id}/budget/items/{item_id}", "PUT"),
+        ("/api/v1/homes/{home_id}/budget/items/{item_id}", "DELETE"),
+        ("/api/v1/homes/{home_id}/budget/months/{year}/{month}/copy", "POST"),
     }
     assert expected <= routes
 
@@ -124,3 +131,20 @@ def test_revoked_shares_are_not_representable_as_incoming_discovery() -> None:
     # is represented only by absence, while the existing owner list retains the
     # audit-visible inactive row.
     assert "active" not in BudgetIncomingShareResponse.model_fields
+
+
+def test_budget_items_are_planned_only_and_copy_defaults_are_safe() -> None:
+    item = BudgetItemCreate(
+        category_id=uuid.uuid4(),
+        name="Mortgage",
+        item_type=BudgetItemType.fixed,
+        default_amount=1150,
+        recurring=True,
+        starts_on="2026-09-01",
+    )
+    assert item.item_type == BudgetItemType.fixed
+    assert item.recurring is True
+    copy = BudgetMonthCopyRequest()
+    assert copy.copy_fixed_items is True
+    assert copy.copy_variable_items is False
+    assert copy.copy_income_sources is True
