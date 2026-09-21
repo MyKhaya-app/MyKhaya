@@ -13,12 +13,14 @@ class BudgetProfileResponse(BaseModel):
     owner_user_id: uuid.UUID
     currency: str
     month_start_day: int = Field(ge=1, le=28)
+    default_view: str
     archived: bool
 
 
 class BudgetSettingsUpdate(BaseModel):
     currency: str = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
     month_start_day: int = Field(default=1, ge=1, le=28)
+    default_view: str = Field(default="personal", pattern="^personal$")
 
 
 class BudgetIncomingShareResponse(BaseModel):
@@ -41,6 +43,11 @@ class BudgetCategoryCreate(BaseModel):
         if (self.year is None) != (self.month is None):
             raise ValueError("year and month must be supplied together")
         return self
+
+
+class BudgetCategoryUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
 
 
 class BudgetCategoryResponse(BaseModel):
@@ -70,6 +77,11 @@ class BudgetIncomeSourceResponse(BaseModel):
     archived: bool
 
 
+class BudgetIncomeSourceUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+
+
 class BudgetMonthIncomeResponse(BaseModel):
     id: uuid.UUID
     source_id: uuid.UUID
@@ -87,6 +99,11 @@ class BudgetMonthCategoryResponse(BaseModel):
     manual_actual: float | None
     entries_actual: float
     actual_amount: float
+    note: str | None = None
+
+
+class BudgetCategoryNoteUpdate(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class BudgetMonthResponse(BaseModel):
@@ -144,6 +161,7 @@ class BudgetMonthIncomeUpdate(BaseModel):
 class BudgetPartnerShareCreate(BaseModel):
     partner_user_id: uuid.UUID
     level: BudgetSharingLevel
+    category_ids: list[uuid.UUID] | None = None
 
 
 class BudgetPartnerShareResponse(BaseModel):
@@ -151,3 +169,4 @@ class BudgetPartnerShareResponse(BaseModel):
     partner_user_id: uuid.UUID
     level: BudgetSharingLevel
     active: bool
+    category_ids: list[uuid.UUID] | None = None

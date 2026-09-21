@@ -1414,6 +1414,7 @@ class BudgetProfile(UuidTimeMixin, Base):
     )
     currency: Mapped[str] = mapped_column(String(3), default="GBP", server_default="GBP")
     month_start_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    default_view: Mapped[str] = mapped_column(String(20), default="personal", server_default="personal")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1473,6 +1474,7 @@ class BudgetMonthCategory(UuidTimeMixin, Base):
         server_default=BudgetActualSource.manual.value,
     )
     manual_actual: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    note: Mapped[str | None] = mapped_column(String(1000))
 
 
 class BudgetMonthIncome(UuidTimeMixin, Base):
@@ -1516,6 +1518,7 @@ class BudgetPartnerShare(UuidTimeMixin, Base):
         default=BudgetSharingLevel.summary,
         server_default=BudgetSharingLevel.summary.value,
     )
+    category_ids: Mapped[list[str] | None] = mapped_column(JSON)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

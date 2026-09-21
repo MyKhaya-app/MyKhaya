@@ -18,6 +18,7 @@ export type BudgetProfile = {
   owner_user_id: string;
   currency: string;
   month_start_day: number;
+  default_view: "personal";
   archived: boolean;
 };
 
@@ -37,6 +38,7 @@ export type BudgetMonthCategory = {
   manual_actual: number | null;
   entries_actual: number;
   actual_amount: number;
+  note?: string | null;
 };
 
 export type BudgetMonthIncome = {
@@ -75,6 +77,7 @@ export type BudgetPartnerShare = {
   partner_user_id: string;
   level: "summary" | "categories" | "full";
   active: boolean;
+  category_ids?: string[] | null;
 };
 
 export type BudgetIncomingShare = {
@@ -309,7 +312,7 @@ export class MyKhayaClient {
     this.request<BudgetProfile>(`/homes/${encodeURIComponent(homeId)}/budget/settings`);
   updateBudgetSettings = (
     homeId: string,
-    body: { currency: string; month_start_day: number },
+    body: { currency: string; month_start_day: number; default_view?: "personal" },
   ) =>
     this.request<BudgetProfile>(`/homes/${encodeURIComponent(homeId)}/budget/settings`, {
       method: "PUT",
@@ -325,6 +328,16 @@ export class MyKhayaClient {
       method: "POST",
       body: JSON.stringify(body),
     });
+  updateBudgetCategory = (homeId: string, categoryId: string, body: { name: string; sort_order?: number }) =>
+    this.request<BudgetCategory>(
+      `/homes/${encodeURIComponent(homeId)}/budget/categories/${encodeURIComponent(categoryId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  deleteBudgetCategory = (homeId: string, categoryId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/budget/categories/${encodeURIComponent(categoryId)}`,
+      { method: "DELETE" },
+    );
   budgetIncomeSources = (homeId: string) =>
     this.request<BudgetIncomeSource[]>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
@@ -336,6 +349,20 @@ export class MyKhayaClient {
     this.request<BudgetIncomeSource>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
       { method: "POST", body: JSON.stringify(body) },
+    );
+  updateBudgetIncomeSource = (
+    homeId: string,
+    sourceId: string,
+    body: { name: string; sort_order?: number },
+  ) =>
+    this.request<BudgetIncomeSource>(
+      `/homes/${encodeURIComponent(homeId)}/budget/income-sources/${encodeURIComponent(sourceId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  deleteBudgetIncomeSource = (homeId: string, sourceId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/budget/income-sources/${encodeURIComponent(sourceId)}`,
+      { method: "DELETE" },
     );
   budgetMonth = (homeId: string, year: number, month: number) =>
     this.request<BudgetMonth>(
@@ -392,6 +419,11 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/categories/${encodeURIComponent(categoryId)}/actual`,
       { method: "PUT", body: JSON.stringify(body) },
     );
+  updateBudgetCategoryNote = (homeId: string, year: number, month: number, categoryId: string, note: string | null) =>
+    this.request<BudgetMonthCategory>(
+      `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/categories/${encodeURIComponent(categoryId)}/note`,
+      { method: "PUT", body: JSON.stringify({ note }) },
+    );
   updateBudgetPlan = (
     homeId: string,
     year: number,
@@ -420,10 +452,11 @@ export class MyKhayaClient {
     homeId: string,
     partnerUserId: string,
     level: BudgetPartnerShare["level"],
+    categoryIds?: string[],
   ) =>
     this.request<BudgetPartnerShare>(
       `/homes/${encodeURIComponent(homeId)}/budget/shares/${encodeURIComponent(partnerUserId)}`,
-      { method: "PUT", body: JSON.stringify({ partner_user_id: partnerUserId, level }) },
+      { method: "PUT", body: JSON.stringify({ partner_user_id: partnerUserId, level, category_ids: categoryIds }) },
     );
   revokeBudgetShare = (homeId: string, partnerUserId: string) =>
     this.request<void>(

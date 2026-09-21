@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +19,12 @@ from mykhaya.audit import audit
 from mykhaya.budget_schemas import (
     BudgetActualUpdate,
     BudgetCategoryCreate,
+    BudgetCategoryNoteUpdate,
     BudgetCategoryResponse,
+    BudgetCategoryUpdate,
     BudgetIncomeSourceCreate,
     BudgetIncomeSourceResponse,
+    BudgetIncomeSourceUpdate,
     BudgetIncomingShareResponse,
     BudgetMonthCategoryResponse,
     BudgetMonthIncomeResponse,
@@ -92,6 +95,7 @@ def _profile_response(row: BudgetProfile) -> BudgetProfileResponse:
         owner_user_id=row.owner_user_id,
         currency=row.currency,
         month_start_day=row.month_start_day,
+        default_view=row.default_view,
         archived=row.archived_at is not None,
     )
 
@@ -302,6 +306,7 @@ async def _month_response(
                     manual_actual=float(row.manual_actual) if row.manual_actual is not None else None,
                     entries_actual=float(entries_amount),
                     actual_amount=float(actual),
+                    note=row.note,
                 )
             )
     income_rows = (
@@ -358,6 +363,7 @@ async def update_budget_settings(
     profile = await _profile(db, auth.user.id)
     profile.currency = body.currency.upper()
     profile.month_start_day = body.month_start_day
+    profile.default_view = body.default_view
     audit(
         db,
         request,
@@ -434,6 +440,55 @@ async def create_category(
     return BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
 
 
+@router.put("/{home_id}/budget/categories/{category_id}", response_model=BudgetCategoryResponse)
+async def update_category(
+    home_id: uuid.UUID,
+    category_id: uuid.UUID,
+    body: BudgetCategoryUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetCategoryResponse:
+    await _member_and_feature(home_id, auth, db)
+    profile = await _profile(db, auth.user.id)
+    row = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
+    row.name = body.name.strip()
+    row.sort_order = body.sort_order
+    months = (await db.scalars(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)))).all()
+    for month in months:
+        if _is_current_or_future_month(month.year, month.month):
+            membership = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == row.id))
+            if membership is not None:
+                membership.category_name = row.name
+    audit(db, request, "budget.category.updated", auth.user.id, target_type="budget_category", target_id=row.id)
+    await db.commit()
+    return BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+
+
+@router.delete("/{home_id}/budget/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_category(
+    home_id: uuid.UUID,
+    category_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await _member_and_feature(home_id, auth, db)
+    profile = await _profile(db, auth.user.id)
+    row = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
+    months = (await db.scalars(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)))).all()
+    current_future_ids = [month.id for month in months if _is_current_or_future_month(month.year, month.month)]
+    if current_future_ids:
+        await db.execute(delete(BudgetMonthCategory).where(BudgetMonthCategory.category_id == row.id, BudgetMonthCategory.month_id.in_(current_future_ids)))
+    row.archived_at = datetime.now(UTC)
+    audit(db, request, "budget.category.archived", auth.user.id, target_type="budget_category", target_id=row.id)
+    await db.commit()
+
+
 @router.get("/{home_id}/budget/income-sources", response_model=list[BudgetIncomeSourceResponse])
 async def list_income_sources(
     home_id: uuid.UUID,
@@ -493,6 +548,99 @@ async def create_income_source(
             f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
         ) from None
     return BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+
+
+@router.put("/{home_id}/budget/income-sources/{source_id}", response_model=BudgetIncomeSourceResponse)
+async def update_income_source(
+    home_id: uuid.UUID,
+    source_id: uuid.UUID,
+    body: BudgetIncomeSourceUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetIncomeSourceResponse:
+    await _member_and_feature(home_id, auth, db)
+    profile = await _profile(db, auth.user.id)
+    row = await db.scalar(
+        select(BudgetIncomeSource).where(
+            BudgetIncomeSource.id == source_id,
+            BudgetIncomeSource.profile_id == profile.id,
+            BudgetIncomeSource.archived_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Income source not found")
+    name = body.name.strip()
+    row.name = name
+    row.sort_order = body.sort_order
+    current_future = (
+        await db.scalars(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id,
+                BudgetMonth.archived_at.is_(None),
+            )
+        )
+    ).all()
+    try:
+        for month in current_future:
+            if _is_current_or_future_month(month.year, month.month):
+                membership = await db.scalar(
+                    select(BudgetMonthIncome).where(
+                        BudgetMonthIncome.month_id == month.id,
+                        BudgetMonthIncome.source_id == row.id,
+                    )
+                )
+                if membership is not None:
+                    membership.source_name = name
+        audit(db, request, "budget.income_source.updated", auth.user.id, target_type="budget_income_source", target_id=row.id)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
+        ) from None
+    return BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+
+
+@router.delete("/{home_id}/budget/income-sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_income_source(
+    home_id: uuid.UUID,
+    source_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await _member_and_feature(home_id, auth, db)
+    profile = await _profile(db, auth.user.id)
+    row = await db.scalar(
+        select(BudgetIncomeSource).where(
+            BudgetIncomeSource.id == source_id,
+            BudgetIncomeSource.profile_id == profile.id,
+            BudgetIncomeSource.archived_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Income source not found")
+    months = (
+        await db.scalars(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id,
+                BudgetMonth.archived_at.is_(None),
+            )
+        )
+    ).all()
+    current_future_ids = [month.id for month in months if _is_current_or_future_month(month.year, month.month)]
+    if current_future_ids:
+        await db.execute(
+            delete(BudgetMonthIncome).where(
+                BudgetMonthIncome.source_id == row.id,
+                BudgetMonthIncome.month_id.in_(current_future_ids),
+            )
+        )
+    row.archived_at = datetime.now(UTC)
+    audit(db, request, "budget.income_source.archived", auth.user.id, target_type="budget_income_source", target_id=row.id)
+    await db.commit()
 
 
 @router.post("/{home_id}/budget/months/{year}/{month}", response_model=BudgetMonthResponse, status_code=status.HTTP_201_CREATED)
@@ -742,6 +890,31 @@ async def update_planned_amount(
     return next(item for item in response.categories if item.category_id == category_id)
 
 
+@router.put("/{home_id}/budget/months/{year}/{month}/categories/{category_id}/note", response_model=BudgetMonthCategoryResponse)
+async def update_category_note(
+    home_id: uuid.UUID,
+    year: int,
+    month: int,
+    category_id: uuid.UUID,
+    body: BudgetCategoryNoteUpdate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetMonthCategoryResponse:
+    await _member_and_feature(home_id, auth, db)
+    profile = await _profile(db, auth.user.id)
+    month_row = await _month_for_owner(db, profile.id, year, month)
+    await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
+    row = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month_row.id, BudgetMonthCategory.category_id == category_id))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
+    row.note = body.note.strip() if body.note else None
+    audit(db, request, "budget.category.note.updated", auth.user.id, target_type="budget_month_category", target_id=row.id)
+    await db.commit()
+    response = await _month_response(db, month_row)
+    return next(item for item in response.categories if item.category_id == category_id)
+
+
 @router.put("/{home_id}/budget/months/{year}/{month}/income/{source_id}", response_model=BudgetMonthIncomeResponse)
 async def update_month_income(
     home_id: uuid.UUID,
@@ -786,7 +959,7 @@ async def list_shares(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     rows = (await db.scalars(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id))).all()
-    return [BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=row.revoked_at is None) for row in rows]
+    return [BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=row.revoked_at is None, category_ids=row.category_ids) for row in rows]
 
 
 @router.put("/{home_id}/budget/shares/{partner_user_id}", response_model=BudgetPartnerShareResponse)
@@ -805,16 +978,34 @@ async def set_share(
     partner = await db.scalar(select(Membership).where(Membership.group_id == home_id, Membership.user_id == partner_user_id, Membership.removed_at.is_(None)))
     if partner is None or partner.relationship == HouseholdRelationship.child:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Partner not found")
+    category_ids: list[str] | None = None
+    if body.level == BudgetSharingLevel.categories:
+        requested = {str(category_id) for category_id in (body.category_ids or [])}
+        valid = set(
+            str(category_id)
+            for category_id in (
+                await db.scalars(
+                    select(BudgetCategory.id).where(
+                        BudgetCategory.profile_id == profile.id,
+                        BudgetCategory.archived_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        if not requested.issubset(valid):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "One or more shared categories are invalid")
+        category_ids = sorted(requested)
     row = await db.scalar(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id, BudgetPartnerShare.partner_user_id == partner_user_id))
     if row is None:
-        row = BudgetPartnerShare(profile_id=profile.id, partner_user_id=partner_user_id, level=body.level)
+        row = BudgetPartnerShare(profile_id=profile.id, partner_user_id=partner_user_id, level=body.level, category_ids=category_ids)
         db.add(row)
     else:
         row.level = body.level
+        row.category_ids = category_ids
         row.revoked_at = None
     audit(db, request, "budget.partner_sharing.updated", auth.user.id, target_type="budget_partner_share", target_id=row.id, metadata={"level": body.level.value})
     await db.commit()
-    return BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=True)
+    return BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=True, category_ids=row.category_ids)
 
 
 @router.delete("/{home_id}/budget/shares/{partner_user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -903,4 +1094,8 @@ async def get_shared_month(
     if profile is None or share is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget not found")
     month_row = await _month_for_owner(db, profile.id, year, month)
-    return await _month_response(db, month_row, include_categories=share.level != BudgetSharingLevel.summary)
+    response = await _month_response(db, month_row, include_categories=share.level != BudgetSharingLevel.summary)
+    if share.level == BudgetSharingLevel.categories and share.category_ids is not None:
+        allowed = set(share.category_ids)
+        response.categories = [category for category in response.categories if str(category.category_id) in allowed]
+    return response

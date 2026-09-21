@@ -13,6 +13,8 @@ const apiMock = vi.hoisted(() => ({
   createBudgetIncomeSource: vi.fn(),
   budgetIncomeSources: vi.fn(),
   updateBudgetMonthIncome: vi.fn(),
+  updateBudgetIncomeSource: vi.fn(),
+  deleteBudgetIncomeSource: vi.fn(),
   budgetEntries: vi.fn(),
   budgetEntry: vi.fn(),
   sharedBudgetMonth: vi.fn(),
@@ -76,10 +78,33 @@ describe("Budget consumer API wiring", () => {
 
   it("saves monthly expected and received income", async () => {
     render(<BudgetModule screen="income" />);
-    fireEvent.change(await screen.findByLabelText("Expected"), { target: { value: "4900" } });
-    fireEvent.change(screen.getByLabelText("Received"), { target: { value: "4300" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save income" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Salary" }));
+    fireEvent.change(screen.getByLabelText("Expected amount (per month)"), { target: { value: "4900" } });
+    fireEvent.change(screen.getByLabelText("Received amount (per month)"), { target: { value: "4300" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4900, received_amount: 4300 }));
+  });
+
+  it("opens the add-income BottomSheet and closes after saving", async () => {
+    apiMock.createBudgetIncomeSource.mockResolvedValue({ id: "source-2", name: "NNUH", sort_order: 0, archived: false });
+    apiMock.budgetMonth
+      .mockResolvedValueOnce(month)
+      .mockResolvedValueOnce({ ...month, income: [...month.income, { id: "income-2", source_id: "source-2", source_name: "NNUH", expected_amount: 0, received_amount: 0 }] });
+    render(<BudgetModule screen="income" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Add income source/ }));
+    expect(screen.getByRole("dialog", { name: "Add income source" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "NNUH" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create income source" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add income source" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: "NNUH" })).toBeInTheDocument();
+  });
+
+  it("opens edit and then the destructive income-source confirmation", async () => {
+    render(<BudgetModule screen="income" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Salary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete income source" }));
+    expect(screen.getByRole("dialog", { name: "Delete income source?" })).toBeInTheDocument();
+    expect(screen.getByText(/Historical data will be kept/)).toBeInTheDocument();
   });
 
   it("shows a friendly duplicate income-source error and keeps the entered name", async () => {

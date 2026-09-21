@@ -336,7 +336,34 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
         f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}",
     )
     assert historical.status_code == 201
-    assert all(row["source_id"] != source_id for row in historical.json()["income"])
+    assert next(row for row in historical.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
+
+    renamed = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/income-sources/{source_id}",
+        json={"name": "NNUH Salary", "sort_order": 0},
+    )
+    assert renamed.status_code == 200
+    current_after_rename = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    assert next(row for row in current_after_rename.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH Salary"
+    historical_after_rename = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
+    )
+    assert next(row for row in historical_after_rename.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
+
+    archived = await unsafe(
+        client,
+        "DELETE",
+        f"/api/v1/homes/{home_id}/budget/income-sources/{source_id}",
+    )
+    assert archived.status_code == 204
+    current_after_archive = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    assert all(row["source_id"] != source_id for row in current_after_archive.json()["income"])
+    historical_after_archive = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
+    )
+    assert next(row for row in historical_after_archive.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
 
     async with SessionFactory() as db:
         memberships = (

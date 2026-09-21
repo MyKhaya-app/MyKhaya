@@ -6275,6 +6275,145 @@ button.danger,
   cursor: pointer;
   width: 100%;
 }
+.budget-page .budget-income-source-row,
+.budget-page .budget-add-card {
+  appearance: none;
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  color: var(--colour-ink);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+.budget-page .budget-add-card {
+  align-items: center;
+  border-radius: 1rem;
+  gap: .7rem;
+  margin-top: .75rem;
+  padding: .75rem;
+}
+.budget-page .budget-add-card > svg:first-child {
+  color: var(--colour-forest);
+  flex: 0 0 auto;
+}
+.budget-page .budget-add-card > svg:last-child {
+  color: var(--colour-muted);
+  margin-left: auto;
+}
+.budget-page .budget-add-card span {
+  min-width: 0;
+}
+.budget-page .budget-add-card strong,
+.budget-page .budget-add-card small {
+  display: block;
+}
+.budget-page .budget-add-card small {
+  color: var(--colour-muted);
+  font-size: .78rem;
+  margin-top: .15rem;
+}
+.budget-page .budget-sheet-form {
+  display: grid;
+  gap: .55rem;
+  padding-bottom: .25rem;
+}
+.budget-page .budget-sheet-form input:not([type="checkbox"]) {
+  width: 100%;
+}
+.budget-page .budget-sheet-form label:not(.budget-sheet-toggle) {
+  font-size: .82rem;
+  font-weight: 750;
+  margin-top: .25rem;
+}
+.budget-page .budget-sheet-form button {
+  margin-top: .45rem;
+  width: 100%;
+}
+.budget-page .budget-sheet-toggle {
+  align-items: center;
+  display: flex;
+  gap: .75rem;
+  justify-content: space-between;
+  margin-top: .4rem;
+}
+.budget-page .budget-sheet-toggle span {
+  display: grid;
+  gap: .1rem;
+}
+.budget-page .budget-sheet-toggle small {
+  color: var(--colour-muted);
+}
+.budget-page .budget-sheet-toggle input {
+  accent-color: var(--colour-forest);
+  flex: 0 0 auto;
+  height: 1.2rem;
+  width: 1.2rem;
+}
+.budget-page .budget-destructive-link {
+  background: transparent;
+  border: 0;
+  color: var(--colour-danger, #b42318);
+  font-weight: 750;
+}
+.budget-page .budget-delete-confirm {
+  display: grid;
+  gap: .7rem;
+}
+.budget-page .budget-delete-confirm button {
+  width: 100%;
+}
+.budget-page .budget-detail-stats {
+  display: grid;
+  gap: .55rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: .85rem;
+}
+.budget-page .budget-usage-card {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  border-radius: 1rem;
+  display: grid;
+  gap: .55rem;
+  padding: .85rem;
+}
+.budget-page .budget-progress {
+  background: var(--colour-cream);
+  border-radius: 99px;
+  display: block;
+  height: .45rem;
+  overflow: hidden;
+}
+.budget-page .budget-progress > span {
+  background: var(--colour-forest);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+.budget-page .budget-picker-list {
+  display: grid;
+  gap: .45rem;
+}
+.budget-page .budget-picker-list button {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  border-radius: .8rem;
+  color: var(--colour-ink);
+  font: inherit;
+  min-height: 2.8rem;
+  padding: .7rem .8rem;
+  text-align: left;
+}
+@media (max-width: 430px) {
+  .budget-page .budget-detail-stats {
+    gap: .35rem;
+  }
+  .budget-page .budget-detail-stats .budget-stat-card {
+    padding: .5rem;
+  }
+}
 .budget-page .budget-inline-form,
 .budget-page .budget-form-card {
   border-radius: 1rem;
