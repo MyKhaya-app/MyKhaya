@@ -18,6 +18,7 @@ from mykhaya.models import (
     BudgetMonthCategory,
     BudgetMonthIncome,
     BudgetMonthItem,
+    BudgetSpendingEntry,
     HouseholdRelationship,
     Membership,
     PermissionProfile,
@@ -178,6 +179,110 @@ async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
     future = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/budget/months/2026/10")
     assert future.status_code == 201
     assert any(row["category_id"] == category_id for row in future.json()["categories"])
+
+
+@pytest.mark.asyncio
+async def test_spending_entry_switches_empty_current_category_to_entries_and_recalculates(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-entry-{suffix}@example.com", "Entry Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Entry Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Enable entry regression coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+
+    now = datetime.now(UTC)
+    year, month = now.year, now.month
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/categories",
+        json={"name": "Miscellaneous", "year": year, "month": month},
+    )
+    assert created.status_code == 201
+    category_id = created.json()["id"]
+    planned = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/months/{year}/{month}/categories/{category_id}/plan",
+        json={"planned_amount": 350},
+    )
+    assert planned.status_code == 200
+
+    entry = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/entries",
+        json={
+            "category_id": category_id,
+            "description": "Primark",
+            "amount": 50,
+            "spent_on": f"{year}-{month:02d}-01",
+            "note": "Regression check",
+        },
+    )
+    assert entry.status_code == 201
+    entry_id = entry.json()["id"]
+
+    async with SessionFactory() as db:
+        stored = await db.scalar(
+            select(BudgetSpendingEntry).where(BudgetSpendingEntry.id == uuid.UUID(entry_id))
+        )
+        stored_category = await db.scalar(
+            select(BudgetMonthCategory).where(BudgetMonthCategory.id == stored.month_category_id)
+        ) if stored is not None else None
+    assert stored is not None
+    assert stored.description == "Primark"
+    assert stored.amount == 50
+    assert stored.spent_on.isoformat() == f"{year}-{month:02d}-01"
+    assert stored.note == "Regression check"
+    assert stored_category is not None
+    assert str(stored_category.category_id) == category_id
+
+    month_response = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    assert month_response.status_code == 200
+    category = next(row for row in month_response.json()["categories"] if row["category_id"] == category_id)
+    assert category["actual_source"] == "entries"
+    assert category["entries_actual"] == 50
+    assert category["actual_amount"] == 50
+    assert category["planned_amount"] == 350
+
+    entries = await client.get(f"/api/v1/homes/{home_id}/budget/entries?year={year}&month={month}")
+    assert entries.status_code == 200
+    assert [row["description"] for row in entries.json()].count("Primark") == 1
+    assert entries.json()[0]["note"] == "Regression check"
+
+    updated = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
+        json={
+            "category_id": category_id,
+            "description": "Primark",
+            "amount": 75,
+            "spent_on": f"{year}-{month:02d}-01",
+            "note": "Updated regression check",
+        },
+    )
+    assert updated.status_code == 200
+    after_edit = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    edited_category = next(row for row in after_edit.json()["categories"] if row["category_id"] == category_id)
+    assert edited_category["actual_amount"] == 75
+    assert edited_category["planned_amount"] - edited_category["actual_amount"] == 275
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/budget/entries/{entry_id}")
+    assert deleted.status_code == 204
+    after_delete = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    deleted_category = next(row for row in after_delete.json()["categories"] if row["category_id"] == category_id)
+    assert deleted_category["actual_amount"] == 0
+    assert deleted_category["entries_actual"] == 0
 
 
 @pytest.mark.asyncio

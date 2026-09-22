@@ -1107,6 +1107,23 @@ async def create_entry(
         note=body.note.strip() if body.note else None,
     )
     db.add(row)
+    # A new entry on an empty current/future category should immediately drive
+    # Actuals. Preserve explicit manual values and historical month state.
+    if (
+        _is_current_or_future_month(month.year, month.month)
+        and month_category.actual_source == BudgetActualSource.manual
+        and month_category.manual_actual is None
+    ):
+        month_category.actual_source = BudgetActualSource.entries
+        audit(
+            db,
+            request,
+            "budget.actual_source.updated",
+            auth.user.id,
+            target_type="budget_month_category",
+            target_id=month_category.id,
+            metadata={"source": BudgetActualSource.entries.value, "reason": "first_spending_entry"},
+        )
     await db.flush()
     audit(db, request, "budget.entry.created", auth.user.id, target_type="budget_entry", target_id=row.id)
     await db.commit()

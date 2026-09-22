@@ -6392,6 +6392,42 @@ button.danger,
   display: block;
   height: 100%;
 }
+.budget-page .budget-quick-actions-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--colour-ink);
+  display: flex;
+  font: inherit;
+  justify-content: space-between;
+  margin: 1rem 0 .55rem;
+  padding: .35rem 0;
+  text-align: left;
+  width: 100%;
+}
+.budget-page .budget-quick-actions {
+  margin-bottom: 1rem;
+}
+.budget-page .budget-transactions {
+  margin-top: .4rem;
+}
+.budget-page .budget-transaction-row {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  border-radius: .85rem;
+  display: flex;
+  gap: .7rem;
+  min-height: 3.7rem;
+  padding: .65rem .8rem;
+}
+.budget-page .budget-transaction-row + .budget-transaction-row {
+  margin-top: .45rem;
+}
+.budget-page .budget-transaction-row > strong:last-child {
+  margin-left: auto;
+  white-space: nowrap;
+}
 .budget-add-picker-list {
   display: grid;
   gap: .7rem;

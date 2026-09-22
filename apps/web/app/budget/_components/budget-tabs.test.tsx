@@ -10,8 +10,16 @@ describe("BudgetTabs", () => {
   it.each([
     ["/budget", "Overview"],
     ["/budget/categories", "Categories"],
+    ["/budget/categories/housing", "Categories"],
+    ["/budget/edit-plan", "Categories"],
+    ["/budget/spending", "Categories"],
+    ["/budget/spending/entry-1/edit", "Categories"],
     ["/budget/income", "Income"],
+    ["/budget/income/salary/edit", "Income"],
     ["/budget/settings", "Settings"],
+    ["/budget/settings/profile", "Settings"],
+    ["/budget/sharing", "Settings"],
+    ["/budget/together", "Overview"],
   ])("marks %s as active", (route, activeLabel) => {
     pathname.value = route;
     render(<BudgetTabs />);

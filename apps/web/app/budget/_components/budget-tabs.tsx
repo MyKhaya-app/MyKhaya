@@ -12,7 +12,15 @@ const tabs = [
 
 export function BudgetTabs() {
   const pathname = usePathname();
-  const activeHref = tabs.find((tab) => tab.href === pathname)?.href ?? "/budget";
+  const activeHref = pathname === "/budget"
+    ? "/budget"
+    : pathname.startsWith("/budget/categories") || pathname === "/budget/edit-plan" || pathname.startsWith("/budget/spending")
+      ? "/budget/categories"
+      : pathname.startsWith("/budget/income")
+        ? "/budget/income"
+        : pathname.startsWith("/budget/settings") || pathname.startsWith("/budget/sharing")
+          ? "/budget/settings"
+          : "/budget";
 
   return (
     <nav className="budget-tabs" aria-label="Budget sections">
