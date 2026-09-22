@@ -84,9 +84,11 @@ public func weekEventLayout(
         // Same exclusive-end convention as eventsByDay in CalendarLayout.swift
         // (end minus one second, then take that instant's calendar day) so a
         // multi-day event occupies exactly the same set of days whether it's
-        // shown as bars here or as per-day dots in the month view.
-        let startDay = calendar.startOfDay(for: start)
-        let endDay = calendar.startOfDay(for: end.addingTimeInterval(-1))
+        // shown as bars here or as per-day dots in the month view. All-day
+        // boundaries are read as literal UTC calendar dates, never through
+        // the device's own `calendar` — see localMidnightOfCalendarDay.
+        let startDay = localMidnightOfCalendarDay(containing: start, isAllDay: event.isAllDay, calendar: calendar)
+        let endDay = localMidnightOfCalendarDay(containing: end.addingTimeInterval(-1), isAllDay: event.isAllDay, calendar: calendar)
         guard let rawStartColumn = calendar.dateComponents([.day], from: dayStart, to: startDay).day,
               let rawEndColumn = calendar.dateComponents([.day], from: dayStart, to: endDay).day else { continue }
 

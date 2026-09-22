@@ -181,6 +181,34 @@ final class WeekEventLayoutTests: XCTestCase {
         XCTAssertEqual(result.bars[0].endColumn, 6)
     }
 
+    // MARK: Timezone boundary regression — all-day bars must never leak into
+    // an adjacent column for a device outside UTC (see
+    // localMidnightOfCalendarDay in CalendarLayout.swift).
+
+    private var londonSummerCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London")! // BST = UTC+1 in September
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    func test_oneDayAllDayEvent_onThursday_staysConfinedToThursday_positiveOffsetDevice() {
+        // 2026-09-03 is the Thursday of this fixture's week (Mon 2026-08-31 .. Sun 2026-09-06).
+        let e = event("bday", title: "Amara's Birthday", start: "2026-09-03T00:00:00Z", end: "2026-09-04T00:00:00Z", allDay: true)
+        let result = weekEventLayout(events: [e], weekStart: weekStart, calendar: londonSummerCalendar)
+        XCTAssertEqual(result.bars.count, 1)
+        XCTAssertEqual(result.bars[0].startColumn, 3, "Thursday")
+        XCTAssertEqual(result.bars[0].endColumn, 3, "must not spill into Friday (column 4) on a UTC+1 device — the reported bug")
+    }
+
+    func test_oneDayAllDayEvent_onSunday_staysConfinedToSunday_positiveOffsetDevice() {
+        let e = event("sun", title: "Family day", start: "2026-09-06T00:00:00Z", end: "2026-09-07T00:00:00Z", allDay: true)
+        let result = weekEventLayout(events: [e], weekStart: weekStart, calendar: londonSummerCalendar)
+        XCTAssertEqual(result.bars.count, 1)
+        XCTAssertEqual(result.bars[0].startColumn, 6)
+        XCTAssertEqual(result.bars[0].endColumn, 6, "confined to Sunday, the week's last column, on a UTC+1 device")
+    }
+
     // MARK: Determinism
 
     func test_rowAssignment_isDeterministic_acrossRepeatedCalls() {

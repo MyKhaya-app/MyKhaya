@@ -127,4 +127,135 @@ final class CalendarLayoutTests: XCTestCase {
         let grouped = eventsByDay([broken], calendar: utcCalendar)
         XCTAssertTrue(grouped.isEmpty, "an event with an unparsable start date must be skipped, not crash")
     }
+
+    // MARK: Timezone boundary regression — all-day events must never leak
+    // into an adjacent local day for a device outside UTC (see
+    // localMidnightOfCalendarDay in CalendarLayout.swift). Real report: a
+    // Sunday-only all-day event, and a Thursday birthday, both appeared to
+    // spill onto the following day on a device running BST (UTC+1).
+
+    private var londonSummerCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London")! // BST = UTC+1 in September
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    private var newYorkCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")! // EDT = UTC-4 in September
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    func test_eventsByDay_oneDayAllDayEvent_onSunday_doesNotLeakIntoMonday_positiveOffsetDevice() {
+        // 2026-09-20 is a Sunday. Stored as start=2026-09-20T00:00:00Z,
+        // end=2026-09-21T00:00:00Z (exclusive) — "the 20th only".
+        let sundayOnly = WidgetEvent(
+            id: "e1", title: "Family day", startAt: "2026-09-20T00:00:00.000Z", endAt: "2026-09-21T00:00:00.000Z",
+            isAllDay: true, timezone: "Europe/London", colorHex: "#00ff00", deepLink: "/calendar?event=e1"
+        )
+        let grouped = eventsByDay([sundayOnly], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-9-20"]?.count, 1, "must appear on Sunday the 20th")
+        XCTAssertNil(grouped["2026-9-21"], "must NOT leak onto Monday the 21st on a UTC+1 device — the reported bug")
+    }
+
+    func test_eventsByDay_oneDayAllDayBirthday_onThursday_doesNotLeakIntoFriday_positiveOffsetDevice() {
+        // 2026-09-24 is a Thursday.
+        let birthday = WidgetEvent(
+            id: "b1", title: "Amara's Birthday", startAt: "2026-09-24T00:00:00.000Z", endAt: "2026-09-25T00:00:00.000Z",
+            isAllDay: true, timezone: "Europe/London", colorHex: "#ff00ff", deepLink: "/calendar?event=b1"
+        )
+        let grouped = eventsByDay([birthday], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-9-24"]?.count, 1, "must appear on Thursday the 24th")
+        XCTAssertNil(grouped["2026-9-25"], "a birthday must NOT leak onto Friday on a UTC+1 device — the reported bug")
+    }
+
+    func test_eventsByDay_twoDayAllDayEvent_appearsOnExactlyTwoDays_positiveOffsetDevice() {
+        // start=2026-09-24T00:00:00Z, end=2026-09-26T00:00:00Z (exclusive) — the 24th and 25th only.
+        let twoDay = WidgetEvent(
+            id: "e2", title: "Sleepover", startAt: "2026-09-24T00:00:00.000Z", endAt: "2026-09-26T00:00:00.000Z",
+            isAllDay: true, timezone: "Europe/London", colorHex: "#00ff00", deepLink: "/calendar?event=e2"
+        )
+        let grouped = eventsByDay([twoDay], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-9-24"]?.count, 1)
+        XCTAssertEqual(grouped["2026-9-25"]?.count, 1)
+        XCTAssertNil(grouped["2026-9-23"], "must not leak backwards either")
+        XCTAssertNil(grouped["2026-9-26"], "end is exclusive — must not include the 26th")
+    }
+
+    func test_eventsByDay_oneDayAllDayEvent_doesNotLeakBackwards_negativeOffsetDevice() {
+        // A negative-offset device (behind UTC) is the opposite failure
+        // mode: naively converting a UTC-midnight boundary into local time
+        // would push it into the *previous* local day instead.
+        let thursdayOnly = WidgetEvent(
+            id: "e3", title: "Appointment", startAt: "2026-09-24T00:00:00.000Z", endAt: "2026-09-25T00:00:00.000Z",
+            isAllDay: true, timezone: "America/New_York", colorHex: "#00ff00", deepLink: "/calendar?event=e3"
+        )
+        let grouped = eventsByDay([thursdayOnly], calendar: newYorkCalendar)
+        XCTAssertEqual(grouped["2026-9-24"]?.count, 1, "must appear on the 24th")
+        XCTAssertNil(grouped["2026-9-23"], "must NOT leak backwards onto the 23rd on a UTC-4 device")
+        XCTAssertNil(grouped["2026-9-25"], "must NOT leak forwards onto the 25th either")
+    }
+
+    func test_eventsByDay_oneDayAllDayEvent_onUkClockChangeSunday_staysConfinedToThatDay() {
+        // 2026-10-25 is the UK's 2026 autumn clock-change Sunday (BST ->
+        // GMT at 02:00 local, so that calendar day is actually 25 hours
+        // long in Europe/London). TimeZone(identifier: "Europe/London") is
+        // DST-aware, so localMidnightOfCalendarDay's `calendar.date(from:)`
+        // reconstruction must resolve to the correct local midnight either
+        // side of the transition without any DST-specific logic of its own.
+        let clockChangeDay = WidgetEvent(
+            id: "e6", title: "Clocks go back", startAt: "2026-10-25T00:00:00.000Z", endAt: "2026-10-26T00:00:00.000Z",
+            isAllDay: true, timezone: "Europe/London", colorHex: "#00ff00", deepLink: "/calendar?event=e6"
+        )
+        let grouped = eventsByDay([clockChangeDay], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-10-25"]?.count, 1, "must appear on the clock-change Sunday itself")
+        XCTAssertNil(grouped["2026-10-24"], "must not leak backwards across the DST boundary")
+        XCTAssertNil(grouped["2026-10-26"], "must not leak forwards across the DST boundary")
+    }
+
+    func test_eventsByDay_twoDayAllDayEvent_spanningUkClockChange_appearsOnExactlyTwoDays() {
+        // Spans the clock-change Sunday (25th, BST->GMT) and the following
+        // Monday (26th, now GMT) — the two calendar days genuinely differ
+        // in UTC offset, so this is the sharpest test that the fix doesn't
+        // silently depend on a fixed offset.
+        let spanning = WidgetEvent(
+            id: "e7", title: "Half term start", startAt: "2026-10-25T00:00:00.000Z", endAt: "2026-10-27T00:00:00.000Z",
+            isAllDay: true, timezone: "Europe/London", colorHex: "#00ff00", deepLink: "/calendar?event=e7"
+        )
+        let grouped = eventsByDay([spanning], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-10-25"]?.count, 1)
+        XCTAssertEqual(grouped["2026-10-26"]?.count, 1)
+        XCTAssertNil(grouped["2026-10-27"], "end is exclusive — must not include the 27th")
+    }
+
+    func test_eventsByDay_lateTimedEvent_staysOnItsOwnLocalDay_notUtc() {
+        // 22:30-22:59 UTC is 23:30-23:59 BST on a UTC+1 device — still
+        // wholly within the 20th locally. Confirms timed events (isAllDay
+        // == false) keep bucketing by the device's own local day, which
+        // localMidnightOfCalendarDay preserves — this fix only changes the
+        // all-day branch.
+        let lateEvent = WidgetEvent(
+            id: "e4", title: "Late call", startAt: "2026-09-20T22:30:00.000Z", endAt: "2026-09-20T22:59:00.000Z",
+            isAllDay: false, timezone: "Europe/London", colorHex: "#0000ff", deepLink: "/calendar?event=e4"
+        )
+        let grouped = eventsByDay([lateEvent], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped.count, 1)
+        XCTAssertEqual(grouped["2026-9-20"]?.count, 1, "23:30-23:59 local is still wholly the 20th locally")
+    }
+
+    func test_eventsByDay_timedEventCrossingLocalMidnight_appearsOnBothDaysItSpans() {
+        // 23:30 BST on the 20th to 00:30 BST on the 21st genuinely spans
+        // two local days — a timed event, unlike an all-day one, has real
+        // wall-clock start/end instants, so this must appear on both days
+        // it actually touches (never a leak — a correct span).
+        let crossesMidnight = WidgetEvent(
+            id: "e5", title: "Late film", startAt: "2026-09-20T22:30:00.000Z", endAt: "2026-09-20T23:30:00.000Z",
+            isAllDay: false, timezone: "Europe/London", colorHex: "#0000ff", deepLink: "/calendar?event=e5"
+        )
+        let grouped = eventsByDay([crossesMidnight], calendar: londonSummerCalendar)
+        XCTAssertEqual(grouped["2026-9-20"]?.count, 1)
+        XCTAssertEqual(grouped["2026-9-21"]?.count, 1, "the event genuinely runs until 00:30 local on the 21st")
+    }
 }
