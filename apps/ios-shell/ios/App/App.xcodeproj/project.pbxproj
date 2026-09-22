@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		04B9983967AF2C594B52CFE8 /* MyKhayaWidgetCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */; };
+		0571F0BCE747A667A7F8ACB0 /* SystemSettingsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02DD7234D0064D79923B408E /* SystemSettingsPlugin.swift */; };
 		0AC6B8B26DFF59416A8A6690 /* MyKhayaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4475B4DA1EDC20977720D36B /* MyKhayaWidgetsBundle.swift */; };
 		0BBB9153FFE25E9F4E70B6E4 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FFDEB96A374B406799D2CC /* Color+Hex.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
@@ -22,6 +23,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		536DAA5120BE89BD01E8E189 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 267EE6FA2D4FE660091D5293 /* Foundation.framework */; };
 		55938AB4E30C5D58C44EA8BE /* CalendarViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DFE00C82B0FBFB91B3F8A30 /* CalendarViews.swift */; };
+		6A4013ADC7E8A1A1F16BE259 /* NativePushEnvironmentPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F141C3F77A67F7A1B636996 /* NativePushEnvironmentPlugin.swift */; };
 		7439659A88C0317BD58DF56D /* WidgetBridgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */; };
 		76EC47C389C254FE4B8266B9 /* TodoViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC4673A7A57222864529C480 /* TodoViews.swift */; };
 		7953B0673D660068398A8EAE /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA3DB5330950B521A7044C7 /* MainViewController.swift */; };
@@ -62,7 +64,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		02DD7234D0064D79923B408E /* SystemSettingsPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SystemSettingsPlugin.swift; sourceTree = "<group>"; };
 		0AB344921B74A1E6B98B31E1 /* NextEventProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NextEventProvider.swift; path = ../../MyKhayaWidgets/Timeline/NextEventProvider.swift; sourceTree = "<group>"; };
+		1F141C3F77A67F7A1B636996 /* NativePushEnvironmentPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativePushEnvironmentPlugin.swift; sourceTree = "<group>"; };
 		267EE6FA2D4FE660091D5293 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		3B14BC78F28CD29DA5158953 /* TodoWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TodoWidget.swift; path = ../../MyKhayaWidgets/TodoWidget.swift; sourceTree = "<group>"; };
@@ -181,6 +185,8 @@
 				89368AE1C877E59340EE17DA /* WidgetBridgePlugin.swift */,
 				BDA3DB5330950B521A7044C7 /* MainViewController.swift */,
 				87ED1C165680BD37FADE56AA /* PrivacyInfo.xcprivacy */,
+				02DD7234D0064D79923B408E /* SystemSettingsPlugin.swift */,
+				1F141C3F77A67F7A1B636996 /* NativePushEnvironmentPlugin.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -277,7 +283,7 @@
 			mainGroup = 504EC2FB1FED79650016851F;
 			packageReferences = (
 				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
-				1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */,
+				1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */,
 			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
 			projectDirPath = "";
@@ -322,6 +328,8 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				7439659A88C0317BD58DF56D /* WidgetBridgePlugin.swift in Sources */,
 				7953B0673D660068398A8EAE /* MainViewController.swift in Sources */,
+				0571F0BCE747A667A7F8ACB0 /* SystemSettingsPlugin.swift in Sources */,
+				6A4013ADC7E8A1A1F16BE259 /* NativePushEnvironmentPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -407,6 +415,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -425,6 +434,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.29;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -464,6 +474,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -476,6 +487,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.29;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -491,16 +503,14 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/AppDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = App/Info.plist;
-				MYKHAYA_APNS_BUILD_ENVIRONMENT = development;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.25;
+				MYKHAYA_APNS_BUILD_ENVIRONMENT = development;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -520,16 +530,14 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/AppRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = App/Info.plist;
-				MYKHAYA_APNS_BUILD_ENVIRONMENT = production;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.25;
+				MYKHAYA_APNS_BUILD_ENVIRONMENT = production;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -548,11 +556,9 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -568,11 +574,9 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = ../../MyKhayaWidgets/MyKhayaWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -616,7 +620,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */ = {
+		1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../native/WidgetCore;
 		};
@@ -634,12 +638,12 @@
 		};
 		8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */;
 			productName = MyKhayaWidgetCore;
 		};
 		CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */;
 			productName = MyKhayaWidgetCore;
 		};
 /* End XCSwiftPackageProductDependency section */
