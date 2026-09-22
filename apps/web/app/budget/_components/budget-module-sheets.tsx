@@ -37,7 +37,7 @@ function CategoriesScreen({ homeId }: { homeId: string }) {
   return <>
     <Header title="Categories" description="Track where your budget goes." />
     <Period {...period} onChange={(year, month) => setPeriod({ year, month })} />
-    <BudgetMonthCopy homeId={homeId} year={period.year} month={period.month} onCreated={load} />
+    <BudgetMonthCopy homeId={homeId} year={period.year} month={period.month} onCreated={load} subtle />
     <div className="budget-list">{items.map((item) => { const row = month?.categories.find((entry) => entry.category_id === item.id); return <Link className="budget-list-row" key={item.id} href={`/budget/categories/${item.id}?year=${period.year}&month=${period.month}`}><span className="budget-icon"><Home size={21} /></span><span className="budget-row-copy"><strong>{item.name}</strong><small>{row ? `Planned ${money(row.planned_amount)} · Actual ${money(row.actual_amount)}` : "Not planned for this month"}</small></span><ChevronRight size={20} /></Link>; })}</div>
     <button type="button" className="budget-add-card" onClick={() => setSheet("add")}><Plus size={20} /><span><strong>Add category</strong><small>Create a new budget category</small></span><ChevronRight size={20} /></button>
     <BudgetAddAction homeId={homeId} onRefresh={load} />

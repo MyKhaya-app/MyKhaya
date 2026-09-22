@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { CalendarDays } from "lucide-react";
 import { api } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
 
@@ -10,7 +11,7 @@ function nextPeriod(year: number, month: number) {
   return { year: next.getFullYear(), month: next.getMonth() + 1 };
 }
 
-export function BudgetMonthCopy({ homeId, year, month, onCreated, contextual = false }: { homeId: string; year: number; month: number; onCreated?: () => void; contextual?: boolean }) {
+export function BudgetMonthCopy({ homeId, year, month, onCreated, contextual = false, subtle = false }: { homeId: string; year: number; month: number; onCreated?: () => void; contextual?: boolean; subtle?: boolean }) {
   const router = useRouter();
   const target = contextual ? { year, month } : nextPeriod(year, month);
   const source = new Date(year, month - 2, 1);
@@ -42,7 +43,7 @@ export function BudgetMonthCopy({ homeId, year, month, onCreated, contextual = f
   }
 
   return <>
-    <button type="button" className={contextual ? "budget-contextual-copy-trigger" : "budget-secondary-button"} onClick={() => setOpen(true)}><span><strong>Set up {targetLabel}</strong>{contextual && <small>Copy your fixed costs and income from {new Intl.DateTimeFormat("en-GB", { month: "long" }).format(source)}.</small>}</span>{contextual && <span aria-hidden="true">›</span>}</button>
+    <button type="button" className={contextual ? "budget-contextual-copy-trigger" : subtle ? "budget-subtle-copy-trigger" : "budget-secondary-button"} onClick={() => setOpen(true)}>{subtle ? <><span className="budget-subtle-copy-icon" aria-hidden="true"><CalendarDays size={20} /></span><span>Set up next month</span><span aria-hidden="true">→</span></> : <><span><strong>Set up {targetLabel}</strong>{contextual && <small>Copy your fixed costs and income from {new Intl.DateTimeFormat("en-GB", { month: "long" }).format(source)}.</small>}</span>{contextual && <span aria-hidden="true">›</span>}</>}</button>
     {open && <BottomSheet title={`Create ${targetLabel} budget`} onDismiss={() => !saving && setOpen(false)}>
       <div className="budget-copy-sheet">
         <p>Choose what to add. Existing values in {targetLabel} will be kept; this does not replace the month.</p>

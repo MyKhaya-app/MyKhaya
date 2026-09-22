@@ -73,7 +73,7 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
       <span aria-hidden="true">Add</span>
     </button>
     {mode === "menu" && <BottomSheet title="What would you like to add?" onDismiss={close}>
-      <div className="budget-picker-list">
+      <div className="budget-picker-list budget-add-picker-list">
         <button type="button" className="budget-picker-row" onClick={() => open("fixed")}><span className="budget-picker-icon"><WalletCards size={21} /></span><span className="budget-picker-copy"><strong>Fixed monthly cost</strong><small>Mortgage, broadband, subscriptions, etc.</small></span><ArrowRight size={19} aria-hidden="true" /></button>
         <button type="button" className="budget-picker-row" onClick={() => open("variable")}><span className="budget-picker-icon"><CircleDollarSign size={21} /></span><span className="budget-picker-copy"><strong>Variable budget</strong><small>Groceries, fuel, eating out, etc.</small></span><ArrowRight size={19} aria-hidden="true" /></button>
         <button type="button" className="budget-picker-row" onClick={() => { setMode(null); onSpending?.(); }}><span className="budget-picker-icon"><Receipt size={21} /></span><span className="budget-picker-copy"><strong>Spending entry</strong><small>Record money you have spent.</small></span><ArrowRight size={19} aria-hidden="true" /></button>
