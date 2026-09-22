@@ -10,9 +10,10 @@ function nextPeriod(year: number, month: number) {
   return { year: next.getFullYear(), month: next.getMonth() + 1 };
 }
 
-export function BudgetMonthCopy({ homeId, year, month, onCreated }: { homeId: string; year: number; month: number; onCreated?: () => void }) {
+export function BudgetMonthCopy({ homeId, year, month, onCreated, contextual = false }: { homeId: string; year: number; month: number; onCreated?: () => void; contextual?: boolean }) {
   const router = useRouter();
-  const target = nextPeriod(year, month);
+  const target = contextual ? { year, month } : nextPeriod(year, month);
+  const source = new Date(year, month - 2, 1);
   const targetLabel = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(target.year, target.month - 1, 1));
   const [open, setOpen] = useState(false);
   const [fixed, setFixed] = useState(true);
@@ -41,7 +42,7 @@ export function BudgetMonthCopy({ homeId, year, month, onCreated }: { homeId: st
   }
 
   return <>
-    <button type="button" className="budget-secondary-button" onClick={() => setOpen(true)}>Set up {targetLabel}</button>
+    <button type="button" className={contextual ? "budget-contextual-copy-trigger" : "budget-secondary-button"} onClick={() => setOpen(true)}><span><strong>Set up {targetLabel}</strong>{contextual && <small>Copy your fixed costs and income from {new Intl.DateTimeFormat("en-GB", { month: "long" }).format(source)}.</small>}</span>{contextual && <span aria-hidden="true">›</span>}</button>
     {open && <BottomSheet title={`Create ${targetLabel} budget`} onDismiss={() => !saving && setOpen(false)}>
       <div className="budget-copy-sheet">
         <p>Choose what to add. Existing values in {targetLabel} will be kept; this does not replace the month.</p>
