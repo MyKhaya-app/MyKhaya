@@ -51,13 +51,18 @@ import {
   zonedToday,
 } from "../calendar/calendar-utils";
 
-function eventTime(value: string, timezone: string) {
+function eventClock(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
     timeZone: timezone,
   }).format(new Date(value));
+}
+
+function eventTime(event: EventOccurrence) {
+  if (event.is_all_day) return "All day";
+  return eventClock(event.start_at, event.timezone);
 }
 
 function eventDateStack(value: string, timezone: string, isAllDay = false) {
@@ -126,12 +131,12 @@ function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number 
 function eventTiming(event: EventOccurrence) {
   const bounds = eventDateBounds(event, event.timezone);
   const multiDay = bounds.startKey !== bounds.endKey;
-  const startTime = eventTime(event.start_at, event.timezone);
+  const startTime = eventTime(event);
   const startsAtMidnight = startTime === "00:00";
   const effectivelyAllDay = event.is_all_day || startsAtMidnight;
   if (!multiDay) {
     return {
-      leading: event.is_all_day ? "All day" : `${startTime}–${eventTime(event.end_at, event.timezone)}`,
+      leading: event.is_all_day ? "All day" : `${startTime}–${eventClock(event.end_at, event.timezone)}`,
       ending: null,
     };
   }
@@ -141,7 +146,7 @@ function eventTiming(event: EventOccurrence) {
     : eventDateStack(event.end_at, event.timezone);
   return {
     leading: effectivelyAllDay ? "Multi-day" : `${startTime} →`,
-    ending: `Ends ${end.weekday} ${end.day} ${end.month}${effectivelyAllDay ? "" : ` · ${eventTime(event.end_at, event.timezone)}`}`,
+    ending: `Ends ${end.weekday} ${end.day} ${end.month}${effectivelyAllDay ? "" : ` · ${eventClock(event.end_at, event.timezone)}`}`,
   };
 }
 
@@ -574,7 +579,7 @@ export default function HomePage() {
                     key={event.occurrence_id}
                     event={event}
                     members={membersForEvent(event.member_ids)}
-                    leading={eventTime(event.start_at, event.timezone)}
+                    leading={eventTime(event)}
                   />
                 ))}
               </div>

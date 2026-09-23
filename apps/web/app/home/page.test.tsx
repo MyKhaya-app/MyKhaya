@@ -653,6 +653,27 @@ describe("Home — Coming up", () => {
     expect(screen.queryByText("Sports Day")).not.toBeInTheDocument();
   });
 
+  it("renders an all-day Today event as All day rather than a timezone-derived clock time", async () => {
+    enableCalendarOnly();
+    const day = new Date().toISOString().slice(0, 10);
+    const nextDay = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    (api.homeSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      today_events: [occurrence({
+        occurrence_id: "occ-today-all-day",
+        title: "Test whole day",
+        is_all_day: true,
+        start_at: `${day}T00:00:00Z`,
+        end_at: `${nextDay}T00:00:00Z`,
+      })],
+      next_event: null,
+    });
+
+    const { container } = render(<HomePage />);
+
+    expect(await screen.findByText("Test whole day")).toBeInTheDocument();
+    expect(container.querySelector(".home-event-time")?.textContent).toBe("All day");
+  });
+
   it("shows a compact 24-hour start/end range for a same-day timed event", async () => {
     enableCalendarOnly();
     const tomorrow = new Date(Date.now() + 86_400_000);

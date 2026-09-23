@@ -18,7 +18,7 @@ from __future__ import annotations
 import calendar as month_calendar
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import ColumnElement, and_, or_, select
@@ -55,6 +55,18 @@ class EffectiveOccurrence:
     # overridden and that list is authoritative for it.
     member_ids_override: list[uuid.UUID] | None
     is_overridden: bool
+
+
+def all_day_occurrence_covers_date(occurrence: EffectiveOccurrence, calendar_date: date) -> bool:
+    """Apply the all-day calendar-date contract to an effective occurrence.
+
+    All-day boundaries are stored at UTC midnight and the end is exclusive.
+    This date comparison also protects readers from legacy rows whose
+    all-day boundaries were stored with a local offset before normalization.
+    """
+    start_date = occurrence.start_at.astimezone(UTC).date()
+    end_date = occurrence.end_at.astimezone(UTC).date()
+    return start_date <= calendar_date < end_date
 
 
 async def load_exceptions(

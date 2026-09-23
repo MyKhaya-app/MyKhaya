@@ -13,6 +13,7 @@ from mykhaya.audit import audit
 from mykhaya.calendar_occurrences import (
     MAX_RANGE_DAYS,
     EffectiveOccurrence,
+    all_day_occurrence_covers_date,
     canonical_occurrences_up_to,
     expand_occurrences,
     is_canonical_occurrence,
@@ -2490,6 +2491,8 @@ async def home_summary(
     for event in today_candidate_rows:
         exceptions = today_exceptions.get(event.id, {})
         for effective in expand_occurrences(event, day_start, day_end, exceptions):
+            if effective.is_all_day and not all_day_occurrence_covers_date(effective, local_today):
+                continue
             today_effective.append((event, effective))
     today_effective.sort(key=lambda pair: pair[1].start_at)
     today_events = [

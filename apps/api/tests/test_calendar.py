@@ -7,7 +7,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from mykhaya.calendar_occurrences import expand_occurrences, next_occurrence_on_or_after
+from mykhaya.calendar_occurrences import (
+    EffectiveOccurrence,
+    all_day_occurrence_covers_date,
+    expand_occurrences,
+    next_occurrence_on_or_after,
+)
 from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
@@ -32,6 +37,26 @@ from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
+
+
+def test_all_day_occurrence_uses_exclusive_utc_date_boundary() -> None:
+    occurrence = EffectiveOccurrence(
+        occurrence_start=datetime(2026, 9, 22, tzinfo=UTC),
+        start_at=datetime(2026, 9, 22, tzinfo=UTC),
+        end_at=datetime(2026, 9, 23, tzinfo=UTC),
+        title="Test whole day",
+        description=None,
+        is_all_day=True,
+        location_text=None,
+        calendar_id=uuid.uuid4(),
+        label_id=None,
+        reminder_minutes=None,
+        member_ids_override=None,
+        is_overridden=False,
+    )
+
+    assert all_day_occurrence_covers_date(occurrence, date(2026, 9, 22))
+    assert not all_day_occurrence_covers_date(occurrence, date(2026, 9, 23))
 
 
 @pytest.fixture
