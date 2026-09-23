@@ -2732,6 +2732,64 @@ html.native-shell .home-section-overlap {
 .support-success > svg {
   color: var(--colour-forest);
 }
+.diagnostics-page {
+  display: grid;
+  gap: 1rem;
+}
+.diagnostics-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.diagnostics-toolbar p {
+  margin: 0;
+}
+.diagnostics-list {
+  display: grid;
+  gap: 0;
+}
+.diagnostic-row {
+  align-items: center;
+  border-bottom: 1px solid #eee8df;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.9rem 0;
+}
+.diagnostic-row:last-child {
+  border-bottom: 0;
+}
+.diagnostic-row > span:nth-child(2) {
+  display: grid;
+  gap: 0.2rem;
+}
+.diagnostic-row small {
+  color: var(--colour-muted);
+}
+.diagnostic-row b {
+  color: var(--colour-slate);
+  font-size: 0.8rem;
+  text-align: right;
+}
+.diagnostic-icon {
+  color: var(--colour-forest);
+  display: inline-flex;
+}
+.diagnostics-share {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+}
+.diagnostics-share > div {
+  display: grid;
+  gap: 0.5rem;
+}
+.diagnostics-share h2,
+.diagnostics-share p {
+  margin: 0;
+}
 .support-reference {
   font-size: 1.05rem;
 }

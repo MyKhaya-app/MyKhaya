@@ -16,6 +16,7 @@ import {
   notificationPermissionLabel,
   platformLabel,
 } from "./help-support-logic";
+import { collectSupportDiagnostics } from "@/components/support-diagnostics";
 
 // The service status URL is a canonical, PCC-managed operational setting
 // (mykhaya.platform_settings.SETTINGS_SCHEMA's service_status_url) — never
@@ -147,9 +148,17 @@ function DiagnosticsSummary() {
     ? nativeInfo
       ? `${nativeInfo.version} (Build ${nativeInfo.build})`
       : null
-    : build
+      : build
       ? build.version
       : null;
+  const snapshot = collectSupportDiagnostics({
+    appVersion,
+    buildNumber: nativeInfo?.build ?? build?.build_time ?? null,
+    platform: nativePlatform(),
+    runtime: isNativeShell() ? "native" : "web",
+    notificationPermission,
+    online,
+  });
 
   return (
     <section className="card details help-diagnostics-card">
@@ -161,7 +170,7 @@ function DiagnosticsSummary() {
             <Bug size={14} aria-hidden="true" />
             App version
           </dt>
-          <dd>{appVersion ?? "Unavailable"}</dd>
+          <dd>{snapshot.app_version ?? "Unavailable"}</dd>
         </div>
         <div>
           <dt>
@@ -182,7 +191,7 @@ function DiagnosticsSummary() {
             <Wifi size={14} aria-hidden="true" />
             Connectivity
           </dt>
-          <dd>{connectivityLabel(online)}</dd>
+          <dd>{connectivityLabel(snapshot.network_state === "online" ? true : snapshot.network_state === "offline" ? false : null)}</dd>
         </div>
       </dl>
     </section>

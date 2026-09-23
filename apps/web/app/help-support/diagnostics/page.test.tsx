@@ -31,15 +31,20 @@ beforeEach(() => {
     display_name: "Megan",
     principal_type: "adult",
   });
-  global.fetch = vi.fn().mockRejectedValue(new Error("no build info in tests"));
+  global.fetch = vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("config/public")) return Promise.resolve({ ok: true, json: () => Promise.resolve({ support_enabled: true }) });
+    if (url.includes("health/live")) return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "ok" }) });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ version: "1.0.0", build_time: "1" }) });
+  }) as unknown as typeof fetch;
 });
 
-describe("Run diagnostics (Phase 2C placeholder)", () => {
-  it("truthfully shows Coming soon with no diagnostic checks run and no share action", async () => {
+describe("Run diagnostics", () => {
+  it("runs checks and exposes rerun/share actions", async () => {
     render(<RunDiagnostics />);
     await screen.findByRole("heading", { name: "Run diagnostics" });
-    expect(screen.getByText("Coming soon")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /run again/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /share diagnostics/i })).toBeNull();
+    expect(await screen.findByText("MyKhaya service")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run again/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /report a bug with diagnostics/i })).toHaveAttribute("href", "/help-support/report-bug?diagnostics=1");
   });
 });

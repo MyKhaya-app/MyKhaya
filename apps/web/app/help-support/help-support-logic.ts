@@ -7,6 +7,7 @@
 import type { NativePlatform } from "@/components/native-runtime";
 import type { ServiceState } from "@/components/platform-types";
 import type { SupportTicketPriorityValue } from "@/components/support-logic";
+import { collectSupportDiagnostics } from "@/components/support-diagnostics";
 
 // The public Status page's own overall_message (mykhaya.status_aggregation)
 // is written for that page's fuller context ("Operational", "Scheduled
@@ -117,14 +118,5 @@ export function buildBugReportDiagnostics(
   source: BugReportDiagnosticsSource,
   now: Date = new Date(),
 ): BugReportDiagnosticsPayload {
-  const payload: BugReportDiagnosticsPayload = {
-    platform: source.platform,
-    runtime: source.runtime,
-    notification_permission: source.notificationPermission,
-    client_timestamp: now.toISOString(),
-  };
-  if (source.appVersion) payload.app_version = source.appVersion;
-  if (source.buildNumber) payload.build_number = source.buildNumber;
-  if (source.online !== null) payload.network_state = source.online ? "online" : "offline";
-  return payload;
+  return collectSupportDiagnostics(source, now);
 }
