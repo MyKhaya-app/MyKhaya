@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, ImagePlus, Send } from "lucide-react";
 import { api, type SupportTicketResponse } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
@@ -40,6 +40,7 @@ export default function ContactSupport() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<SupportTicketResponse | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const platform = nativePlatform();
   const source = useMemo(() => ({
     appVersion: build?.version ?? null,
@@ -106,7 +107,35 @@ export default function ContactSupport() {
     <label>Subject<input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={200} required /></label>
     <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}>{CATEGORY_OPTIONS.map((option) => <option key={`${option.label}-${option.value}`} value={option.value}>{option.label}</option>)}</select></label>
     <label>Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={4000} rows={7} required /></label>
-    <label className="support-file-field"><span><ImagePlus size={16} aria-hidden="true" /> Screenshot (optional)</span><input type="file" accept="image/*" onChange={(event) => setScreenshot(event.target.files?.[0] ?? null)} />{screenshot && <small>{screenshot.name}</small>}</label>
+    <div className="support-file-field">
+      <label htmlFor="contact-support-screenshot" className="support-file-button">
+        <ImagePlus size={18} aria-hidden="true" />
+        <span><strong>{screenshot ? "Change screenshot" : "Add screenshot"}</strong><small>Optional</small></span>
+      </label>
+      <input
+        id="contact-support-screenshot"
+        ref={fileInputRef}
+        className="visually-hidden"
+        type="file"
+        accept="image/*"
+        onChange={(event) => setScreenshot(event.target.files?.[0] ?? null)}
+      />
+      {screenshot && (
+        <div className="support-file-chip">
+          <span className="text-ellipsis">{screenshot.name}</span>
+          <button
+            type="button"
+            className="tertiary"
+            onClick={() => {
+              setScreenshot(null);
+              if (fileInputRef.current) fileInputRef.current.value = "";
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      )}
+    </div>
     <small>Your screenshot may include information currently visible on your screen.</small>
     <label className="check-row"><input type="checkbox" checked={includeDiagnostics} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />Include diagnostics</label>
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send request"}</button>

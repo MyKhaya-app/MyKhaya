@@ -239,6 +239,23 @@ TEMPLATES: dict[str, TemplateDefault] = {
         disableable=False,
         security_critical=False,
     ),
+    # Team-only: never sent to the requester (they just wrote the message
+    # themselves) — see mykhaya.support_notifications.ticket_follow_up. Only
+    # queued when MYKHAYA_SUPPORT_NOTIFICATION_EMAIL is configured, exactly
+    # like support.ticket.received's own team copy.
+    "support.ticket.follow_up": TemplateDefault(
+        subject="A requester replied to MyKhaya support request {{reference}}",
+        body=(
+            "The requester replied to their {{ticket_type}}.\n\n"
+            "Reference: {{reference}}\n\n{{reply_text}}"
+        ),
+        allowed_variables=frozenset({"reference", "subject", "ticket_type", "reply_text"}),
+        required_variables=frozenset({"reference", "reply_text"}),
+        description="Sent to the support team when a requester follows up on their own ticket.",
+        module="support",
+        disableable=False,
+        security_critical=False,
+    ),
     # --- Calendar (in-app / push) --------------------------------------------
     # These four cover routers.calendar's per-event-member notifications
     # (Home-side) and notifications.calendar_shares' equivalent for external
@@ -684,5 +701,11 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
     "support.ticket.resolved": {
         "reference": "MK-1042",
         "subject": "Account help",
+    },
+    "support.ticket.follow_up": {
+        "reference": "MK-1042",
+        "ticket_type": "support request",
+        "subject": "Account help",
+        "reply_text": "Still seeing this after the last update — any news?",
     },
 }

@@ -35,7 +35,12 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.security import password_hash
-from mykhaya.support_notifications import ticket_received, ticket_reply, ticket_resolved
+from mykhaya.support_notifications import (
+    ticket_follow_up,
+    ticket_received,
+    ticket_reply,
+    ticket_resolved,
+)
 from mykhaya.support_reference import next_support_reference
 
 
@@ -239,6 +244,117 @@ async def test_ticket_reply_idempotency_key_is_stable_per_message_id() -> None:
     rows = await _outbox_rows_for(requester.email)
     reply_rows = [r for r in rows if r.payload["notification_type"] == "support.ticket.reply"]
     assert len(reply_rows) == 1
+
+
+# --------------------------------------------------------------------------
+# ticket_follow_up (requester's own reply — team-only, never to the requester)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ticket_follow_up_notifies_team_only_when_configured() -> None:
+    requester = await _create_user()
+    team_email = unique_email("support-team")
+    settings = get_settings().model_copy(update={"support_notification_email": team_email})
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id,
+            author_user_id=requester.id,
+            message="Still happening — any update?",
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_follow_up(db, settings, ticket, message.message, message.id)
+        await db.commit()
+
+    team_rows = await _outbox_rows_for(team_email)
+    requester_rows = await _outbox_rows_for(requester.email)
+    assert len(team_rows) == 1
+    assert len(requester_rows) == 0
+    payload = team_rows[0].payload
+    assert payload["notification_type"] == "support.ticket.follow_up"
+    assert ticket.reference in payload["body"]
+    assert "Still happening — any update?" in payload["body"]
+
+
+@pytest.mark.asyncio
+async def test_ticket_follow_up_does_not_raise_when_team_email_is_not_configured() -> None:
+    requester = await _create_user()
+    settings = get_settings().model_copy(update={"support_notification_email": None})
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_user_id=requester.id, message="Following up."
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_follow_up(db, settings, ticket, message.message, message.id)  # must not raise
+        await db.commit()
+
+    payloads = [p for p in await _all_support_outbox_payloads() if ticket.reference in p["body"]]
+    follow_up_rows = [p for p in payloads if p["notification_type"] == "support.ticket.follow_up"]
+    assert len(follow_up_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_ticket_follow_up_idempotency_key_is_stable_per_message_id() -> None:
+    requester = await _create_user()
+    team_email = unique_email("support-team")
+    settings = get_settings().model_copy(update={"support_notification_email": team_email})
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_user_id=requester.id, message="Repeated follow-up."
+        )
+        db.add(message)
+        await db.flush()
+        message_id = message.id
+        # A second call with the same persisted message id (e.g. a retried
+        # request) must not enqueue a second email.
+        await ticket_follow_up(db, settings, ticket, message.message, message_id)
+        await ticket_follow_up(db, settings, ticket, message.message, message_id)
+        await db.commit()
+
+    team_rows = await _outbox_rows_for(team_email)
+    follow_up_rows = [
+        r for r in team_rows if r.payload["notification_type"] == "support.ticket.follow_up"
+    ]
+    assert len(follow_up_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_ticket_follow_up_email_failure_does_not_abort_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requester = await _create_user()
+    team_email = unique_email("support-team")
+    settings = get_settings().model_copy(update={"support_notification_email": team_email})
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        await db.commit()
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("smtp exploded")
+
+    monkeypatch.setattr("mykhaya.support_notifications.notify", boom)
+
+    async with SessionFactory() as db:
+        ticket = await _reload_ticket(db, ticket.id)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_user_id=requester.id, message="Reply text."
+        )
+        db.add(message)
+        await db.flush()
+        # Must not raise, despite the patched notify() below.
+        await ticket_follow_up(db, settings, ticket, message.message, message.id)
+        await db.commit()  # must succeed despite the notify failure above
+        message_id = message.id
+
+    monkeypatch.undo()
+    async with SessionFactory() as db:
+        reloaded = await db.get(SupportTicketMessage, message_id)
+        assert reloaded is not None
 
 
 # --------------------------------------------------------------------------
@@ -459,17 +575,27 @@ async def test_support_emails_never_include_diagnostics_attachments_or_internal_
         ticket.status = SupportTicketStatus.resolved
         await db.flush()
 
+        follow_up_message = SupportTicketMessage(
+            ticket_id=ticket.id, author_user_id=requester.id, message="Requester follow-up content."
+        )
+        db.add(follow_up_message)
+        await db.flush()
+
         await ticket_received(db, settings, ticket, requester)
         await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await ticket_follow_up(
+            db, settings, ticket, follow_up_message.message, follow_up_message.id
+        )
         await ticket_resolved(db, settings, ticket, requester, "privacy-resolution")
         await db.commit()
 
     payloads = [p for p in await _all_support_outbox_payloads() if ticket.reference in p["body"]]
-    # requester received + team received + requester reply + requester resolved
-    assert len(payloads) == 4
+    # requester received + team received + requester reply + team follow_up + requester resolved
+    assert len(payloads) == 5
     assert {p["notification_type"] for p in payloads} == {
         "support.ticket.received",
         "support.ticket.reply",
+        "support.ticket.follow_up",
         "support.ticket.resolved",
     }
 

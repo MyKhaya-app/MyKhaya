@@ -61,6 +61,25 @@ describe("Contact support", () => {
     ).toBeVisible();
   });
 
+  it("shows a styled Add screenshot control, and swaps to a filename with Remove once a file is chosen", async () => {
+    const user = userEvent.setup();
+    render(<ContactSupport />);
+    await screen.findByRole("heading", { name: "Contact support" });
+    expect(screen.getByLabelText(/add screenshot/i)).toBeInTheDocument();
+    expect(screen.queryByText("Remove")).toBeNull();
+
+    const file = new File(["fake-image-bytes"], "screenshot.png", { type: "image/png" });
+    const input = document.getElementById("contact-support-screenshot") as HTMLInputElement;
+    await user.upload(input, file);
+
+    expect(screen.getByText("screenshot.png")).toBeInTheDocument();
+    expect(screen.getByLabelText(/change screenshot/i)).toBeInTheDocument();
+    const removeButton = screen.getByRole("button", { name: "Remove" });
+    await user.click(removeButton);
+    expect(screen.queryByText("screenshot.png")).toBeNull();
+    expect(input.value).toBe("");
+  });
+
   it("submits a support ticket and shows its reference", async () => {
     const user = userEvent.setup();
     const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;

@@ -60,6 +60,25 @@ describe("Report a bug", () => {
     ).toBeVisible();
   });
 
+  it("shows a styled Add screenshot control, and swaps to a filename with Remove once a file is chosen", async () => {
+    const user = userEvent.setup();
+    render(<ReportBug />);
+    await screen.findByRole("heading", { name: "Report a bug" });
+    expect(screen.getByLabelText(/add screenshot/i)).toBeInTheDocument();
+    expect(screen.queryByText("Remove")).toBeNull();
+
+    const file = new File(["fake-image-bytes"], "screenshot.png", { type: "image/png" });
+    const input = document.getElementById("report-bug-screenshot") as HTMLInputElement;
+    await user.upload(input, file);
+
+    expect(screen.getByText("screenshot.png")).toBeInTheDocument();
+    expect(screen.getByLabelText(/change screenshot/i)).toBeInTheDocument();
+    const removeButton = screen.getByRole("button", { name: "Remove" });
+    await user.click(removeButton);
+    expect(screen.queryByText("screenshot.png")).toBeNull();
+    expect(input.value).toBe("");
+  });
+
   it("submits diagnostics and shows the server reference", async () => {
     const user = userEvent.setup();
     const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;

@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Activity, Bell, Bug, MessageCircle, Smartphone, Wifi } from "lucide-react";
 import { App } from "@capacitor/app";
+import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { openExternalUrl } from "@/components/open-external-url";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { useBuildInfo } from "@/components/app-version";
 import { useNotificationPermission } from "@/components/use-notification-permission";
 import type { ServiceState } from "@/components/platform-types";
+import { openTicketCount } from "@/components/support-logic";
 import {
   connectivityLabel,
   hubStatusMessage,
@@ -207,8 +209,26 @@ function DiagnosticsSummary() {
   );
 }
 
+// Reuses the same /support/tickets list the requests page itself fetches
+// (Part C) — never a second/dedicated count endpoint. A failure here just
+// means no count badge shows; the "My support requests" card itself never
+// depends on this succeeding.
+function useOpenRequestCount(): number | null {
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    api
+      .listSupportTickets()
+      .then((response) => setCount(openTicketCount(response.items)))
+      .catch(() => setCount(null));
+  }, []);
+
+  return count;
+}
+
 export default function HelpSupport() {
   const [supportEnabled, setSupportEnabled] = useState<boolean | null>(null);
+  const openRequestCount = useOpenRequestCount();
 
   useEffect(() => {
     fetch("/api/v1/config/public", { cache: "no-store" })
@@ -249,30 +269,29 @@ export default function HelpSupport() {
       </div>
 
       <div className="card-stack">
+        <Link className="card" href="/help-support/requests">
+          <div>
+            <h2>My support requests</h2>
+            <p>
+              View your open and previous support requests.
+              {openRequestCount !== null && openRequestCount > 0 && (
+                <span className="support-status-pill support-status-info help-requests-count">
+                  {openRequestCount} open
+                </span>
+              )}
+            </p>
+          </div>
+          <span aria-hidden="true">›</span>
+        </Link>
+
         <ServiceStatusBanner />
 
-        {supportEnabled ? (
-          <Link className="card" href="/help-support/report-bug">
-            <div>
-              <h2>Report a bug</h2>
-              <p>Send us issue details, screenshots and app diagnostics to help us fix problems faster.</p>
-            </div>
-            <span aria-hidden="true">›</span>
-          </Link>
-        ) : (
+        {supportEnabled === false && (
           <section className="card details" aria-live="polite">
             <h2>Report a bug</h2>
             <p className="muted">Bug reporting is temporarily unavailable. Service status is still available below.</p>
           </section>
         )}
-
-        <Link className="card" href="/help-support/contact-support">
-          <div>
-            <h2>Contact support</h2>
-            <p>Get help from the MyKhaya support team.</p>
-          </div>
-          <span aria-hidden="true">›</span>
-        </Link>
 
         <section className="card details">
           <h2>Knowledge base</h2>

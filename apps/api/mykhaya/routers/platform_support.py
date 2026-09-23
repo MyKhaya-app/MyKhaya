@@ -37,6 +37,7 @@ from mykhaya.models import (
 )
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_schemas import (
+    PlatformSupportSettingsResponse,
     PlatformSupportTicketAttachmentResponse,
     PlatformSupportTicketDetailResponse,
     PlatformSupportTicketDiagnosticResponse,
@@ -187,6 +188,20 @@ async def _detail_response(
             if diagnostic is not None
             else None
         ),
+    )
+
+
+@router.get("/settings", response_model=PlatformSupportSettingsResponse)
+async def get_support_settings(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    settings: Settings = Depends(get_settings),
+) -> PlatformSupportSettingsResponse:
+    # Deliberately the only value exposed here — support_enabled (GET
+    # /platform/modules) and service_status_url (GET /platform/settings)
+    # already have their own single source of truth; this route must never
+    # duplicate either. See PlatformSupportSettingsResponse's docstring.
+    return PlatformSupportSettingsResponse(
+        support_notification_email=settings.support_notification_email
     )
 
 

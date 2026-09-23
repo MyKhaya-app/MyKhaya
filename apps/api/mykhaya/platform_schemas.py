@@ -1143,3 +1143,15 @@ class PlatformSupportTicketUpdate(StrictModel):
 
 class PlatformSupportTicketMessageCreate(StrictModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class PlatformSupportSettingsResponse(BaseModel):
+    """Read-only support-behaviour summary for PCC's Support Settings page.
+    Deliberately does NOT repeat `support_enabled` (see GET /platform/modules
+    — the FeatureFlag row is the one source of truth for that) or
+    `service_status_url` (see GET /platform/settings — the PlatformSetting
+    row is that value's one owner). This exists only for the one value
+    neither of those surfaces already exposes: the env-only, non-runtime-
+    editable support-team notification destination."""
+
+    support_notification_email: str | None

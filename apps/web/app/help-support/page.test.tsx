@@ -28,6 +28,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      listSupportTickets: vi.fn(),
     },
   };
 });
@@ -98,6 +99,7 @@ beforeEach(() => {
     display_name: "Megan",
     principal_type: "adult",
   });
+  (api.listSupportTickets as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   mockFetch();
 });
 
@@ -129,24 +131,7 @@ describe("Help & Support — quick actions", () => {
     expect(runDiagnostics).toHaveAttribute("href", "/help-support/diagnostics");
   });
 
-  it("makes the Report a bug and Contact support cards below navigate to the same real routes once support_enabled resolves", async () => {
-    render(<HelpSupport />);
-    // The "Report a bug" card renders a disabled <section> (not a link)
-    // until the /config/public fetch resolves support_enabled — both
-    // states share the same accessible heading name, so wait for the real
-    // link specifically rather than the first matching heading, which can
-    // otherwise be the pre-fetch disabled render.
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Report a bug" }).closest("a")).not.toBeNull();
-    });
-    const reportBugHeading = screen.getByRole("heading", { name: "Report a bug" });
-    const contactSupportHeading = screen.getByRole("heading", { name: "Contact support" });
-
-    expect(reportBugHeading.closest("a")).toHaveAttribute("href", "/help-support/report-bug");
-    expect(contactSupportHeading.closest("a")).toHaveAttribute("href", "/help-support/contact-support");
-  });
-
-  it("shows the Report a bug card as unavailable (not a link) when support is disabled", async () => {
+  it("shows an explanatory Report a bug card, not a dead link, when support is disabled", async () => {
     mockFetch({
       configPayload: { ...DEFAULT_CONFIG_PAYLOAD, support_enabled: false },
     });
@@ -155,11 +140,60 @@ describe("Help & Support — quick actions", () => {
     await waitFor(() => {
       expect(screen.getByText(/bug reporting is temporarily unavailable/i)).toBeInTheDocument();
     });
-    expect(screen.getByRole("heading", { name: "Report a bug" }).closest("a")).toBeNull();
     // The quick action degrades to a non-navigable, clearly-labelled
-    // disabled state too, not a link to a route that can't do anything.
+    // disabled state, not a link to a route that can't do anything.
     expect(screen.queryByRole("link", { name: "Report a bug" })).toBeNull();
     expect(screen.getByText("Report a bug unavailable")).toBeInTheDocument();
+  });
+
+  it("does not show the explanatory Report a bug card once support is enabled", async () => {
+    render(<HelpSupport />);
+    await screen.findByRole("link", { name: "Report a bug" });
+    expect(screen.queryByText(/bug reporting is temporarily unavailable/i)).toBeNull();
+  });
+});
+
+describe("Help & Support — My support requests", () => {
+  it("links to the requests list", async () => {
+    render(<HelpSupport />);
+    const link = await screen.findByRole("link", { name: /my support requests/i });
+    expect(link).toHaveAttribute("href", "/help-support/requests");
+    expect(
+      screen.getByText("View your open and previous support requests."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an open-request count fetched from the existing ticket list", async () => {
+    (api.listSupportTickets as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        { id: "t1", reference: "MK-1001", type: "bug", status: "open", priority: "normal", subject: "A", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", resolved_at: null },
+        { id: "t2", reference: "MK-1002", type: "bug", status: "in_progress", priority: "normal", subject: "B", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", resolved_at: null },
+        { id: "t3", reference: "MK-1003", type: "bug", status: "resolved", priority: "normal", subject: "C", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", resolved_at: "2026-01-02T00:00:00Z" },
+      ],
+    });
+    render(<HelpSupport />);
+    await screen.findByRole("link", { name: /my support requests/i });
+    expect(await screen.findByText("2 open")).toBeInTheDocument();
+  });
+
+  it("shows no count badge when there are no open requests", async () => {
+    render(<HelpSupport />);
+    await screen.findByRole("link", { name: /my support requests/i });
+    expect(screen.queryByText(/open$/)).toBeNull();
+  });
+
+  it("shows no count badge, and no crash, when the ticket list fails to load", async () => {
+    (api.listSupportTickets as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+    render(<HelpSupport />);
+    await screen.findByRole("link", { name: /my support requests/i });
+    expect(screen.queryByText(/open$/)).toBeNull();
+  });
+
+  it("remains available even when support ticket submission is disabled", async () => {
+    mockFetch({ configPayload: { ...DEFAULT_CONFIG_PAYLOAD, support_enabled: false } });
+    render(<HelpSupport />);
+    const link = await screen.findByRole("link", { name: /my support requests/i });
+    expect(link).toHaveAttribute("href", "/help-support/requests");
   });
 });
 

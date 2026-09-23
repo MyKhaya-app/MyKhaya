@@ -181,3 +181,64 @@ export const TICKET_APP_AREA_OPTIONS: SupportTicketAppAreaValue[] = [
 
 export const APP_AREA_OPTIONS: { value: SupportTicketAppAreaValue; label: string }[] =
   TICKET_APP_AREA_OPTIONS.map((value) => ({ value, label: APP_AREA_LABELS[value] }));
+
+// --- My support requests (consumer-only) ----------------------------------
+
+// A ticket the requester can still add to. Never used to gate the backend
+// (routers.support.add_message accepts a reply regardless of status — this
+// is purely a frontend courtesy so a person isn't invited to type into a
+// closed conversation); see help-support/requests/[id]/page.tsx.
+export function isActiveTicketStatus(status: string): boolean {
+  return status === "open" || status === "in_progress" || status === "waiting_for_user";
+}
+
+// Used by the Help & Support hub's "My support requests" card (Part C) —
+// reuses the same list response the requests page itself fetches, never a
+// second/dedicated count endpoint. `null` means "not yet known" (still
+// loading, or the request failed), which the caller renders as no count
+// rather than 0.
+export function openTicketCount(
+  tickets: { status: string }[] | null,
+): number | null {
+  if (tickets === null) return null;
+  return tickets.filter((ticket) => isActiveTicketStatus(ticket.status)).length;
+}
+
+// A small, consumer-safe status tone — deliberately not CcBadgeTone (PCC's
+// own component/type), so this file's consumer half never depends on PCC
+// styling even indirectly. See .support-status-pill in app/styles.css.
+export type SupportStatusTone = "info" | "warning" | "neutral" | "success";
+
+export function ticketStatusConsumerTone(value: string): SupportStatusTone {
+  switch (value as SupportTicketStatusValue) {
+    case "open":
+      return "info";
+    case "in_progress":
+      return "warning";
+    case "waiting_for_user":
+      return "neutral";
+    case "resolved":
+    case "closed":
+      return "success";
+    default:
+      return "neutral";
+  }
+}
+
+// Mirrors control-centre/platform-format.ts's relativeTime shape but kept
+// local — the consumer app never imports from components/platform-format.ts
+// (a PCC-named module) even for a function this small and generic.
+export function relativeTimeFromNow(value: string): string {
+  const elapsed = new Date(value).getTime() - Date.now();
+  if (Number.isNaN(elapsed)) return "Unavailable";
+  const formatter = new Intl.RelativeTimeFormat("en-GB", { numeric: "auto" });
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+  ];
+  for (const [unit, milliseconds] of units) {
+    if (Math.abs(elapsed) >= milliseconds) return formatter.format(Math.round(elapsed / milliseconds), unit);
+  }
+  return "just now";
+}

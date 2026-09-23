@@ -2177,6 +2177,10 @@
 .cc-move-member-summary { background: #f3f6f7; border-radius: 0.45rem; margin: 0 0 0.9rem; padding: 0.7rem 0.9rem; }
 .cc-move-member-summary h3 { font-size: 0.85rem; margin: 0 0 0.4rem; }
 .cc-move-member-summary ul { margin: 0.5rem 0 0; padding-left: 1.1rem; }
+/* Support Settings' "What consumer Support provides" panel (Part D) — a
+   plain informational list, not a form or interactive control. */
+.cc-support-behaviour-list { margin: 0; padding-left: 1.2rem; }
+.cc-support-behaviour-list li { color: var(--cc-text-muted); padding: 0.15rem 0; }
 .cc-cleanup-tabs { border-bottom: 1px solid var(--platform-line); display: flex; gap: 0.4rem; margin: 0 0 1rem; }
 .cc-cleanup-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--cc-text-muted); cursor: pointer; font-weight: 650; padding: 0.5rem 0.2rem 0.6rem; }
 .cc-cleanup-tabs button + button { margin-left: 1rem; }

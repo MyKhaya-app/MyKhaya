@@ -72,6 +72,10 @@ MANDATORY_EMAIL_TYPES = {
     "support.ticket.received",
     "support.ticket.reply",
     "support.ticket.resolved",
+    # Team-only: never sent to a real MyKhaya user (recipient_user_id is
+    # always None — see support_notifications.ticket_follow_up), so it must
+    # be mandatory to satisfy notify()'s "no user account yet" exemption.
+    "support.ticket.follow_up",
 }
 
 

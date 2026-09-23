@@ -217,7 +217,8 @@ async def _reset_support_rate_limits() -> None:
     identity = hashlib.sha256(DEFAULT_TEST_PEER.encode()).hexdigest()[:24]
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     try:
-        for bucket in ("support-ticket-create", "support-attachment-upload"):
+        buckets = ("support-ticket-create", "support-attachment-upload", "support-ticket-message")
+        for bucket in buckets:
             await redis.delete(f"rate:{bucket}:{identity}")
     finally:
         await redis.aclose()
@@ -244,6 +245,53 @@ async def test_support_operator_role_can_access_support_queue(
     await admin_login(admin_client, admin)
     response = await admin_client.get("/api/v1/platform/support/tickets")
     assert response.status_code == 200
+
+
+# --- settings (Part D: PCC Support Settings) -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_security_role_cannot_access_support_settings(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.security)
+    await admin_login(admin_client, admin)
+    response = await admin_client.get("/api/v1/platform/support/settings")
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_support_settings_reports_the_configured_team_notification_email(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    configured = get_settings().model_copy(
+        update={"support_notification_email": "support-team@example.com"}
+    )
+    app.dependency_overrides[get_settings] = lambda: configured
+    try:
+        admin = await admin_factory(PlatformRole.support)
+        await admin_login(admin_client, admin)
+        response = await admin_client.get("/api/v1/platform/support/settings")
+        assert response.status_code == 200
+        assert response.json() == {"support_notification_email": "support-team@example.com"}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.mark.asyncio
+async def test_support_settings_reports_null_when_team_notification_email_is_not_configured(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    unconfigured = get_settings().model_copy(update={"support_notification_email": None})
+    app.dependency_overrides[get_settings] = lambda: unconfigured
+    try:
+        admin = await admin_factory(PlatformRole.support)
+        await admin_login(admin_client, admin)
+        response = await admin_client.get("/api/v1/platform/support/settings")
+        assert response.status_code == 200
+        assert response.json() == {"support_notification_email": None}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
 
 
 # --- list / filter / search ---------------------------------------------------
@@ -535,6 +583,43 @@ async def test_admin_reply_is_visible_to_requester(
             )
         ).all()
         assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_replies_appear_in_pcc_conversation_in_order_without_loss(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    await create_verified_user(consumer_client, unique_email("pccconsumerreply"), "Requester Name")
+    ticket_id = await create_ticket(consumer_client, "Multiple requester follow-ups")
+
+    for message in ("First follow-up.", "Second follow-up.", "Third follow-up."):
+        posted = await unsafe(
+            consumer_client,
+            "POST",
+            f"/api/v1/support/tickets/{ticket_id}/messages",
+            json={"message": message},
+        )
+        assert posted.status_code == 201, posted.text
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    detail = await admin_unsafe(
+        admin_client, "GET", f"/api/v1/platform/support/tickets/{ticket_id}"
+    )
+    assert detail.status_code == 200
+    messages = detail.json()["messages"]
+    assert [m["message"] for m in messages] == [
+        "First follow-up.",
+        "Second follow-up.",
+        "Third follow-up.",
+    ]
+    # Every consumer reply is attributed to the requester, never an admin —
+    # PCC's own rendering (author_admin_id present -> "(MyKhaya team)")
+    # depends on this being correct.
+    for entry in messages:
+        assert entry["author_admin_id"] is None
+        assert entry["author_user_id"] is not None
+        assert entry["author_display_name"] == "Requester Name"
 
 
 # --- attachment retrieval (Phase 2B) -------------------------------------------

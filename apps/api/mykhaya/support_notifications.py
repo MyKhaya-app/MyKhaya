@@ -112,6 +112,37 @@ async def ticket_reply(
         log.exception("support.ticket_reply_email_queue_failed", ticket_id=str(ticket.id))
 
 
+async def ticket_follow_up(
+    db: AsyncSession,
+    settings: Settings,
+    ticket: SupportTicket,
+    reply_text: str,
+    message_id: uuid.UUID,
+) -> None:
+    """Team-only notification for a requester's own follow-up reply — never
+    sent to the requester (they just wrote it). Skipped entirely, same as
+    ticket_received's team copy, when no support_notification_email is
+    configured; a requester reply sitting unseen in PCC with no team
+    destination configured is a deployment/config gap, not something this
+    function can fix, so it logs and returns rather than failing the reply."""
+    if not settings.support_notification_email:
+        log.info("support.notification_destination_missing", ticket_id=str(ticket.id))
+        return
+    try:
+        await _queue(
+            db,
+            settings,
+            recipient_user_id=None,
+            recipient_email=settings.support_notification_email,
+            notification_type="support.ticket.follow_up",
+            ticket=ticket,
+            idempotency_key=f"support.ticket.follow_up:{ticket.id}:{message_id}",
+            reply_text=reply_text,
+        )
+    except Exception:
+        log.exception("support.ticket_follow_up_email_queue_failed", ticket_id=str(ticket.id))
+
+
 async def ticket_resolved(
     db: AsyncSession,
     settings: Settings,

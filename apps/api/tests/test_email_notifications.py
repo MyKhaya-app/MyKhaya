@@ -119,6 +119,7 @@ def test_mandatory_email_types_are_registered() -> None:
         "support.ticket.received",
         "support.ticket.reply",
         "support.ticket.resolved",
+        "support.ticket.follow_up",
     } == (MANDATORY_EMAIL_TYPES)
 
 

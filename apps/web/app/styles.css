@@ -2697,31 +2697,78 @@ html.native-shell .home-section-overlap {
 }
 .support-choice-list {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
+/* Compact, full-width tap target — the row itself is the <label>, so the
+   native radio only needs to be visible, not large; a bigger hit area comes
+   from the row's own padding, not the control. Selected state is never
+   colour-only: the border/shadow pairs with the radio's own checked state. */
 .support-choice {
   align-items: center;
   border: 1px solid #d9d7d0;
   border-radius: var(--radius-small);
   display: flex;
-  gap: 0.7rem;
-  padding: 0.7rem;
+  gap: 0.65rem;
+  min-height: 44px;
+  padding: 0.55rem 0.7rem;
 }
 .support-choice.selected {
   border-color: var(--colour-sage-dark);
   box-shadow: 0 0 0 2px var(--colour-sage-soft);
 }
+.support-choice input[type="radio"] {
+  accent-color: var(--colour-sage-dark);
+  flex: none;
+  height: 19px;
+  margin: 0;
+  width: 19px;
+}
 .support-choice span {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.1rem;
+}
+.support-choice strong {
+  font-size: 0.92rem;
+}
+.support-choice small {
+  font-size: 0.8rem;
 }
 .support-form small {
   color: var(--colour-muted);
 }
-.support-file-field > span {
+/* Screenshot picker: the real <input type="file"> stays fully functional
+   and accessible (.visually-hidden, never display:none), associated via
+   htmlFor/id with this styled label acting as the visible control — see
+   report-bug/page.tsx and contact-support/page.tsx. */
+.support-file-button {
+  align-items: center;
+  border: 1px dashed #d3cec2;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.7rem;
+}
+.support-file-button:hover {
+  border-color: var(--colour-sage-dark);
+}
+.support-file-button svg {
+  color: var(--colour-sage-dark);
+  flex: none;
+}
+.support-file-button span {
+  display: grid;
+  gap: 0.1rem;
+}
+.support-file-chip {
   align-items: center;
   display: flex;
-  gap: 0.35rem;
+  gap: 0.6rem;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+}
+.support-file-chip button {
+  flex: none;
 }
 .support-success {
   display: grid;
@@ -2729,6 +2776,89 @@ html.native-shell .home-section-overlap {
 }
 .support-success > svg {
   color: var(--colour-forest);
+}
+/* My support requests (list + detail) — consumer-only, never CcBadge (PCC).
+   Colour is always paired with the real status word, never alone. */
+.support-status-pill {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 0.3rem 0;
+  padding: 0.2rem 0.6rem;
+  width: fit-content;
+}
+.support-status-info {
+  background: #e3edf4;
+  color: #416b7c;
+}
+.support-status-warning {
+  background: #fff2d8;
+  color: #8a5a12;
+}
+.support-status-neutral {
+  background: #ece7db;
+  color: var(--colour-slate);
+}
+.support-status-success {
+  background: var(--colour-sage-soft);
+  color: #354f38;
+}
+/* Inline "N open" badge next to the hub's My support requests description —
+   deliberately not the block-ish .support-status-pill sizing above. */
+.help-requests-count {
+  display: inline;
+  margin: 0 0 0 0.4rem;
+  padding: 0.05rem 0.5rem;
+}
+.support-request-reference {
+  color: var(--colour-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+}
+.support-request-updated {
+  font-size: 0.82rem;
+  margin-top: 0.2rem;
+}
+.support-request-created {
+  font-size: 0.85rem;
+}
+.support-requests-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.support-conversation {
+  display: grid;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+.support-message {
+  border-bottom: 1px solid #eee8df;
+  display: grid;
+  gap: 0.2rem;
+  padding-bottom: 0.9rem;
+}
+.support-message:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.support-message time {
+  color: var(--colour-muted);
+  font-size: 0.78rem;
+}
+.support-reply-form {
+  display: grid;
+  gap: 0.75rem;
+}
+.support-conversation-closed {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1.1rem;
 }
 .diagnostics-page {
   display: grid;

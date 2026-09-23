@@ -89,6 +89,26 @@ export type SupportTicketResponse = {
   diagnostics: (SupportTicketDiagnosticsPayload & { client_timestamp: string | null }) | null;
 };
 
+export type SupportTicketSummaryResponse = {
+  id: string;
+  reference: string;
+  type: "bug" | "support" | "feedback";
+  status: "open" | "in_progress" | "waiting_for_user" | "resolved" | "closed";
+  priority: "normal" | "elevated" | "blocking";
+  subject: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+};
+
+export type SupportTicketListResponse = {
+  items: SupportTicketSummaryResponse[];
+};
+
+export type SupportTicketMessageCreateRequest = {
+  message: string;
+};
+
 export type PublicConfig = {
   service_status_url: string | null;
   support_enabled: boolean;
@@ -284,6 +304,14 @@ export class MyKhayaClient {
       { method: "POST", body },
     );
   };
+  listSupportTickets = () => this.request<SupportTicketListResponse>("/support/tickets");
+  getSupportTicket = (ticketId: string) =>
+    this.request<SupportTicketResponse>(`/support/tickets/${encodeURIComponent(ticketId)}`);
+  addSupportTicketMessage = (ticketId: string, body: SupportTicketMessageCreateRequest) =>
+    this.request<SupportTicketMessageResponse>(
+      `/support/tickets/${encodeURIComponent(ticketId)}/messages`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
   activityHeartbeat = () =>
     this.request<void>("/activity/heartbeat", { method: "POST", body: "{}" });
   productUsageEvent = (body: {
