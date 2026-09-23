@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, type BudgetCategory, type BudgetSpendingEntry } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
 
-export function BudgetEditEntrySheet({ homeId, entry, onClose, onSaved }: { homeId: string; entry: BudgetSpendingEntry; onClose: () => void; onSaved: () => void }) {
+export function BudgetEditEntrySheet({ homeId, entry, onClose, onSaved }: { homeId: string; entry: BudgetSpendingEntry; onClose: () => void; onSaved: () => void | Promise<void> }) {
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
   const [category, setCategory] = useState(entry.category_id);
   const [description, setDescription] = useState(entry.description);
@@ -23,7 +23,7 @@ export function BudgetEditEntrySheet({ homeId, entry, onClose, onSaved }: { home
     setError("");
     try {
       await api.updateBudgetEntry(homeId, entry.id, { category_id: category, description, amount: Number(amount), spent_on: spentOn, note: note.trim() || null });
-      onSaved();
+      await onSaved();
       onClose();
     } catch {
       setError("Couldn’t save spending entry. Please try again.");
@@ -37,7 +37,7 @@ export function BudgetEditEntrySheet({ homeId, entry, onClose, onSaved }: { home
     setError("");
     try {
       await api.deleteBudgetEntry(homeId, entry.id);
-      onSaved();
+      await onSaved();
       onClose();
     } catch {
       setError("Couldn’t delete spending entry. Please try again.");

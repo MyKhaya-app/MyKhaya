@@ -182,7 +182,7 @@ async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
 
 
 @pytest.mark.asyncio
-async def test_spending_entry_switches_empty_current_category_to_entries_and_recalculates(
+async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculates(
     client: AsyncClient,
 ) -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
@@ -249,7 +249,8 @@ async def test_spending_entry_switches_empty_current_category_to_entries_and_rec
     month_response = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
     assert month_response.status_code == 200
     category = next(row for row in month_response.json()["categories"] if row["category_id"] == category_id)
-    assert category["actual_source"] == "entries"
+    assert category["actual_source"] == "manual"
+    assert category["fixed_actual"] == 0
     assert category["entries_actual"] == 50
     assert category["actual_amount"] == 50
     assert category["planned_amount"] == 350

@@ -6586,6 +6586,13 @@ button.danger,
   min-height: 3.7rem;
   padding: .65rem .8rem;
 }
+.budget-page button.budget-transaction-row {
+  color: var(--colour-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
 .budget-page .budget-transaction-row + .budget-transaction-row {
   margin-top: .45rem;
 }

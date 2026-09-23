@@ -118,6 +118,7 @@ export type BudgetMonthCategory = {
   actual_source: "manual" | "entries";
   manual_actual: number | null;
   entries_actual: number;
+  fixed_actual: number | null;
   actual_amount: number;
   note?: string | null;
   fixed_planned_amount: number;

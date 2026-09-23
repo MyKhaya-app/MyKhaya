@@ -57,7 +57,7 @@ function SpendingScreen({ homeId }: { homeId: string }) {
   const [period, setPeriod] = useState(periodNow());
   const [entries, setEntries] = useState<BudgetSpendingEntry[]>([]);
   const [sheet, setSheet] = useState<BudgetSpendingEntry | "add" | null>(null);
-  const load = () => { void api.budgetEntries(homeId, period).then(setEntries).catch(() => setEntries([])); };
+  const load = () => api.budgetEntries(homeId, period).then(setEntries).catch(() => setEntries([]));
   useEffect(() => { load(); }, [homeId, period.year, period.month]);
   return <>
     <Header title="Spending entries" description="Optional detail under your budget." />

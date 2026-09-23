@@ -158,6 +158,7 @@ class BudgetMonthCategoryResponse(BaseModel):
     actual_source: BudgetActualSource
     manual_actual: float | None
     entries_actual: float
+    fixed_actual: float | None = None
     actual_amount: float
     note: str | None = None
     fixed_planned_amount: float = 0

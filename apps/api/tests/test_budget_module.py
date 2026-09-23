@@ -16,7 +16,7 @@ from mykhaya.budget_schemas import (
 from mykhaya.main import app
 from mykhaya.models import BudgetActualSource, BudgetItemType, BudgetSharingLevel, FeatureKey
 from mykhaya.module_registry import ReleaseState, module_definition
-from mykhaya.routers.budget import calculate_actual_amount
+from mykhaya.routers.budget import calculate_actual_amount, calculate_snapshot_actual
 
 
 def test_budget_is_a_released_home_toggleable_module_but_disabled_by_default() -> None:
@@ -39,6 +39,33 @@ def test_manual_actual_never_doubles_with_spending_entries() -> None:
     assert calculate_actual_amount(
         BudgetActualSource.entries, Decimal("100.00"), Decimal("40.00")
     ) == Decimal("40.00")
+
+
+def test_new_snapshot_actual_adds_fixed_amount_and_entries() -> None:
+    assert calculate_snapshot_actual(
+        Decimal("1850"), BudgetActualSource.manual, Decimal("1850"), Decimal("978")
+    ) == Decimal("2828")
+    assert calculate_snapshot_actual(
+        Decimal("0"), BudgetActualSource.manual, None, Decimal("978")
+    ) == Decimal("978")
+
+
+def test_legacy_snapshot_actual_keeps_mutually_exclusive_semantics() -> None:
+    assert calculate_snapshot_actual(
+        None, BudgetActualSource.manual, Decimal("1850"), Decimal("978")
+    ) == Decimal("1850")
+    assert calculate_snapshot_actual(
+        None, BudgetActualSource.entries, None, Decimal("978")
+    ) == Decimal("978")
+
+
+def test_legacy_manual_value_is_not_reinterpreted_when_unchanged() -> None:
+    legacy_manual = Decimal("1850")
+    submitted = Decimal("1850")
+    assert submitted == legacy_manual
+    assert calculate_snapshot_actual(
+        None, BudgetActualSource.manual, legacy_manual, Decimal("978")
+    ) == Decimal("1850")
 
 
 def test_actual_source_contract_requires_only_the_selected_value() -> None:

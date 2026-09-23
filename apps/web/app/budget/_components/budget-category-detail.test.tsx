@@ -18,7 +18,7 @@ vi.mock("./budget-add-action", () => ({ BudgetAddAction: () => null }));
 vi.mock("./budget-entry-sheet", () => ({ BudgetEntrySheet: () => null, periodDate: () => "2026-09-01" }));
 vi.mock("./budget-item-list", () => ({ BudgetItemList: () => null }));
 
-const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-cat-1", category_id: "cat-1", category_name: "Housing", planned_amount: 350, actual_source: "entries", manual_actual: null, entries_actual: 50, actual_amount: 50 }], income: [] };
+const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-cat-1", category_id: "cat-1", category_name: "Housing", planned_amount: 350, actual_source: "manual", manual_actual: null, fixed_actual: 0, entries_actual: 50, actual_amount: 50 }], income: [] };
 
 describe("Budget category detail", () => {
   beforeEach(() => {
@@ -42,5 +42,10 @@ describe("Budget category detail", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Add spending entry" })).toBeInTheDocument();
+  });
+
+  it("opens an existing transaction in the edit sheet", async () => {
+    render(<BudgetCategoryDetail homeId="home-1" categoryId="cat-1" />);
+    expect(await screen.findByRole("button", { name: "Edit transaction Primark" })).toBeInTheDocument();
   });
 });

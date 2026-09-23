@@ -1564,6 +1564,9 @@ class BudgetMonthCategory(UuidTimeMixin, Base):
         server_default=BudgetActualSource.manual.value,
     )
     manual_actual: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    fixed_actual: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), server_default="0"
+    )
     note: Mapped[str | None] = mapped_column(String(1000))
 
 

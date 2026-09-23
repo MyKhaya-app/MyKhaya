@@ -77,6 +77,18 @@ def calculate_actual_amount(
     return manual_actual or Decimal("0") if source == BudgetActualSource.manual else entries_actual
 
 
+def calculate_snapshot_actual(
+    fixed_actual: Decimal | None,
+    source: BudgetActualSource,
+    manual_actual: Decimal | None,
+    entries_actual: Decimal,
+) -> Decimal:
+    """Calculate additive totals while preserving legacy snapshot semantics."""
+    if fixed_actual is None:
+        return calculate_actual_amount(source, manual_actual, entries_actual)
+    return fixed_actual + entries_actual
+
+
 async def _member_and_feature(
     home_id: uuid.UUID, auth: AuthContext, db: AsyncSession
 ) -> Membership:
@@ -419,7 +431,9 @@ async def _month_response(
                 )
             )
             entries_amount = Decimal(entries_total or 0)
-            actual = calculate_actual_amount(row.actual_source, row.manual_actual, entries_amount)
+            actual = calculate_snapshot_actual(
+                row.fixed_actual, row.actual_source, row.manual_actual, entries_amount
+            )
             item_rows = (
                 await db.scalars(
                     select(BudgetMonthItem).where(
@@ -447,6 +461,9 @@ async def _month_response(
                     actual_source=row.actual_source,
                     manual_actual=float(row.manual_actual) if row.manual_actual is not None else None,
                     entries_actual=float(entries_amount),
+                    fixed_actual=(
+                        float(row.fixed_actual) if row.fixed_actual is not None else None
+                    ),
                     actual_amount=float(actual),
                     note=row.note,
                     fixed_planned_amount=float(fixed_planned),
@@ -1107,23 +1124,6 @@ async def create_entry(
         note=body.note.strip() if body.note else None,
     )
     db.add(row)
-    # A new entry on an empty current/future category should immediately drive
-    # Actuals. Preserve explicit manual values and historical month state.
-    if (
-        _is_current_or_future_month(month.year, month.month)
-        and month_category.actual_source == BudgetActualSource.manual
-        and month_category.manual_actual is None
-    ):
-        month_category.actual_source = BudgetActualSource.entries
-        audit(
-            db,
-            request,
-            "budget.actual_source.updated",
-            auth.user.id,
-            target_type="budget_month_category",
-            target_id=month_category.id,
-            metadata={"source": BudgetActualSource.entries.value, "reason": "first_spending_entry"},
-        )
     await db.flush()
     audit(db, request, "budget.entry.created", auth.user.id, target_type="budget_entry", target_id=row.id)
     await db.commit()
@@ -1271,9 +1271,34 @@ async def update_actual(
     row = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month_row.id, BudgetMonthCategory.category_id == category_id))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
-    row.actual_source = body.source
-    row.manual_actual = Decimal(str(body.manual_actual)) if body.manual_actual is not None else None
-    audit(db, request, "budget.actual_source.updated", auth.user.id, target_type="budget_month_category", target_id=row.id, metadata={"source": body.source.value})
+    if body.source == BudgetActualSource.manual:
+        manual_value = Decimal(str(body.manual_actual))
+        # An explicit changed amount opts a legacy row into the additive
+        # fixed-plus-entries model. Submitting the unchanged legacy value is
+        # deliberately a no-op with respect to the model transition.
+        if row.fixed_actual is not None or row.manual_actual != manual_value:
+            row.fixed_actual = manual_value
+            audit(
+                db,
+                request,
+                "budget.fixed_actual.updated",
+                auth.user.id,
+                target_type="budget_month_category",
+                target_id=row.id,
+            )
+    elif row.fixed_actual is None:
+        # Untouched legacy rows retain the old mutually-exclusive semantics.
+        row.actual_source = body.source
+        row.manual_actual = None
+        audit(
+            db,
+            request,
+            "budget.actual_source.updated",
+            auth.user.id,
+            target_type="budget_month_category",
+            target_id=row.id,
+            metadata={"source": body.source.value},
+        )
     await db.commit()
     response = await _month_response(db, month_row)
     return next(item for item in response.categories if item.category_id == category_id)
