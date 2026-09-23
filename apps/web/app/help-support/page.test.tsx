@@ -54,27 +54,34 @@ vi.mock("@/components/use-notification-permission", () => ({
 
 const { api } = await import("@mykhaya/api-client");
 
+// Phase 2H: the compact Service Status summary and service_status_url both
+// come from the single, unauthenticated GET /api/v1/config/public — never a
+// separate /api/v1/status call, which is host-gated to the dedicated status
+// subdomain (mykhaya.routers.status.enforce_status_host) and unreachable
+// from this app's own origin in a real deployment. See help-support/page.tsx.
 type FetchMockOptions = {
-  configPayload?: unknown;
-  statusPayload?: unknown;
-  statusOk?: boolean;
-  statusRejects?: boolean;
+  configPayload?: Record<string, unknown>;
+  configOk?: boolean;
+  configRejects?: boolean;
+};
+
+const DEFAULT_CONFIG_PAYLOAD = {
+  service_status_url: "https://status.dev.mykhaya.app/",
+  support_enabled: true,
+  status_overall: "operational",
+  status_overall_message: "Operational",
 };
 
 function mockFetch({
-  configPayload = { service_status_url: "https://status.dev.mykhaya.app/", support_enabled: true },
-  statusPayload = { overall: "operational", overall_message: "Operational" },
-  statusOk = true,
-  statusRejects = false,
+  configPayload = DEFAULT_CONFIG_PAYLOAD,
+  configOk = true,
+  configRejects = false,
 }: FetchMockOptions = {}) {
   global.fetch = vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes("/config/public")) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(configPayload) });
-    }
-    if (url.includes("/status")) {
-      if (statusRejects) return Promise.reject(new Error("network down"));
-      return Promise.resolve({ ok: statusOk, json: () => Promise.resolve(statusPayload) });
+      if (configRejects) return Promise.reject(new Error("network down"));
+      return Promise.resolve({ ok: configOk, json: () => Promise.resolve(configPayload) });
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
   }) as unknown as typeof fetch;
@@ -141,7 +148,7 @@ describe("Help & Support — quick actions", () => {
 
   it("shows the Report a bug card as unavailable (not a link) when support is disabled", async () => {
     mockFetch({
-      configPayload: { service_status_url: "https://status.dev.mykhaya.app/", support_enabled: false },
+      configPayload: { ...DEFAULT_CONFIG_PAYLOAD, support_enabled: false },
     });
     render(<HelpSupport />);
 
@@ -169,16 +176,31 @@ describe("Help & Support — Knowledge base", () => {
 
 describe("Help & Support — Service Status", () => {
   it("shows 'All systems operational' for the operational state", async () => {
-    mockFetch({ statusPayload: { overall: "operational", overall_message: "Operational" } });
+    mockFetch({
+      configPayload: { ...DEFAULT_CONFIG_PAYLOAD, status_overall: "operational", status_overall_message: "Operational" },
+    });
     render(<HelpSupport />);
     await screen.findByText("All systems operational");
   });
 
   it("shows 'Some services are experiencing problems' for a degraded state", async () => {
     mockFetch({
-      statusPayload: {
-        overall: "degraded_performance",
-        overall_message: "Some systems are experiencing degraded performance",
+      configPayload: {
+        ...DEFAULT_CONFIG_PAYLOAD,
+        status_overall: "degraded_performance",
+        status_overall_message: "Some systems are experiencing degraded performance",
+      },
+    });
+    render(<HelpSupport />);
+    await screen.findByText("Some services are experiencing problems");
+  });
+
+  it("shows 'Some services are experiencing problems' for a partial outage", async () => {
+    mockFetch({
+      configPayload: {
+        ...DEFAULT_CONFIG_PAYLOAD,
+        status_overall: "partial_outage",
+        status_overall_message: "Partial service disruption",
       },
     });
     render(<HelpSupport />);
@@ -186,43 +208,133 @@ describe("Help & Support — Service Status", () => {
   });
 
   it("shows 'Service disruption' for a major outage", async () => {
-    mockFetch({ statusPayload: { overall: "major_outage", overall_message: "Major service disruption" } });
+    mockFetch({
+      configPayload: {
+        ...DEFAULT_CONFIG_PAYLOAD,
+        status_overall: "major_outage",
+        status_overall_message: "Major service disruption",
+      },
+    });
     render(<HelpSupport />);
     await screen.findByText("Service disruption");
   });
 
-  it("degrades gracefully, with no crash, when the status API fails", async () => {
-    mockFetch({ statusRejects: true });
+  it("shows the backend's own truthful wording for a maintenance window, never collapsed into an outage", async () => {
+    mockFetch({
+      configPayload: {
+        ...DEFAULT_CONFIG_PAYLOAD,
+        status_overall: "maintenance",
+        status_overall_message: "Scheduled maintenance in progress",
+      },
+    });
+    render(<HelpSupport />);
+    await screen.findByText("Scheduled maintenance in progress");
+    expect(screen.queryByText("Service disruption")).toBeNull();
+    expect(screen.queryByText("Some services are experiencing problems")).toBeNull();
+  });
+
+  it("degrades gracefully, with no crash and no fabricated 'All systems operational', when the config fetch rejects", async () => {
+    mockFetch({ configRejects: true });
     render(<HelpSupport />);
     await screen.findByRole("heading", { name: "Help & Support" });
     await screen.findByText("Status information is temporarily unavailable.");
+    expect(screen.queryByText("All systems operational")).toBeNull();
   });
 
-  it("degrades gracefully when the status API returns a non-OK response", async () => {
-    mockFetch({ statusOk: false, statusPayload: {} });
+  it("degrades gracefully, with no fabricated 'All systems operational', when the config endpoint returns a non-OK response", async () => {
+    mockFetch({ configOk: false, configPayload: {} });
     render(<HelpSupport />);
     await screen.findByText("Status information is temporarily unavailable.");
+    expect(screen.queryByText("All systems operational")).toBeNull();
+  });
+
+  it("shows the truthful unavailable state, not a fabricated good state, when the backend omits status fields (e.g. status_public_enabled off)", async () => {
+    mockFetch({
+      configPayload: {
+        service_status_url: "https://status.dev.mykhaya.app/",
+        support_enabled: true,
+        // No status_overall / status_overall_message — mirrors what
+        // routers.public_config sends when settings.status_public_enabled
+        // is False.
+      },
+    });
+    render(<HelpSupport />);
+    await screen.findByText("Status information is temporarily unavailable.");
+    expect(screen.queryByText("All systems operational")).toBeNull();
   });
 
   it("opens the configured service_status_url externally, not /service-status, and never uses colour alone", async () => {
-    mockFetch({ configPayload: { service_status_url: "https://status.dev.mykhaya.app/" } });
+    mockFetch();
     const user = userEvent.setup();
     render(<HelpSupport />);
 
     await screen.findByText("All systems operational");
     const link = screen.getByRole("link", { name: /view current platform status/i });
     expect(link).toHaveAttribute("href", "https://status.dev.mykhaya.app/");
+    // Status wording is always real visible text, not colour/icon alone —
+    // the coloured dot next to it is aria-hidden.
+    expect(document.querySelector(".help-status-dot")).toHaveAttribute("aria-hidden", "true");
 
     await user.click(link);
     expect(openExternalUrl).toHaveBeenCalledWith("https://status.dev.mykhaya.app/");
   });
 
   it("shows a disabled state, not a broken link, when no status URL is configured", async () => {
-    mockFetch({ configPayload: { service_status_url: null } });
+    mockFetch({ configPayload: { ...DEFAULT_CONFIG_PAYLOAD, service_status_url: null } });
     render(<HelpSupport />);
     await screen.findByText("All systems operational");
     expect(screen.queryByRole("link", { name: /view current platform status/i })).toBeNull();
     expect(screen.getByText("Platform status page not available right now")).toBeInTheDocument();
+  });
+
+  it("keeps the detailed-status action keyboard accessible as a real link, not a click-only element", async () => {
+    mockFetch();
+    render(<HelpSupport />);
+    await screen.findByText("All systems operational");
+    const link = screen.getByRole("link", { name: /view current platform status/i });
+    expect(link.tagName).toBe("A");
+    expect(link).toHaveAttribute("href");
+  });
+
+  it("shows a truthful, announced 'Checking…' state before the config fetch resolves, in a live region", async () => {
+    // The page fetches /config/public twice (Service Status + the separate
+    // support_enabled check) — resolve every outstanding call, not just one.
+    const resolvers: ((value: { ok: boolean; json: () => Promise<unknown> }) => void)[] = [];
+    global.fetch = vi.fn(
+      () => new Promise((resolve) => { resolvers.push(resolve); }),
+    ) as unknown as typeof fetch;
+
+    render(<HelpSupport />);
+    await screen.findByText("Checking…");
+    const card = screen.getByText("Checking…").closest("section");
+    expect(card).toHaveAttribute("aria-live", "polite");
+
+    resolvers.forEach((resolve) => resolve({ ok: true, json: () => Promise.resolve(DEFAULT_CONFIG_PAYLOAD) }));
+    await screen.findByText("All systems operational");
+  });
+
+  it("does not remove or disable Service Status when the Support ticket feature is disabled", async () => {
+    mockFetch({ configPayload: { ...DEFAULT_CONFIG_PAYLOAD, support_enabled: false } });
+    render(<HelpSupport />);
+    await screen.findByText("Report a bug unavailable");
+    await screen.findByText("All systems operational");
+    expect(screen.getByRole("link", { name: /view current platform status/i })).toBeInTheDocument();
+  });
+
+  it("leaves Contact support, Diagnostics, and page rendering unaffected when the status summary fails", async () => {
+    mockFetch({ configRejects: true });
+    render(<HelpSupport />);
+    await screen.findByText("Status information is temporarily unavailable.");
+
+    expect(screen.getByRole("link", { name: "Contact support" })).toHaveAttribute(
+      "href",
+      "/help-support/contact-support",
+    );
+    expect(screen.getByRole("link", { name: "Run diagnostics" })).toHaveAttribute(
+      "href",
+      "/help-support/diagnostics",
+    );
+    await screen.findByText("Helpful diagnostics");
   });
 });
 
@@ -231,12 +343,14 @@ describe("Help & Support — Helpful diagnostics summary", () => {
     global.fetch = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.includes("/config/public")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ service_status_url: null }) });
-      }
-      if (url.includes("/status")) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ overall: "operational", overall_message: "Operational" }),
+          json: () =>
+            Promise.resolve({
+              service_status_url: null,
+              status_overall: "operational",
+              status_overall_message: "Operational",
+            }),
         });
       }
       // /api/v1/health/build genuinely fails — the truthful "unavailable" path.
@@ -252,12 +366,14 @@ describe("Help & Support — Helpful diagnostics summary", () => {
     global.fetch = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.includes("/config/public")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ service_status_url: null }) });
-      }
-      if (url.includes("/status")) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ overall: "operational", overall_message: "Operational" }),
+          json: () =>
+            Promise.resolve({
+              service_status_url: null,
+              status_overall: "operational",
+              status_overall_message: "Operational",
+            }),
         });
       }
       if (url.includes("/health/build")) {

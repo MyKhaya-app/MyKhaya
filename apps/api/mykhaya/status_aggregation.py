@@ -23,7 +23,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from mykhaya.models import IncidentLifecycleState, ServiceState
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.models import (
+    IncidentLifecycleState,
+    PublicIncident,
+    ServiceState,
+    StatusIncidentService,
+)
 
 # The fixed catalogue of monitored, customer-facing services shown on the
 # public Status page and selectable when creating/updating a status
@@ -109,3 +117,40 @@ def is_incident_active(
         and resolved_at is None
         and starts_at <= now
     )
+
+
+async def overall_public_state(db: AsyncSession, now: datetime | None = None) -> ServiceState:
+    """The same overall-severity computation mykhaya.routers.status's public
+    /status endpoint returns as `overall`, factored out so a second,
+    non-host-gated surface (mykhaya.routers.public_config) can show a
+    truthful summary without duplicating the incident-aggregation query or
+    inventing a second status model. Deliberately the lightest possible
+    query for just the overall banner — no per-incident detail, no service
+    list, no update history; those stay exclusive to the full Status page."""
+    now = now or datetime.now(UTC)
+    rows = (
+        await db.scalars(
+            select(PublicIncident)
+            .where(PublicIncident.starts_at <= now)
+            .order_by(PublicIncident.starts_at.desc())
+            .limit(100)
+        )
+    ).all()
+    active_rows = [
+        row
+        for row in rows
+        if is_incident_active(
+            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
+        )
+    ]
+    if not active_rows:
+        return ServiceState.operational
+    active_ids = [row.id for row in active_rows]
+    impacts = (
+        await db.scalars(
+            select(StatusIncidentService.impact).where(
+                StatusIncidentService.incident_id.in_(active_ids)
+            )
+        )
+    ).all()
+    return highest_severity(list(impacts))

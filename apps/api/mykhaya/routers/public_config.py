@@ -9,6 +9,7 @@ from mykhaya.db import get_db
 from mykhaya.features import platform_feature_enabled
 from mykhaya.models import FeatureKey, PlatformSetting
 from mykhaya.platform_settings import SETTINGS_SCHEMA, resolve_environment_fallback
+from mykhaya.status_aggregation import overall_message, overall_public_state
 
 router = APIRouter(prefix="/config", tags=["public-config"])
 
@@ -35,6 +36,18 @@ async def public_config(
     with require_support_feature on the real /support/* routes regardless of
     what this endpoint says. Deliberately just the boolean — no override
     internals, no admin/config metadata, no reason.
+
+    `status_overall`/`status_overall_message` (Phase 2H) exist because
+    mykhaya.routers.status's GET /status is deliberately host-gated to the
+    dedicated status subdomain (enforce_status_host) — a consumer web/native
+    client calling the API through its own origin can never reach it. The
+    Help & Support hub's compact status summary needs the exact same
+    overall-severity computation (mykhaya.status_aggregation.
+    overall_public_state — no separate model, no raw health data) from a
+    surface it can actually call. Omitted entirely when
+    settings.status_public_enabled is False, exactly like /status 404s in
+    that case, so the frontend's existing "status unavailable" fallback
+    applies rather than a fabricated state.
     """
     consumer_visible_keys = [
         key for key, definition in SETTINGS_SCHEMA.items() if definition.consumer_visible
@@ -58,4 +71,8 @@ async def public_config(
         for key in consumer_visible_keys
     }
     payload["support_enabled"] = await platform_feature_enabled(db, FeatureKey.support)
+    if settings.status_public_enabled:
+        overall = await overall_public_state(db)
+        payload["status_overall"] = overall
+        payload["status_overall_message"] = overall_message(overall)
     return payload

@@ -18,46 +18,55 @@ import {
 } from "./help-support-logic";
 import { collectSupportDiagnostics } from "@/components/support-diagnostics";
 
-// The service status URL is a canonical, PCC-managed operational setting
-// (mykhaya.platform_settings.SETTINGS_SCHEMA's service_status_url) — never
-// hardcoded here. Only the consumer-safe allow-listed endpoint is used,
-// never the privileged /platform/settings surface.
-function useServiceStatusUrl(): string | null {
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/v1/config/public", { cache: "no-store" })
-      .then((response) =>
-        response.ok ? (response.json() as Promise<{ service_status_url: string | null }>) : null,
-      )
-      .then((payload) => setUrl(payload?.service_status_url ?? null))
-      .catch(() => setUrl(null));
-  }, []);
-
-  return url;
-}
-
 type StatusSummary = { overall: ServiceState; overall_message: string };
 
-// Compact summary only — the full service list and incident history stay on
-// the dedicated Service Status experience (linked below), not duplicated
-// here. Same public, curated /status endpoint that page already uses; never
-// internal health (DB/SMTP/Stripe/worker), never infrastructure detail.
-function useStatusSummary(): { summary: StatusSummary | null; failed: boolean } {
+type PublicConfigPayload = {
+  service_status_url?: string | null;
+  status_overall?: ServiceState;
+  status_overall_message?: string;
+};
+
+// Both the "View current platform status" link target and the compact
+// status summary below come from the one unauthenticated, non-host-gated
+// GET /api/v1/config/public — never mykhaya.routers.status's GET /status,
+// which is deliberately host-gated to the dedicated status subdomain
+// (enforce_status_host) and unreachable from this app's own origin. The
+// summary is the exact same overall-severity computation as the full
+// Status page (mykhaya.status_aggregation.overall_public_state), just
+// surfaced from somewhere this page can actually call — never internal
+// health (DB/SMTP/Stripe/worker), never the full service/incident list.
+function useServiceStatus(): {
+  serviceStatusUrl: string | null;
+  summary: StatusSummary | null;
+  failed: boolean;
+} {
+  const [serviceStatusUrl, setServiceStatusUrl] = useState<string | null>(null);
   const [summary, setSummary] = useState<StatusSummary | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    fetch("/api/v1/status", { cache: "no-store" })
+    fetch("/api/v1/config/public", { cache: "no-store" })
       .then((response) => {
-        if (!response.ok) throw new Error("status unavailable");
-        return response.json() as Promise<StatusSummary>;
+        if (!response.ok) throw new Error("config unavailable");
+        return response.json() as Promise<PublicConfigPayload>;
       })
-      .then(setSummary)
+      .then((payload) => {
+        setServiceStatusUrl(payload.service_status_url ?? null);
+        if (payload.status_overall && payload.status_overall_message) {
+          setSummary({
+            overall: payload.status_overall,
+            overall_message: payload.status_overall_message,
+          });
+        } else {
+          // status_public_enabled is off, or the backend genuinely didn't
+          // send a status — never fabricate "All systems operational".
+          setFailed(true);
+        }
+      })
       .catch(() => setFailed(true));
   }, []);
 
-  return { summary, failed };
+  return { serviceStatusUrl, summary, failed };
 }
 
 type NativeAppInfo = { version: string; build: string };
@@ -98,13 +107,15 @@ function useOnlineStatus(): boolean | null {
   return online;
 }
 
-function ServiceStatusBanner({ serviceStatusUrl }: { serviceStatusUrl: string | null }) {
-  const { summary, failed } = useStatusSummary();
+function ServiceStatusBanner() {
+  const { serviceStatusUrl, summary, failed } = useServiceStatus();
 
   return (
-    <section className="card details help-status-card">
+    <section className="card details help-status-card" aria-live="polite">
       <h2>Service status</h2>
       {failed ? (
+        // Never "All systems operational" here — an unreachable/disabled
+        // status source is a genuinely unknown state, not a good one.
         <p className="quiet-state">Status information is temporarily unavailable.</p>
       ) : summary ? (
         <p className={`help-status-line help-status-${summary.overall}`}>
@@ -112,9 +123,7 @@ function ServiceStatusBanner({ serviceStatusUrl }: { serviceStatusUrl: string | 
           {hubStatusMessage(summary.overall, summary.overall_message)}
         </p>
       ) : (
-        <p className="quiet-state" role="status">
-          Checking…
-        </p>
+        <p className="quiet-state">Checking…</p>
       )}
       {serviceStatusUrl ? (
         <a
@@ -199,7 +208,6 @@ function DiagnosticsSummary() {
 }
 
 export default function HelpSupport() {
-  const serviceStatusUrl = useServiceStatusUrl();
   const [supportEnabled, setSupportEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -241,7 +249,7 @@ export default function HelpSupport() {
       </div>
 
       <div className="card-stack">
-        <ServiceStatusBanner serviceStatusUrl={serviceStatusUrl} />
+        <ServiceStatusBanner />
 
         {supportEnabled ? (
           <Link className="card" href="/help-support/report-bug">
