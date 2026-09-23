@@ -2535,6 +2535,55 @@ html.native-shell .home-section-overlap {
   max-width: 760px;
   padding: 1.5rem;
 }
+/* Help & Support hub (Phase 2C): compact Service Status summary and
+   Helpful diagnostics list. Status is never colour-only — .help-status-line
+   always carries the real wording too (see help-support-logic.ts). */
+.help-status-line {
+  align-items: center;
+  display: flex;
+  font-weight: 700;
+  gap: 0.5rem;
+}
+.help-status-dot {
+  background: var(--colour-muted);
+  border-radius: 50%;
+  flex: none;
+  height: 0.6rem;
+  width: 0.6rem;
+}
+.help-status-operational .help-status-dot {
+  background: var(--colour-forest);
+}
+.help-status-degraded_performance .help-status-dot,
+.help-status-partial_outage .help-status-dot {
+  background: #c98a2b;
+}
+.help-status-major_outage .help-status-dot {
+  background: #b3452f;
+}
+.help-status-maintenance .help-status-dot {
+  background: var(--colour-slate);
+}
+.help-status-link {
+  color: var(--colour-forest);
+  display: inline-block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.6rem;
+}
+.help-status-link-disabled {
+  color: var(--colour-muted);
+  font-weight: 400;
+}
+.help-diagnostics-list dt {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+}
+.help-diagnostics-list dt svg {
+  color: var(--colour-muted);
+  flex: none;
+}
 .settings-list-row {
   align-items: flex-start;
   display: flex;
