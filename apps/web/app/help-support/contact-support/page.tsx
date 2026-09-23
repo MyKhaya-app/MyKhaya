@@ -112,14 +112,3 @@ export default function ContactSupport() {
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send request"}</button>
   </form></SettingsPage>;
 }
-
-export function LegacyContactSupport() {
-  return (
-    <SettingsPage title="Contact support" description="Get help from the MyKhaya support team.">
-      <section className="card details">
-        <p className="quiet-state">Coming soon</p>
-        <p className="muted">In-app support requests aren&apos;t available yet.</p>
-      </section>
-    </SettingsPage>
-  );
-}

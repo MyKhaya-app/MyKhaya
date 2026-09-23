@@ -69,17 +69,3 @@ export default function RunDiagnostics() {
     </div>
   </SettingsPage>;
 }
-
-export function LegacyDiagnosticsPlaceholder() {
-  return (
-    <SettingsPage title="Run diagnostics" description="Check your device and app settings for common issues.">
-      <section className="card details">
-        <p className="quiet-state">Coming soon</p>
-        <p className="muted">
-          A full diagnostics check isn&apos;t available yet — see the Helpful diagnostics summary
-          on the Help & Support page for what we can already show you.
-        </p>
-      </section>
-    </SettingsPage>
-  );
-}
