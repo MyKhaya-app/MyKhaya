@@ -233,8 +233,7 @@ export default function SupportTicketDetailPage({ params }: { params: Promise<{ 
                       />
                     </label>
                     <p className="cc-page-meta">
-                      This reply will be saved to the ticket and emailed to the requester.
-                      Email delivery will be enabled in a later phase.
+                      This reply is saved to the ticket and emailed to the requester.
                     </p>
                     <button
                       type="submit"
@@ -305,8 +304,9 @@ export default function SupportTicketDetailPage({ params }: { params: Promise<{ 
               <CcSection title="Ticket details">
                 <CcCard>
                   <CcMetadataGrid dense>
-                    <CcMetadataItem label="Status">
+                    <CcMetadataItem label={<label htmlFor="support-ticket-status">Status</label>}>
                       <select
+                        id="support-ticket-status"
                         value={data.status}
                         disabled={savingField === "status"}
                         onChange={(event) => updateTicket({ status: event.target.value }, "status")}
@@ -323,8 +323,9 @@ export default function SupportTicketDetailPage({ params }: { params: Promise<{ 
                         </CcBadge>
                       </div>
                     </CcMetadataItem>
-                    <CcMetadataItem label="Priority">
+                    <CcMetadataItem label={<label htmlFor="support-ticket-priority">Priority</label>}>
                       <select
+                        id="support-ticket-priority"
                         value={data.priority}
                         disabled={savingField === "priority"}
                         onChange={(event) => updateTicket({ priority: event.target.value }, "priority")}
@@ -348,8 +349,9 @@ export default function SupportTicketDetailPage({ params }: { params: Promise<{ 
                     <CcMetadataItem label="Home">{data.group_name ?? "—"}</CcMetadataItem>
                     <CcMetadataItem label="App area">{ticketAppAreaLabel(data.app_area)}</CcMetadataItem>
                     <CcMetadataItem label="Source">{ticketSourceLabel(data.source)}</CcMetadataItem>
-                    <CcMetadataItem label="Assigned admin">
+                    <CcMetadataItem label={<label htmlFor="support-ticket-assignee">Assigned admin</label>}>
                       <select
+                        id="support-ticket-assignee"
                         value={data.assigned_admin_id ?? ""}
                         disabled={savingField === "assigned"}
                         onChange={(event) =>

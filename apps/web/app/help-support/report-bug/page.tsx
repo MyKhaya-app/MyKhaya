@@ -88,6 +88,7 @@ export default function ReportBug() {
     <fieldset><legend>How serious is it?</legend><div className="support-choice-list">{SEVERITY_OPTIONS.map((option) => <label className={`support-choice${severity === option.value ? " selected" : ""}`} key={option.value}><input type="radio" name="severity" value={option.value} checked={severity === option.value} onChange={() => setSeverity(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</div></fieldset>
     <label>What happened?<textarea value={description} maxLength={4000} onChange={(event) => setDescription(event.target.value)} required rows={6} /></label>
     <label className="support-file-field"><span><ImagePlus size={16} aria-hidden="true" /> Screenshot (optional)</span><input type="file" accept="image/*" onChange={(event) => setScreenshot(event.target.files?.[0] ?? null)} />{screenshot && <small>{screenshot.name}</small>}</label>
+    <small>Your screenshot may include information currently visible on your screen.</small>
     <label className="check-row"><input type="checkbox" checked={includeDiagnostics} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />Include helpful diagnostics</label>
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send report"}</button>
   </form></SettingsPage>;

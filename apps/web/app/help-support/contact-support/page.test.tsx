@@ -53,6 +53,14 @@ describe("Contact support", () => {
     expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
   });
 
+  it("shows a screenshot privacy warning visibly, before any file is chosen", async () => {
+    render(<ContactSupport />);
+    await screen.findByRole("heading", { name: "Contact support" });
+    expect(
+      screen.getByText("Your screenshot may include information currently visible on your screen."),
+    ).toBeVisible();
+  });
+
   it("submits a support ticket and shows its reference", async () => {
     const user = userEvent.setup();
     const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;

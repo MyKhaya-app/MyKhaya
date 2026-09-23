@@ -52,6 +52,14 @@ describe("Report a bug", () => {
     expect(screen.getByRole("radio", { name: /Minor/i })).toBeChecked();
   });
 
+  it("shows a screenshot privacy warning visibly, before any file is chosen", async () => {
+    render(<ReportBug />);
+    await screen.findByRole("heading", { name: "Report a bug" });
+    expect(
+      screen.getByText("Your screenshot may include information currently visible on your screen."),
+    ).toBeVisible();
+  });
+
   it("submits diagnostics and shows the server reference", async () => {
     const user = userEvent.setup();
     const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;

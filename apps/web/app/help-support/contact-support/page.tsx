@@ -107,6 +107,7 @@ export default function ContactSupport() {
     <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}>{CATEGORY_OPTIONS.map((option) => <option key={`${option.label}-${option.value}`} value={option.value}>{option.label}</option>)}</select></label>
     <label>Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={4000} rows={7} required /></label>
     <label className="support-file-field"><span><ImagePlus size={16} aria-hidden="true" /> Screenshot (optional)</span><input type="file" accept="image/*" onChange={(event) => setScreenshot(event.target.files?.[0] ?? null)} />{screenshot && <small>{screenshot.name}</small>}</label>
+    <small>Your screenshot may include information currently visible on your screen.</small>
     <label className="check-row"><input type="checkbox" checked={includeDiagnostics} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />Include diagnostics</label>
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send request"}</button>
   </form></SettingsPage>;
