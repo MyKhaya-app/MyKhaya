@@ -2826,6 +2826,224 @@ html.native-shell .home-section-overlap {
 .support-request-created {
   font-size: 0.85rem;
 }
+.help-support-page .page-heading {
+  margin-bottom: 1.35rem;
+}
+.help-action-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: var(--space-card-stack);
+}
+.help-action-tile {
+  align-items: flex-start;
+  background: var(--colour-white);
+  border: 1px solid #eee8df;
+  border-radius: var(--radius-card);
+  color: var(--colour-slate);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 142px;
+  padding: 1rem 0.85rem;
+  position: relative;
+  text-decoration: none;
+}
+.help-action-tile svg {
+  color: var(--colour-forest);
+  margin-bottom: 0.2rem;
+}
+.help-action-tile strong {
+  color: var(--colour-ink);
+  font-size: 0.98rem;
+  line-height: 1.15;
+}
+.help-action-tile > span:not(.help-action-chevron) {
+  color: var(--colour-muted);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+.help-action-chevron {
+  align-self: flex-end;
+  bottom: 0.85rem;
+  color: var(--colour-forest);
+  font-size: 1.7rem;
+  line-height: 1;
+  position: absolute;
+  right: 0.75rem;
+}
+.help-action-disabled {
+  background: #f8f7f3;
+  color: var(--colour-muted);
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+.help-action-disabled svg,
+.help-action-disabled strong,
+.help-action-disabled > span:not(.help-action-chevron) {
+  color: var(--colour-muted);
+}
+.help-requests-card,
+.help-service-card,
+.help-contact-card {
+  padding: 1.1rem;
+}
+.help-card-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.help-card-heading h2,
+.help-card-heading p {
+  margin: 0;
+}
+.help-card-heading p,
+.help-service-description,
+.help-service-message,
+.help-empty-state {
+  color: var(--colour-muted);
+  margin-top: 0.35rem;
+}
+.help-view-all {
+  align-items: center;
+  color: var(--colour-forest);
+  display: inline-flex;
+  flex: none;
+  font-weight: 700;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.help-request-preview {
+  margin-top: 0.9rem;
+}
+.help-request-row {
+  align-items: center;
+  border-top: 1px solid #eee8df;
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  min-height: 68px;
+  padding: 0.65rem 0;
+  text-decoration: none;
+}
+.help-request-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 1rem;
+  color: var(--colour-forest);
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+.help-request-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.help-request-copy strong,
+.help-request-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.help-request-copy span {
+  color: var(--colour-muted);
+  font-size: 0.82rem;
+}
+.help-request-row .support-status-pill {
+  margin: 0;
+  white-space: nowrap;
+}
+.help-service-card {
+  margin-top: var(--space-card-stack);
+}
+.help-service-description,
+.help-service-message {
+  margin-bottom: 0;
+}
+.help-card-divider {
+  border-top: 1px solid #eee8df;
+  margin: 1rem 0 0.2rem;
+}
+.help-status-link {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  gap: 0.65rem;
+  min-height: 44px;
+  text-decoration: none;
+}
+.help-status-link span:nth-child(2) {
+  flex: 1;
+}
+.help-status-link-disabled {
+  color: var(--colour-muted);
+}
+.help-contact-card {
+  align-items: center;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-top: var(--space-card-stack);
+}
+.help-contact-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-forest);
+  display: inline-flex;
+  height: 56px;
+  justify-content: center;
+  width: 56px;
+}
+.help-contact-card h2,
+.help-contact-card p {
+  margin: 0;
+}
+.help-contact-card p {
+  color: var(--colour-muted);
+  margin-top: 0.35rem;
+}
+.help-contact-button {
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .help-action-grid {
+    gap: 0.45rem;
+  }
+  .help-action-tile {
+    min-height: 150px;
+    padding: 0.75rem 0.65rem;
+  }
+  .help-action-tile strong {
+    font-size: 0.88rem;
+  }
+  .help-action-tile > span:not(.help-action-chevron) {
+    font-size: 0.76rem;
+  }
+  .help-request-row {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+  }
+  .help-request-row > .support-status-pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .help-request-row > span:last-child {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .help-contact-card {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .help-contact-button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
 .support-requests-empty-actions {
   display: flex;
   flex-wrap: wrap;
