@@ -48,6 +48,7 @@ from mykhaya.platform_schemas import (
 )
 from mykhaya.platform_security import PlatformContext, require_roles
 from mykhaya.routers.platform import SUPPORT
+from mykhaya.support_notifications import ticket_reply, ticket_resolved
 
 router = APIRouter(prefix="/platform/support", tags=["platform-support"])
 
@@ -330,9 +331,11 @@ async def update_ticket(
     request: Request,
     context: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> PlatformSupportTicketDetailResponse:
     ticket = await _load_ticket(db, ticket_id)
     changes = body.model_dump(exclude_unset=True)
+    resolution_key: str | None = None
 
     if "status" in changes and body.status is not None and body.status != ticket.status:
         previous_status = ticket.status
@@ -352,6 +355,9 @@ async def update_ticket(
             new={"status": ticket.status.value},
         )
         if ticket.status == SupportTicketStatus.resolved:
+            resolution_key = (
+                ticket.resolved_at.isoformat() if ticket.resolved_at else str(uuid.uuid4())
+            )
             platform_audit(
                 db, request, context, "support.ticket.resolved", "support_ticket", ticket.id
             )
@@ -391,6 +397,10 @@ async def update_ticket(
             new={"assigned_admin_id": str(new_assignee) if new_assignee else None},
         )
 
+    if resolution_key is not None:
+        requester = await db.get(User, ticket.requester_user_id)
+        if requester is not None:
+            await ticket_resolved(db, settings, ticket, requester, resolution_key)
     await db.commit()
     await db.refresh(ticket)
     ticket = await _load_ticket(db, ticket_id)
@@ -408,6 +418,7 @@ async def reply_to_ticket(
     request: Request,
     context: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> PlatformSupportTicketMessageResponse:
     ticket = await _load_ticket(db, ticket_id)
     message = SupportTicketMessage(
@@ -420,6 +431,10 @@ async def reply_to_ticket(
         visibility=SupportMessageVisibility.requester,
     )
     db.add(message)
+    await db.flush()
+    requester = await db.get(User, ticket.requester_user_id)
+    if requester is not None:
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
     platform_audit(db, request, context, "support.ticket.replied", "support_ticket", ticket.id)
     await db.commit()
     await db.refresh(message)

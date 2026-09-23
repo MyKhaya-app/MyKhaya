@@ -177,6 +177,9 @@ def test_registry_matches_migration_version() -> None:
         "meal_plan_updated",
         "meal_plan_removed",
         "home_join_request",
+        "support.ticket.received",
+        "support.ticket.reply",
+        "support.ticket.resolved",
     }
 
 
@@ -215,7 +218,8 @@ def test_mandatory_email_types_are_registered_as_non_disableable() -> None:
     for template_type in MANDATORY_EMAIL_TYPES:
         assert template_type in TEMPLATES
         assert TEMPLATES[template_type].disableable is False
-        assert TEMPLATES[template_type].security_critical is True
+        if not template_type.startswith("support.ticket."):
+            assert TEMPLATES[template_type].security_critical is True
 
 
 @pytest.mark.asyncio
@@ -1093,6 +1097,9 @@ def test_expected_templates_declare_the_expected_required_variables() -> None:
         "household_invitation": {"link"},
         "calendar_share_invitation": {"link"},
         "platform_administrator_invitation": {"link"},
+        "support.ticket.received": {"reference"},
+        "support.ticket.reply": {"reference", "reply_text"},
+        "support.ticket.resolved": {"reference"},
     }
     for template_type, required in expected.items():
         assert set(TEMPLATES[template_type].required_variables) == required, template_type

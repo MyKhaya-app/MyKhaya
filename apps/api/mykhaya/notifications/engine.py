@@ -69,6 +69,9 @@ MANDATORY_EMAIL_TYPES = {
     # a household_invitation — the recipient can't accept/decline without it.
     "calendar_share_invitation",
     "mfa_email_code",
+    "support.ticket.received",
+    "support.ticket.reply",
+    "support.ticket.resolved",
 }
 
 

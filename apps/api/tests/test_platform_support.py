@@ -27,6 +27,7 @@ from mykhaya.models import (
     AdministrativeAuditEvent,
     FeatureFlag,
     FeatureKey,
+    OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
     SupportTicket,
@@ -380,6 +381,24 @@ async def test_update_status_sets_resolved_at_and_audits(
     assert updated.json()["resolved_at"] is not None
 
     async with SessionFactory() as db:
+        ticket = await db.get(SupportTicket, uuid.UUID(ticket_id))
+        assert ticket is not None
+        requester = await db.get(User, ticket.requester_user_id)
+        assert requester is not None
+        resolved_events = [
+            event
+            for event in (
+                await db.scalars(
+                    select(OutboxEvent).where(OutboxEvent.topic == "notification.email")
+                )
+            ).all()
+            if event.payload.get("recipient_email") == requester.email
+            and event.payload.get("notification_type") == "support.ticket.resolved"
+            and ticket.reference in event.payload.get("body", "")
+        ]
+        assert len(resolved_events) == 1
+
+    async with SessionFactory() as db:
         events = (
             await db.scalars(
                 select(AdministrativeAuditEvent).where(
@@ -487,6 +506,24 @@ async def test_admin_reply_is_visible_to_requester(
     messages = consumer_view.json()["messages"]
     assert len(messages) == 1
     assert messages[0]["author"] == "admin"
+
+    async with SessionFactory() as db:
+        ticket = await db.get(SupportTicket, uuid.UUID(ticket_id))
+        assert ticket is not None
+        requester = await db.get(User, ticket.requester_user_id)
+        assert requester is not None
+        reply_events = [
+            event
+            for event in (
+                await db.scalars(
+                    select(OutboxEvent).where(OutboxEvent.topic == "notification.email")
+                )
+            ).all()
+            if event.payload.get("recipient_email") == requester.email
+            and event.payload.get("notification_type") == "support.ticket.reply"
+        ]
+        assert len(reply_events) == 1
+        assert "Thanks for the report" in reply_events[0].payload["body"]
 
     async with SessionFactory() as db:
         events = (

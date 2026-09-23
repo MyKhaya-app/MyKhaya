@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from mykhaya.models import NotificationChannel
 
-DEFAULT_TEMPLATE_VERSION = 4
+DEFAULT_TEMPLATE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -197,6 +197,47 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="platform",
         disableable=False,
         security_critical=True,
+    ),
+    "support.ticket.received": TemplateDefault(
+        subject="We've received your MyKhaya {{ticket_type}}",
+        body=(
+            "We've received your {{ticket_type}}.\n\n"
+            "Reference: {{reference}}\n\n"
+            "You don't need to do anything right now. We'll get back to you as soon as we can."
+        ),
+        allowed_variables=frozenset({"reference", "ticket_type", "subject"}),
+        required_variables=frozenset({"reference"}),
+        description="Sent when a MyKhaya support ticket is created.",
+        module="support",
+        disableable=False,
+        security_critical=False,
+    ),
+    "support.ticket.reply": TemplateDefault(
+        subject="A reply to your MyKhaya support request {{reference}}",
+        body=(
+            "The MyKhaya support team replied to your request.\n\n"
+            "Reference: {{reference}}\n\n{{reply_text}}"
+        ),
+        allowed_variables=frozenset({"reference", "subject", "reply_text"}),
+        required_variables=frozenset({"reference", "reply_text"}),
+        description="Sent when the MyKhaya support team replies to a ticket.",
+        module="support",
+        disableable=False,
+        security_critical=False,
+    ),
+    "support.ticket.resolved": TemplateDefault(
+        subject="Your MyKhaya support request has been resolved",
+        body=(
+            "Your MyKhaya support request has been resolved.\n\n"
+            "Reference: {{reference}}\n\n"
+            "If you still need help, you can contact us again through MyKhaya."
+        ),
+        allowed_variables=frozenset({"reference", "subject"}),
+        required_variables=frozenset({"reference"}),
+        description="Sent when a MyKhaya support ticket is resolved.",
+        module="support",
+        disableable=False,
+        security_critical=False,
     ),
     # --- Calendar (in-app / push) --------------------------------------------
     # These four cover routers.calendar's per-event-member notifications
@@ -629,5 +670,19 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
     "home_join_request": {
         "requester_display_name": "Megan",
         "home_name": "The Example Family",
+    },
+    "support.ticket.received": {
+        "reference": "MK-1042",
+        "ticket_type": "support request",
+        "subject": "Account help",
+    },
+    "support.ticket.reply": {
+        "reference": "MK-1042",
+        "subject": "Account help",
+        "reply_text": "Thanks for getting in touch. We can help with that.",
+    },
+    "support.ticket.resolved": {
+        "reference": "MK-1042",
+        "subject": "Account help",
     },
 }

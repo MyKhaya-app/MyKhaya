@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     smtp_reply_to: str | None = None
     email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
+    support_notification_email: str | None = None
     email_verification_enabled: bool = True
     vapid_public_key: str | None = None
     vapid_private_key: SecretStr | None = None

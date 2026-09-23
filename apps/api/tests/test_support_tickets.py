@@ -29,6 +29,7 @@ from mykhaya.models import (
     FeatureKey,
     HouseholdRelationship,
     Membership,
+    OutboxEvent,
     PermissionProfile,
     Role,
     SupportTicket,
@@ -175,7 +176,8 @@ async def test_support_routes_404_when_feature_disabled(client: AsyncClient) -> 
 
 @pytest.mark.asyncio
 async def test_create_bug_report_returns_mk_reference(client: AsyncClient) -> None:
-    await create_verified_user(client, unique_email("bug"), "Bug Reporter")
+    email = unique_email("bug")
+    await create_verified_user(client, email, "Bug Reporter")
     created = await unsafe(
         client,
         "POST",
@@ -197,6 +199,21 @@ async def test_create_bug_report_returns_mk_reference(client: AsyncClient) -> No
     assert body["messages"] == []
     assert body["attachments"] == []
     assert body["diagnostics"] is None
+
+    async with SessionFactory() as db:
+        email_events = [
+            event
+            for event in (
+                await db.scalars(
+                    select(OutboxEvent).where(OutboxEvent.topic == "notification.email")
+                )
+            ).all()
+            if event.payload.get("recipient_email") == email
+            and event.payload.get("notification_type") == "support.ticket.received"
+        ]
+        assert len(email_events) == 1
+        assert body["reference"] in email_events[0].payload["body"]
+        assert "diagnostic" not in email_events[0].payload["body"].lower()
 
 
 @pytest.mark.asyncio

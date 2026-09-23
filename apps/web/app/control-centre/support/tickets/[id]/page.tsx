@@ -233,7 +233,7 @@ export default function SupportTicketDetailPage({ params }: { params: Promise<{ 
                       />
                     </label>
                     <p className="cc-page-meta">
-                      This reply is saved to the ticket and shown to the requester in the app.
+                      This reply will be saved to the ticket and emailed to the requester.
                       Email delivery will be enabled in a later phase.
                     </p>
                     <button

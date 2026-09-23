@@ -53,6 +53,7 @@ from mykhaya.schemas import (
     SupportTicketResponse,
     SupportTicketSummaryResponse,
 )
+from mykhaya.support_notifications import ticket_received
 from mykhaya.support_reference import next_support_reference
 
 MAX_ATTACHMENTS_PER_TICKET = 5
@@ -224,6 +225,7 @@ async def create_ticket(
             "support_ticket",
             ticket.id,
         )
+    await ticket_received(db, settings, ticket, auth.user)
 
     audit(
         db,
