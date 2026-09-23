@@ -296,7 +296,9 @@ async def add_message(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> SupportTicketMessageResponse:
+    await enforce_rate_limit(request, settings, "support-ticket-message", 30, 3600)
     ticket = await _owned_ticket(ticket_id, auth, db)
     message = SupportTicketMessage(
         ticket_id=ticket.id,
