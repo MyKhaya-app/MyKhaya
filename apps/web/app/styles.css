@@ -3138,6 +3138,15 @@ html.native-shell .home-section-overlap {
   color: var(--colour-forest);
   display: inline-flex;
 }
+.diagnostic-spinner {
+  animation: diagnostics-spin 1s linear infinite;
+}
+@keyframes diagnostics-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .diagnostic-spinner { animation: none; }
+}
 .diagnostics-share {
   align-items: flex-start;
   display: flex;
