@@ -13,11 +13,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mykhaya.attachments.storage import get_attachment_storage
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import (
     Group,
@@ -25,6 +27,7 @@ from mykhaya.models import (
     SupportMessageVisibility,
     SupportTicket,
     SupportTicketAppArea,
+    SupportTicketAttachment,
     SupportTicketMessage,
     SupportTicketPriority,
     SupportTicketSource,
@@ -92,9 +95,21 @@ def _message_response(
     if message.author_admin_id is not None:
         admin = admins.get(message.author_admin_id)
         display_name = admin.display_name if admin else "Former administrator"
-    else:
-        user = users.get(message.author_user_id) if message.author_user_id else None
+    elif message.author_user_id is not None:
+        user = users.get(message.author_user_id)
         display_name = user.display_name if user else "Former user"
+    else:
+        # Both FKs are null: only reachable if the row a message pointed to
+        # was hard-deleted (author_user_id/author_admin_id are both
+        # `ondelete="SET NULL"`) — in practice this never happens in
+        # production (PlatformAdministrator/User rows are deactivated or
+        # anonymised, never hard-deleted; the only place this repo does
+        # hard-delete a PlatformAdministrator is a test cleanup fixture).
+        # Genuinely unknown at this point, so this deliberately does NOT
+        # default to "Former user" (which would misattribute a possible
+        # admin message to the requester side) — see the Phase 2B
+        # instruction this addresses.
+        display_name = "Former participant"
     return PlatformSupportTicketMessageResponse(
         id=message.id,
         author_user_id=message.author_user_id,
@@ -416,4 +431,69 @@ async def reply_to_ticket(
         message=message.message,
         visibility=message.visibility.value,
         created_at=message.created_at,
+    )
+
+
+def _safe_content_disposition_filename(original_filename: str) -> str:
+    # ASCII-only, no quotes/control characters — the original filename is
+    # display text a consumer chose (see SupportTicketAttachment's
+    # docstring), never trusted for a filesystem path and, here, not
+    # trusted raw inside an HTTP header either. Falls back to a fixed name
+    # rather than trying to preserve anything from an unsafe original.
+    cleaned = "".join(
+        char for char in original_filename if char.isascii() and char not in '"\\\r\n'
+    ).strip()
+    return cleaned[:120] or "attachment"
+
+
+@router.get("/tickets/{ticket_id}/attachments/{attachment_id}")
+async def get_attachment(
+    ticket_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    # Ticket existence and attachment-belongs-to-ticket are checked
+    # together, and both a missing ticket and a missing/foreign attachment
+    # return the same 404 — never distinguish "no such ticket" from
+    # "that attachment isn't on this ticket" (same convention as
+    # routers.support's _owned_ticket and dependencies.membership_for).
+    attachment = await db.scalar(
+        select(SupportTicketAttachment).where(
+            SupportTicketAttachment.id == attachment_id,
+            SupportTicketAttachment.ticket_id == ticket_id,
+        )
+    )
+    if attachment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That attachment could not be found.")
+
+    storage = get_attachment_storage(settings)
+    data = await storage.load(attachment.storage_key)
+    if data is None:
+        # The DB row exists but the bytes are gone (e.g. manual ops
+        # cleanup) — still a 404, not a 500: from the caller's point of
+        # view there is simply no attachment to show.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That attachment could not be found.")
+
+    platform_audit(
+        db, request, context, "support.attachment.viewed", "support_ticket_attachment",
+        attachment.id, new={"ticket_id": str(ticket_id)},
+    )
+    await db.commit()
+
+    filename = _safe_content_disposition_filename(attachment.original_filename)
+    return Response(
+        content=data,
+        media_type=attachment.content_type,
+        headers={
+            # Inline, not attachment — this is a screenshot preview, meant
+            # to render in the PCC page (<img>) or open in a new tab, not
+            # force-download. Never cached beyond this response: an admin
+            # session's own authorization is what gates every fetch, so a
+            # shared/proxy cache must not retain a copy.
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+        },
     )

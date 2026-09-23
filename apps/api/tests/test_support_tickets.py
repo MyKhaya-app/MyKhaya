@@ -11,6 +11,7 @@ import io
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -18,6 +19,7 @@ from PIL import Image
 from redis.asyncio import Redis
 from sqlalchemy import select
 
+from mykhaya.attachments.storage import LocalAttachmentStorage
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
@@ -140,6 +142,17 @@ def make_png_bytes(size: tuple[int, int] = (40, 40)) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", size, color=(200, 60, 60)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# --- storage-layer path traversal (mirrors test_avatars.py's identical
+# check for LocalAvatarStorage) ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_local_attachment_storage_rejects_path_traversal_key(tmp_path: Path) -> None:
+    storage = LocalAttachmentStorage(tmp_path)
+    with pytest.raises(ValueError, match="Invalid attachment storage key"):
+        await storage.save("../escape.webp", b"nope")
 
 
 # --- feature gate -------------------------------------------------------------

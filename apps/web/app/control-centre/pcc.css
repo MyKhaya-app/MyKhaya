@@ -3536,3 +3536,27 @@
 @media (max-width: 1200px) { .pcc-root .cc-user-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pcc-root .cc-user-summary-person { grid-column: 1 / -1; } .pcc-root .cc-user-summary-item:nth-child(2n) { border-left: 0; } .pcc-root .cc-user-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pcc-root .cc-user-profile-side-column { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .pcc-root .cc-user-profile-header { display: grid; } .pcc-root .cc-user-profile-header-side { justify-items: start; } .pcc-root .cc-user-detail-grid, .pcc-root .cc-user-profile-side-column, .pcc-root .cc-user-bottom-grid { grid-template-columns: 1fr; } .pcc-root .cc-user-profile-side-column { grid-column: auto; } }
 @media (max-width: 600px) { .pcc-root .cc-user-profile-page { padding: 20px 16px 32px; } .pcc-root .cc-user-profile-name h1 { font-size: 25px; line-height: 32px; } .pcc-root .cc-user-profile-meta { flex-wrap: wrap; gap: 12px 0; } .pcc-root .cc-user-profile-meta > div { padding-left: 0; } .pcc-root .cc-user-profile-meta > div + div { border-left: 0; padding-left: 12px; } .pcc-root .cc-user-summary { grid-template-columns: 1fr; } .pcc-root .cc-user-summary-person { grid-column: auto; } .pcc-root .cc-user-summary-item { border-left: 0; border-top: 1px solid #eaecf0; } }
+
+/* Support (Phase 2B): PCC-scoped equivalent of the consumer stylesheet's
+   .text-wrap-anywhere utility — apps/control-centre/layout.tsx never
+   imports app/styles.css (see pcc-css-boundary.test.ts), so that class has
+   no effect here and this page needs its own. */
+.pcc-root .cc-text-wrap { min-width: 0; overflow-wrap: anywhere; }
+
+/* .record-list's base rule lays each <article> out as a single flex row
+   (label/value pairs, e.g. Subscriptions' event history) — a conversation
+   entry is a name/timestamp line followed by a full message paragraph, so
+   it needs its articles stacked instead. */
+.pcc-root .cc-conversation article { align-items: stretch; flex-direction: column; gap: 0.3rem; }
+.pcc-root .cc-conversation article > strong { display: flex; gap: 0.4rem; }
+
+.pcc-root .cc-support-reply-form { border-top: 1px solid var(--cc-border); margin-top: 1rem; padding-top: 1rem; }
+.pcc-root .cc-support-reply-form label { display: block; }
+.pcc-root .cc-support-reply-form textarea { margin-top: 0.3rem; resize: vertical; width: 100%; }
+.pcc-root .cc-support-reply-form .cc-action { margin-top: 0.6rem; }
+
+.pcc-root .cc-attachment-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.pcc-root .cc-attachment-tile { background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); color: inherit; display: flex; flex-direction: column; gap: 0.4rem; overflow: hidden; padding: 0.6rem; text-decoration: none; }
+.pcc-root .cc-attachment-tile img { aspect-ratio: 4 / 3; background: var(--cc-bg); border-radius: 4px; object-fit: cover; width: 100%; }
+.pcc-root .cc-attachment-fallback { align-items: center; aspect-ratio: 4 / 3; background: var(--cc-bg); border-radius: 4px; color: var(--cc-text-muted); display: flex; font-size: 0.74rem; justify-content: center; }
+.pcc-root .cc-attachment-name { color: var(--cc-text-muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

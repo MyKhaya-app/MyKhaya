@@ -7,15 +7,18 @@ AdministrativeAuditEvent framework.
 """
 
 import hashlib
+import io
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from redis.asyncio import Redis
 from sqlalchemy import delete, select
 
+from mykhaya.attachments.storage import get_attachment_storage
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
@@ -27,6 +30,7 @@ from mykhaya.models import (
     PlatformAdministrator,
     PlatformRole,
     SupportTicket,
+    SupportTicketAttachment,
     TokenPurpose,
     User,
 )
@@ -173,6 +177,23 @@ async def create_ticket(client: AsyncClient, subject: str = "PCC test ticket") -
     )
     assert created.status_code == 201, created.text
     return created.json()["id"]
+
+
+def make_png_bytes(size: tuple[int, int] = (40, 40)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color=(60, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+async def upload_attachment(
+    client: AsyncClient, ticket_id: str, filename: str = "screenshot.png"
+) -> str:
+    files = {"file": (filename, make_png_bytes(), "image/png")}
+    uploaded = await unsafe(
+        client, "POST", f"/api/v1/support/tickets/{ticket_id}/attachments", files=files
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    return uploaded.json()["id"]
 
 
 @pytest.fixture(autouse=True)
@@ -477,3 +498,175 @@ async def test_admin_reply_is_visible_to_requester(
             )
         ).all()
         assert len(events) == 1
+
+
+# --- attachment retrieval (Phase 2B) -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_can_retrieve_attachment(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    await create_verified_user(consumer_client, unique_email("pccattach"), "PCC Attach User")
+    ticket_id = await create_ticket(consumer_client, "Attachment ticket")
+    attachment_id = await upload_attachment(consumer_client, ticket_id)
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    fetched = await admin_client.get(
+        f"/api/v1/platform/support/tickets/{ticket_id}/attachments/{attachment_id}"
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.headers["content-type"] == "image/webp"
+    assert "attachment" not in fetched.headers.get("content-disposition", "")
+    assert "inline" in fetched.headers.get("content-disposition", "")
+    assert fetched.headers.get("cache-control") == "private, no-store"
+    assert len(fetched.content) > 0
+
+    async with SessionFactory() as db:
+        events = (
+            await db.scalars(
+                select(AdministrativeAuditEvent).where(
+                    AdministrativeAuditEvent.administrator_id == admin.id,
+                    AdministrativeAuditEvent.action == "support.attachment.viewed",
+                )
+            )
+        ).all()
+        assert len(events) == 1
+        assert str(events[0].target_id) == attachment_id
+
+
+@pytest.mark.asyncio
+async def test_attachment_retrieval_requires_platform_admin_auth(
+    consumer_client: AsyncClient,
+) -> None:
+    await create_verified_user(consumer_client, unique_email("pccattachauth"), "No Admin User")
+    ticket_id = await create_ticket(consumer_client, "Unauthenticated fetch ticket")
+    attachment_id = await upload_attachment(consumer_client, ticket_id)
+
+    # No admin session cookie at all (this client only ever logged in as a
+    # consumer) — must be rejected, not silently served.
+    unauthenticated = await consumer_client.get(
+        f"/api/v1/platform/support/tickets/{ticket_id}/attachments/{attachment_id}"
+    )
+    assert unauthenticated.status_code in (401, 404)
+
+
+@pytest.mark.asyncio
+async def test_attachment_retrieval_wrong_ticket_id_returns_404(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    """An attachment must only be retrievable through its own ticket's id —
+    not any other valid ticket id, even one the same admin can otherwise
+    see. Guards against an attachment id being usable as a skeleton key
+    once you know it, regardless of the ticket path segment."""
+    await create_verified_user(consumer_client, unique_email("pccattachwrong"), "Wrong Ticket User")
+    ticket_a = await create_ticket(consumer_client, "Ticket A")
+    ticket_b = await create_ticket(consumer_client, "Ticket B")
+    attachment_id = await upload_attachment(consumer_client, ticket_a)
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    mismatched = await admin_client.get(
+        f"/api/v1/platform/support/tickets/{ticket_b}/attachments/{attachment_id}"
+    )
+    assert mismatched.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_attachment_retrieval_nonexistent_attachment_returns_404(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    await create_verified_user(
+        consumer_client, unique_email("pccattachmiss"), "Missing Attach User"
+    )
+    ticket_id = await create_ticket(consumer_client, "No attachment ticket")
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    missing = await admin_client.get(
+        f"/api/v1/platform/support/tickets/{ticket_id}/attachments/{uuid.uuid4()}"
+    )
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_attachment_retrieval_path_traversal_id_is_rejected(
+    admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    # A traversal-style id can never reach the storage layer: either the
+    # client/ASGI layer normalises the encoded ".." segments before this
+    # even matches a route (404, observed here), or a non-UUID segment
+    # somehow reaches FastAPI's uuid.UUID path converter, which rejects it
+    # outright (422) before any lookup. Either way, never a 200 and never a
+    # path resolved outside the attachment storage directory (see
+    # AttachmentStorage._path_for's own defence in depth for the case
+    # where a caller bypasses HTTP entirely).
+    traversal = await admin_client.get(
+        f"/api/v1/platform/support/tickets/{uuid.uuid4()}/attachments/..%2F..%2F..%2Fetc%2Fpasswd"
+    )
+    assert traversal.status_code in (404, 422)
+
+
+@pytest.mark.asyncio
+async def test_attachment_retrieval_missing_bytes_returns_404_not_500(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    """The DB row can outlive the on-disk file (manual ops cleanup, a
+    future retention job) — retrieval must degrade to 404, never a 500."""
+    await create_verified_user(consumer_client, unique_email("pccattachghost"), "Ghost Attach User")
+    ticket_id = await create_ticket(consumer_client, "Ghost attachment ticket")
+    attachment_id = await upload_attachment(consumer_client, ticket_id)
+
+    async with SessionFactory() as db:
+        attachment = await db.get(SupportTicketAttachment, uuid.UUID(attachment_id))
+        assert attachment is not None
+        storage = get_attachment_storage(get_settings())
+        await storage.delete(attachment.storage_key)
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    ghosted = await admin_client.get(
+        f"/api/v1/platform/support/tickets/{ticket_id}/attachments/{attachment_id}"
+    )
+    assert ghosted.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_attachment_url_never_exposes_storage_key_or_filesystem_path(
+    consumer_client: AsyncClient, admin_client: AsyncClient, admin_factory: AdminFactory
+) -> None:
+    await create_verified_user(consumer_client, unique_email("pccattachkey"), "Attach Key User")
+    ticket_id = await create_ticket(consumer_client, "Storage key check ticket")
+    await upload_attachment(consumer_client, ticket_id)
+
+    admin = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, admin)
+    detail = await admin_client.get(f"/api/v1/platform/support/tickets/{ticket_id}")
+    assert detail.status_code == 200
+    body = detail.text
+    assert "storage_key" not in body
+    assert "/data/" not in body
+    assert ".webp" not in body  # server-generated filename extension leaks nothing either
+
+
+# --- consumer cannot reach PCC APIs ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consumer_session_cannot_list_pcc_tickets(consumer_client: AsyncClient) -> None:
+    await create_verified_user(consumer_client, unique_email("pccdenied"), "Denied User")
+    response = await consumer_client.get("/api/v1/platform/support/tickets")
+    assert response.status_code in (401, 404)
+
+
+@pytest.mark.asyncio
+async def test_consumer_session_cannot_patch_pcc_ticket(consumer_client: AsyncClient) -> None:
+    await create_verified_user(consumer_client, unique_email("pccdeniedpatch"), "Denied Patch User")
+    ticket_id = await create_ticket(consumer_client, "Denied patch ticket")
+    response = await consumer_client.patch(
+        f"/api/v1/platform/support/tickets/{ticket_id}", json={"status": "resolved"}
+    )
+    assert response.status_code in (401, 403, 404)

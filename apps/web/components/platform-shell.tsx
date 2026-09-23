@@ -14,6 +14,7 @@ import {
   FlaskConical,
   HeartPulse,
   LayoutDashboard,
+  LifeBuoy,
   ListChecks,
   Mail,
   MessageSquare,
@@ -74,6 +75,13 @@ const navGroups: NavGroup[] = [
       { label: "Push", href: "/push", icon: Bell },
       { label: "Notifications", href: "/notifications", icon: Send },
       { label: "Communications", href: "/communications", icon: MessageSquare },
+    ],
+  },
+  {
+    label: "Support",
+    items: [
+      { label: "Tickets", href: "/support/tickets", icon: LifeBuoy },
+      { label: "Settings", href: "/support/settings", icon: Settings },
     ],
   },
   {
