@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AppShell, PersistentAppShell } from "./app-shell";
 
@@ -148,6 +148,39 @@ describe("AppShell — native-shell root class", () => {
     await screen.findByText("content");
 
     expect(document.documentElement.classList.contains("native-shell")).toBe(false);
+  });
+
+  it("hides the native dock while the visual viewport is keyboard-reduced and restores it on close", async () => {
+    nativeShell = true;
+    const originalViewport = window.visualViewport;
+    let resize: (() => void) | undefined;
+    const viewportState = { height: 800 };
+    const viewport = {
+      get height() { return viewportState.height; },
+      addEventListener: (_event: string, listener: () => void) => { resize = listener; },
+      removeEventListener: vi.fn(),
+    } as unknown as VisualViewport;
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+
+    render(<AppShell>content</AppShell>);
+    await screen.findByText("content");
+    expect(document.querySelector(".bottom-nav")).not.toBeNull();
+
+    act(() => {
+      viewportState.height = 500;
+      resize?.();
+    });
+    await waitFor(() => expect(document.querySelector(".bottom-nav")).toBeNull());
+    expect(document.querySelector(".app-shell")).toHaveClass("native-keyboard-open");
+
+    act(() => {
+      viewportState.height = 800;
+      resize?.();
+    });
+    await waitFor(() => expect(document.querySelector(".bottom-nav")).not.toBeNull());
+    expect(document.querySelector(".app-shell")).not.toHaveClass("native-keyboard-open");
+
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: originalViewport });
   });
 });
 

@@ -12,6 +12,7 @@ import { NativeBiometricOffer } from "./native-biometric-offer";
 import { genericUnlockPromptCopy } from "./native-biometric";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
+import { useNativeKeyboardOpen } from "./use-native-keyboard";
 import { api } from "@mykhaya/api-client";
 import { NotificationProvider } from "./notification-state";
 import { useActivityHeartbeat } from "./use-activity-heartbeat";
@@ -39,6 +40,7 @@ export function AppShell({
   // shown-and-resolved, or determined it had nothing to show. See
   // NativeBiometricOffer's onSettled doc comment.
   const [biometricSettled, setBiometricSettled] = useState(false);
+  const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
 
@@ -123,7 +125,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}`}>
+      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
@@ -142,7 +144,7 @@ export function AppShell({
           {children}
         </main>
       </div>
-      <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />
+      {!keyboardOpen && <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />}
       {!isNativeShell() && <AroundHouseDock />}
       </div>
     </NotificationProvider>

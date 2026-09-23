@@ -1716,6 +1716,12 @@ html.native-shell .app-main {
      breathing room, not the browser layout's bottom-nav-height offset. */
   padding-bottom: max(1rem, var(--safe-bottom));
 }
+/* The native keyboard temporarily reduces the visual viewport. The shared
+   hook removes the dock while it is open, so there is no stale dock height or
+   floating navigation above the keyboard. */
+html.native-shell .app-shell.native-keyboard-open .app-main {
+  padding-bottom: max(1rem, var(--safe-bottom));
+}
 html.native-shell .bottom-nav {
   bottom: auto;
   flex: none;
