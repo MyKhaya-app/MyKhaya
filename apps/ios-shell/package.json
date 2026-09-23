@@ -1,6 +1,6 @@
 {
   "name": "@mykhaya/ios-shell",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "private": true,
   "description": "Capacitor native iOS shell for MyKhaya. Loads the live MyKhaya web frontend (apps/web, deployed) inside a WKWebView and adds selected native iOS capabilities. This is NOT a second frontend — see docs/architecture/adr/0012-capacitor-ios-shell.md and ADR 0011.",
   "scripts": {

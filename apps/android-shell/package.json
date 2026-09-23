@@ -1,6 +1,6 @@
 {
   "name": "@mykhaya/android-shell",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "private": true,
   "description": "Capacitor native Android shell for MyKhaya. Loads the live MyKhaya web frontend (apps/web, deployed) inside a Capacitor WebView. This is NOT a second frontend — see docs/architecture/adr/0014-capacitor-android-shell.md, ADR 0012 (the equivalent iOS decision), and ADR 0011.",
   "scripts": {
