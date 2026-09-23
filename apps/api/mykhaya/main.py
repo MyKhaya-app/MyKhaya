@@ -14,8 +14,6 @@ from mykhaya.config import get_settings
 from mykhaya.routers import (
     activity,
     auth,
-    usage,
-    usage_admin,
     billing,
     birthdays,
     budget,
@@ -34,9 +32,13 @@ from mykhaya.routers import (
     meal_plans,
     notifications,
     platform,
+    platform_support,
     public_config,
     reminders,
+    support,
     todos,
+    usage,
+    usage_admin,
     users,
     wishlists,
 )
@@ -108,6 +110,16 @@ class RequestBodyTooLarge(Exception):
 
 
 AVATAR_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+ATTACHMENT_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _is_support_attachment_upload(request: Request) -> bool:
+    path = request.url.path
+    return (
+        request.method == "POST"
+        and path.startswith("/api/v1/support/tickets/")
+        and path.endswith("/attachments")
+    )
 
 
 @app.middleware("http")
@@ -127,11 +139,14 @@ async def security_and_limits(
         # above the general JSON body limit — everything else keeps the tight default.
         # Multipart framing is bounded overhead outside the uploaded file itself;
         # leave room for it so a file at the documented limit reaches the route.
-        body_limit = (
-            settings.avatar_max_upload_bytes + AVATAR_MULTIPART_OVERHEAD_BYTES
-            if request.method == "POST" and request.url.path == "/api/v1/users/me/avatar"
-            else settings.request_body_limit
-        )
+        if request.method == "POST" and request.url.path == "/api/v1/users/me/avatar":
+            body_limit = settings.avatar_max_upload_bytes + AVATAR_MULTIPART_OVERHEAD_BYTES
+        elif _is_support_attachment_upload(request):
+            body_limit = (
+                settings.support_attachment_max_upload_bytes + ATTACHMENT_MULTIPART_OVERHEAD_BYTES
+            )
+        else:
+            body_limit = settings.request_body_limit
         length = request.headers.get("content-length")
         if length is not None:
             try:
@@ -217,8 +232,10 @@ for router in (
     budget.router,
     notifications.router,
     platform.router,
+    platform_support.router,
     public_config.router,
     communications_admin.router,
+    support.router,
     billing.router,
     billing.group_router,
     status_router.router,

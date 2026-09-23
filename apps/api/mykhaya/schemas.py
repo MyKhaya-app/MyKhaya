@@ -22,6 +22,11 @@ from mykhaya.models import (
     Role,
     RoutineReminderTiming,
     RoutineScope,
+    SupportTicketAppArea,
+    SupportTicketPriority,
+    SupportTicketSource,
+    SupportTicketStatus,
+    SupportTicketType,
 )
 
 
@@ -1734,6 +1739,8 @@ class NativePushDeviceResponse(BaseModel):
     last_seen_at: datetime | None
     disabled_at: datetime | None
     apns_environment: Literal["sandbox", "production"] | None
+
+
 class PushSubscriptionResponse(BaseModel):
     id: uuid.UUID
     device_label: str | None
@@ -1746,3 +1753,130 @@ class PushSubscriptionResponse(BaseModel):
 class PushPublicKeyResponse(BaseModel):
     configured: bool
     public_key: str | None
+
+
+# --- Support tickets ---------------------------------------------------------
+# Consumer-facing support ticket schemas (Phase 2A backend foundation). See
+# mykhaya.platform_schemas for the PCC/admin-side equivalents — deliberately
+# separate models, not shared, so a field only ever exposed to admins (e.g.
+# requester email, internal notes) can never leak into a consumer response by
+# accident of a shared base class.
+
+
+class SupportTicketDiagnosticSubmit(StrictModel):
+    """Strict allowlist — StrictModel's `extra='forbid'` rejects any payload
+    carrying a field not listed here (Phase 2A: "Reject or strip unknown
+    diagnostic fields... must never accept arbitrary extra keys"). Every
+    field is optional since not every runtime can report every value."""
+
+    app_version: str | None = Field(default=None, max_length=40)
+    build_number: str | None = Field(default=None, max_length=40)
+    platform: str | None = Field(default=None, max_length=20)
+    os_version: str | None = Field(default=None, max_length=40)
+    runtime: str | None = Field(default=None, max_length=20)
+    notification_permission: str | None = Field(default=None, max_length=20)
+    push_registration_state: str | None = Field(default=None, max_length=20)
+    api_connectivity: str | None = Field(default=None, max_length=20)
+    network_state: str | None = Field(default=None, max_length=20)
+    background_refresh_state: str | None = Field(default=None, max_length=20)
+    client_timestamp: datetime | None = None
+
+
+class SupportTicketDiagnosticResponse(BaseModel):
+    app_version: str | None
+    build_number: str | None
+    platform: str | None
+    os_version: str | None
+    runtime: str | None
+    notification_permission: str | None
+    push_registration_state: str | None
+    api_connectivity: str | None
+    network_state: str | None
+    background_refresh_state: str | None
+    client_timestamp: datetime | None
+
+
+class SupportTicketCreate(StrictModel):
+    type: SupportTicketType
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=4000)
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None = None
+    # Contextual metadata only — never an access-control boundary. The
+    # server does not verify the caller is currently a member of this Home;
+    # it is simply recorded as "which Home the reporter was using," and a
+    # ticket is always visible only to its own requester regardless of this
+    # value (see routers.support and models.SupportTicket's docstring).
+    group_id: uuid.UUID | None = None
+    # Optional — the "Include diagnostics" toggle. Validated against the
+    # same strict allowlist as the standalone submission.
+    diagnostics: SupportTicketDiagnosticSubmit | None = None
+
+    @field_validator("subject")
+    @classmethod
+    def clean_subject(cls, value: str) -> str:
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            raise ValueError("Subject cannot be empty.")
+        return cleaned
+
+
+class SupportTicketMessageCreate(StrictModel):
+    # No `visibility` field, deliberately — a consumer can never create
+    # anything but a requester-visible message. See
+    # models.SupportTicketMessage's docstring.
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class SupportTicketMessageResponse(BaseModel):
+    id: uuid.UUID
+    author: Literal["requester", "admin"]
+    message: str
+    created_at: datetime
+
+
+class SupportTicketAttachmentResponse(BaseModel):
+    id: uuid.UUID
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+class SupportTicketResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    description: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    group_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+    messages: list[SupportTicketMessageResponse] = Field(default_factory=list)
+    attachments: list[SupportTicketAttachmentResponse] = Field(default_factory=list)
+    diagnostics: SupportTicketDiagnosticResponse | None = None
+
+
+class SupportTicketSummaryResponse(BaseModel):
+    """The list view — lighter than SupportTicketResponse (no messages/
+    attachments/diagnostics bodies), matching the existing list-vs-detail
+    response-shape convention used elsewhere in this codebase."""
+
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+
+
+class SupportTicketListResponse(BaseModel):
+    items: list[SupportTicketSummaryResponse]

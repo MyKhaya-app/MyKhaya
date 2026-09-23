@@ -94,7 +94,12 @@ services:
     # Profile avatars only (see mykhaya/avatars/) — a small, dedicated app-data volume,
     # not a general media/photo store. Only `api` actually reads/writes it; worker and
     # scheduler inherit the mount via this anchor but don't use it.
-    volumes: ["avatar_data:/data/avatars"]
+    # support_attachment_data mirrors that same pattern for support-ticket
+    # attachments (see mykhaya/attachments/) — a separate volume, not a reuse
+    # of avatar_data, matching that module's own dedicated storage
+    # abstraction (mykhaya.attachments.storage, not mykhaya.avatars.storage).
+    volumes:
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments"]
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -190,6 +195,7 @@ services:
       RUFF_CACHE_DIR: /tmp/.ruff_cache
       MYPY_CACHE_DIR: /tmp/.mypy_cache
       MYKHAYA_AVATAR_STORAGE_DIR: /tmp/avatars
+      MYKHAYA_SUPPORT_ATTACHMENT_STORAGE_DIR: /tmp/support-attachments
     command: ["python", "-m", "pytest"]
     depends_on:
       {
@@ -288,3 +294,4 @@ volumes:
   caddy_data: {}
   caddy_config: {}
   avatar_data: {}
+  support_attachment_data: {}

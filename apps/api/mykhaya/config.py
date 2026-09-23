@@ -176,6 +176,14 @@ class Settings(BaseSettings):
     # The transport ceiling protects the API from unbounded multipart bodies;
     # decoded pixel limits in avatars.processing protect memory separately.
     avatar_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
+    support_attachment_storage_dir: str = "/data/support-attachments"
+    # ~10 MB ceiling per Phase 2A's agreed attachment controls — a separate
+    # setting from avatar_max_upload_bytes since these are different upload
+    # surfaces with different size expectations (a bug-report screenshot vs
+    # a profile photo).
+    support_attachment_max_upload_bytes: int = Field(
+        default=10_485_760, ge=1024, le=52_428_800
+    )
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments

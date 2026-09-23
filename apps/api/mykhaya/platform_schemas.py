@@ -16,6 +16,11 @@ from mykhaya.models import (
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
+    SupportTicketAppArea,
+    SupportTicketPriority,
+    SupportTicketSource,
+    SupportTicketStatus,
+    SupportTicketType,
 )
 from mykhaya.module_registry import ReleaseState
 from mykhaya.schemas import CalendarUsageResponse, StrictModel
@@ -1029,3 +1034,112 @@ class SubscriptionDetailResponse(BaseModel):
     # Dashboard links only, matching this phase's test-mode-only scope.
     stripe_dashboard_customer_url: str | None = None
     stripe_dashboard_subscription_url: str | None = None
+
+
+# --- Support tickets (PCC/admin side) ----------------------------------------
+# Deliberately separate from mykhaya.schemas' consumer-facing Support ticket
+# models, not a shared base — an admin response legitimately carries fields
+# (requester email/name, assigned admin, internal message authorship) that
+# must never appear in a consumer response, so keeping them in wholly
+# separate classes makes that boundary structural rather than a
+# field-by-field discipline.
+
+
+class PlatformSupportTicketMessageResponse(BaseModel):
+    id: uuid.UUID
+    author_user_id: uuid.UUID | None
+    author_admin_id: uuid.UUID | None
+    author_display_name: str
+    message: str
+    visibility: Literal["requester", "internal"]
+    created_at: datetime
+
+
+class PlatformSupportTicketAttachmentResponse(BaseModel):
+    id: uuid.UUID
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+class PlatformSupportTicketDiagnosticResponse(BaseModel):
+    app_version: str | None
+    build_number: str | None
+    platform: str | None
+    os_version: str | None
+    runtime: str | None
+    notification_permission: str | None
+    push_registration_state: str | None
+    api_connectivity: str | None
+    network_state: str | None
+    background_refresh_state: str | None
+    client_timestamp: datetime | None
+
+
+class PlatformSupportTicketSummaryResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    requester_display_name: str
+    requester_email: EmailStr
+    group_id: uuid.UUID | None
+    group_name: str | None
+    assigned_admin_id: uuid.UUID | None
+    assigned_admin_display_name: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlatformSupportTicketListResponse(BaseModel):
+    items: list[PlatformSupportTicketSummaryResponse]
+    next_page: int | None = None
+
+
+class PlatformSupportTicketDetailResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    description: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    requester_user_id: uuid.UUID
+    requester_display_name: str
+    requester_email: EmailStr
+    group_id: uuid.UUID | None
+    group_name: str | None
+    assigned_admin_id: uuid.UUID | None
+    assigned_admin_display_name: str | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+    messages: list[PlatformSupportTicketMessageResponse]
+    attachments: list[PlatformSupportTicketAttachmentResponse]
+    diagnostics: PlatformSupportTicketDiagnosticResponse | None
+
+
+class PlatformSupportTicketUpdate(StrictModel):
+    """All fields optional — a PATCH only ever changes what it includes.
+    Reused for status transitions, assignment, and priority changes alike
+    rather than three separate endpoints, matching this router's small,
+    single-purpose scope."""
+
+    status: SupportTicketStatus | None = None
+    priority: SupportTicketPriority | None = None
+    assigned_admin_id: uuid.UUID | None = None
+    # Reassigning to nobody is a distinct, deliberate action from "field
+    # omitted" — Pydantic's exclude_unset (used by the route) tells these
+    # apart, so `assigned_admin_id: null` unassigns rather than being
+    # ignored.
+
+
+class PlatformSupportTicketMessageCreate(StrictModel):
+    message: str = Field(min_length=1, max_length=4000)

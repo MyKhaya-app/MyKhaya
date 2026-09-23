@@ -210,6 +210,24 @@ MODULES: tuple[ModuleDefinition, ...] = (
         # unaffected (feature_modules() below).
         home_admin_manageable=False,
     ),
+    ModuleDefinition(
+        FeatureKey.support.value,
+        "Support",
+        "Report a bug, request support, or share feedback — MyKhaya's own "
+        "lightweight support-ticket capability.",
+        "Communication",
+        ReleaseState.beta,
+        False,
+        "1.0.0",
+        route="/help-support",
+        # A per-user capability, not a Home module — a ticket belongs to its
+        # requester, not a Home (Phase 2A decision 5), so there is nothing
+        # for a Home Admin to toggle per-Home. Gated globally only, via
+        # features.platform_feature_enabled(db, FeatureKey.support) — see
+        # routers.support — rather than the per-Home
+        # is_feature_enabled/require_feature path every other module uses.
+        home_admin_manageable=False,
+    ),
 )
 
 MODULE_BY_ID = {module.id: module for module in MODULES}

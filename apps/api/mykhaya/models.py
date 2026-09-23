@@ -211,6 +211,66 @@ class FeatureKey(StrEnum):
     external_sharing = "external_sharing"
     nudges = "nudges"
     budget = "budget"
+    support = "support"
+
+
+class SupportTicketType(StrEnum):
+    bug = "bug"
+    support = "support"
+    feedback = "feedback"
+
+
+class SupportTicketStatus(StrEnum):
+    open = "open"
+    in_progress = "in_progress"
+    waiting_for_user = "waiting_for_user"
+    resolved = "resolved"
+    closed = "closed"
+
+
+class SupportTicketPriority(StrEnum):
+    normal = "normal"
+    elevated = "elevated"
+    blocking = "blocking"
+
+
+class SupportTicketSource(StrEnum):
+    ios = "ios"
+    android = "android"
+    web = "web"
+    desktop_web = "desktop_web"
+
+
+class SupportTicketAppArea(StrEnum):
+    """Deliberately its own enum, not hard-coded string literals scattered
+    across schemas/routers/frontend — a new module registering a new app
+    area only ever means adding one value here (and to the frontend's
+    mirrored list, same as WidgetEvent/CalendarLayout's hand-mirrored-TS
+    convention elsewhere in this codebase)."""
+
+    home = "home"
+    calendar = "calendar"
+    family = "family"
+    nudges = "nudges"
+    lists = "lists"
+    meals = "meals"
+    budget = "budget"
+    account = "account"
+    notifications = "notifications"
+    more = "more"
+    other = "other"
+
+
+class SupportMessageVisibility(StrEnum):
+    # Shown to the ticket's own requester — the only visibility a consumer
+    # route can ever read or write (see schemas.SupportTicketMessageCreate,
+    # which has no visibility field, and routers.support's message list,
+    # which filters this value unconditionally).
+    requester = "requester"
+    # Admin-only internal note. Modelled now for structural completeness
+    # (PHASE 2A instructions) but no consumer-facing route can create or
+    # read a message at this visibility — see routers.support.
+    internal = "internal"
 
 
 class ProductUsagePlatform(StrEnum):
@@ -3267,3 +3327,178 @@ class StripeBillingDiagnostic(Base):
     effective_plan: Mapped[str | None] = mapped_column(String(40))
     safe_error_code: Mapped[str | None] = mapped_column(String(80))
     safe_error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+class SupportTicket(UuidTimeMixin, Base):
+    """A lightweight, MyKhaya-owned support ticket (bug report, support
+    request, or feedback). MyKhaya/PCC is the system of record — email is a
+    notification/communication mechanism layered on top via the existing
+    Notification Engine, never the underlying store (Phase 2A decision:
+    "Email is a notification/communication mechanism only").
+
+    `reference` is a human-readable MK-#### identifier generated from a
+    dedicated PostgreSQL sequence (see mykhaya.support_reference) — gaps
+    from abandoned/rolled-back inserts are expected and acceptable, never
+    backfilled or reused. The sequence implementation is never exposed to
+    consumers; only the formatted reference is.
+
+    PRIVACY (Phase 2A decision 5): a ticket is visible only to its own
+    requester (requester_user_id == the authenticated user), never to other
+    members of the same Home merely because group_id matches — group_id is
+    contextual metadata only (which Home the reporter was using at the
+    time), not an access-control boundary. See routers.support's consumer
+    routes, which filter exclusively on requester_user_id, and
+    tests/test_support_tickets.py's cross-user isolation tests.
+    """
+
+    __tablename__ = "support_tickets"
+    reference: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    requester_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    type: Mapped[SupportTicketType] = mapped_column(
+        Enum(SupportTicketType, name="support_ticket_type")
+    )
+    status: Mapped[SupportTicketStatus] = mapped_column(
+        Enum(SupportTicketStatus, name="support_ticket_status"),
+        default=SupportTicketStatus.open,
+        server_default=SupportTicketStatus.open.value,
+        index=True,
+    )
+    priority: Mapped[SupportTicketPriority] = mapped_column(
+        Enum(SupportTicketPriority, name="support_ticket_priority"),
+        default=SupportTicketPriority.normal,
+        server_default=SupportTicketPriority.normal.value,
+    )
+    subject: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(4000))
+    source: Mapped[SupportTicketSource] = mapped_column(
+        Enum(SupportTicketSource, name="support_ticket_source")
+    )
+    app_area: Mapped[SupportTicketAppArea | None] = mapped_column(
+        Enum(SupportTicketAppArea, name="support_ticket_app_area")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL"), index=True
+    )
+    messages: Mapped[list["SupportTicketMessage"]] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan"
+    )
+    attachments: Mapped[list["SupportTicketAttachment"]] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan"
+    )
+    diagnostic: Mapped["SupportTicketDiagnostic | None"] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class SupportTicketMessage(UuidTimeMixin, Base):
+    """One entry in a ticket's conversation. At most one of author_user_id /
+    author_admin_id is ever set at creation time (ck_support_message_single_author)
+    — author_user_id for the requester's own message, author_admin_id for an
+    admin's reply; the application layer (routers.support, routers.platform_support)
+    always sets exactly one on create. The constraint itself only forbids
+    BOTH being set simultaneously, not requires exactly one — both columns
+    are `ondelete="SET NULL"`, so a later deleted User or PlatformAdministrator
+    can legitimately leave a historical message with neither set, without
+    violating this constraint (see tests/test_platform_support.py's admin
+    cleanup fixture, which exercises exactly this path).
+
+    `visibility` defaults to 'requester' (shown to the ticket's own
+    requester). 'internal' notes are modelled now as a structural option for
+    a possible future admin-only-notes feature but are never reachable by
+    any consumer-facing route: schemas.SupportTicketMessageCreate has no
+    visibility field at all, so a consumer request body can never set it,
+    and routers.support's message list filters visibility == requester
+    unconditionally."""
+
+    __tablename__ = "support_ticket_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (author_user_id IS NOT NULL AND author_admin_id IS NOT NULL)",
+            name="ck_support_message_single_author",
+        ),
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True
+    )
+    author_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    author_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    message: Mapped[str] = mapped_column(String(4000))
+    visibility: Mapped[SupportMessageVisibility] = mapped_column(
+        Enum(SupportMessageVisibility, name="support_message_visibility"),
+        default=SupportMessageVisibility.requester,
+        server_default=SupportMessageVisibility.requester.value,
+    )
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="messages")
+
+
+class SupportTicketAttachment(UuidTimeMixin, Base):
+    """Metadata only — file bytes live on disk
+    (mykhaya.attachments.storage), never in Postgres, mirroring the existing
+    avatar-storage architecture but via its own generic AttachmentStorage
+    (avatar-specific code is deliberately not reused). storage_key is always
+    a server-generated random filename (see
+    mykhaya.attachments.storage.attachment_filename), never derived from
+    original_filename, which is display-only and never used to build a
+    filesystem path — see AttachmentStorage._path_for's matching defence in
+    depth."""
+
+    __tablename__ = "support_ticket_attachments"
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(120), unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    uploaded_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="attachments")
+
+
+class SupportTicketDiagnostic(UuidTimeMixin, Base):
+    """A strict, explicitly-modelled technical snapshot attached to a ticket
+    — deliberately never an arbitrary JSON blob (Phase 2A security
+    requirement). A separate table (not a JSON column on SupportTicket)
+    specifically so its read access can be independently audited
+    (support.diagnostics.viewed — see routers.platform_support) rather than
+    being indistinguishable from reading the ticket itself.
+
+    Every field is technical client-state metadata only — never passwords,
+    tokens, cookies, or any consumer content (calendar/Nudge/list/meal/
+    budget data). The API layer (schemas.SupportTicketDiagnosticSubmit,
+    `extra="forbid"` via StrictModel) rejects any payload carrying an
+    unrecognised key outright rather than silently stripping it, so a future
+    client accidentally sending more can never succeed by surprise. One
+    snapshot per ticket (ticket_id is unique) — this is a point-in-time
+    "include diagnostics" attachment, not a history."""
+
+    __tablename__ = "support_ticket_diagnostics"
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    app_version: Mapped[str | None] = mapped_column(String(40))
+    build_number: Mapped[str | None] = mapped_column(String(40))
+    platform: Mapped[str | None] = mapped_column(String(20))
+    os_version: Mapped[str | None] = mapped_column(String(40))
+    runtime: Mapped[str | None] = mapped_column(String(20))
+    notification_permission: Mapped[str | None] = mapped_column(String(20))
+    push_registration_state: Mapped[str | None] = mapped_column(String(20))
+    api_connectivity: Mapped[str | None] = mapped_column(String(20))
+    network_state: Mapped[str | None] = mapped_column(String(20))
+    background_refresh_state: Mapped[str | None] = mapped_column(String(20))
+    client_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="diagnostic")
