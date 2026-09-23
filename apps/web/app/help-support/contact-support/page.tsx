@@ -98,10 +98,10 @@ export default function ContactSupport() {
     } finally { setBusy(false); }
   }
 
-  if (supportEnabled === false) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team."><section className="card details" aria-live="polite"><h2>Support unavailable</h2><p className="muted">Support requests are temporarily unavailable. Please check Service Status and try again later.</p></section></SettingsPage>;
-  if (success) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team."><section className="card details support-success" aria-live="polite"><CheckCircle2 aria-hidden="true" /><h2>We&apos;ve received your request.</h2><p className="support-reference">Reference: <strong>{success.reference}</strong></p>{warning && <p className="field-error">{warning}</p>}<a className="button" href="/help-support">Back to Help &amp; Support</a></section></SettingsPage>;
+  if (supportEnabled === false) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details" aria-live="polite"><h2>Support unavailable</h2><p className="muted">Support requests are temporarily unavailable. Please check Service Status and try again later.</p></section></SettingsPage>;
+  if (success) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details support-success" aria-live="polite"><CheckCircle2 aria-hidden="true" /><h2>We&apos;ve received your request.</h2><p className="support-reference">Reference: <strong>{success.reference}</strong></p>{warning && <p className="field-error">{warning}</p>}<a className="button" href="/help-support">Back to Help &amp; Support</a></section></SettingsPage>;
 
-  return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team."><form className="card details support-form" onSubmit={submit} noValidate>
+  return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><form className="card details support-form" onSubmit={submit} noValidate>
     {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
     {warning && <p className="notice" role="status">{warning}</p>}
     <label>Subject<input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={200} required /></label>

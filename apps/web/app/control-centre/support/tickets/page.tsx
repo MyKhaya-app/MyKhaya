@@ -126,6 +126,15 @@ function TicketsQueue() {
     setParams({ [key]: value || null, page: "1" });
   }
 
+  const hasActiveFilters = Boolean(query || FILTER_KEYS.some((key) => filters[key]));
+
+  function clearFilters() {
+    setQueryInput("");
+    const cleared: Record<string, string | null> = { query: null, page: "1" };
+    for (const key of FILTER_KEYS) cleared[key] = null;
+    setParams(cleared);
+  }
+
   const rows = data?.items ?? [];
   const columns: CcTableColumn<TicketSummary>[] = [
     {
@@ -181,7 +190,7 @@ function TicketsQueue() {
 
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage wide className="cc-support-tickets-queue">
         <CcPageHeader
           eyebrow="Support"
           title="Tickets"
@@ -194,7 +203,7 @@ function TicketsQueue() {
               <input
                 value={queryInput}
                 onChange={(event) => setQueryInput(event.target.value)}
-                placeholder="Reference, subject, requester name or email"
+                placeholder="Reference, subject, requester…"
               />
             </label>
             <label>
@@ -269,6 +278,11 @@ function TicketsQueue() {
             <button type="submit" className="cc-action cc-action-primary">
               Search
             </button>
+            {hasActiveFilters && (
+              <button type="button" className="secondary" onClick={clearFilters}>
+                Clear
+              </button>
+            )}
           </form>
         </CcToolbar>
         {error && <CcNotice tone="error">Unable to load tickets: {error}</CcNotice>}

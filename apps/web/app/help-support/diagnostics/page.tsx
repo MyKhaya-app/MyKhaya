@@ -58,7 +58,7 @@ export default function RunDiagnostics() {
       .catch(() => setSupportEnabled(false));
   }, []);
   const diagnosticsReady = collectSupportDiagnostics(source);
-  return <SettingsPage title="Run diagnostics" description="Check your device and app settings for common issues.">
+  return <SettingsPage title="Run diagnostics" description="Check your device and app settings for common issues." backLink={{ href: "/help-support", label: "Help & Support" }}>
     <div className="diagnostics-page">
       <div className="diagnostics-toolbar"><p className="muted" aria-live="polite">{running ? "Checking your app and connection…" : relativeTime(lastChecked)}</p><button className="secondary" type="button" onClick={() => void run()} disabled={running}><RefreshCw size={16} aria-hidden="true" /> Run again</button></div>
       <section className="card details diagnostics-list" aria-label="Diagnostic checks">

@@ -28,6 +28,7 @@ import { api } from "@mykhaya/api-client";
 import { AppShellContent } from "./app-shell";
 import { HeroFlower } from "./hero-flower";
 import { useActiveHome } from "./use-active-home";
+import { SupportBackLink } from "./support-back-link";
 
 // Who may see a given More row. Mirrors the *page's own* access rule in
 // every case — this only ever hides a link a visitor genuinely can't (or
@@ -177,12 +178,14 @@ export function SettingsPage({
   description,
   hideHeading = false,
   className = "",
+  backLink,
   children,
 }: {
   title?: string;
   description?: string;
   hideHeading?: boolean;
   className?: string;
+  backLink?: { href: string; label: string };
   children?: React.ReactNode;
 }) {
   const [user, setUser] = useState<User | null>(null);
@@ -260,6 +263,7 @@ export function SettingsPage({
       <main className={`standard-page${className ? ` ${className}` : ""}`}>
         {children ? (
           <>
+            {backLink && <SupportBackLink href={backLink.href} label={backLink.label} />}
             {!hideHeading && (
               <div className="page-heading">
                 <div>

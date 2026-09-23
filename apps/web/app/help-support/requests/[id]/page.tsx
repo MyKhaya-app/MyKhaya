@@ -65,7 +65,7 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
 
   if (error) {
     return (
-      <SettingsPage title="Support request" description="View your conversation with the MyKhaya support team.">
+      <SettingsPage title="Support request" description="View your conversation with the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}>
         <p className="notice error" role="alert">
           {error}
         </p>
@@ -75,7 +75,7 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
 
   if (!ticket) {
     return (
-      <SettingsPage title="Support request" description="View your conversation with the MyKhaya support team.">
+      <SettingsPage title="Support request" description="View your conversation with the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}>
         <p role="status">Loading…</p>
       </SettingsPage>
     );
@@ -84,7 +84,7 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
   const active = isActiveTicketStatus(ticket.status);
 
   return (
-    <SettingsPage title={ticket.reference} description={ticket.subject}>
+    <SettingsPage title={ticket.reference} description={ticket.subject} backLink={{ href: "/help-support/requests", label: "My support requests" }}>
       <div className="card-stack">
         <section className="card details">
           <p

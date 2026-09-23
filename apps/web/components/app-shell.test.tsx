@@ -252,6 +252,14 @@ describe("AppShell — authenticated navigation", () => {
     expect(document.querySelector(".app-header")).toBeNull();
     expect(document.querySelector(".bottom-nav")).toBeNull();
   });
+
+  it("keeps Help & Support drill-down routes inside the persistent consumer shell", async () => {
+    pathname = "/help-support/diagnostics";
+    render(<PersistentAppShell><div>Support diagnostics</div></PersistentAppShell>);
+    expect(screen.getByText("Support diagnostics")).toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).not.toBeNull();
+    expect(document.querySelector(".bottom-nav")).not.toBeNull();
+  });
 });
 
 describe("AppShell — sequences the biometric offer ahead of the notification prompt", () => {

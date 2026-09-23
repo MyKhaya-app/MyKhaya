@@ -3473,6 +3473,49 @@
 @media (max-width: 820px) { .pcc-root .cc-users-proof .cc-list-toolbar-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pcc-root .cc-users-proof .cc-list-toolbar-form label:first-child { grid-column: 1 / -1; } .pcc-root .cc-users-proof .cc-list-toolbar-form button { justify-self: start; } }
 @media (max-width: 560px) { .pcc-root .cc-users-proof .cc-list-toolbar-form { grid-template-columns: 1fr; } .pcc-root .cc-users-proof .cc-list-toolbar-form label:first-child { grid-column: auto; } .pcc-root .cc-users-proof .cc-list-toolbar-form button { width: auto; } }
 
+/* Support Tickets queue: same compact-grid toolbar technique as
+   .cc-users-proof above (search wide, dropdowns compact, one row on desktop,
+   grid auto-flow wraps to further rows as the viewport narrows) — scoped
+   separately since this toolbar has 6 filter dropdowns, not 2. Labels stay
+   visible (accessible name = the label text, same as every other PCC list
+   toolbar) — compactness comes entirely from the grid layout, not from
+   hiding or removing any label. */
+.pcc-root .cc-support-tickets-queue > .cc-toolbar { margin-bottom: 1rem; width: 100%; }
+.pcc-root .cc-support-tickets-queue .cc-list-toolbar-form {
+  align-items: end;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(240px, 2fr) minmax(110px, .6fr) minmax(110px, .6fr) minmax(110px, .6fr) minmax(110px, .6fr) minmax(130px, .7fr) minmax(150px, .8fr) auto auto;
+  width: 100%;
+}
+.pcc-root .cc-support-tickets-queue .cc-list-toolbar-form label { min-width: 0; }
+.pcc-root .cc-support-tickets-queue .cc-list-toolbar-form input,
+.pcc-root .cc-support-tickets-queue .cc-list-toolbar-form select {
+  box-sizing: border-box;
+  height: 42px;
+  margin-top: .3rem;
+  width: 100%;
+}
+.pcc-root .cc-support-tickets-queue .cc-list-toolbar-form button { align-self: end; height: 42px; white-space: nowrap; }
+@media (max-width: 1500px) {
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form {
+    grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(105px, 1fr)) minmax(125px, 1fr) minmax(145px, 1fr) auto auto;
+  }
+}
+@media (max-width: 1200px) {
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form { grid-template-columns: repeat(5, minmax(140px, 1fr)); }
+}
+@media (max-width: 820px) {
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form label:first-child { grid-column: 1 / -1; }
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form button { justify-self: start; }
+}
+@media (max-width: 560px) {
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form { grid-template-columns: 1fr; }
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form label:first-child { grid-column: auto; }
+  .pcc-root .cc-support-tickets-queue .cc-list-toolbar-form button { width: auto; }
+}
+
 /* Final shared TailAdmin PCC presentation layer. Page-specific selectors above
    remain for deliberate exceptions; these rules normalize the common
    primitives without forcing unrelated pages into one layout. */

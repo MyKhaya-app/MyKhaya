@@ -192,4 +192,41 @@ describe("Support tickets queue", () => {
     render(<SupportTicketsPage />);
     expect(await screen.findByText("No tickets match these filters.")).toBeInTheDocument();
   });
+
+  it("hides the Clear action when no search or filter is active", async () => {
+    render(<SupportTicketsPage />);
+    await screen.findByText("MK-1001");
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+  });
+
+  it("shows Clear once a filter is active, and resets search/filters/page when clicked", async () => {
+    searchParams = new URLSearchParams({ status: "open", query: "battery" });
+    render(<SupportTicketsPage />);
+    await screen.findByText("MK-1001");
+    const clearButton = screen.getByRole("button", { name: "Clear" });
+
+    await userEvent.click(clearButton);
+    await waitFor(() =>
+      expect(replace).toHaveBeenCalledWith(expect.stringContaining("page=1"), expect.anything()),
+    );
+    const clearedCall = replace.mock.calls.find(([target]) =>
+      (target as string).includes("/support/tickets"),
+    );
+    expect(clearedCall).toBeDefined();
+    const [target] = clearedCall as [string, unknown];
+    expect(target).not.toContain("status=");
+    expect(target).not.toContain("query=");
+  });
+
+  it("keeps every filter control's accessible name in the compact toolbar layout", async () => {
+    render(<SupportTicketsPage />);
+    await screen.findByText("MK-1001");
+    expect(screen.getByLabelText("Search")).toHaveAttribute("placeholder", "Reference, subject, requester…");
+    expect(screen.getByLabelText("Status")).toBeInTheDocument();
+    expect(screen.getByLabelText("Type")).toBeInTheDocument();
+    expect(screen.getByLabelText("Priority")).toBeInTheDocument();
+    expect(screen.getByLabelText("Platform")).toBeInTheDocument();
+    expect(screen.getByLabelText("App area")).toBeInTheDocument();
+    expect(screen.getByLabelText("Assigned to")).toBeInTheDocument();
+  });
 });

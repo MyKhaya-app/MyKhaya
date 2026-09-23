@@ -39,6 +39,7 @@ export default function MySupportRequests() {
     <SettingsPage
       title="My support requests"
       description="View your open and previous conversations with the MyKhaya support team."
+      backLink={{ href: "/help-support", label: "Help & Support" }}
     >
       {error ? (
         <p className="notice error" role="alert">

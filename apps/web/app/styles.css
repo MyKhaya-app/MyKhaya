@@ -2826,6 +2826,21 @@ html.native-shell .home-section-overlap {
 .support-request-created {
   font-size: 0.85rem;
 }
+.support-back-link {
+  align-items: center;
+  color: var(--colour-forest);
+  display: inline-flex;
+  font-size: 0.95rem;
+  font-weight: 700;
+  gap: 0.1rem;
+  margin-bottom: 0.9rem;
+  min-height: 44px;
+  text-decoration: none;
+}
+.support-back-link:hover {
+  color: var(--colour-forest-dark);
+  text-decoration: underline;
+}
 .help-support-page .page-heading {
   margin-bottom: 1.35rem;
 }
