@@ -13,6 +13,87 @@ export type ConsumerMfaStatus = {
   preferred_method: "totp" | "email" | null;
 };
 
+// Mirrors apps/api/mykhaya/schemas.py's SupportTicket* request/response
+// models exactly (Phase 2A/2D) — see apps/web/components/support-logic.ts
+// for the corresponding display-label mirror of the same backend enums.
+export type SupportTicketDiagnosticsPayload = {
+  app_version?: string;
+  build_number?: string;
+  platform?: string;
+  os_version?: string;
+  runtime?: string;
+  notification_permission?: string;
+  push_registration_state?: string;
+  api_connectivity?: string;
+  network_state?: string;
+  background_refresh_state?: string;
+  client_timestamp?: string;
+};
+
+export type SupportTicketCreateRequest = {
+  type: "bug" | "support" | "feedback";
+  subject: string;
+  description: string;
+  source: "ios" | "android" | "web" | "desktop_web";
+  app_area?: string | null;
+  priority?: "normal" | "elevated" | "blocking";
+  group_id?: string | null;
+  diagnostics?: SupportTicketDiagnosticsPayload | null;
+};
+
+export type SupportTicketDiagnosticResponse = {
+  app_version: string | null;
+  build_number: string | null;
+  platform: string | null;
+  os_version: string | null;
+  runtime: string | null;
+  notification_permission: string | null;
+  push_registration_state: string | null;
+  api_connectivity: string | null;
+  network_state: string | null;
+  background_refresh_state: string | null;
+  client_timestamp: string | null;
+};
+
+export type SupportTicketMessageResponse = {
+  id: string;
+  author: "requester" | "admin";
+  message: string;
+  created_at: string;
+};
+
+export type SupportTicketAttachmentResponse = {
+  id: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+};
+
+export type SupportTicketResponse = {
+  id: string;
+  reference: string;
+  type: "bug" | "support" | "feedback";
+  status: "open" | "in_progress" | "waiting_for_user" | "resolved" | "closed";
+  priority: "normal" | "elevated" | "blocking";
+  subject: string;
+  description: string;
+  source: "ios" | "android" | "web" | "desktop_web";
+  app_area: string | null;
+  group_id: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  messages: SupportTicketMessageResponse[];
+  attachments: SupportTicketAttachmentResponse[];
+  diagnostics: (SupportTicketDiagnosticsPayload & { client_timestamp: string | null }) | null;
+};
+
+export type PublicConfig = {
+  service_status_url: string | null;
+  support_enabled: boolean;
+};
+
 export type BudgetProfile = {
   id: string;
   owner_user_id: string;
@@ -188,6 +269,20 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  publicConfig = () => this.request<PublicConfig>("/config/public");
+  createSupportTicket = (body: SupportTicketCreateRequest) =>
+    this.request<SupportTicketResponse>("/support/tickets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  uploadSupportAttachment = (ticketId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return this.request<SupportTicketAttachmentResponse>(
+      `/support/tickets/${encodeURIComponent(ticketId)}/attachments`,
+      { method: "POST", body },
+    );
+  };
   activityHeartbeat = () =>
     this.request<void>("/activity/heartbeat", { method: "POST", body: "{}" });
   productUsageEvent = (body: {

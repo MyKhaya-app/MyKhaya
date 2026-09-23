@@ -191,6 +191,26 @@ function DiagnosticsSummary() {
 
 export default function HelpSupport() {
   const serviceStatusUrl = useServiceStatusUrl();
+  const [supportEnabled, setSupportEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch("/api/v1/config/public", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { support_enabled?: boolean } | null) => setSupportEnabled(payload?.support_enabled === true))
+      .catch(() => setSupportEnabled(false));
+  }, []);
+
+  const reportBugAction = supportEnabled ? (
+    <Link className="quick-action" href="/help-support/report-bug">
+      <Bug size={20} aria-hidden="true" />
+      Report a bug
+    </Link>
+  ) : (
+    <span className="quick-action quick-action-disabled" aria-disabled="true">
+      <Bug size={20} aria-hidden="true" />
+      Report a bug unavailable
+    </span>
+  );
 
   return (
     <SettingsPage
@@ -199,10 +219,7 @@ export default function HelpSupport() {
     >
       <div className="quick-actions help-quick-actions">
         <div className="quick-actions-row quick-actions-row-3">
-          <Link className="quick-action" href="/help-support/report-bug">
-            <Bug size={20} aria-hidden="true" />
-            Report a bug
-          </Link>
+          {reportBugAction}
           <Link className="quick-action" href="/help-support/contact-support">
             <MessageCircle size={20} aria-hidden="true" />
             Contact support
@@ -217,13 +234,20 @@ export default function HelpSupport() {
       <div className="card-stack">
         <ServiceStatusBanner serviceStatusUrl={serviceStatusUrl} />
 
-        <Link className="card" href="/help-support/report-bug">
-          <div>
+        {supportEnabled ? (
+          <Link className="card" href="/help-support/report-bug">
+            <div>
+              <h2>Report a bug</h2>
+              <p>Send us issue details, screenshots and app diagnostics to help us fix problems faster.</p>
+            </div>
+            <span aria-hidden="true">›</span>
+          </Link>
+        ) : (
+          <section className="card details" aria-live="polite">
             <h2>Report a bug</h2>
-            <p>Send us issue details, screenshots and app diagnostics to help us fix problems faster.</p>
-          </div>
-          <span aria-hidden="true">›</span>
-        </Link>
+            <p className="muted">Bug reporting is temporarily unavailable. Service status is still available below.</p>
+          </section>
+        )}
 
         <Link className="card" href="/help-support/contact-support">
           <div>

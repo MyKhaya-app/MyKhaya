@@ -62,7 +62,7 @@ type FetchMockOptions = {
 };
 
 function mockFetch({
-  configPayload = { service_status_url: "https://status.dev.mykhaya.app/" },
+  configPayload = { service_status_url: "https://status.dev.mykhaya.app/", support_enabled: true },
   statusPayload = { overall: "operational", overall_message: "Operational" },
   statusOk = true,
   statusRejects = false,

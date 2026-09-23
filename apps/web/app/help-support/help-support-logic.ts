@@ -6,6 +6,7 @@
 
 import type { NativePlatform } from "@/components/native-runtime";
 import type { ServiceState } from "@/components/platform-types";
+import type { SupportTicketPriorityValue } from "@/components/support-logic";
 
 // The public Status page's own overall_message (mykhaya.status_aggregation)
 // is written for that page's fuller context ("Operational", "Scheduled
@@ -61,4 +62,69 @@ export function notificationPermissionLabel(status: string): string {
 export function connectivityLabel(online: boolean | null): string {
   if (online === null) return "Unknown";
   return online ? "Online" : "Offline";
+}
+
+// --- Report a bug (Phase 2D) --------------------------------------------------
+
+// The form's own user-facing severity choice — deliberately not the same
+// vocabulary as SupportTicketPriorityValue (backend/PCC language). Maps
+// exactly 1:1 onto it; the backend remains authoritative for what a
+// priority value actually means/does.
+export type SeverityValue = "minor" | "problematic" | "blocking";
+
+export const SEVERITY_TO_PRIORITY: Record<SeverityValue, SupportTicketPriorityValue> = {
+  minor: "normal",
+  problematic: "elevated",
+  blocking: "blocking",
+};
+
+export const SEVERITY_OPTIONS: { value: SeverityValue; label: string; description: string }[] = [
+  { value: "minor", label: "Minor", description: "Small issue" },
+  { value: "problematic", label: "Problematic", description: "Affects usage" },
+  { value: "blocking", label: "Blocking", description: "Can't use this feature" },
+];
+
+// Only the fields the Help & Support hub's own "Helpful diagnostics"
+// summary already truthfully sources (Phase 2C) — app version/build,
+// platform, runtime, notification permission, connectivity. Deliberately
+// does NOT include os_version/push_registration_state/
+// background_refresh_state/api_connectivity: none of those are genuinely
+// available from existing production code on this page today (Phase 2F's
+// real collector is where they belong), so sending them would mean
+// fabricating values rather than reusing real ones. `network_state` is the
+// one connectivity-shaped field the strict backend schema actually has;
+// online/offline is what navigator.onLine can truthfully say.
+export type BugReportDiagnosticsSource = {
+  appVersion: string | null;
+  buildNumber: string | null;
+  platform: NativePlatform;
+  runtime: "native" | "web";
+  notificationPermission: string;
+  online: boolean | null;
+};
+
+export type BugReportDiagnosticsPayload = {
+  app_version?: string;
+  build_number?: string;
+  platform?: string;
+  runtime?: string;
+  notification_permission?: string;
+  network_state?: string;
+  client_timestamp?: string;
+};
+
+export function buildBugReportDiagnostics(
+  source: BugReportDiagnosticsSource,
+  now: Date = new Date(),
+): BugReportDiagnosticsPayload {
+  const payload: BugReportDiagnosticsPayload = {
+    platform: source.platform,
+    runtime: source.runtime,
+    notification_permission: source.notificationPermission,
+    client_timestamp: now.toISOString(),
+  };
+  if (source.appVersion) payload.app_version = source.appVersion;
+  if (source.buildNumber) payload.build_number = source.buildNumber;
+  if (source.online !== null) payload.network_state = source.online ? "online" : "offline";
+  return payload;
 }

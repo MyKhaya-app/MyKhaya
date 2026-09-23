@@ -1802,6 +1802,16 @@ class SupportTicketCreate(StrictModel):
     description: str = Field(min_length=1, max_length=4000)
     source: SupportTicketSource
     app_area: SupportTicketAppArea | None = None
+    # Phase 2D: the requester's own severity choice (Minor/Problematic/
+    # Blocking on the Report a bug form maps exactly to
+    # normal/elevated/blocking — see help-support-logic.ts's
+    # SEVERITY_TO_PRIORITY on the frontend). Absent Phase 2A had no field
+    # for this at all, silently defaulting every ticket to `normal`
+    # regardless of what was reported — added here rather than left
+    # unaddressed, since "backend remains authoritative" presumes a field
+    # exists for it to be authoritative over. The enum itself, and its
+    # default, are unchanged from Phase 2A.
+    priority: SupportTicketPriority = SupportTicketPriority.normal
     # Contextual metadata only — never an access-control boundary. The
     # server does not verify the caller is currently a member of this Home;
     # it is simply recorded as "which Home the reporter was using," and a

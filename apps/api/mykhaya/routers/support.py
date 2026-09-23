@@ -189,6 +189,7 @@ async def create_ticket(
         requester_user_id=auth.user.id,
         group_id=body.group_id,
         type=body.type,
+        priority=body.priority,
         subject=body.subject,
         description=body.description,
         source=body.source,
@@ -232,7 +233,11 @@ async def create_ticket(
         body.group_id,
         "support_ticket",
         ticket.id,
-        metadata={"reference": reference, "type": body.type.value},
+        metadata={
+            "reference": reference,
+            "type": body.type.value,
+            "priority": body.priority.value,
+        },
     )
     await db.commit()
     created = await _owned_ticket(ticket.id, auth, db)

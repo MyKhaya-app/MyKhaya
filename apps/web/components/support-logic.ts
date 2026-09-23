@@ -1,11 +1,19 @@
-// Pure display logic for the Platform Control Centre Support area — labels
-// and badge tones for the mykhaya SupportTicket* enums (see
-// apps/api/mykhaya/models.py). Kept separate from page components so it can
-// be unit-tested directly (this repo has no component-rendering test infra
-// for Control Centre pages; see platform-mfa-logic.test.ts for the
-// established pattern), mirroring status-incidents-logic.ts's shape. Never
-// re-derives ticket state — that stays server-side; this only turns an
-// already-resolved enum value into something to show a person.
+// Pure display logic for MyKhaya Support ticket enums (see
+// apps/api/mykhaya/models.py's SupportTicket* StrEnums) — the shared
+// frontend mirror of that backend representation (matching this codebase's
+// existing hand-mirrored-enum convention, e.g. WidgetEvent/CalendarLayout),
+// so app-area/type/status/priority values are never re-listed as scattered
+// string literals. Originally built for Platform Control Centre's Support
+// queue (Phase 2B); reused as-is by the consumer Report a bug form (Phase
+// 2D) for the same app-area enum and priority values — only
+// `CcBadgeTone`-typed exports are PCC-specific (a type-only import, erased
+// at compile time, so importing this file adds no PCC code to the consumer
+// bundle). Kept separate from page components so it can be unit-tested
+// directly (this repo has no component-rendering test infra for Control
+// Centre pages; see platform-mfa-logic.test.ts for the established
+// pattern), mirroring status-incidents-logic.ts's shape. Never re-derives
+// ticket state — that stays server-side; this only turns an already-resolved
+// enum value into something to show a person.
 
 import type { CcBadgeTone } from "./control-centre/badge";
 
@@ -170,3 +178,6 @@ export const TICKET_APP_AREA_OPTIONS: SupportTicketAppAreaValue[] = [
   "more",
   "other",
 ];
+
+export const APP_AREA_OPTIONS: { value: SupportTicketAppAreaValue; label: string }[] =
+  TICKET_APP_AREA_OPTIONS.map((value) => ({ value, label: APP_AREA_LABELS[value] }));

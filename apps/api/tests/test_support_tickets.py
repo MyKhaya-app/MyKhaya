@@ -200,6 +200,53 @@ async def test_create_bug_report_returns_mk_reference(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "severity_priority",
+    ["normal", "elevated", "blocking"],
+)
+async def test_create_ticket_accepts_explicit_priority(
+    client: AsyncClient, severity_priority: str
+) -> None:
+    """The Report a bug form's severity choice (Minor/Problematic/Blocking)
+    maps 1:1 to normal/elevated/blocking — Phase 2D added this field to
+    SupportTicketCreate, which previously had no way to set priority at
+    creation at all (every ticket silently defaulted to normal)."""
+    await create_verified_user(client, unique_email(f"sev-{severity_priority}"), "Severity User")
+    created = await unsafe(
+        client,
+        "POST",
+        "/api/v1/support/tickets",
+        json={
+            "type": "bug",
+            "subject": "Severity mapping check",
+            "description": "Details.",
+            "source": "web",
+            "priority": severity_priority,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["priority"] == severity_priority
+
+
+@pytest.mark.asyncio
+async def test_create_ticket_rejects_unknown_priority(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("sevbad"), "Bad Severity User")
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/support/tickets",
+        json={
+            "type": "bug",
+            "subject": "Bad priority",
+            "description": "Details.",
+            "source": "web",
+            "priority": "urgent",
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
 async def test_create_ticket_with_diagnostics_stores_and_audits_them(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("diag"), "Diag User")
     created = await unsafe(

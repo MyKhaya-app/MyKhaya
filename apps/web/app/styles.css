@@ -2675,6 +2675,66 @@ html.native-shell .home-section-overlap {
   font-size: 0.82rem;
   margin: 0;
 }
+.quick-action-disabled {
+  color: var(--colour-muted);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+.support-form {
+  display: grid;
+  gap: 1rem;
+}
+.support-form fieldset {
+  border: 0;
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+}
+.support-form legend {
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+.support-choice-list {
+  display: grid;
+  gap: 0.5rem;
+}
+.support-choice {
+  align-items: center;
+  border: 1px solid #d9d7d0;
+  border-radius: var(--radius-small);
+  display: flex;
+  gap: 0.7rem;
+  padding: 0.7rem;
+}
+.support-choice.selected {
+  border-color: var(--colour-sage-dark);
+  box-shadow: 0 0 0 2px var(--colour-sage-soft);
+}
+.support-choice span {
+  display: grid;
+  gap: 0.15rem;
+}
+.support-choice small,
+.support-file-field small,
+.support-form label > small {
+  color: var(--colour-muted);
+}
+.support-file-field > span {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+.support-success {
+  display: grid;
+  gap: 0.75rem;
+}
+.support-success > svg {
+  color: var(--colour-forest);
+}
+.support-reference {
+  font-size: 1.05rem;
+}
 .routine-form {
   display: grid;
   gap: 1rem;
