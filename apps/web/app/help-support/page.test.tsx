@@ -122,13 +122,37 @@ describe("Help & Support — quick actions", () => {
     expect(runDiagnostics).toHaveAttribute("href", "/help-support/diagnostics");
   });
 
-  it("makes the Report a bug and Contact support cards below navigate to the same real placeholder routes", async () => {
+  it("makes the Report a bug and Contact support cards below navigate to the same real routes once support_enabled resolves", async () => {
     render(<HelpSupport />);
-    const reportBugHeading = await screen.findByRole("heading", { name: "Report a bug" });
+    // The "Report a bug" card renders a disabled <section> (not a link)
+    // until the /config/public fetch resolves support_enabled — both
+    // states share the same accessible heading name, so wait for the real
+    // link specifically rather than the first matching heading, which can
+    // otherwise be the pre-fetch disabled render.
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Report a bug" }).closest("a")).not.toBeNull();
+    });
+    const reportBugHeading = screen.getByRole("heading", { name: "Report a bug" });
     const contactSupportHeading = screen.getByRole("heading", { name: "Contact support" });
 
     expect(reportBugHeading.closest("a")).toHaveAttribute("href", "/help-support/report-bug");
     expect(contactSupportHeading.closest("a")).toHaveAttribute("href", "/help-support/contact-support");
+  });
+
+  it("shows the Report a bug card as unavailable (not a link) when support is disabled", async () => {
+    mockFetch({
+      configPayload: { service_status_url: "https://status.dev.mykhaya.app/", support_enabled: false },
+    });
+    render(<HelpSupport />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/bug reporting is temporarily unavailable/i)).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: "Report a bug" }).closest("a")).toBeNull();
+    // The quick action degrades to a non-navigable, clearly-labelled
+    // disabled state too, not a link to a route that can't do anything.
+    expect(screen.queryByRole("link", { name: "Report a bug" })).toBeNull();
+    expect(screen.getByText("Report a bug unavailable")).toBeInTheDocument();
   });
 });
 

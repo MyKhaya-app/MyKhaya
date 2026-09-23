@@ -82,7 +82,8 @@ export default function ReportBug() {
 
   return <SettingsPage title="Report a bug" description="Help us fix issues faster by sharing what happened."><form className="card details support-form" onSubmit={submit} noValidate>
     {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
-    <label>What went wrong?<input value={subject} maxLength={MAX_SUBJECT} onChange={(event) => setSubject(event.target.value)} required aria-describedby="subject-help" /><small id="subject-help">{subject.length}/{MAX_SUBJECT}</small></label>
+    <label>What went wrong?<input value={subject} maxLength={MAX_SUBJECT} onChange={(event) => setSubject(event.target.value)} required aria-describedby="subject-help" /></label>
+    <small id="subject-help">{subject.length}/{MAX_SUBJECT}</small>
     <label>App area<select value={area} onChange={(event) => setArea(event.target.value)}>{APP_AREA_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
     <fieldset><legend>How serious is it?</legend><div className="support-choice-list">{SEVERITY_OPTIONS.map((option) => <label className={`support-choice${severity === option.value ? " selected" : ""}`} key={option.value}><input type="radio" name="severity" value={option.value} checked={severity === option.value} onChange={() => setSeverity(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</div></fieldset>
     <label>What happened?<textarea value={description} maxLength={4000} onChange={(event) => setDescription(event.target.value)} required rows={6} /></label>

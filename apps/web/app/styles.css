@@ -2715,9 +2715,7 @@ html.native-shell .home-section-overlap {
   display: grid;
   gap: 0.15rem;
 }
-.support-choice small,
-.support-file-field small,
-.support-form label > small {
+.support-form small {
   color: var(--colour-muted);
 }
 .support-file-field > span {
