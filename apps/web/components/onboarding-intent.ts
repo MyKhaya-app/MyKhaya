@@ -9,7 +9,7 @@
 // ever grants Family; only the existing authenticated Checkout endpoint and
 // its verified webhook can do that.
 
-export type PlanChoice = "free" | "family";
+export type PlanChoice = "free" | "family" | "ultimate";
 export type BillingIntervalChoice = "month" | "year";
 
 export interface OnboardingIntent {
@@ -28,7 +28,7 @@ export function parseIntentFromParams(
   interval: string | null,
 ): OnboardingIntent {
   return {
-    plan: plan === "family" ? "family" : "free",
+    plan: plan === "family" || plan === "ultimate" ? plan : "free",
     interval: interval === "year" ? "year" : "month",
   };
 }
@@ -62,7 +62,7 @@ export function readOnboardingIntent(
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { plan?: unknown; interval?: unknown; savedAt?: unknown };
     if (typeof parsed.savedAt !== "number" || now - parsed.savedAt > MAX_AGE_MS) return null;
-    if (parsed.plan !== "free" && parsed.plan !== "family") return null;
+    if (parsed.plan !== "free" && parsed.plan !== "family" && parsed.plan !== "ultimate") return null;
     if (parsed.interval !== "month" && parsed.interval !== "year") return null;
     return { plan: parsed.plan, interval: parsed.interval };
   } catch {

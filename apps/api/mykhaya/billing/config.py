@@ -64,11 +64,15 @@ class StripeConfig:
     # Stored with the PCC row when Stripe is managed there; the environment
     # value remains the bootstrap/fallback value when no enabled PCC row exists.
     acquisition_enabled: bool = False
+    family_signups_enabled: bool = False
+    ultimate_signups_enabled: bool = False
     secret_key: str | None = field(default=None, repr=False)
     webhook_secret: str | None = field(default=None, repr=False)
     publishable_key: str | None = None
     family_monthly_price_id: str | None = None
     family_annual_price_id: str | None = None
+    ultimate_monthly_price_id: str | None = None
+    ultimate_annual_price_id: str | None = None
 
 
 class StripeNotConfiguredError(RuntimeError):
@@ -87,6 +91,8 @@ def _from_environment(settings: Settings) -> StripeConfig:
         configured=True,
         mode=mode,
         acquisition_enabled=settings.stripe_billing_acquisition_enabled,
+        family_signups_enabled=settings.stripe_billing_acquisition_enabled,
+        ultimate_signups_enabled=settings.stripe_ultimate_acquisition_enabled,
         secret_key=secret_key or None,
         webhook_secret=settings.stripe_webhook_secret.get_secret_value()
         if settings.stripe_webhook_secret
@@ -94,6 +100,8 @@ def _from_environment(settings: Settings) -> StripeConfig:
         publishable_key=settings.stripe_publishable_key,
         family_monthly_price_id=settings.stripe_family_monthly_price_id,
         family_annual_price_id=settings.stripe_family_annual_price_id,
+        ultimate_monthly_price_id=settings.stripe_ultimate_monthly_price_id,
+        ultimate_annual_price_id=settings.stripe_ultimate_annual_price_id,
     )
 
 
@@ -102,6 +110,8 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
 
     mode: StripeModeLiteral = "live" if row.mode == StripeMode.live else "test"
     acquisition_enabled = row.acquisition_enabled
+    family_signups_enabled = row.family_signups_enabled
+    ultimate_signups_enabled = row.ultimate_signups_enabled
 
     if mode == "test":
         publishable_key = row.test_publishable_key
@@ -109,12 +119,16 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
         encrypted_webhook_secret = row.encrypted_test_webhook_secret
         monthly_price_id = row.test_family_monthly_price_id
         annual_price_id = row.test_family_annual_price_id
+        ultimate_monthly_price_id = row.test_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.test_ultimate_annual_price_id
     else:
         publishable_key = row.live_publishable_key
         encrypted_secret_key = row.encrypted_live_secret_key
         encrypted_webhook_secret = row.encrypted_live_webhook_secret
         monthly_price_id = row.live_family_monthly_price_id
         annual_price_id = row.live_family_annual_price_id
+        ultimate_monthly_price_id = row.live_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.live_ultimate_annual_price_id
 
     missing = [
         name
@@ -132,6 +146,8 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
             configured=False,
             mode=mode,
             acquisition_enabled=acquisition_enabled,
+            family_signups_enabled=family_signups_enabled,
+            ultimate_signups_enabled=ultimate_signups_enabled,
             incomplete_reason=(
                 f"{mode.capitalize()} mode is selected but missing: {', '.join(missing)}."
             ),
@@ -150,6 +166,8 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
             configured=False,
             mode=mode,
             acquisition_enabled=acquisition_enabled,
+            family_signups_enabled=family_signups_enabled,
+            ultimate_signups_enabled=ultimate_signups_enabled,
             incomplete_reason=(
                 "Stored Stripe credentials could not be decrypted with the current "
                 "encryption key and must be re-entered."
@@ -162,6 +180,8 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
             configured=False,
             mode=mode,
             acquisition_enabled=acquisition_enabled,
+            family_signups_enabled=family_signups_enabled,
+            ultimate_signups_enabled=ultimate_signups_enabled,
             incomplete_reason=(
                 f"The stored secret key does not look like a {mode}-mode Stripe key "
                 f"(expected it to start with sk_{mode}_)."
@@ -173,11 +193,15 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
         configured=True,
         mode=mode,
         acquisition_enabled=acquisition_enabled,
+        family_signups_enabled=family_signups_enabled,
+        ultimate_signups_enabled=ultimate_signups_enabled,
         secret_key=secret_key,
         webhook_secret=webhook_secret,
         publishable_key=publishable_key,
         family_monthly_price_id=monthly_price_id,
         family_annual_price_id=annual_price_id,
+        ultimate_monthly_price_id=ultimate_monthly_price_id,
+        ultimate_annual_price_id=ultimate_annual_price_id,
     )
 
 

@@ -20,6 +20,7 @@ from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
     Group,
+    HomeSubscription,
     HomeSubscriptionEvent,
     PlatformAdministrator,
     PlatformRole,
@@ -244,6 +245,182 @@ async def test_grant_complimentary_grants_family_access_and_is_audited(
         assert len(history) == 1
         assert history[0].to_plan == SubscriptionPlan.family
         assert history[0].to_provider == SubscriptionProvider.complimentary
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_grants_ultimate_access_and_is_audited(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """Mirrors test_grant_complimentary_grants_family_access_and_is_audited
+    for the Ultimate tier — regression coverage for a real bug where the PCC
+    grant dialog's plan selection was never included in the request body, so
+    every grant silently persisted Family regardless of what the operator
+    picked (see apps/web/.../subscriptions/[id]/page.tsx's grantComplimentary
+    and its own test coverage). This test exercises the backend directly:
+    when `plan` genuinely is sent as "ultimate", it must be genuinely stored
+    and reflected everywhere — including Budget/Driveway entitlements, which
+    only Ultimate grants."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Friends and family beta",
+            "complimentary_note": "Internal note, never shown to the household",
+            "confirmed": True,
+            "reason": "Approved beta access",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["plan"] == "ultimate"
+    assert payload["provider"] == "complimentary"
+    assert payload["effective_plan"] == "ultimate"
+    assert payload["complimentary_reason"] == "Friends and family beta"
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload["subscription"]["plan"] == "ultimate"
+    assert detail_payload["subscription"]["effective_plan"] == "ultimate"
+    assert detail_payload["entitlements"]["plan"] == "ultimate"
+    assert detail_payload["entitlements"]["booleans"]["budget.enabled"] is True
+    assert detail_payload["entitlements"]["booleans"]["driveway.enabled"] is True
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.ultimate
+        history = (
+            await db.scalars(
+                select(HomeSubscriptionEvent).where(
+                    HomeSubscriptionEvent.group_id == home_id,
+                    HomeSubscriptionEvent.event_type == "complimentary_granted",
+                )
+            )
+        ).all()
+        assert len(history) == 1
+        assert history[0].to_plan == SubscriptionPlan.ultimate
+
+
+@pytest.mark.asyncio
+async def test_updating_existing_complimentary_family_to_ultimate_persists_new_plan(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """The exact reported bug's backend-side reproduction/regression case:
+    a Home already has complimentary Family; updating it with plan=ultimate
+    must genuinely change the stored plan, not merely refresh reason/expiry
+    while leaving the old plan in place."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    first = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "family",
+            "complimentary_reason": "Beta tester",
+            "confirmed": True,
+            "reason": "Initial grant",
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["plan"] == "family"
+
+    updated = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Upgraded to Ultimate for beta",
+            "confirmed": True,
+            "reason": "Approved Ultimate upgrade",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plan"] == "ultimate"
+    assert updated.json()["effective_plan"] == "ultimate"
+    assert updated.json()["complimentary_reason"] == "Upgraded to Ultimate for beta"
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.ultimate
+        assert subscription.complimentary_reason == "Upgraded to Ultimate for beta"
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.json()["subscription"]["plan"] == "ultimate"
+    assert detail.json()["entitlements"]["booleans"]["budget.enabled"] is True
+    assert detail.json()["entitlements"]["booleans"]["driveway.enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_updating_existing_complimentary_ultimate_to_family_persists_new_plan(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """The symmetric downgrade case — Ultimate -> Family must genuinely
+    persist Family again, including losing the Ultimate-only entitlements."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    first = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Beta tester",
+            "confirmed": True,
+            "reason": "Initial grant",
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["plan"] == "ultimate"
+
+    updated = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "family",
+            "complimentary_reason": "Downgraded back to Family",
+            "confirmed": True,
+            "reason": "Approved downgrade",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plan"] == "family"
+    assert updated.json()["effective_plan"] == "family"
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.family
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.json()["subscription"]["plan"] == "family"
+    assert detail.json()["entitlements"]["booleans"]["budget.enabled"] is False
+    assert detail.json()["entitlements"]["booleans"]["driveway.enabled"] is False
 
 
 @pytest.mark.asyncio

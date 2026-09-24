@@ -6,6 +6,7 @@ import {
   Baby,
   Bell,
   Calendar,
+  Car,
   CircleUserRound,
   CreditCard,
   ExternalLink,
@@ -62,6 +63,13 @@ interface MoreItem {
   // role gates, unaffected.
   featureKey?: string;
   entitlementKey?: keyof BillingStatus;
+  // Which plan this row's entitlementKey requires, for the locked-tile
+  // wording ("Included with MyKhaya <plan>"). Only meaningful alongside
+  // entitlementKey — a row can only actually be locked once billingStatus
+  // positively says so (see `locked()`), so this never invents a message on
+  // its own. "Family" for Family-only rows (Nudges/Meal Plans/Wishlists);
+  // "Ultimate" for the premium tier (Budget, Driveway).
+  requiredPlan?: "Family" | "Ultimate";
 }
 
 interface MoreGroup {
@@ -91,6 +99,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
         gate: "all",
         featureKey: "nudges",
         entitlementKey: "nudges_enabled",
+        requiredPlan: "Family",
       },
       {
         name: "Lists",
@@ -115,6 +124,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
         gate: "all",
         featureKey: "meals",
         entitlementKey: "meals_enabled",
+        requiredPlan: "Family",
       },
       {
         name: "Wishlists",
@@ -125,6 +135,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
         gate: "all",
         featureKey: "wish_lists",
         entitlementKey: "wishlists_enabled",
+        requiredPlan: "Family",
       },
       {
         name: "Budget",
@@ -134,6 +145,19 @@ const MORE_GROUPS: readonly MoreGroup[] = [
         tone: "sage",
         gate: "adult",
         featureKey: "budget",
+        entitlementKey: "budget_enabled",
+        requiredPlan: "Ultimate",
+      },
+      {
+        name: "Driveway",
+        detail: "Vehicles, renewals, inspections, service history and documents",
+        href: "/driveway",
+        icon: Car,
+        tone: "blue",
+        gate: "all",
+        featureKey: "driveway",
+        entitlementKey: "driveway_enabled",
+        requiredPlan: "Ultimate",
       },
     ],
   },
@@ -302,7 +326,11 @@ export function SettingsPage({
                                 <Lock className="more-row-lock" aria-hidden="true" size={12} />
                               )}
                             </h2>
-                            <p>{itemLocked ? "Included with MyKhaya Family" : item.detail}</p>
+                            <p>
+                              {itemLocked
+                                ? `Included with MyKhaya ${item.requiredPlan ?? "Family"}`
+                                : item.detail}
+                            </p>
                           </span>
                           <span className="more-row-chevron" aria-hidden="true">
                             ›

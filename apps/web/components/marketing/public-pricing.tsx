@@ -7,11 +7,9 @@
 // calculation, no hard-coded £ anywhere. See
 // docs/architecture/commercial-entitlements.md#phase-5.
 //
-// Free and Family are the only two plans MyKhaya has — this is
-// deliberately two cards, not three stretched to look "balanced". Family
-// is visually promoted (larger, on the brand's own forest green) the same
-// way a single recommended plan is promoted on any well-designed pricing
-// page; Free sits calmly on the page's normal paper surface next to it.
+// MyKhaya offers three plans: Free, Family and Ultimate. Family remains the
+// recommended household plan, while Ultimate adds Budget, Driveway and future
+// premium modules.
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -20,8 +18,10 @@ import { api } from "@mykhaya/api-client";
 import { intervalSuffix } from "../billing-logic";
 import {
   canStartFamilyCheckout,
+  canStartUltimateCheckout,
   pricingOptionFor,
   savingLabelFor,
+  ultimatePricingOptionFor,
 } from "../family-pricing-logic";
 import { resolveCtaDestination } from "../cta-destination";
 import type {
@@ -63,7 +63,7 @@ export function PublicPricing() {
   const [pricingError, setPricingError] = useState(false);
   const [billingInterval, setBillingInterval] =
     useState<BillingIntervalChoice>("month");
-  const [busy, setBusy] = useState<"free" | "family" | null>(null);
+  const [busy, setBusy] = useState<"free" | "family" | "ultimate" | null>(null);
 
   useEffect(() => {
     api
@@ -95,6 +95,7 @@ export function PublicPricing() {
 
   const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
   const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
+  const ultimate = pricing ? ultimatePricingOptionFor(pricing, billingInterval) : null;
 
   return (
     <section
@@ -216,6 +217,48 @@ export function PublicPricing() {
               }
             >
               {busy === "family" ? "One moment…" : "Start Family"}
+            </button>
+          )}
+        </article>
+
+        <article className="mk-plan mk-plan-ultimate">
+          <div className="mk-plan-header">
+            <h3>Ultimate</h3>
+            <p className="mk-plan-tagline">For the full MyKhaya experience</p>
+          </div>
+          {!pricing || !ultimate ? (
+            <p role="status" className="mk-plan-loading">
+              {pricingError ? "Ultimate pricing is temporarily unavailable." : "Loading pricingâ€¦"}
+            </p>
+          ) : (
+            <>
+              <p className="mk-plan-price">
+                <strong>{ultimate.formatted_amount}</strong> / {intervalSuffix(billingInterval)}
+              </p>
+              <p className="mk-plan-hint">
+                {billingInterval === "month" ? "Billed monthly" : "Billed annually"}
+                {pricing.ultimate_annual_saving_formatted && billingInterval === "year"
+                  ? ` â€” Save ${pricing.ultimate_annual_saving_formatted} per year`
+                  : ""}
+              </p>
+            </>
+          )}
+          <ul className="mk-plan-list">
+            <li>Everything in Family</li>
+            <li>Budget</li>
+            <li>Driveway</li>
+            <li>Future premium modules</li>
+          </ul>
+          {!pricing || !canStartUltimateCheckout(pricing) ? (
+            <p className="notice" role="status">New Ultimate sign-ups are temporarily paused.</p>
+          ) : (
+            <button
+              type="button"
+              className="mk-plan-cta"
+              disabled={busy !== null || !ultimate}
+              onClick={() => choosePlan({ plan: "ultimate", interval: billingInterval })}
+            >
+              {busy === "ultimate" ? "One momentâ€¦" : "Start Ultimate"}
             </button>
           )}
         </article>

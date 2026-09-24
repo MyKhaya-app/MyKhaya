@@ -55,12 +55,6 @@ async def is_feature_enabled(
         if override is not None:
             return bool(override)
 
-        # Budget is an explicit per-Home opt-in. Its platform flag represents
-        # rollout availability, while the absence of a Home override must not
-        # make personal Budget visible by default.
-        if key == FeatureKey.budget:
-            return False
-
     return True
 
 
@@ -75,11 +69,7 @@ async def feature_matrix(db: AsyncSession, home_id: uuid.UUID) -> dict[FeatureKe
     return {
         # Platform-authoritative: a disabled/missing global flag means
         # disabled regardless of any Home override — see is_feature_enabled.
-        key: (
-            overrides.get(key, False if key == FeatureKey.budget else True)
-            if flags.get(key, False)
-            else False
-        )
+        key: (overrides.get(key, True) if flags.get(key, False) else False)
         for key in FeatureKey
         if module_definition(key.value).release_state != ReleaseState.hidden
     }

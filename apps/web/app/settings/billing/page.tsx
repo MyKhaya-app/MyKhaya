@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Calendar,
@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import type { BillingStatus, FamilyPricing, PlanComparison } from "@mykhaya/shared-types";
+import type { BillingStatus, FamilyPricing, PlanComparison, SubscriptionPlanValue } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
@@ -29,6 +29,7 @@ import {
 } from "@/components/billing-logic";
 import { overLimitExplanation } from "@/components/calendar-entitlement-logic";
 import { memberOverLimitExplanation } from "@/components/member-entitlement-logic";
+import { canStartUltimateCheckout } from "@/components/family-pricing-logic";
 
 // One small icon per comparison row key — purely decorative (the row label
 // text already carries the meaning), keyed off PlanComparisonRow.key so a
@@ -70,6 +71,7 @@ export default function PlanAndBillingSettings() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmationTimedOut, setConfirmationTimedOut] = useState(false);
+  const checkoutPlan = useRef<"family" | "ultimate">("family");
 
   const load = useCallback(async () => {
     if (!activeHomeId) return null;
@@ -123,23 +125,33 @@ export default function PlanAndBillingSettings() {
           }
         }
       }
-      return pollForFamilyBillingStatus(load);
+      return pollForFamilyBillingStatus(load, { targetPlan: checkoutPlan.current });
     })().then((result) => {
-      if (!cancelled && result?.effective_plan !== "family") setConfirmationTimedOut(true);
+      if (
+        !cancelled &&
+        result?.effective_plan !== checkoutPlan.current
+      ) {
+        setConfirmationTimedOut(true);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [checkoutBanner, checkoutSessionId, load]);
 
-  async function startCheckout(interval: "month" | "year") {
+  async function startCheckout(
+    interval: "month" | "year",
+    plan: SubscriptionPlanValue = "family",
+  ) {
     if (!activeHomeId || busy) return;
+    checkoutPlan.current = plan === "ultimate" ? "ultimate" : "family";
     setBusy(true);
     setError("");
     try {
       const { checkout_url: checkoutUrl } = await api.createCheckoutSession(
         activeHomeId,
         interval,
+        plan,
       );
       window.location.href = checkoutUrl;
     } catch (cause) {
@@ -174,6 +186,10 @@ export default function PlanAndBillingSettings() {
   }
 
   const cardKind = status ? resolvePlanCardKind(status) : null;
+  const planLabel =
+    status?.effective_plan === "ultimate" || status?.stored_plan === "ultimate"
+      ? "Ultimate"
+      : "Family";
   const restoreOption = pricing?.options[0];
   const stillConfirming =
     checkoutBanner === "success" && status?.effective_plan === "free" && !confirmationTimedOut;
@@ -181,7 +197,7 @@ export default function PlanAndBillingSettings() {
   return (
     <SettingsPage
       title="Plan & Billing"
-      description="Manage this Home's Family access, payment and retention status."
+      description="Manage this Home's plan, payment and retention status."
     >
       <main className="standard-page module-page">
         {checkoutBanner === "success" && (
@@ -260,29 +276,29 @@ export default function PlanAndBillingSettings() {
               {cardKind === "complimentary_no_expiry" && (
                 <>
                   <p>
-                    <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
+                    <strong className={`state-label ${planBadgeClass("family")}`}>{planLabel}</strong>{" "}
                     <span className="state-label state-soft">Complimentary access</span>
                   </p>
                   <p>No payment required. Access does not expire.</p>
-                  <p>Family applies to everyone in this Home.</p>
+                  <p>{planLabel} applies to everyone in this Home.</p>
                 </>
               )}
 
               {cardKind === "complimentary_with_expiry" && (
                 <>
                   <p>
-                    <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
+                    <strong className={`state-label ${planBadgeClass("family")}`}>{planLabel}</strong>{" "}
                     <span className="state-label state-soft">Complimentary access</span>
                   </p>
                   <p>No payment required. Access until {formatDate(status.complimentary_expires_at)}.</p>
-                  <p>Family applies to everyone in this Home.</p>
+                  <p>{planLabel} applies to everyone in this Home.</p>
                 </>
               )}
 
               {cardKind === "stripe_active" && (
                 <>
                   <p>
-                    <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
+                    <strong className={`state-label ${planBadgeClass("family")}`}>{planLabel}</strong>{" "}
                     <strong className={`state-label ${statusBadgeClass(status.status)}`}>
                       {statusLabel(status.status)}
                     </strong>
@@ -299,14 +315,14 @@ export default function PlanAndBillingSettings() {
                     <br />
                     {formatDate(status.current_period_end)}
                   </p>
-                  <p>Family applies to everyone in this Home.</p>
+                  <p>{planLabel} applies to everyone in this Home.</p>
                 </>
               )}
 
               {cardKind === "stripe_past_due" && (
                 <>
                   <p>
-                    <strong className={`state-label ${planBadgeClass("family")}`}>Family</strong>{" "}
+                    <strong className={`state-label ${planBadgeClass("family")}`}>{planLabel}</strong>{" "}
                     <strong className={`state-label ${statusBadgeClass(status.status)}`}>
                       Payment needs attention
                     </strong>
@@ -327,8 +343,8 @@ export default function PlanAndBillingSettings() {
                       Cancels on {formatDate(status.current_period_end)}
                     </strong>
                   </p>
-                  <p>You&rsquo;ll keep Family access until then.</p>
-                  <p>Family applies to everyone in this Home.</p>
+                  <p>You&rsquo;ll keep {planLabel} access until then.</p>
+                  <p>{planLabel} applies to everyone in this Home.</p>
                   <div className="notice" role="status">
                     <strong>Your Home will move to MyKhaya Free when Family ends.</strong>
                     <p>
@@ -453,16 +469,54 @@ export default function PlanAndBillingSettings() {
               </section>
             )}
 
+            {canShowUpgradeOptions(status) && pricing?.ultimate_options?.length ? (
+              <section>
+                <h2>Upgrade to Ultimate</h2>
+                <p>Everything in Family, plus Budget, Driveway and future premium modules.</p>
+                {!canStartUltimateCheckout(pricing) ? (
+                  <p className="notice" role="status">
+                    New Ultimate sign-ups are temporarily paused.
+                  </p>
+                ) : (
+                  <div className="feature-card-grid">
+                    {pricing.ultimate_options.map((option) => (
+                      <article className="card feature-card" key={`ultimate-${option.interval}`}>
+                        <div className="feature-card-heading">
+                          <h3>Ultimate {intervalName(option.interval)}</h3>
+                          {option.interval === "year" && pricing.ultimate_annual_is_best_value && (
+                            <span className="release-badge core">Best value</span>
+                          )}
+                        </div>
+                        <p>
+                          <strong>{option.formatted_amount}</strong> / {intervalSuffix(option.interval)}
+                        </p>
+                        {option.interval === "year" && pricing.ultimate_annual_saving_formatted && (
+                          <small>Save {pricing.ultimate_annual_saving_formatted} per year</small>
+                        )}
+                        <button
+                          disabled={busy}
+                          onClick={() => startCheckout(option.interval, "ultimate")}
+                        >
+                          Upgrade to Ultimate
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            ) : null}
+
             {comparison && comparison.rows.length > 0 && (
               <section className="card plan-compare">
-                <h2>Free vs Family</h2>
+                <h2>Compare plans</h2>
                 <table className="plan-compare-table">
                   <caption className="sr-only">
-                    What's included on the Free plan compared with Family
+                    What's included on the Free, Family and Ultimate plans
                   </caption>
                   <colgroup>
                     <col className="plan-compare-col-feature" />
                     <col className="plan-compare-col-free" />
+                    <col className="plan-compare-col-family" />
                     <col className="plan-compare-col-family" />
                   </colgroup>
                   <thead>
@@ -475,6 +529,7 @@ export default function PlanAndBillingSettings() {
                         <Crown size={14} aria-hidden="true" />
                         Family
                       </th>
+                      <th scope="col" className="plan-compare-family-heading">Ultimate</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -490,6 +545,7 @@ export default function PlanAndBillingSettings() {
                           </th>
                           <td className="plan-compare-free-value">{row.free_display}</td>
                           <td className="plan-compare-family-value">{row.family_display}</td>
+                          <td className="plan-compare-family-value">{row.ultimate_display}</td>
                         </tr>
                       );
                     })}

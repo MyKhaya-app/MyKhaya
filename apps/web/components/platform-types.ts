@@ -281,6 +281,8 @@ export type StripeModeSettings = {
   webhook_secret_last4: string | null;
   family_monthly_price_id: string | null;
   family_annual_price_id: string | null;
+  ultimate_monthly_price_id?: string | null;
+  ultimate_annual_price_id?: string | null;
 };
 
 export type StripeWebhookSummary = {
@@ -296,6 +298,8 @@ export type StripeConfiguration = {
   configured: boolean;
   enabled: boolean;
   acquisition_enabled: boolean;
+  family_signups_enabled?: boolean;
+  ultimate_signups_enabled?: boolean;
   mode: "test" | "live";
   source: "database" | "environment" | "unconfigured";
   incomplete_reason: string | null;

@@ -1532,6 +1532,49 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/lists/${encodeURIComponent(listId)}/items/clear-completed`,
       { method: "POST" },
     );
+  // --- Driveway (Ultimate-only) ---------------------------------------------
+  vehicles = (homeId: string) =>
+    this.request<import("@mykhaya/shared-types").VehicleListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles`,
+    );
+  vehicle = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`,
+    );
+  createVehicle = (homeId: string, body: import("@mykhaya/shared-types").VehicleCreatePayload) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  updateVehicle = (
+    homeId: string,
+    vehicleId: string,
+    body: import("@mykhaya/shared-types").VehicleUpdatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  deleteVehicle = (homeId: string, vehicleId: string) =>
+    this.request<void>(`/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`, {
+      method: "DELETE",
+    });
+  // Reminders linked to one vehicle (Phase 4). Editing/deleting a linked
+  // reminder reuses the existing generic updateReminder/deleteReminder
+  // methods below — no separate Driveway edit/delete route exists.
+  vehicleReminders = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").ReminderListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/reminders`,
+    );
+  createVehicleReminder = (
+    homeId: string,
+    vehicleId: string,
+    body: import("@mykhaya/shared-types").VehicleReminderCreatePayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").Reminder>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/reminders`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
   // --- Wishlists (Family-only) ---------------------------------------------
   wishlists = (homeId: string) =>
     this.request<import("@mykhaya/shared-types").WishlistListResponse>(
@@ -1696,10 +1739,11 @@ export class MyKhayaClient {
   createCheckoutSession = (
     homeId: string,
     interval: import("@mykhaya/shared-types").BillingInterval,
+    plan: import("@mykhaya/shared-types").SubscriptionPlanValue = "family",
   ) =>
     this.request<{ checkout_url: string }>(
       `/groups/${encodeURIComponent(homeId)}/billing/checkout-session`,
-      { method: "POST", body: JSON.stringify({ interval }) },
+      { method: "POST", body: JSON.stringify({ plan, interval }) },
     );
   confirmCheckoutSession = (sessionId: string) =>
     this.request<{

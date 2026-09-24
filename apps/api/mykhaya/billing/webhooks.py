@@ -31,7 +31,7 @@ from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig
 from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.state import apply_stripe_subscription_state
-from mykhaya.models import HomeSubscription, StripeWebhookEvent
+from mykhaya.models import HomeSubscription, StripeWebhookEvent, SubscriptionPlan
 
 _HANDLED_EVENT_TYPES = frozenset(
     {
@@ -138,11 +138,22 @@ async def _handle_subscription_event(
     db: AsyncSession,
     group_id: uuid.UUID,
     subscription_obj: dict[str, Any],
+    config: StripeConfig,
     *,
     event_id: str,
     event_type: str,
     hint: str,
 ) -> None:
+    plan_by_price = {
+        price_id: plan
+        for price_id, plan in (
+            (config.family_monthly_price_id, SubscriptionPlan.family),
+            (config.family_annual_price_id, SubscriptionPlan.family),
+            (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
+            (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
+        )
+        if price_id
+    }
     await apply_stripe_subscription_state(
         db,
         group_id=group_id,
@@ -150,6 +161,7 @@ async def _handle_subscription_event(
         actor_administrator_id=None,
         reason=f"Stripe webhook {event_type} ({event_id})",
         event_type_hint=hint,
+        plan_by_price=plan_by_price,
     )
 
 
@@ -180,6 +192,16 @@ async def _handle_invoice_event(
         actor_administrator_id=None,
         reason=f"Stripe webhook {event_type} ({event_id})",
         event_type_hint=hint,
+        plan_by_price={
+            price_id: plan
+            for price_id, plan in (
+                (config.family_monthly_price_id, SubscriptionPlan.family),
+                (config.family_annual_price_id, SubscriptionPlan.family),
+                (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
+                (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
+            )
+            if price_id
+        },
     )
 
 
@@ -223,6 +245,7 @@ async def process_webhook_event(
             db,
             group_id,
             data_object,
+            config,
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_activated",
@@ -233,6 +256,7 @@ async def process_webhook_event(
             db,
             group_id,
             data_object,
+            config,
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_updated",
@@ -243,6 +267,7 @@ async def process_webhook_event(
             db,
             group_id,
             data_object,
+            config,
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_cancelled",

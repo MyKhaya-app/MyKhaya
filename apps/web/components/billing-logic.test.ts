@@ -111,6 +111,8 @@ function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
     list_usage: { count: 0, limit: 2, over_limit: false },
     wishlists_enabled: false,
     nudges_enabled: false,
+    budget_enabled: false,
+    driveway_enabled: false,
     ...overrides,
   };
 }

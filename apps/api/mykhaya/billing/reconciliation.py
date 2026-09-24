@@ -22,7 +22,7 @@ from mykhaya.entitlements import (
     get_home_subscription,
     resolve_effective_plan,
 )
-from mykhaya.models import HomeSubscription
+from mykhaya.models import HomeSubscription, SubscriptionPlan
 
 
 class NoStripeSubscriptionError(RuntimeError):
@@ -119,9 +119,15 @@ async def confirm_checkout_session(
 
     items = (stripe_subscription.get("items") or {}).get("data") or []
     price_id = ((items[0].get("price") or {}).get("id") if items else None)
-    if price_id not in {config.family_monthly_price_id, config.family_annual_price_id}:
+    configured_prices = {
+        config.family_monthly_price_id,
+        config.family_annual_price_id,
+        config.ultimate_monthly_price_id,
+        config.ultimate_annual_price_id,
+    }
+    if price_id not in configured_prices:
         raise CheckoutConfirmationError(
-            "The Stripe subscription does not use a configured Family price."
+            "The Stripe subscription does not use a configured MyKhaya plan price."
         )
 
     reconciled = await apply_stripe_subscription_state(
@@ -131,6 +137,16 @@ async def confirm_checkout_session(
         actor_administrator_id=None,
         reason=f"Checkout confirmation {session_id}",
         event_type_hint="stripe_checkout_confirmed",
+        plan_by_price={
+            price_id: plan
+            for price_id, plan in (
+                (config.family_monthly_price_id, SubscriptionPlan.family),
+                (config.family_annual_price_id, SubscriptionPlan.family),
+                (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
+                (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
+            )
+            if price_id
+        },
     )
     subscription = reconciled or await ensure_home_subscription(db, group_id)
     subscription.external_customer_id = session_customer_id
@@ -161,7 +177,7 @@ async def confirm_checkout_session(
         result=(
             "mismatch"
             if stripe_subscription.get("status") in {"active", "trialing"}
-            and resolve_effective_plan(fresh_subscription).value != "family"
+            and resolve_effective_plan(fresh_subscription).value == "free"
             else "completed"
         ),
         stripe_mode=config.mode,
@@ -173,13 +189,13 @@ async def confirm_checkout_session(
         safe_error_code=(
             "entitlement_mismatch"
             if stripe_subscription.get("status") in {"active", "trialing"}
-            and resolve_effective_plan(fresh_subscription).value != "family"
+            and resolve_effective_plan(fresh_subscription).value == "free"
             else None
         ),
         safe_error_message=(
             "Stripe reports an active subscription but MyKhaya resolves Free."
             if stripe_subscription.get("status") in {"active", "trialing"}
-            and resolve_effective_plan(fresh_subscription).value != "family"
+            and resolve_effective_plan(fresh_subscription).value == "free"
             else None
         ),
     )
@@ -210,4 +226,14 @@ async def reconcile_home_subscription(
         actor_administrator_id=actor_administrator_id,
         reason="Manual reconciliation from the Platform Control Centre",
         event_type_hint="stripe_reconciled",
+        plan_by_price={
+            price_id: plan
+            for price_id, plan in (
+                (config.family_monthly_price_id, SubscriptionPlan.family),
+                (config.family_annual_price_id, SubscriptionPlan.family),
+                (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
+                (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
+            )
+            if price_id
+        },
     )

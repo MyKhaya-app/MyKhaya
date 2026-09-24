@@ -479,6 +479,9 @@ async def test_free_resolves_the_full_agreed_capability_matrix() -> None:
         assert await has_entitlement(db, home_id, "family_plans.enabled") is False
         assert await has_entitlement(db, home_id, "support.priority.enabled") is False
         assert await has_entitlement(db, home_id, "nudges.enabled") is False
+        # Ultimate-only premium modules — Free never includes these.
+        assert await has_entitlement(db, home_id, "budget.enabled") is False
+        assert await has_entitlement(db, home_id, "driveway.enabled") is False
 
 
 @pytest.mark.asyncio
@@ -503,6 +506,35 @@ async def test_family_resolves_the_full_agreed_capability_matrix() -> None:
         assert await has_entitlement(db, home_id, "family_plans.enabled") is True
         assert await has_entitlement(db, home_id, "support.priority.enabled") is True
         assert await has_entitlement(db, home_id, "nudges.enabled") is True
+        # Ultimate-only premium modules — Family does not include these.
+        assert await has_entitlement(db, home_id, "budget.enabled") is False
+        assert await has_entitlement(db, home_id, "driveway.enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_ultimate_resolves_the_full_agreed_capability_matrix() -> None:
+    """Ultimate inherits every Family entitlement and adds the premium
+    modules Family does not include — see PLAN_DEFINITIONS."""
+    home_id = await _make_home()
+    async with SessionFactory() as db:
+        await ensure_home_subscription(db, home_id)
+        await db.commit()
+    await _set_subscription(home_id, plan=SubscriptionPlan.ultimate)
+    async with SessionFactory() as db:
+        assert await get_limit(db, home_id, "home.max_members") is None
+        assert await get_limit(db, home_id, "lists.max_lists") is None
+        assert await has_entitlement(db, home_id, "notes.enabled") is True
+        assert await has_entitlement(db, home_id, "routines.household.enabled") is True
+        assert await has_entitlement(db, home_id, "events.shared.enabled") is True
+        assert await has_entitlement(db, home_id, "lists.enabled") is True
+        assert await has_entitlement(db, home_id, "chores.enabled") is True
+        assert await has_entitlement(db, home_id, "wishlists.enabled") is True
+        assert await has_entitlement(db, home_id, "members.external_invites.enabled") is True
+        assert await has_entitlement(db, home_id, "family_plans.enabled") is True
+        assert await has_entitlement(db, home_id, "support.priority.enabled") is True
+        assert await has_entitlement(db, home_id, "nudges.enabled") is True
+        assert await has_entitlement(db, home_id, "budget.enabled") is True
+        assert await has_entitlement(db, home_id, "driveway.enabled") is True
 
 
 @pytest.mark.asyncio
@@ -809,6 +841,9 @@ async def test_effective_plan_sql_filter_matches_python_resolution() -> None:
             "provider": SubscriptionProvider.stripe,
             "status": SubscriptionStatus.past_due,
         },
+        # A third tier must never be conflated with Family by the SQL
+        # mirror's "not free" bucket — see effective_plan_sql_filter.
+        {"plan": SubscriptionPlan.ultimate, "provider": SubscriptionProvider.stripe},
     ]
     home_ids: list[uuid.UUID] = []
     for scenario in scenarios:
@@ -820,7 +855,7 @@ async def test_effective_plan_sql_filter_matches_python_resolution() -> None:
         home_ids.append(home_id)
 
     async with SessionFactory() as db:
-        for plan in (SubscriptionPlan.free, SubscriptionPlan.family):
+        for plan in (SubscriptionPlan.free, SubscriptionPlan.family, SubscriptionPlan.ultimate):
             sql_matches = (
                 await db.scalars(
                     select(HomeSubscription.group_id)

@@ -134,6 +134,11 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             # gating) — see mykhaya.routers.household_routines/reminders/
             # todos, which require both.
             "nudges.enabled": False,
+            # Ultimate-only premium modules. Independent of FeatureKey.budget/
+            # driveway (platform/Home module gating) — see
+            # mykhaya.routers.budget/driveway, which require both.
+            "budget.enabled": False,
+            "driveway.enabled": False,
         },
         limits={
             # User-created Calendar Tags; the primary Home calendar is a
@@ -181,8 +186,41 @@ PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
             "support.priority.enabled": True,
             "meals.enabled": True,
             "nudges.enabled": True,
+            # Family does not include the Ultimate-only premium modules.
+            "budget.enabled": False,
+            "driveway.enabled": False,
         },
         limits={
+            "calendar.max_tags": None,
+            "calendar.max_categories": None,
+            "calendar.max_calendars": None,
+            "home.max_members": None,
+            "routines.personal.max_active": None,
+            "lists.max_lists": None,
+        },
+    ),
+    SubscriptionPlan.ultimate: PlanDefinition(
+        plan=SubscriptionPlan.ultimate,
+        booleans={
+            # Inherits every Family entitlement...
+            "notes.enabled": True,
+            "lists.enabled": True,
+            "chores.enabled": True,
+            "wishlists.enabled": True,
+            "routines.household.enabled": True,
+            "events.shared.enabled": True,
+            "members.external_invites.enabled": True,
+            "family_plans.enabled": True,
+            "support.priority.enabled": True,
+            "meals.enabled": True,
+            "nudges.enabled": True,
+            # ...and adds the premium modules Family does not include.
+            "budget.enabled": True,
+            "driveway.enabled": True,
+        },
+        limits={
+            # Same unlimited limits as Family — Ultimate never restricts
+            # anything Family already leaves uncapped.
             "calendar.max_tags": None,
             "calendar.max_categories": None,
             "calendar.max_calendars": None,
@@ -696,7 +734,7 @@ def resolve_effective_state(subscription: HomeSubscription | None) -> EffectiveS
 
 
 def effective_plan_sql_filter(plan: SubscriptionPlan) -> ColumnElement[bool]:
-    """A SQL-expressible mirror of resolve_effective_plan's Free/Family split,
+    """A SQL-expressible mirror of resolve_effective_plan's tier resolution,
     for filtering a listing query (mykhaya.routers.platform's subscription
     list/summary endpoints) without fetching every row into Python first.
 
@@ -728,7 +766,13 @@ def effective_plan_sql_filter(plan: SubscriptionPlan) -> ColumnElement[bool]:
     )
     if plan == SubscriptionPlan.free:
         return is_effectively_free
-    return and_(HomeSubscription.id.is_not(None), not_(is_effectively_free))
+    # A non-free effective plan is whatever the stored plan says, as long as
+    # the subscription is honoured (not lapsed/expired) — narrow to the
+    # exact requested tier so a 3+-tier PLAN_DEFINITIONS (e.g. family vs.
+    # ultimate) is never conflated into a single "not free" bucket.
+    return and_(
+        HomeSubscription.id.is_not(None), not_(is_effectively_free), HomeSubscription.plan == plan
+    )
 
 
 def complimentary_expired_sql_filter() -> ColumnElement[bool]:

@@ -8,7 +8,7 @@
 // stays server-side in mykhaya.entitlements; this only turns already-resolved
 // values into labels and badge classes.
 
-export type SubscriptionPlanValue = "free" | "family";
+export type SubscriptionPlanValue = "free" | "family" | "ultimate";
 export type SubscriptionProviderValue = "free" | "complimentary" | "stripe" | "apple" | "google";
 export type SubscriptionStatusValue =
   | "active"
@@ -20,6 +20,7 @@ export type SubscriptionStatusValue =
 const PLAN_LABELS: Record<SubscriptionPlanValue, string> = {
   free: "Free",
   family: "Family",
+  ultimate: "Ultimate",
 };
 
 const PROVIDER_LABELS: Record<SubscriptionProviderValue, string> = {
@@ -53,7 +54,7 @@ export function statusLabel(status: string): string {
 /** "state-healthy" for Family, "state-not-configured" for Free — mirrors the
  * existing state-label badge convention (see platform-mfa-logic.ts). */
 export function planBadgeClass(plan: string): string {
-  return plan === "family" ? "state-healthy" : "state-not-configured";
+  return plan === "family" || plan === "ultimate" ? "state-healthy" : "state-not-configured";
 }
 
 export function statusBadgeClass(status: string): string {

@@ -6,7 +6,7 @@ import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { useReauthGuard } from "@/components/platform-reauth-modal";
 import { readableDate } from "@/components/platform-format";
-import type { Entitlements, SubscriptionDetail } from "@/components/platform-types";
+import type { Entitlements, HomeSubscription, SubscriptionDetail } from "@/components/platform-types";
 import {
   complimentaryReasonPresets,
   eventTypeLabel,
@@ -191,14 +191,23 @@ export default function SubscriptionDetailPage({
     const expiryChoice = formData.get("expiry_choice") as string;
     const expiryDate = formData.get("expiry_date") as string;
     try {
-      await platformApi.put(`/homes/${encodeURIComponent(id)}/subscription/complimentary`, {
-        complimentary_reason: complimentaryReason,
-        complimentary_note: (formData.get("note") as string) || null,
-        expires_at: expiryChoice === "specific" && expiryDate ? expiryDate : null,
-        reason: formData.get("audit_reason"),
-        confirmed: true,
-      });
-      setMessage("Complimentary Family access granted.");
+      const saved = await platformApi.put<HomeSubscription>(
+        `/homes/${encodeURIComponent(id)}/subscription/complimentary`,
+        {
+          plan: (formData.get("plan") as string) || "family",
+          complimentary_reason: complimentaryReason,
+          complimentary_note: (formData.get("note") as string) || null,
+          expires_at: expiryChoice === "specific" && expiryDate ? expiryDate : null,
+          reason: formData.get("audit_reason"),
+          confirmed: true,
+        },
+      );
+      // Derived from the server's authoritative saved plan, never from the
+      // form's raw selection — the two must never be allowed to diverge in
+      // what the operator is told happened.
+      setMessage(
+        `Complimentary ${saved.plan === "ultimate" ? "Ultimate" : "Family"} access granted.`,
+      );
       setShowGrantForm(false);
       await load();
     } catch (cause) {
@@ -232,7 +241,7 @@ export default function SubscriptionDetailPage({
         reason: formData.get("audit_reason"),
         confirmed: true,
       });
-      setMessage("Complimentary access removed — this Home is now on the Free plan.");
+      setMessage("Complimentary access removed; this Home has returned to its underlying subscription plan.");
       setShowRevokeForm(false);
       await load();
     } catch (cause) {
@@ -582,7 +591,7 @@ export default function SubscriptionDetailPage({
                     </CcNotice>
                   ) : data.subscription.provider === "complimentary" ? (
                     <>
-                      <p>This Home currently has complimentary Family access.</p>
+                      <p>This Home currently has complimentary {data.subscription.plan === "ultimate" ? "Ultimate" : "Family"} access.</p>
                       <div className="platform-modal-actions" style={{ justifyContent: "flex-start" }}>
                         <button className="secondary" onClick={() => setShowGrantForm(true)}>
                           Extend / update
@@ -590,7 +599,7 @@ export default function SubscriptionDetailPage({
                       </div>
                       <div className="cc-section-danger" style={{ marginTop: "1rem" }}>
                         <p style={{ marginTop: 0 }}>
-                          Removing complimentary access returns this Home to Free immediately.
+                          Removing complimentary access returns this Home to its underlying subscription plan.
                         </p>
                         <button className="danger" onClick={() => setShowRevokeForm(true)}>
                           Remove complimentary access
@@ -601,7 +610,7 @@ export default function SubscriptionDetailPage({
                     <>
                       <p>This Home does not currently have complimentary access.</p>
                       <button onClick={() => setShowGrantForm(true)}>
-                        Grant complimentary Family access
+                        Grant complimentary access
                       </button>
                     </>
                   )}
@@ -631,12 +640,24 @@ export default function SubscriptionDetailPage({
       <CcConfirmDialog
         open={showGrantForm}
         onClose={() => setShowGrantForm(false)}
-        title="Grant complimentary Family access"
-        description="This gives the Home Family-plan entitlements without payment — for beta testers, friends and family, or internal use. It never touches Stripe."
+        title="Grant complimentary access"
+        description="This gives the Home selected plan entitlements without payment. It never touches Stripe."
         confirmLabel="Grant complimentary access"
         onConfirm={grantComplimentary}
         extraFields={
           <>
+            <label>
+              Plan
+              <select
+                name="plan"
+                defaultValue={
+                  data?.subscription.provider === "complimentary" ? data.subscription.plan : "family"
+                }
+              >
+                <option value="family">Family</option>
+                <option value="ultimate">Ultimate</option>
+              </select>
+            </label>
             <label>
               Reason
               <select name="reason_preset" defaultValue="">

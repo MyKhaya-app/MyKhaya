@@ -161,6 +161,8 @@ class Settings(BaseSettings):
     # change is "update these two IDs", never a code or migration change.
     stripe_family_monthly_price_id: str | None = None
     stripe_family_annual_price_id: str | None = None
+    stripe_ultimate_monthly_price_id: str | None = None
+    stripe_ultimate_annual_price_id: str | None = None
     stripe_billing_configured: bool = False
     # Phase 7's deliberate go-live gate — deployment configuration, not a
     # Platform Control Centre toggle (see "Do not implement a remote live
@@ -172,6 +174,7 @@ class Settings(BaseSettings):
     # creation. Defaults false everywhere, including production, so
     # deploying code never itself enables paid acquisition.
     stripe_billing_acquisition_enabled: bool = False
+    stripe_ultimate_acquisition_enabled: bool = False
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
     # The transport ceiling protects the API from unbounded multipart bodies;
@@ -351,6 +354,15 @@ class Settings(BaseSettings):
             )
             if not value
         ]
+        if self.stripe_ultimate_acquisition_enabled:
+            missing.extend(
+                name
+                for name, value in (
+                    ("MYKHAYA_STRIPE_ULTIMATE_MONTHLY_PRICE_ID", self.stripe_ultimate_monthly_price_id),
+                    ("MYKHAYA_STRIPE_ULTIMATE_ANNUAL_PRICE_ID", self.stripe_ultimate_annual_price_id),
+                )
+                if not value
+            )
         if missing:
             raise ValueError(
                 "MYKHAYA_STRIPE_BILLING_CONFIGURED is true but required settings are "

@@ -8,9 +8,11 @@ import { FormStatus } from "@/components/form-status";
 import { intervalSuffix } from "@/components/billing-logic";
 import {
   canStartFamilyCheckout,
+  canStartUltimateCheckout,
   isBestValueInterval,
   pricingOptionFor,
   savingLabelFor,
+  ultimatePricingOptionFor,
 } from "@/components/family-pricing-logic";
 import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
@@ -41,13 +43,17 @@ export default function Onboarding() {
   const [pricing, setPricing] = useState<FamilyPricing | null>(null);
   const [pricingError, setPricingError] = useState(false);
   const [billingInterval, setBillingInterval] = useState<BillingIntervalChoice>("month");
+  const [requestedPlan, setRequestedPlan] = useState<"family" | "ultimate">("family");
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [matchedHome, setMatchedHome] = useState<HomeJoinCodeLookup | null>(null);
 
   useEffect(() => {
     if (step !== "plan") return;
     const intent = readOnboardingIntent();
-    if (intent) setBillingInterval(intent.interval);
+    if (intent) {
+      setBillingInterval(intent.interval);
+      if (intent.plan === "ultimate") setRequestedPlan("ultimate");
+    }
     api
       .familyPricing()
       .then(setPricing)
@@ -117,12 +123,16 @@ export default function Onboarding() {
     router.push("/home");
   }
 
-  async function upgradeToFamily() {
+  async function upgradeToFamily(plan: "family" | "ultimate" = requestedPlan) {
     if (!homeId || busy) return;
     setBusy(true);
     setError("");
     try {
-      const { checkout_url: checkoutUrl } = await api.createCheckoutSession(homeId, billingInterval);
+      const { checkout_url: checkoutUrl } = await api.createCheckoutSession(
+        homeId,
+        billingInterval,
+        plan,
+      );
       clearOnboardingIntent();
       window.location.href = checkoutUrl;
     } catch (err) {
@@ -184,6 +194,30 @@ export default function Onboarding() {
                 Create a new Home
               </button>
             </article>
+            {pricing?.ultimate_options?.length ? (
+              <article className="card feature-card">
+                <div className="feature-card-heading"><h3>Ultimate</h3></div>
+                <p className="muted">Everything in Family, plus Budget, Driveway and future premium modules.</p>
+                <p className="pricing-amount">
+                  <strong>{ultimatePricingOptionFor(pricing, billingInterval)?.formatted_amount ?? "—"}</strong>
+                  <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                </p>
+                {!canStartUltimateCheckout(pricing) ? (
+                  <p className="notice" role="status">New Ultimate sign-ups are temporarily paused.</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
+                    onClick={() => {
+                      setRequestedPlan("ultimate");
+                      void upgradeToFamily("ultimate");
+                    }}
+                  >
+                    {busy ? "One moment…" : "Upgrade to Ultimate"}
+                  </button>
+                )}
+              </article>
+            ) : null}
           </div>
           <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
             Sign out
@@ -366,7 +400,7 @@ export default function Onboarding() {
                 <button
                   type="button"
                   disabled={busy || pricingError || !selected}
-                  onClick={upgradeToFamily}
+                  onClick={() => void upgradeToFamily()}
                 >
                   {busy ? "One moment…" : "Upgrade to Family"}
                 </button>

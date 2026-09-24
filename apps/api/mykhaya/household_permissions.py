@@ -63,6 +63,14 @@ class Capability(StrEnum):
     # routers.wishlists._require_owner_or_admin.
     wishlists_view = "wishlists.view"
     wishlists_manage = "wishlists.manage"
+    # Driveway (mykhaya.routers.driveway) — same "view vs manage" split as
+    # Lists/Meal Plans for Household-scoped vehicles; a Personal-scoped
+    # vehicle (and the sensitive VIN/insurance fields that default to
+    # Personal visibility even on a Household-scoped vehicle) additionally
+    # requires the caller to be that vehicle's own owner (or home_admin),
+    # mirroring routers.wishlists' per-owner check.
+    driveway_view = "driveway.view"
+    driveway_manage = "driveway.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
@@ -85,6 +93,8 @@ DELEGATABLE_CAPABILITIES = frozenset(
         Capability.lists_manage,
         Capability.wishlists_view,
         Capability.wishlists_manage,
+        Capability.driveway_view,
+        Capability.driveway_manage,
         Capability.sharing_external,
     }
 )
@@ -108,6 +118,8 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.lists_manage,
             Capability.wishlists_view,
             Capability.wishlists_manage,
+            Capability.driveway_view,
+            Capability.driveway_manage,
             # A Partner/Adult may request an external calendar share (see
             # routers.calendar_sharing) — sending it outright vs. requiring
             # Home Admin approval is decided per-request there (whether the

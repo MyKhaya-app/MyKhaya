@@ -136,6 +136,21 @@ async def pricing(
         if is_best_value and family_pricing.annual_saving_unit_amount is not None
         else None
     )
+    ultimate_options = family_pricing.ultimate_options
+    ultimate_annual_is_best_value = (
+        family_pricing.ultimate_annual_saving_unit_amount is not None
+        and family_pricing.ultimate_annual_saving_unit_amount > 0
+    )
+    ultimate_saving = (
+        format_amount(
+            family_pricing.ultimate_annual_saving_unit_amount,
+            ultimate_options[1].currency,
+        )
+        if ultimate_annual_is_best_value
+        and family_pricing.ultimate_annual_saving_unit_amount is not None
+        and ultimate_options is not None
+        else None
+    )
     return FamilyPricingResponse(
         plan=family_pricing.plan,
         options=[
@@ -150,6 +165,22 @@ async def pricing(
         annual_saving_formatted=saving,
         annual_is_best_value=is_best_value,
         acquisition_enabled=acquisition_enabled,
+        ultimate_options=(
+            [
+                PricingOptionResponse(
+                    interval=option.interval,
+                    currency=option.currency,
+                    unit_amount=option.unit_amount,
+                    formatted_amount=option.formatted_amount,
+                )
+                for option in ultimate_options
+            ]
+            if ultimate_options
+            else None
+        ),
+        ultimate_annual_saving_formatted=ultimate_saving,
+        ultimate_annual_is_best_value=ultimate_annual_is_best_value,
+        ultimate_acquisition_enabled=family_pricing.ultimate_acquisition_enabled,
     )
 
 
@@ -191,6 +222,7 @@ async def plan_comparison(
     await enforce_rate_limit(request, settings, "billing-plans", 60, 60)
     free = plan_definition_for(SubscriptionPlan.free)
     family = plan_definition_for(SubscriptionPlan.family)
+    ultimate = plan_definition_for(SubscriptionPlan.ultimate)
     free_members = free.limits.get("home.max_members")
     family_members = family.limits.get("home.max_members")
     free_categories = free.limits.get("calendar.max_tags")
@@ -204,18 +236,21 @@ async def plan_comparison(
                 label="People",
                 free_display=_people_display(free_members),
                 family_display=_people_display(family_members),
+                ultimate_display=_people_display(ultimate.limits.get("home.max_members")),
             ),
             PlanComparisonRow(
                 key="calendar.max_tags",
                 label="Calendar Tags",
                 free_display=_categories_display(free_categories),
                 family_display=_categories_display(family_categories),
+                ultimate_display=_categories_display(ultimate.limits.get("calendar.max_tags")),
             ),
             PlanComparisonRow(
                 key="routines.personal.max_active",
                 label="Personal routines",
                 free_display=_personal_routines_display(free_personal_routines),
                 family_display=_personal_routines_display(family_personal_routines),
+                ultimate_display=_personal_routines_display(ultimate.limits.get("routines.personal.max_active")),
             ),
             PlanComparisonRow(
                 key="routines.household.enabled",
@@ -226,6 +261,30 @@ async def plan_comparison(
                 family_display=_included_display(
                     family.booleans.get("routines.household.enabled", False)
                 ),
+                ultimate_display=_included_display(
+                    ultimate.booleans.get("routines.household.enabled", False)
+                ),
+            ),
+            PlanComparisonRow(
+                key="budget.enabled",
+                label="Budget",
+                free_display=_included_display(free.booleans.get("budget.enabled", False)),
+                family_display=_included_display(family.booleans.get("budget.enabled", False)),
+                ultimate_display=_included_display(ultimate.booleans.get("budget.enabled", False)),
+            ),
+            PlanComparisonRow(
+                key="driveway.enabled",
+                label="Driveway",
+                free_display=_included_display(free.booleans.get("driveway.enabled", False)),
+                family_display=_included_display(family.booleans.get("driveway.enabled", False)),
+                ultimate_display=_included_display(ultimate.booleans.get("driveway.enabled", False)),
+            ),
+            PlanComparisonRow(
+                key="premium.future",
+                label="Future premium modules",
+                free_display="Not included",
+                family_display="Not included",
+                ultimate_display="Included",
             ),
         ]
     )
@@ -318,7 +377,8 @@ async def billing_status(
         # Billing's upgrade section (canShowUpgradeOptions) reads this to
         # decide whether to show Checkout at all, so a disabled kill switch
         # correctly hides it there too, not only at the API layer.
-        stripe_billing_available=config.configured and config.acquisition_enabled,
+        stripe_billing_available=config.configured
+        and (config.family_signups_enabled or config.ultimate_signups_enabled),
         family_access=await has_user_entitlement(
             db, auth.user.id, group_id, "family_plans.enabled"
         ),
@@ -337,6 +397,8 @@ async def billing_status(
         list_usage=await list_usage(db, group_id),
         wishlists_enabled=await has_entitlement(db, group_id, "wishlists.enabled"),
         nudges_enabled=await has_entitlement(db, group_id, "nudges.enabled"),
+        budget_enabled=await has_entitlement(db, group_id, "budget.enabled"),
+        driveway_enabled=await has_entitlement(db, group_id, "driveway.enabled"),
     )
 
 
@@ -354,7 +416,12 @@ async def checkout_session(
     config = await resolve_stripe_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
-    if not config.acquisition_enabled:
+    plan_enabled = (
+        config.family_signups_enabled if body.plan == SubscriptionPlan.family
+        else config.ultimate_signups_enabled if body.plan == SubscriptionPlan.ultimate
+        else False
+    )
+    if not plan_enabled:
         # The Phase 7 kill switch — deliberately separate from "configured".
         # Existing Stripe-backed Homes, webhooks, renewals, cancellations,
         # the Portal, and reconciliation are all unaffected by this; only a
@@ -362,7 +429,7 @@ async def checkout_session(
         # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "New Family sign-ups are temporarily unavailable. Please try again later.",
+            f"New {body.plan.value.capitalize()} subscriptions are temporarily unavailable. Please try again later.",
         )
 
     # Serialises concurrent checkout attempts for the same Home (double-click,
@@ -383,6 +450,7 @@ async def checkout_session(
             subscription,
             auth.user.id,
             auth.user.email,
+            body.plan,
             body.interval,
         )
     except DuplicateSubscriptionError as exc:
@@ -392,6 +460,8 @@ async def checkout_session(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
         ) from exc
+    except (StripeNotConfiguredError, ValueError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return CheckoutSessionResponse(checkout_url=checkout_url)
 
 

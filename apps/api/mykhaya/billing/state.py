@@ -181,6 +181,7 @@ async def apply_stripe_subscription_state(
     actor_administrator_id: uuid.UUID | None,
     reason: str,
     event_type_hint: str,
+    plan_by_price: dict[str, SubscriptionPlan] | None = None,
 ) -> HomeSubscription | None:
     """Returns the updated HomeSubscription, or None if the incoming Stripe
     object produced no mutation (unrecognised/unconfirmed status, or a
@@ -229,6 +230,12 @@ async def apply_stripe_subscription_state(
         return None
 
     price_id, interval = extract_price_and_interval(stripe_subscription)
+    requested_plan = (stripe_subscription.get("metadata") or {}).get("mykhaya_plan")
+    price_plan = plan_by_price.get(price_id) if plan_by_price and price_id else None
+    try:
+        incoming_plan = price_plan or SubscriptionPlan(requested_plan or SubscriptionPlan.family.value)
+    except ValueError:
+        incoming_plan = SubscriptionPlan.family
     period_start, period_end = extract_period(stripe_subscription)
 
     # Out-of-order guard 2: for the *same* subscription ID, current_period_end
@@ -256,12 +263,13 @@ async def apply_stripe_subscription_state(
     materially_changed = (
         subscription.provider != SubscriptionProvider.stripe
         or subscription.status != mapped_status
+        or subscription.plan != incoming_plan
         or subscription.external_price_id != price_id
         or subscription.billing_interval != interval
         or subscription.external_subscription_id != incoming_subscription_id
     )
 
-    subscription.plan = SubscriptionPlan.family
+    subscription.plan = incoming_plan
     subscription.provider = SubscriptionProvider.stripe
     subscription.status = mapped_status
     subscription.external_customer_id = subscription.external_customer_id or customer_id

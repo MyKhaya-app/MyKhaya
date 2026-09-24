@@ -3860,7 +3860,7 @@ async def grant_complimentary(
         subscription.provider,
         subscription.status,
     )
-    subscription.plan = SubscriptionPlan.family
+    subscription.plan = body.plan
     subscription.provider = SubscriptionProvider.complimentary
     # external_customer_id/external_subscription_id/external_price_id are
     # deliberately left as-is even when they belonged to a now-cancelled
@@ -3938,6 +3938,8 @@ async def revoke_complimentary(
         subscription.provider,
         subscription.status,
     )
+    # This row represents complimentary-only access. Paid Stripe Homes are
+    # rejected above and therefore retain their commercial state unchanged.
     subscription.plan = SubscriptionPlan.free
     subscription.provider = SubscriptionProvider.free
     subscription.status = SubscriptionStatus.active
@@ -6835,6 +6837,8 @@ def _stripe_mode_settings_response(
             webhook_secret_last4=None,
             family_monthly_price_id=None,
             family_annual_price_id=None,
+            ultimate_monthly_price_id=None,
+            ultimate_annual_price_id=None,
         )
     if mode == "test":
         publishable_key = row.test_publishable_key
@@ -6842,12 +6846,16 @@ def _stripe_mode_settings_response(
         encrypted_webhook_secret = row.encrypted_test_webhook_secret
         monthly_price_id = row.test_family_monthly_price_id
         annual_price_id = row.test_family_annual_price_id
+        ultimate_monthly_price_id = row.test_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.test_ultimate_annual_price_id
     else:
         publishable_key = row.live_publishable_key
         encrypted_secret_key = row.encrypted_live_secret_key
         encrypted_webhook_secret = row.encrypted_live_webhook_secret
         monthly_price_id = row.live_family_monthly_price_id
         annual_price_id = row.live_family_annual_price_id
+        ultimate_monthly_price_id = row.live_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.live_ultimate_annual_price_id
 
     def _decrypted_last4(ciphertext: str | None) -> str | None:
         if not ciphertext:
@@ -6865,6 +6873,8 @@ def _stripe_mode_settings_response(
         webhook_secret_last4=_decrypted_last4(encrypted_webhook_secret),
         family_monthly_price_id=monthly_price_id,
         family_annual_price_id=annual_price_id,
+        ultimate_monthly_price_id=ultimate_monthly_price_id,
+        ultimate_annual_price_id=ultimate_annual_price_id,
     )
 
 
@@ -6921,6 +6931,8 @@ async def stripe_configuration(
         configured=config.configured,
         enabled=row.enabled if row else False,
         acquisition_enabled=row.acquisition_enabled if row else config.acquisition_enabled,
+        family_signups_enabled=row.family_signups_enabled if row else config.family_signups_enabled,
+        ultimate_signups_enabled=row.ultimate_signups_enabled if row else config.ultimate_signups_enabled,
         mode=row.mode.value if row else config.mode,
         source=config.source,
         incomplete_reason=config.incomplete_reason,
@@ -7014,7 +7026,12 @@ async def inspect_stripe_checkout(
         items = (stripe_subscription.get("items") or {}).get("data") or []
         if items:
             price_id = (items[0].get("price") or {}).get("id")
-    configured_prices = {config.family_monthly_price_id, config.family_annual_price_id}
+    configured_prices = {
+        config.family_monthly_price_id,
+        config.family_annual_price_id,
+        config.ultimate_monthly_price_id,
+        config.ultimate_annual_price_id,
+    }
     metadata_group = (session.get("metadata") or {}).get("mykhaya_group_id")
     reference_group = session.get("client_reference_id")
     home_reference = "matches" if metadata_group or reference_group else "missing"
@@ -7062,25 +7079,17 @@ async def update_stripe_settings(
         db.add(row)
 
     new_mode = StripeMode(body.mode)
-    if body.acquisition_enabled and not body.enabled:
+    if (body.family_signups_enabled or body.ultimate_signups_enabled) and not body.enabled:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Enable the Stripe integration before allowing new subscriptions.",
         )
-    if body.enabled and body.acquisition_enabled:
+    if body.enabled and (body.family_signups_enabled or body.ultimate_signups_enabled):
         active_publishable = (
             body.test_publishable_key if body.mode == "test" else body.live_publishable_key
         )
-        active_monthly = (
-            body.test_family_monthly_price_id
-            if body.mode == "test"
-            else body.live_family_monthly_price_id
-        )
-        active_annual = (
-            body.test_family_annual_price_id
-            if body.mode == "test"
-            else body.live_family_annual_price_id
-        )
+        active_monthly = body.test_family_monthly_price_id if body.mode == "test" else body.live_family_monthly_price_id
+        active_annual = body.test_family_annual_price_id if body.mode == "test" else body.live_family_annual_price_id
         active_secret_provided = bool(
             body.test_secret_key if body.mode == "test" else body.live_secret_key
         )
@@ -7102,10 +7111,18 @@ async def update_stripe_settings(
             missing.append("secret key")
         if not (active_webhook_provided or active_webhook_exists):
             missing.append("webhook signing secret")
-        if not active_monthly:
-            missing.append("monthly Price ID")
-        if not active_annual:
-            missing.append("annual Price ID")
+        if body.family_signups_enabled:
+            if not active_monthly:
+                missing.append("Family monthly Price ID")
+            if not active_annual:
+                missing.append("Family annual Price ID")
+        if body.ultimate_signups_enabled:
+            ultimate_monthly = body.test_ultimate_monthly_price_id if body.mode == "test" else body.live_ultimate_monthly_price_id
+            ultimate_annual = body.test_ultimate_annual_price_id if body.mode == "test" else body.live_ultimate_annual_price_id
+            if not ultimate_monthly:
+                missing.append("Ultimate monthly Price ID")
+            if not ultimate_annual:
+                missing.append("Ultimate annual Price ID")
         if missing:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -7114,13 +7131,19 @@ async def update_stripe_settings(
 
     row.enabled = body.enabled
     row.acquisition_enabled = body.acquisition_enabled
+    row.family_signups_enabled = body.family_signups_enabled
+    row.ultimate_signups_enabled = body.ultimate_signups_enabled
     row.mode = new_mode
     row.test_publishable_key = body.test_publishable_key
     row.test_family_monthly_price_id = body.test_family_monthly_price_id
     row.test_family_annual_price_id = body.test_family_annual_price_id
+    row.test_ultimate_monthly_price_id = body.test_ultimate_monthly_price_id
+    row.test_ultimate_annual_price_id = body.test_ultimate_annual_price_id
     row.live_publishable_key = body.live_publishable_key
     row.live_family_monthly_price_id = body.live_family_monthly_price_id
     row.live_family_annual_price_id = body.live_family_annual_price_id
+    row.live_ultimate_monthly_price_id = body.live_ultimate_monthly_price_id
+    row.live_ultimate_annual_price_id = body.live_ultimate_annual_price_id
     row.updated_by_administrator_id = context.administrator.id
 
     secrets_replaced: list[str] = []
@@ -7155,9 +7178,13 @@ async def update_stripe_settings(
             "test_publishable_key": row.test_publishable_key,
             "test_family_monthly_price_id": row.test_family_monthly_price_id,
             "test_family_annual_price_id": row.test_family_annual_price_id,
+            "test_ultimate_monthly_price_id": row.test_ultimate_monthly_price_id,
+            "test_ultimate_annual_price_id": row.test_ultimate_annual_price_id,
             "live_publishable_key": row.live_publishable_key,
             "live_family_monthly_price_id": row.live_family_monthly_price_id,
             "live_family_annual_price_id": row.live_family_annual_price_id,
+            "live_ultimate_monthly_price_id": row.live_ultimate_monthly_price_id,
+            "live_ultimate_annual_price_id": row.live_ultimate_annual_price_id,
         },
     )
     if previous_mode is not None and previous_mode != row.mode.value:

@@ -364,17 +364,23 @@ class StripeSettingsUpdate(SensitiveActionRequest):
 
     enabled: bool
     acquisition_enabled: bool = False
+    family_signups_enabled: bool = False
+    ultimate_signups_enabled: bool = False
     mode: Literal["test", "live"]
     test_publishable_key: str | None = Field(default=None, max_length=200)
     test_secret_key: str | None = Field(default=None, max_length=500)
     test_webhook_secret: str | None = Field(default=None, max_length=500)
     test_family_monthly_price_id: str | None = Field(default=None, max_length=200)
     test_family_annual_price_id: str | None = Field(default=None, max_length=200)
+    test_ultimate_monthly_price_id: str | None = Field(default=None, max_length=200)
+    test_ultimate_annual_price_id: str | None = Field(default=None, max_length=200)
     live_publishable_key: str | None = Field(default=None, max_length=200)
     live_secret_key: str | None = Field(default=None, max_length=500)
     live_webhook_secret: str | None = Field(default=None, max_length=500)
     live_family_monthly_price_id: str | None = Field(default=None, max_length=200)
     live_family_annual_price_id: str | None = Field(default=None, max_length=200)
+    live_ultimate_monthly_price_id: str | None = Field(default=None, max_length=200)
+    live_ultimate_annual_price_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("test_publishable_key", "live_publishable_key")
     @classmethod
@@ -400,8 +406,12 @@ class StripeSettingsUpdate(SensitiveActionRequest):
     @field_validator(
         "test_family_monthly_price_id",
         "test_family_annual_price_id",
+        "test_ultimate_monthly_price_id",
+        "test_ultimate_annual_price_id",
         "live_family_monthly_price_id",
         "live_family_annual_price_id",
+        "live_ultimate_monthly_price_id",
+        "live_ultimate_annual_price_id",
     )
     @classmethod
     def validate_price_id(cls, value: str | None) -> str | None:
@@ -415,11 +425,15 @@ class StripeSettingsUpdate(SensitiveActionRequest):
         "test_webhook_secret",
         "test_family_monthly_price_id",
         "test_family_annual_price_id",
+        "test_ultimate_monthly_price_id",
+        "test_ultimate_annual_price_id",
         "live_publishable_key",
         "live_secret_key",
         "live_webhook_secret",
         "live_family_monthly_price_id",
         "live_family_annual_price_id",
+        "live_ultimate_monthly_price_id",
+        "live_ultimate_annual_price_id",
         mode="before",
     )
     @classmethod
@@ -447,6 +461,8 @@ class StripeModeSettingsResponse(BaseModel):
     webhook_secret_last4: str | None
     family_monthly_price_id: str | None
     family_annual_price_id: str | None
+    ultimate_monthly_price_id: str | None
+    ultimate_annual_price_id: str | None
 
 
 class StripeWebhookSummary(BaseModel):
@@ -511,6 +527,8 @@ class StripeConfigurationResponse(BaseModel):
     configured: bool
     enabled: bool
     acquisition_enabled: bool
+    family_signups_enabled: bool
+    ultimate_signups_enabled: bool
     mode: Literal["test", "live"]
     # "database" | "environment" | "unconfigured"
     source: str
@@ -802,6 +820,7 @@ class HomeSubscriptionResponse(BaseModel):
 
 
 class GrantComplimentaryRequest(SensitiveActionRequest):
+    plan: SubscriptionPlan = SubscriptionPlan.family
     complimentary_reason: str = Field(min_length=1, max_length=200)
     complimentary_note: str | None = Field(default=None, max_length=1000)
     expires_at: datetime | None = None

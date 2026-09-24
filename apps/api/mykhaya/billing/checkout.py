@@ -22,6 +22,7 @@ from mykhaya.models import (
     Group,
     HomeSubscription,
     SubscriptionProvider,
+    SubscriptionPlan,
     SubscriptionStatus,
 )
 
@@ -87,6 +88,7 @@ async def create_checkout_session(
     subscription: HomeSubscription,
     actor_user_id: uuid.UUID,
     actor_email: str,
+    plan: SubscriptionPlan,
     interval: BillingInterval,
 ) -> str:
     if not config.configured or not config.secret_key:
@@ -97,11 +99,14 @@ async def create_checkout_session(
     ):
         raise DuplicateSubscriptionError("This Home already has an active Stripe subscription.")
 
-    price_id = (
-        config.family_monthly_price_id
-        if interval == BillingInterval.month
-        else config.family_annual_price_id
-    )
+    if plan == SubscriptionPlan.family:
+        price_id = config.family_monthly_price_id if interval == BillingInterval.month else config.family_annual_price_id
+    elif plan == SubscriptionPlan.ultimate:
+        price_id = config.ultimate_monthly_price_id if interval == BillingInterval.month else config.ultimate_annual_price_id
+    else:
+        raise ValueError("Free is not a paid checkout plan.")
+    if not price_id:
+        raise StripeNotConfiguredError(f"{plan.value.capitalize()} pricing is not configured.")
     assert price_id  # noqa: S101 — guaranteed by Settings validation when configured=True
 
     customer_id = await get_or_create_customer(db, config, home, subscription, actor_email)
@@ -114,7 +119,7 @@ async def create_checkout_session(
     # earlier one) is not permanently blocked. This is defense-in-depth
     # beneath the _LIVE_STRIPE_STATUSES guard above and the per-Home advisory
     # lock the caller (mykhaya.routers.billing) holds around this call.
-    idempotency_key = f"mykhaya-checkout:{home.id}:{interval.value}:{int(time.time() // 300)}"
+    idempotency_key = f"mykhaya-checkout:{home.id}:{plan.value}:{interval.value}:{int(time.time() // 300)}"
 
     session = await call_stripe(
         lambda: stripe.checkout.Session.create(
@@ -127,8 +132,8 @@ async def create_checkout_session(
             ),
             cancel_url=f"{settings.public_web_url}/settings/billing?checkout=cancelled",
             client_reference_id=str(home.id),
-            subscription_data={"metadata": {"mykhaya_group_id": str(home.id)}},
-            metadata={"mykhaya_group_id": str(home.id)},
+            subscription_data={"metadata": {"mykhaya_group_id": str(home.id), "mykhaya_plan": plan.value}},
+            metadata={"mykhaya_group_id": str(home.id), "mykhaya_plan": plan.value},
             api_key=config.secret_key,
             idempotency_key=idempotency_key,
         )

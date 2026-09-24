@@ -76,7 +76,7 @@ export default function Register() {
             message: string;
             verification_required: boolean;
           }>("/auth/register", body);
-      if (intent && intent.plan === "family") saveOnboardingIntent(intent);
+      if (intent && intent.plan !== "free") saveOnboardingIntent(intent);
       const carry = invitation
         ? `invitation=${encodeURIComponent(invitation)}`
         : calendarShare
@@ -133,7 +133,7 @@ export default function Register() {
           &rdquo; calendar with you. Create a free account to view it — Family isn&rsquo;t needed.
         </p>
       )}
-      {!inviteContext && !shareContext && intent?.plan === "family" && (
+      {!inviteContext && !shareContext && intent && intent.plan !== "free" && (
         <p className="notice success">
           You selected Family ({intervalName(intent.interval)} billing) — you&rsquo;ll confirm this
           after creating your Home.

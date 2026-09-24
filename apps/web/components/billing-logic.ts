@@ -15,6 +15,7 @@ export type BillingStatusLoader = () => Promise<BillingStatus | null>;
 export async function pollForFamilyBillingStatus(
   load: BillingStatusLoader,
   options: {
+    targetPlan?: "family" | "ultimate";
     intervalMs?: number;
     timeoutMs?: number;
     sleep?: (milliseconds: number) => Promise<void>;
@@ -27,7 +28,7 @@ export async function pollForFamilyBillingStatus(
   const now = options.now ?? (() => Date.now());
   const startedAt = now();
   let result = await load();
-  while (result?.effective_plan !== "family" && now() - startedAt < timeoutMs) {
+  while (result?.effective_plan !== (options.targetPlan ?? "family") && now() - startedAt < timeoutMs) {
     await sleep(Math.min(intervalMs, timeoutMs - (now() - startedAt)));
     result = await load();
   }
@@ -71,10 +72,10 @@ export type PlanCardKind =
 
 export function resolvePlanCardKind(status: BillingStatus): PlanCardKind {
   if (status.effective_plan === "free") {
-    if (status.stored_plan === "family" && status.provider === "complimentary") {
+    if ((status.stored_plan === "family" || status.stored_plan === "ultimate") && status.provider === "complimentary") {
       return "free_expired_complimentary";
     }
-    if (status.stored_plan === "family" && status.provider === "stripe") {
+    if ((status.stored_plan === "family" || status.stored_plan === "ultimate") && status.provider === "stripe") {
       return "free_ended_stripe";
     }
     return "free";

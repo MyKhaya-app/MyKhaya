@@ -33,3 +33,14 @@ export function savingLabelFor(pricing: FamilyPricing, interval: BillingInterval
 export function canStartFamilyCheckout(pricing: FamilyPricing): boolean {
   return pricing.acquisition_enabled;
 }
+
+export function ultimatePricingOptionFor(
+  pricing: FamilyPricing,
+  interval: BillingInterval,
+): PricingOption | null {
+  return pricing.ultimate_options?.find((option) => option.interval === interval) ?? null;
+}
+
+export function canStartUltimateCheckout(pricing: FamilyPricing): boolean {
+  return pricing.ultimate_acquisition_enabled === true;
+}

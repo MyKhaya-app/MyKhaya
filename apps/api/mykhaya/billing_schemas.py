@@ -34,6 +34,10 @@ class FamilyPricingResponse(BaseModel):
     # checkout_session) — so the frontend can show real prices with a
     # "temporarily paused" notice instead of hiding them.
     acquisition_enabled: bool
+    ultimate_options: list[PricingOptionResponse] | None = None
+    ultimate_annual_saving_formatted: str | None = None
+    ultimate_annual_is_best_value: bool = False
+    ultimate_acquisition_enabled: bool = False
 
 
 class CheckoutSessionRequest(StrictModel):
@@ -41,6 +45,7 @@ class CheckoutSessionRequest(StrictModel):
     Customer, or subscription identifier. See
     docs/security/platform-administration-security.md#checkout."""
 
+    plan: SubscriptionPlan = SubscriptionPlan.family
     interval: BillingInterval
 
 
@@ -155,6 +160,12 @@ class BillingStatusResponse(BaseModel):
     # See routers.household_routines/reminders/todos' nudges.enabled
     # enforcement.
     nudges_enabled: bool
+    # Whether this Home's plan currently includes Budget — Ultimate-only.
+    # See routers.budget's budget.enabled enforcement.
+    budget_enabled: bool
+    # Whether this Home's plan currently includes Driveway — Ultimate-only.
+    # See routers.driveway's driveway.enabled enforcement.
+    driveway_enabled: bool
 
 
 class PlanComparisonRow(BaseModel):
@@ -168,6 +179,7 @@ class PlanComparisonRow(BaseModel):
     label: str
     free_display: str
     family_display: str
+    ultimate_display: str
 
 
 class PlanComparisonResponse(BaseModel):

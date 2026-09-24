@@ -229,6 +229,112 @@ describe("SubscriptionDetailPage", () => {
   });
 });
 
+// Regression coverage for a real bug: the plan the operator picked in the
+// grant/update dialog was never included in the PUT body at all (the field
+// existed in the form but was never read into the request), so every grant
+// silently saved as Family regardless of the Ultimate selection, while the
+// success banner still claimed "Ultimate" because it read the form's raw
+// selection instead of the server's actual saved result. Avoids the
+// pre-existing "Hales Home" ambiguous-match issue elsewhere in this file by
+// waiting on the (unique) grant button instead.
+function grantedSubscription(plan: "family" | "ultimate") {
+  return {
+    ...complimentaryDetail().subscription,
+    plan,
+    effective_plan: plan,
+    complimentary_reason: "Friends and family beta",
+  };
+}
+
+describe("SubscriptionDetailPage — complimentary plan selection", () => {
+  it("includes the operator's selected plan in the grant request", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(freeDetail()),
+    );
+    put.mockResolvedValue(grantedSubscription("ultimate"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("button", { name: "Grant complimentary access" });
+
+    await user.click(screen.getByRole("button", { name: "Grant complimentary access" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Plan"), "ultimate");
+    await user.type(
+      screen.getByLabelText(/Reason for this administrative action/i),
+      "Approved beta tester per support ticket #42",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Grant complimentary access" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    expect(put).toHaveBeenCalledWith(
+      "/homes/home-1/subscription/complimentary",
+      expect.objectContaining({ plan: "ultimate" }),
+    );
+  });
+
+  it("reports the saved plan in the success message, not merely the form selection", async () => {
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(freeDetail()),
+    );
+    put.mockResolvedValue(grantedSubscription("ultimate"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("button", { name: "Grant complimentary access" });
+
+    await user.click(screen.getByRole("button", { name: "Grant complimentary access" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Plan"), "ultimate");
+    await user.type(
+      screen.getByLabelText(/Reason for this administrative action/i),
+      "Approved beta tester per support ticket #42",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Grant complimentary access" }));
+
+    expect(await screen.findByText("Complimentary Ultimate access granted.")).toBeInTheDocument();
+  });
+
+  it("never claims Ultimate was granted when the server actually saved Family", async () => {
+    // The operator picks Ultimate, but the authoritative saved result (what
+    // the server actually persisted) is Family — the banner must reflect
+    // reality, never the client's own guess about what it asked for.
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(freeDetail()),
+    );
+    put.mockResolvedValue(grantedSubscription("family"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("button", { name: "Grant complimentary access" });
+
+    await user.click(screen.getByRole("button", { name: "Grant complimentary access" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Plan"), "ultimate");
+    await user.type(
+      screen.getByLabelText(/Reason for this administrative action/i),
+      "Approved beta tester per support ticket #42",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Grant complimentary access" }));
+
+    expect(await screen.findByText("Complimentary Family access granted.")).toBeInTheDocument();
+    expect(screen.queryByText("Complimentary Ultimate access granted.")).not.toBeInTheDocument();
+  });
+
+  it("pre-fills the plan selector with the Home's current plan when updating existing complimentary access", async () => {
+    const detail = complimentaryDetail();
+    detail.subscription.plan = "ultimate";
+    detail.subscription.effective_plan = "ultimate";
+    get.mockImplementation((path: string) =>
+      path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detail),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("button", { name: "Extend / update" });
+
+    await user.click(screen.getByRole("button", { name: "Extend / update" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Plan")).toHaveValue("ultimate");
+  });
+});
+
 // PCC Polish Phase 1: the final governance audit found live, enforced
 // entitlements (Lists, Wishlists) still labelled "Planned" here, left over
 // from before those modules shipped — see mykhaya.entitlements.

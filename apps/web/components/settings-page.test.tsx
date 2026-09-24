@@ -65,6 +65,8 @@ function mockModuleState(
     listsEntitled?: boolean;
     mealsFeatureOn?: boolean;
     mealsEntitled?: boolean;
+    drivewayFeatureOn?: boolean;
+    drivewayEntitled?: boolean;
   } = {},
 ) {
   const {
@@ -76,6 +78,8 @@ function mockModuleState(
     listsEntitled = true,
     mealsFeatureOn = true,
     mealsEntitled = true,
+    drivewayFeatureOn = true,
+    drivewayEntitled = true,
   } = overrides;
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
     features: [
@@ -83,6 +87,7 @@ function mockModuleState(
       { feature: "nudges", enabled: nudgesFeatureOn },
       { feature: "shopping", enabled: listsFeatureOn },
       { feature: "meals", enabled: mealsFeatureOn },
+      { feature: "driveway", enabled: drivewayFeatureOn },
     ],
   });
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -90,6 +95,7 @@ function mockModuleState(
     nudges_enabled: nudgesEntitled,
     lists_enabled: listsEntitled,
     meals_enabled: mealsEntitled,
+    driveway_enabled: drivewayEntitled,
   });
 }
 
@@ -591,4 +597,46 @@ describe("More — Lists module state", () => {
   // navigation one — More has no notion of list count at all, so there is
   // nothing here to assert beyond "the row never keys off it," which the
   // two tests above already establish by never varying with list count.
+});
+
+// Driveway (Phase 3) — the first module gated on the Ultimate tier rather
+// than Family, exercising the data-driven requiredPlan wording added in
+// Phase 1.5 (see MoreItem.requiredPlan) rather than a second hardcoded
+// "locked" string.
+describe("More — Driveway module state", () => {
+  it("appears under Household Tools as a normal, actionable row when released and entitled on Ultimate", async () => {
+    mockModuleState({ drivewayFeatureOn: true, drivewayEntitled: true });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Driveway" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/driveway");
+    expect(row.className).not.toContain("more-row-locked");
+    expect(within(row).queryByText("Included with MyKhaya Ultimate")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Vehicles, renewals, inspections, service history and documents"),
+    ).toBeInTheDocument();
+    // No "Ultimate" badge/tag anywhere on the row itself — only the
+    // data-driven locked wording (asserted below) ever mentions the plan.
+    expect(within(row).queryByText("Ultimate")).not.toBeInTheDocument();
+  });
+
+  it("shows Driveway as locked/Ultimate-only for a non-entitled Home, using the shared locked-tile treatment", async () => {
+    mockModuleState({ drivewayFeatureOn: true, drivewayEntitled: false });
+    render(<SettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "Driveway" });
+    const row = heading.closest("a")!;
+    expect(row).toHaveAttribute("href", "/driveway");
+    expect(row.className).toContain("more-row-locked");
+    expect(within(row).getByText("Included with MyKhaya Ultimate")).toBeInTheDocument();
+    expect(
+      within(row).queryByText("Vehicles, renewals, inspections, service history and documents"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("is hidden when the platform feature flag is off", async () => {
+    mockModuleState({ drivewayFeatureOn: false, drivewayEntitled: true });
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Home settings" });
+    expect(screen.queryByRole("heading", { name: "Driveway" })).not.toBeInTheDocument();
+  });
 });

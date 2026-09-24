@@ -46,6 +46,7 @@ from mykhaya.budget_schemas import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
+from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.models import (
     BudgetActualSource,
@@ -95,6 +96,7 @@ async def _member_and_feature(
     require_adult_session(auth)
     membership = await membership_for(home_id, auth, db)
     await require_feature(db, FeatureKey.budget, home_id)
+    await require_entitlement(db, home_id, "budget.enabled")
     return membership
 
 

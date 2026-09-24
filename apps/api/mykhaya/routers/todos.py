@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -16,6 +16,7 @@ from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
     FeatureKey,
     Membership,
+    Reminder,
     RoutineScope,
     Todo,
     TodoCategory,
@@ -227,6 +228,18 @@ async def delete_category(
     )
     if row is None or row.created_by != auth.user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That To-do category could not be found")
+    if row.managed_source is not None:
+        linked = await db.scalar(
+            select(func.count())
+            .select_from(Reminder)
+            .where(Reminder.category_id == row.id, Reminder.source_type == row.managed_source)
+        )
+        if linked:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This category is managed by Driveway and is still in use by vehicle "
+                "reminders. Remove those reminders first.",
+            )
     audit(db, request, "todo_category.deleted", auth.user.id, home_id, "todo_category", row.id)
     await db.delete(row)
     await db.commit()

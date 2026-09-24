@@ -71,18 +71,26 @@ export default function PaymentsPage() {
     try {
       const result = await platformApi.put<{ message: string }>("/payments/stripe/settings", {
         enabled: form.get("enabled") === "on",
-        acquisition_enabled: form.get("acquisition_enabled") === "on",
+        acquisition_enabled:
+          form.get("family_signups_enabled") === "on" ||
+          form.get("ultimate_signups_enabled") === "on",
+        family_signups_enabled: form.get("family_signups_enabled") === "on",
+        ultimate_signups_enabled: form.get("ultimate_signups_enabled") === "on",
         mode: form.get("mode"),
         test_publishable_key: str("test_publishable_key"),
         test_secret_key: str("test_secret_key"),
         test_webhook_secret: str("test_webhook_secret"),
         test_family_monthly_price_id: str("test_family_monthly_price_id"),
         test_family_annual_price_id: str("test_family_annual_price_id"),
+        test_ultimate_monthly_price_id: str("test_ultimate_monthly_price_id"),
+        test_ultimate_annual_price_id: str("test_ultimate_annual_price_id"),
         live_publishable_key: str("live_publishable_key"),
         live_secret_key: str("live_secret_key"),
         live_webhook_secret: str("live_webhook_secret"),
         live_family_monthly_price_id: str("live_family_monthly_price_id"),
         live_family_annual_price_id: str("live_family_annual_price_id"),
+        live_ultimate_monthly_price_id: str("live_ultimate_monthly_price_id"),
+        live_ultimate_annual_price_id: str("live_ultimate_annual_price_id"),
         reason: form.get("reason"),
         confirmed: true,
       });
@@ -213,7 +221,7 @@ export default function PaymentsPage() {
           </p>
         )}
         <label>
-          Monthly Price ID
+          Family monthly Price ID
           <input
             name={`${mode}_family_monthly_price_id`}
             defaultValue={settings.family_monthly_price_id ?? ""}
@@ -221,10 +229,26 @@ export default function PaymentsPage() {
           />
         </label>
         <label>
-          Annual Price ID
+          Family annual Price ID
           <input
             name={`${mode}_family_annual_price_id`}
             defaultValue={settings.family_annual_price_id ?? ""}
+            maxLength={200}
+          />
+        </label>
+        <label>
+          Ultimate monthly Price ID
+          <input
+            name={`${mode}_ultimate_monthly_price_id`}
+            defaultValue={settings.ultimate_monthly_price_id ?? ""}
+            maxLength={200}
+          />
+        </label>
+        <label>
+          Ultimate annual Price ID
+          <input
+            name={`${mode}_ultimate_annual_price_id`}
+            defaultValue={settings.ultimate_annual_price_id ?? ""}
             maxLength={200}
           />
         </label>
@@ -331,9 +355,16 @@ export default function PaymentsPage() {
                   <label className="check-row">
                     <input
                       type="checkbox"
-                      name="acquisition_enabled"
-                      defaultChecked={data.acquisition_enabled}
+                      name="family_signups_enabled"
+                      defaultChecked={data.family_signups_enabled ?? data.acquisition_enabled}
                     /> Allow new Family subscriptions
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      name="ultimate_signups_enabled"
+                      defaultChecked={data.ultimate_signups_enabled}
+                    /> Allow new Ultimate subscriptions
                   </label>
                   <p><small>Pause new paid sign-ups without disabling renewals, webhooks, cancellations, or the customer portal.</small></p>
                   <label className="check-row">

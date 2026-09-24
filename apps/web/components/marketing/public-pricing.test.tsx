@@ -3,8 +3,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PublicPricing } from "./public-pricing";
 
-// Two plans only — Free and Family, no manufactured third tier. Family's
-// price must always come from the live pricing API (never a hard-coded
+// The public pricing surface has three plans: Free, Family and Ultimate.
+// Prices must always come from the live pricing API (never a hard-coded
 // figure baked into the component), and every CTA must route through the
 // same resolveCtaDestination logic the rest of the commercial journey uses.
 
@@ -62,8 +62,8 @@ beforeEach(() => {
   (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
-describe("PublicPricing — two plans, no manufactured third tier", () => {
-  it("renders exactly two plan cards: Free and Family", async () => {
+describe("PublicPricing — Free, Family and Ultimate", () => {
+  it("renders exactly three plan cards: Free, Family and Ultimate", async () => {
     (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
       pricingResponse(),
     );
@@ -76,7 +76,10 @@ describe("PublicPricing — two plans, no manufactured third tier", () => {
     expect(
       screen.getByRole("heading", { level: 3, name: "Family" }),
     ).toBeInTheDocument();
-    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(2);
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Ultimate" }),
+    ).toBeInTheDocument();
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(3);
   });
 
   it("shows the exact Free plan feature list and price", async () => {
@@ -125,6 +128,20 @@ describe("PublicPricing — two plans, no manufactured third tier", () => {
     expect(
       screen.getByRole("button", { name: /^start family/i }),
     ).toBeInTheDocument();
+  });
+
+  it("shows Ultimate features including Budget, Driveway and future premium modules", async () => {
+    (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
+      pricingResponse(),
+    );
+    render(<PublicPricing />);
+
+    expect(screen.getByText("Budget")).toBeInTheDocument();
+    expect(screen.getByText("Driveway")).toBeInTheDocument();
+    expect(screen.getByText("Future premium modules")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^start ultimate/i }),
+    ).toBeDisabled();
   });
 
   it("never advertises Chores or Family Plans — neither is a real, released capability", async () => {
@@ -184,7 +201,7 @@ describe("PublicPricing — Family price always comes from the live pricing API"
     expect(screen.getByText(/save £19\.89 per year/i)).toBeInTheDocument();
   });
 
-  it("always shows the Family plan as the permanent, unconditional 'Most popular' choice", async () => {
+  it("shows Family as the recommended 'Most popular' choice", async () => {
     (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
       pricingResponse(),
     );

@@ -401,7 +401,8 @@ export type FeatureKey =
   | "wish_lists"
   | "notifications"
   | "external_sharing"
-  | "nudges";
+  | "nudges"
+  | "driveway";
 
 export type ProductUsagePlatform = "web" | "ios" | "android";
 export type ProductUsageModule =
@@ -971,6 +972,68 @@ export interface ListTemplateUpdatePayload extends ListTemplateCreatePayload {
   expected_updated_at: string;
 }
 
+// Driveway — mirrors mykhaya.driveway_schemas. Phase 2 core vehicle model
+// only (no documents/service/insurance/compliance fields yet).
+export interface Vehicle {
+  id: string;
+  group_id: string;
+  owner_user_id: string;
+  scope: RoutineScope;
+  nickname: string;
+  make: string | null;
+  model: string | null;
+  colour: string | null;
+  year: number | null;
+  fuel_type: string | null;
+  engine_size: string | null;
+  country_code: string;
+  registration: string | null;
+  first_registration_date: string | null;
+  // Omitted by the backend (not just null) for a viewer who isn't the
+  // vehicle's own owner or a home_admin — see routers.driveway.
+  vin: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VehicleListResponse {
+  items: Vehicle[];
+}
+
+export interface VehicleCreatePayload {
+  nickname: string;
+  scope: RoutineScope;
+  make?: string | null;
+  model?: string | null;
+  colour?: string | null;
+  year?: number | null;
+  fuel_type?: string | null;
+  engine_size?: string | null;
+  country_code: string;
+  registration?: string | null;
+  first_registration_date?: string | null;
+  vin?: string | null;
+}
+
+export interface VehicleUpdatePayload extends VehicleCreatePayload {
+  expected_updated_at: string;
+}
+
+// A manual Driveway reminder linked to one vehicle (Phase 4). No scope/
+// category fields — a Driveway-created reminder always inherits the
+// vehicle's own scope and always uses the managed "Vehicles" category; the
+// response is an ordinary Reminder (see mykhaya.driveway_reminders), same
+// shape Nudges already uses.
+export interface VehicleReminderCreatePayload {
+  title: string;
+  description?: string | null;
+  due_date: string;
+  due_time?: string;
+  repeat?: ReminderRepeat;
+  cadence?: ReminderCadence;
+}
+
 export interface ListRenamePayload {
   name: string;
   icon?: ListIcon | null;
@@ -1061,7 +1124,7 @@ export interface CalendarHighlight {
 // See docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
 
 export type BillingInterval = "month" | "year";
-export type SubscriptionPlanValue = "free" | "family";
+export type SubscriptionPlanValue = "free" | "family" | "ultimate";
 export type SubscriptionProviderValue = "free" | "complimentary" | "stripe" | "apple" | "google";
 export type SubscriptionStatusValue =
   | "active"
@@ -1110,6 +1173,8 @@ export interface BillingStatus {
   list_usage: CalendarUsage;
   wishlists_enabled: boolean;
   nudges_enabled: boolean;
+  budget_enabled: boolean;
+  driveway_enabled: boolean;
 }
 
 export interface PricingOption {
@@ -1132,6 +1197,10 @@ export interface FamilyPricing {
   // (server-side) — so use this to swap "Choose Family" for a "temporarily
   // paused" notice rather than hiding the price.
   acquisition_enabled: boolean;
+  ultimate_options?: PricingOption[] | null;
+  ultimate_annual_saving_formatted?: string | null;
+  ultimate_annual_is_best_value?: boolean;
+  ultimate_acquisition_enabled?: boolean;
 }
 
 export interface PlanComparisonRow {
@@ -1139,6 +1208,7 @@ export interface PlanComparisonRow {
   label: string;
   free_display: string;
   family_display: string;
+  ultimate_display: string;
 }
 
 export interface PlanComparison {

@@ -55,6 +55,9 @@ class FamilyPricing:
     # MyKhaya's single-currency launch is in. None rather than a wrong number
     # if that assumption ever stops holding.
     annual_saving_unit_amount: int | None
+    ultimate_options: tuple[PriceOption, PriceOption] | None = None
+    ultimate_annual_saving_unit_amount: int | None = None
+    ultimate_acquisition_enabled: bool = False
 
 
 def format_amount(unit_amount: int, currency: str) -> str:
@@ -127,8 +130,31 @@ async def get_family_pricing(
         if monthly.currency == annual.currency
         else None
     )
+    ultimate_options: tuple[PriceOption, PriceOption] | None = None
+    ultimate_saving: int | None = None
+    if (
+        config.ultimate_monthly_price_id
+        and config.ultimate_annual_price_id
+    ):
+        ultimate_monthly = await _fetch_and_validate_price(
+            config.secret_key, config.ultimate_monthly_price_id, BillingInterval.month
+        )
+        ultimate_annual = await _fetch_and_validate_price(
+            config.secret_key, config.ultimate_annual_price_id, BillingInterval.year
+        )
+        ultimate_options = (ultimate_monthly, ultimate_annual)
+        ultimate_saving = (
+            ultimate_monthly.unit_amount * 12 - ultimate_annual.unit_amount
+            if ultimate_monthly.currency == ultimate_annual.currency
+            else None
+        )
     pricing = FamilyPricing(
-        plan="family", options=(monthly, annual), annual_saving_unit_amount=saving
+        plan="family",
+        options=(monthly, annual),
+        annual_saving_unit_amount=saving,
+        ultimate_options=ultimate_options,
+        ultimate_annual_saving_unit_amount=ultimate_saving,
+        ultimate_acquisition_enabled=config.ultimate_signups_enabled,
     )
     _cache[cache_key] = (now, pricing)
     return pricing

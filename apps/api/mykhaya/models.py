@@ -212,6 +212,7 @@ class FeatureKey(StrEnum):
     nudges = "nudges"
     budget = "budget"
     support = "support"
+    driveway = "driveway"
 
 
 class SupportTicketType(StrEnum):
@@ -2220,6 +2221,23 @@ class Reminder(UuidTimeMixin, Base):
             name="ck_reminder_scope_owner",
         ),
         Index("ix_reminder_group_enabled", "group_id", "enabled"),
+        # "List everything linked to this source entity" (e.g. a vehicle's
+        # reminders) — see mykhaya.driveway_reminders.reminders_for_vehicle.
+        Index("ix_reminder_source_type_id", "source_type", "source_id"),
+        # At most one active managed reminder per (source_type, source_id,
+        # source_event), except source_event='manual' which explicitly
+        # supports multiples (a vehicle can have many independent manual
+        # reminders) — see mykhaya.driveway_reminders.upsert_driveway_reminder.
+        Index(
+            "uq_reminder_source_event_active",
+            "source_type",
+            "source_id",
+            "source_event",
+            unique=True,
+            postgresql_where=text(
+                "source_type IS NOT NULL AND source_event <> 'manual' AND enabled = true"
+            ),
+        ),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
@@ -2254,6 +2272,16 @@ class Reminder(UuidTimeMixin, Base):
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Additive, nullable source-link (Phase 4 Driveway integration — see
+    # mykhaya.driveway_reminders). All three are null for every ordinary
+    # standalone reminder and are never touched by the generic reminder
+    # update/create paths (ReminderCreate/ReminderUpdate have no such
+    # fields) — a module-managed reminder is otherwise an entirely normal
+    # Reminder row. No FK on source_id: source_type is polymorphic (only
+    # "driveway" exists today), so a single column can't target one table.
+    source_type: Mapped[str | None] = mapped_column(String(20))
+    source_id: Mapped[uuid.UUID | None] = mapped_column()
+    source_event: Mapped[str | None] = mapped_column(String(30))
 
 
 class ReminderMember(UuidTimeMixin, Base):
@@ -2307,6 +2335,12 @@ class TodoCategory(UuidTimeMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(80))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Null for every ordinary user-created category. Set to a module name
+    # (currently only "driveway") when a module auto-created this category —
+    # a marker rather than name-matching, so delete-protection never depends
+    # on the visible "Vehicles" label. See mykhaya.driveway_reminders and
+    # routers.todos.delete_category.
+    managed_source: Mapped[str | None] = mapped_column(String(20))
 
 
 class Todo(UuidTimeMixin, Base):
@@ -2867,6 +2901,12 @@ class PlatformStripeSettings(UuidTimeMixin, Base):
     acquisition_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    family_signups_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    ultimate_signups_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     mode: Mapped[StripeMode] = mapped_column(
         Enum(
             StripeMode,
@@ -2881,11 +2921,15 @@ class PlatformStripeSettings(UuidTimeMixin, Base):
     encrypted_test_webhook_secret: Mapped[str | None] = mapped_column(Text)
     test_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
     test_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_ultimate_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_ultimate_annual_price_id: Mapped[str | None] = mapped_column(String(200))
     live_publishable_key: Mapped[str | None] = mapped_column(String(200))
     encrypted_live_secret_key: Mapped[str | None] = mapped_column(Text)
     encrypted_live_webhook_secret: Mapped[str | None] = mapped_column(Text)
     live_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
     live_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_ultimate_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_ultimate_annual_price_id: Mapped[str | None] = mapped_column(String(200))
     updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
@@ -2950,6 +2994,9 @@ class NotificationTemplateRevision(Base):
 class SubscriptionPlan(StrEnum):
     free = "free"
     family = "family"
+    # Inherits everything in `family` and adds premium modules (Budget,
+    # Driveway, ...) — see PLAN_DEFINITIONS in mykhaya.entitlements.
+    ultimate = "ultimate"
 
 
 class SubscriptionProvider(StrEnum):
@@ -3505,3 +3552,58 @@ class SupportTicketDiagnostic(UuidTimeMixin, Base):
     background_refresh_state: Mapped[str | None] = mapped_column(String(20))
     client_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="diagnostic")
+
+
+# ---------------------------------------------------------------------------
+# Driveway — vehicle management (Ultimate-only). Phase 2 core model only:
+# no documents/service/insurance/compliance sub-tables yet (later phases),
+# no official-lookup provider state (Phase 5). See
+# docs/architecture/commercial-entitlements.md and mykhaya.entitlements
+# .PLAN_DEFINITIONS for "driveway.enabled".
+# ---------------------------------------------------------------------------
+
+
+class Vehicle(UuidTimeMixin, Base):
+    """A Home's vehicle. Deliberately international: `country_code` (ISO
+    3166-1 alpha-2, e.g. "GB", "ZA", "US") is the source of truth for which
+    official lookup provider (if any) applies — see
+    mykhaya.driveway.providers.VehicleLookupProvider — never a per-Group
+    setting, since a household can own vehicles registered in different
+    countries. A country with no provider integration still works through
+    manual entry; every field below is always manually editable regardless
+    of provider support.
+
+    `scope`/`owner_user_id` reuse the same Personal/Household primitive as
+    ListTemplate. `vin` defaults to Personal visibility even on a
+    Household-scoped vehicle (see routers.driveway's field-level filtering)
+    — the column itself has no separate visibility flag; that's an API
+    presentation-layer rule, not a schema one, matching the "no new
+    encryption subsystem yet" Phase 1.5 decision. Never write vin/
+    registration/insurance values into audit metadata or logs."""
+
+    __tablename__ = "vehicles"
+    __table_args__ = (
+        CheckConstraint("char_length(nickname) >= 1", name="ck_vehicle_nickname_nonempty"),
+        CheckConstraint("char_length(country_code) = 2", name="ck_vehicle_country_code_iso2"),
+        Index("ix_vehicle_home_scope_active", "group_id", "scope", "archived_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    scope: Mapped[RoutineScope] = mapped_column(Enum(RoutineScope, name="routine_scope", create_type=False))
+    nickname: Mapped[str] = mapped_column(String(120))
+    make: Mapped[str | None] = mapped_column(String(80))
+    model: Mapped[str | None] = mapped_column(String(80))
+    colour: Mapped[str | None] = mapped_column(String(40))
+    year: Mapped[int | None] = mapped_column(Integer)
+    fuel_type: Mapped[str | None] = mapped_column(String(30))
+    engine_size: Mapped[str | None] = mapped_column(String(20))
+    # ISO 3166-1 alpha-2. Presentation-layer only decides UK-specific labels
+    # ("Road tax", "MOT") from this; the concepts stay generic (registration_
+    # renewal/tax_renewal/inspection) everywhere else in Driveway.
+    country_code: Mapped[str] = mapped_column(String(2))
+    registration: Mapped[str | None] = mapped_column(String(20))
+    first_registration_date: Mapped[date | None] = mapped_column(Date())
+    # Sensitive — defaults to Personal visibility even on a Household-scoped
+    # vehicle; never included in audit metadata/logs. See class docstring.
+    vin: Mapped[str | None] = mapped_column(String(32))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

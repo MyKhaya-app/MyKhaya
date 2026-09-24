@@ -1,4 +1,18 @@
-"""Focused rollout tests for the disabled-by-default Budget Home control."""
+"""Focused rollout tests for the Budget Home control.
+
+Budget's platform-flag/Home-toggle rollout mechanics (this file's original
+subject) are unchanged by Phase 1.5 — what changed is that Budget moved off
+its old opt-in-only special case (Budget used to default OFF for every Home
+regardless of plan) onto the same commercial-entitlement model every other
+premium module uses: enabled by default once the platform flag is on,
+gated by the "budget.enabled" entitlement, which only the Ultimate plan
+grants (see mykhaya.entitlements.PLAN_DEFINITIONS and
+routers.budget._member_and_feature). Every test below now puts its Home on
+the Ultimate plan before exercising Budget, exactly as a real Ultimate
+Home would need to be — the rollout mechanics under test (the household
+toggle, category/month/entry/income/item/sharing behaviour) are otherwise
+untouched.
+"""
 
 import uuid
 from collections.abc import AsyncIterator
@@ -11,6 +25,7 @@ from sqlalchemy import delete, select
 from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     AuditEvent,
@@ -23,6 +38,7 @@ from mykhaya.models import (
     Membership,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     User,
 )
 
@@ -35,6 +51,18 @@ async def client() -> AsyncIterator[AsyncClient]:
         yield value
 
 
+async def _set_ultimate_plan(home_id: str) -> None:
+    """Budget requires the "budget.enabled" entitlement (Ultimate-only)
+    in addition to the platform/Home feature-flag layer this file's
+    household-toggle tests exercise — see routers.budget._member_and_feature.
+    """
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.ultimate
+        await db.commit()
+
+
 @pytest.mark.asyncio
 async def test_budget_home_rollout_preserves_profile_and_audits_enable_disable(
     client: AsyncClient,
@@ -44,11 +72,16 @@ async def test_budget_home_rollout_preserves_profile_and_audits_enable_disable(
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Rollout Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
 
     management = await client.get(f"/api/v1/features/{home_id}/modules/management")
     assert management.status_code == 200
     budget = next(row for row in management.json() if row["id"] == "budget")
-    assert budget["enabled"] is False
+    # Budget no longer defaults to disabled for every Home regardless of
+    # plan (the removed opt-in-only special case) — it now starts enabled
+    # like any other module once the platform flag is on, same as every
+    # other Home-toggleable module. See module docstring above.
+    assert budget["enabled"] is True
     assert budget["toggleable"] is True
 
     enabled = await unsafe(
@@ -123,6 +156,7 @@ async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Category Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
 
     enabled = await unsafe(
         client,
@@ -190,6 +224,7 @@ async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculate
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Entry Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
     enabled = await unsafe(
         client,
         "PUT",
@@ -295,6 +330,7 @@ async def test_current_snapshot_reconciles_pre_fix_missing_category_without_touc
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Repair Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
     enabled = await unsafe(
         client,
         "PUT",
@@ -412,6 +448,7 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Income Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
     enabled = await unsafe(
         client,
         "PUT",
@@ -500,6 +537,7 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget V2 Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
     enabled = await unsafe(
         client,
         "PUT",
@@ -647,6 +685,7 @@ async def test_budget_item_partner_sharing_filters_detail_and_revokes_access(
     home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Privacy Home"})
     assert home.status_code == 201
     home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
     enabled = await unsafe(
         client,
         "PUT",

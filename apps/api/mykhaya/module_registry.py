@@ -177,6 +177,19 @@ MODULES: tuple[ModuleDefinition, ...] = (
         route="/budget",
     ),
     ModuleDefinition(
+        FeatureKey.driveway.value,
+        "Driveway",
+        "Vehicle management — tax/registration renewal, MOT/inspection, "
+        "service history, insurance and documents.",
+        "Family",
+        ReleaseState.released,
+        False,
+        "0.10.0",
+        dependencies=(),
+        permissions=(),
+        route="/driveway",
+    ),
+    ModuleDefinition(
         FeatureKey.notifications.value,
         "Notifications",
         "Push, email and in-app reminders — event reminders, daily briefings and "
