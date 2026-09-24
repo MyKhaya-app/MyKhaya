@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { isNativeShell } from "./native-runtime";
 
 const KEYBOARD_THRESHOLD = 120;
@@ -12,6 +13,7 @@ const KEYBOARD_THRESHOLD = 120;
  */
 export function useNativeKeyboardOpen(): boolean {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!isNativeShell()) return;
@@ -36,7 +38,7 @@ export function useNativeKeyboardOpen(): boolean {
       window.removeEventListener("resize", update);
       setOpen(false);
     };
-  }, []);
+  }, [pathname]);
 
   return open;
 }
