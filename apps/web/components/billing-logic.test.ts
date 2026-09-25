@@ -8,9 +8,21 @@ import {
   intervalName,
   intervalSuffix,
   periodLabel,
+  planAction,
   pollForFamilyBillingStatus,
   resolvePlanCardKind,
 } from "./billing-logic";
+
+describe("planAction", () => {
+  it("labels current, higher and lower tiers without reversing the hierarchy", () => {
+    expect(planAction("free", "free")).toBe("Current plan");
+    expect(planAction("free", "family")).toBe("Upgrade");
+    expect(planAction("family", "ultimate")).toBe("Upgrade");
+    expect(planAction("family", "free")).toBe("Downgrade");
+    expect(planAction("ultimate", "family")).toBe("Downgrade");
+    expect(planAction("ultimate", "free")).toBe("Downgrade");
+  });
+});
 
 describe("checkoutBannerKind", () => {
   it("recognises a successful checkout redirect", () => {

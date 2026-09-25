@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   CalendarPlus,
+  Car,
   ClipboardList,
   Gift,
   House,
@@ -11,6 +12,7 @@ import {
   Lock,
   UserPlus,
   UtensilsCrossed,
+  WalletCards,
 } from "lucide-react";
 import { api } from "@mykhaya/api-client";
 import { canAddMember } from "./member-entitlement-logic";
@@ -23,6 +25,8 @@ type DockState = {
   meals: { released: boolean; entitled: boolean };
   lists: { released: boolean; entitled: boolean };
   wishlists: { released: boolean; entitled: boolean };
+  driveway: boolean;
+  budget: boolean;
 };
 
 function featureEnabled(features: { feature: string; enabled: boolean }[], feature: string) {
@@ -88,6 +92,8 @@ export function AroundHouseDock() {
             released: featureEnabled(matrix.features, "wish_lists"),
             entitled: billing.wishlists_enabled,
           },
+          driveway: billing.driveway_enabled,
+          budget: billing.budget_enabled,
         });
       })
       .catch(() => {
@@ -154,6 +160,22 @@ export function AroundHouseDock() {
         label="Wishlists"
         locked={!dockState.wishlists.entitled}
         icon={<Gift size={19} aria-hidden="true" />}
+      />
+    ),
+    dockState.driveway && (
+      <QuickAction
+        key="driveway"
+        href="/driveway"
+        label="Driveway"
+        icon={<Car size={19} aria-hidden="true" />}
+      />
+    ),
+    dockState.budget && (
+      <QuickAction
+        key="budget"
+        href="/budget"
+        label="Budget"
+        icon={<WalletCards size={19} aria-hidden="true" />}
       />
     ),
   ].filter(Boolean);

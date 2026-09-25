@@ -50,8 +50,8 @@ COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
 # creates the volume owned by root and the non-root `mykhaya` user below can't
 # write avatars to it. support-attachments mirrors the same need for its own
 # dedicated volume (mykhaya.attachments.storage).
-RUN mkdir -p /data/avatars /data/support-attachments \
-	&& chown mykhaya:mykhaya /data/avatars /data/support-attachments
+RUN mkdir -p /data/avatars /data/support-attachments /data/vehicle-photos \
+	&& chown mykhaya:mykhaya /data/avatars /data/support-attachments /data/vehicle-photos
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"

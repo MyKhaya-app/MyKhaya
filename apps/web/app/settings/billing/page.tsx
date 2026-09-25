@@ -4,10 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Calendar,
+  BarChart3,
+  Car,
   Check,
   Crown,
   Home as HomeIcon,
   ListChecks,
+  Sprout,
+  Star,
+  Tag,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -23,6 +28,7 @@ import {
   hasFullFamilyAccess,
   intervalName,
   intervalSuffix,
+  planAction,
   periodLabel,
   pollForFamilyBillingStatus,
   resolvePlanCardKind,
@@ -39,8 +45,12 @@ import { canStartUltimateCheckout } from "@/components/family-pricing-logic";
 const COMPARISON_ROW_ICONS: Record<string, typeof Users> = {
   "home.max_members": Users,
   "calendar.max_categories": Calendar,
+  "calendar.max_tags": Tag,
   "routines.personal.max_active": ListChecks,
   "routines.household.enabled": HomeIcon,
+  "budget.enabled": BarChart3,
+  "driveway.enabled": Car,
+  "premium.future": Star,
 };
 
 function formatDate(value: string | null): string {
@@ -50,6 +60,18 @@ function formatDate(value: string | null): string {
     month: "long",
     year: "numeric",
   });
+}
+
+function firstPrice(pricing: FamilyPricing | null, plan: "family" | "ultimate") {
+  const options = plan === "ultimate" ? pricing?.ultimate_options : pricing?.options;
+  return options?.[0] ?? null;
+}
+
+function comparisonValue(value: string) {
+  if (value === "Included") return <Check className="plan-value-check" aria-label="Included" />;
+  if (value === "Not included") return <span className="plan-value-dash" aria-label="Not included">—</span>;
+  if (value === "Whole household") return "Household";
+  return value;
 }
 
 // The polished household Plan & Billing experience (Phase 4) — replaces
@@ -70,6 +92,7 @@ export default function PlanAndBillingSettings() {
   const [comparison, setComparison] = useState<PlanComparison | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [confirmationTimedOut, setConfirmationTimedOut] = useState(false);
   const checkoutPlan = useRef<"family" | "ultimate">("family");
 
@@ -185,12 +208,28 @@ export default function PlanAndBillingSettings() {
     }
   }
 
+  function openManagePlan() {
+    if (status?.can_manage_billing && status.provider === "stripe") setManageOpen(true);
+  }
+
   const cardKind = status ? resolvePlanCardKind(status) : null;
   const planLabel =
     status?.effective_plan === "ultimate" || status?.stored_plan === "ultimate"
       ? "Ultimate"
       : "Family";
   const restoreOption = pricing?.options[0];
+  const familyPrice = status?.effective_plan === "family" && status.price
+    ? status.price
+    : firstPrice(pricing, "family");
+  const ultimatePrice = status?.effective_plan === "ultimate" && status.price
+    ? status.price
+    : firstPrice(pricing, "ultimate");
+  const familyInterval = status?.effective_plan === "family" && status.billing_interval
+    ? status.billing_interval
+    : firstPrice(pricing, "family")?.interval;
+  const ultimateInterval = status?.effective_plan === "ultimate" && status.billing_interval
+    ? status.billing_interval
+    : firstPrice(pricing, "ultimate")?.interval;
   const stillConfirming =
     checkoutBanner === "success" && status?.effective_plan === "free" && !confirmationTimedOut;
 
@@ -402,7 +441,7 @@ export default function PlanAndBillingSettings() {
               )}
 
               {canShowPortalAction(status) && (
-                <button disabled={busy} onClick={openPortal}>
+                <button disabled={busy} onClick={openManagePlan}>
                   {cardKind === "stripe_past_due" ? "Update payment method" : "Manage billing"}
                 </button>
               )}
@@ -506,8 +545,41 @@ export default function PlanAndBillingSettings() {
               </section>
             ) : null}
 
+            <section className="card plan-compare plan-compare-redesign">
+              <h2>Compare plans</h2>
+              <p className="plan-compare-intro">
+                Find the plan that&rsquo;s right for your Home. Upgrade anytime, and keep your data.
+              </p>
+              <div className="plan-option-grid">
+                <article className={`plan-option-card${status.effective_plan === "free" ? " is-current" : ""}`}>
+                  <div className="plan-option-title"><Sprout aria-hidden="true" /><h3>Free</h3></div>
+                  <p className="plan-option-description">Great for getting started</p>
+                  <strong className="plan-option-price">£0</strong><span className="plan-option-cadence">forever</span>
+                  <button className={`plan-option-action ${planAction(status.effective_plan, "free").toLowerCase().replace(" ", "-")}`} disabled={status.effective_plan === "free" || busy || (!canShowUpgradeOptions(status) && !canShowPortalAction(status))} onClick={() => { if (canShowPortalAction(status)) void openPortal(); }}>
+                    {planAction(status.effective_plan, "free")}
+                  </button>
+                </article>
+                <article className={`plan-option-card${status.effective_plan === "family" ? " is-current" : ""}`}>
+                  <div className="plan-option-title"><Crown aria-hidden="true" /><h3>Family</h3></div>
+                  <p className="plan-option-description">The complete family experience</p>
+                  {familyPrice ? <><strong className="plan-option-price">{familyPrice.formatted_amount}</strong><span className="plan-option-cadence">per {familyInterval}</span></> : <span className="plan-option-cadence">Complimentary access</span>}
+                  <button className={`plan-option-action ${planAction(status.effective_plan, "family").toLowerCase().replace(" ", "-")}`} disabled={busy || (status.effective_plan === "family" ? true : !canShowUpgradeOptions(status) && !canShowPortalAction(status))} onClick={() => { if (status.effective_plan === "family") return; if (canShowPortalAction(status)) void openPortal(); else { const option = firstPrice(pricing, "family"); if (option) void startCheckout(option.interval); } }}>
+                    {planAction(status.effective_plan, "family")}
+                  </button>
+                </article>
+                <article className={`plan-option-card${status.effective_plan === "ultimate" ? " is-current" : ""}`}>
+                  <div className="plan-option-title"><Star aria-hidden="true" /><h3>Ultimate</h3></div>
+                  <p className="plan-option-description">Unlock powerful premium modules</p>
+                  {ultimatePrice ? <><strong className="plan-option-price">{ultimatePrice.formatted_amount}</strong><span className="plan-option-cadence">per {ultimateInterval}</span></> : <span className="plan-option-cadence">Pricing unavailable</span>}
+                  <button className={`plan-option-action ${planAction(status.effective_plan, "ultimate").toLowerCase().replace(" ", "-")}`} disabled={busy || (status.effective_plan === "ultimate" ? true : (!canShowUpgradeOptions(status) && !canShowPortalAction(status)) || !pricing?.ultimate_options?.length || !canStartUltimateCheckout(pricing))} onClick={() => { if (status.effective_plan === "ultimate") return; if (canShowPortalAction(status)) void openPortal(); else { const option = firstPrice(pricing, "ultimate"); if (option) void startCheckout(option.interval, "ultimate"); } }}>
+                    {planAction(status.effective_plan, "ultimate")}
+                  </button>
+                </article>
+              </div>
+            </section>
+
             {comparison && comparison.rows.length > 0 && (
-              <section className="card plan-compare">
+              <section className="card plan-compare comparison-table-card">
                 <h2>Compare plans</h2>
                 <table className="plan-compare-table">
                   <caption className="sr-only">
@@ -521,15 +593,12 @@ export default function PlanAndBillingSettings() {
                   </colgroup>
                   <thead>
                     <tr>
-                      <th scope="col">
-                        <span className="sr-only">Feature</span>
-                      </th>
-                      <th scope="col">Free</th>
+                      <th scope="col">Features</th>
+                      <th scope="col"><span className="plan-compare-heading"><Sprout size={18} aria-hidden="true" /><span>Free</span></span></th>
                       <th scope="col" className="plan-compare-family-heading">
-                        <Crown size={14} aria-hidden="true" />
-                        Family
+                        <span className="plan-compare-heading"><Crown size={14} aria-hidden="true" /><span>Family</span></span>
                       </th>
-                      <th scope="col" className="plan-compare-family-heading">Ultimate</th>
+                      <th scope="col" className="plan-compare-family-heading"><span className="plan-compare-heading"><Star size={14} aria-hidden="true" /><span>Ultimate</span></span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -543,9 +612,9 @@ export default function PlanAndBillingSettings() {
                               {row.label}
                             </span>
                           </th>
-                          <td className="plan-compare-free-value">{row.free_display}</td>
-                          <td className="plan-compare-family-value">{row.family_display}</td>
-                          <td className="plan-compare-family-value">{row.ultimate_display}</td>
+                          <td className="plan-compare-free-value">{comparisonValue(row.free_display)}</td>
+                          <td className="plan-compare-family-value">{comparisonValue(row.family_display)}</td>
+                          <td className="plan-compare-family-value">{comparisonValue(row.ultimate_display)}</td>
                         </tr>
                       );
                     })}
@@ -558,7 +627,7 @@ export default function PlanAndBillingSettings() {
               <div className="plan-info-card">
                 <HomeIcon size={22} aria-hidden="true" />
                 <div>
-                  <strong>Your Home currently has Family access.</strong>
+                  <strong>Your Home currently has {planLabel} access.</strong>
                   <p>Enjoy all features together.</p>
                 </div>
               </div>
@@ -573,6 +642,38 @@ export default function PlanAndBillingSettings() {
           </div>
         )}
       </main>
+      {manageOpen && status && (
+        <div className="billing-manage-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManageOpen(false); }}>
+          <section className="billing-manage-sheet" role="dialog" aria-modal="true" aria-labelledby="billing-manage-title">
+            <div className="billing-manage-heading">
+              <div>
+                <p className="eyebrow">Manage your home</p>
+                <h2 id="billing-manage-title">Manage plan</h2>
+              </div>
+              <button className="billing-manage-close" aria-label="Close manage plan" onClick={() => setManageOpen(false)}>×</button>
+            </div>
+            <div className="billing-manage-summary">
+              <strong>{planLabel}</strong>
+              <span>{statusLabel(status.status)}</span>
+              {status.price && status.billing_interval && <span>{status.price.formatted_amount} · {intervalName(status.billing_interval)}</span>}
+            </div>
+            {status.cancel_at_period_end && status.current_period_end ? (
+              <div className="notice" role="status">
+                <strong>Your {planLabel} access ends on {formatDate(status.current_period_end)}.</strong>
+                <p>Your paid access remains active until then. Keep your subscription or undo the cancellation in the billing provider.</p>
+              </div>
+            ) : status.current_period_end && status.price ? (
+              <div className="billing-upcoming-card">
+                <span>Next renewal</span>
+                <strong>{formatDate(status.current_period_end)}</strong>
+                <small>{status.price.formatted_amount} · {intervalName(status.billing_interval ?? "month")}</small>
+              </div>
+            ) : null}
+            <p className="quiet-state">Payment methods, invoices, receipts and cancellation controls are securely managed by Stripe.</p>
+            <button disabled={busy} onClick={() => { setManageOpen(false); void openPortal(); }}>Open billing portal</button>
+          </section>
+        </div>
+      )}
     </SettingsPage>
   );
 }

@@ -34,6 +34,8 @@ function billing(overrides: Record<string, unknown> = {}) {
     lists_enabled: true,
     wishlists_enabled: true,
     nudges_enabled: true,
+    budget_enabled: true,
+    driveway_enabled: true,
     ...overrides,
   };
 }
@@ -70,6 +72,8 @@ describe("AroundHouseDock", () => {
       "/settings/members",
     );
     expect(screen.getByRole("link", { name: "Meal plans" })).toHaveAttribute("href", "/meal-plans");
+    expect(screen.getByRole("link", { name: "Driveway" })).toHaveAttribute("href", "/driveway");
+    expect(screen.getByRole("link", { name: "Budget" })).toHaveAttribute("href", "/budget");
   });
 
   it("does not render while the current Home access state is unknown", () => {

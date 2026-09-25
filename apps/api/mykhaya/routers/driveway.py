@@ -24,13 +24,25 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.attachments.processing import (
+    OUTPUT_CONTENT_TYPE,
+    AttachmentResourceError,
+    UnsupportedImageError,
+    process_attachment_upload,
+)
 from mykhaya.audit import audit
+from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.driveway_providers import (
+    UKDVLAProvider,
+    VehicleLookupNotFound,
+    VehicleLookupUnavailable,
+)
 from mykhaya.driveway_reminders import (
     DrivewayReminderEventType,
     delete_reminders_for_vehicle,
@@ -41,6 +53,8 @@ from mykhaya.driveway_reminders import (
 from mykhaya.driveway_schemas import (
     VehicleCreate,
     VehicleListResponse,
+    VehicleLookupRequest,
+    VehicleLookupResult,
     VehicleReminderCreate,
     VehicleResponse,
     VehicleUpdate,
@@ -48,9 +62,18 @@ from mykhaya.driveway_schemas import (
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
-from mykhaya.models import FeatureKey, HouseholdRelationship, Membership, RoutineScope, Vehicle
+from mykhaya.models import (
+    FeatureKey,
+    HouseholdRelationship,
+    Membership,
+    PlatformSetting,
+    RoutineScope,
+    Vehicle,
+)
+from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.routers.reminders import _to_response as _reminder_response
 from mykhaya.schemas import ReminderListResponse, ReminderResponse
+from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage, vehicle_photo_filename
 
 
 async def _require_driveway(home_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
@@ -85,6 +108,14 @@ def _vehicle_response(vehicle: Vehicle, auth: AuthContext, membership: Membershi
         registration=vehicle.registration,
         first_registration_date=vehicle.first_registration_date,
         vin=vehicle.vin if reveal_sensitive else None,
+        lookup_provider=vehicle.lookup_provider,
+        lookup_status=vehicle.lookup_status,
+        last_successful_lookup=vehicle.last_successful_lookup,
+        tax_status=vehicle.tax_status,
+        tax_due_date=vehicle.tax_due_date,
+        inspection_status=vehicle.inspection_status,
+        inspection_due_date=vehicle.inspection_due_date,
+        photo_version=vehicle.photo_key,
         archived=vehicle.archived_at is not None,
         created_at=vehicle.created_at,
         updated_at=vehicle.updated_at,
@@ -105,6 +136,19 @@ async def _get_vehicle(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
     return row
+
+
+async def _record_lookup_health(db: AsyncSession, *, success: bool, summary: str) -> None:
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled").with_for_update()
+    )
+    if row is None:
+        row = PlatformSetting(key="driveway_dvla_enabled", value={"value": True})
+        db.add(row)
+    health = dict(row.value.get("health") or {})
+    health.update({"state": "Healthy" if success else "Degraded", "last_result": summary})
+    row.value = {**row.value, "health": health}
+    await db.commit()
 
 
 async def _require_vehicle_owner_or_household_manage(
@@ -139,6 +183,70 @@ async def list_vehicles(
     ).all()
     return VehicleListResponse(
         items=[_vehicle_response(row, auth, membership) for row in rows]
+    )
+
+
+@router.post("/{home_id}/vehicles/lookup", response_model=VehicleLookupResult)
+async def lookup_vehicle(
+    home_id: uuid.UUID,
+    body: VehicleLookupRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleLookupResult:
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    await enforce_rate_limit(
+        request, settings, f"driveway-lookup:{auth.user.id}", settings.driveway_lookup_rate_limit, 300
+    )
+    country = body.country_code.upper()
+    if country != "GB":
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="Automatic vehicle lookup isn't available for this country yet, but you can still add the vehicle manually.",
+        )
+    if settings.dvla_api_key is None:
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="We can't check vehicle details right now. You can try again later or add the vehicle manually.",
+        )
+    enabled = await db.scalar(
+        select(PlatformSetting.value).where(PlatformSetting.key == "driveway_dvla_enabled")
+    )
+    if enabled is None or enabled.get("value") is not True:
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="Automatic UK vehicle lookup is temporarily unavailable. You can still add the vehicle manually.",
+        )
+    provider = UKDVLAProvider(settings.dvla_api_key, settings.dvla_api_url)
+    try:
+        result = await provider.lookup(body.registration)
+    except VehicleLookupNotFound:
+        await _record_lookup_health(db, success=True, summary="Vehicle registration not found")
+        return VehicleLookupResult(found=False, manual_entry_required=True, message="We couldn't find that registration. Check it and try again, or add the vehicle manually.")
+    except VehicleLookupUnavailable:
+        await _record_lookup_health(db, success=False, summary="Provider unavailable")
+        return VehicleLookupResult(found=False, manual_entry_required=True, message="We can't check vehicle details right now. You can try again later or add the vehicle manually.")
+    await _record_lookup_health(db, success=True, summary="Vehicle lookup succeeded")
+    return VehicleLookupResult(
+        found=True,
+        provider=provider.name,
+        registration=result.registration,
+        make=result.make,
+        model=result.model,
+        colour=result.colour,
+        year=result.year,
+        fuel_type=result.fuel_type,
+        engine_size=result.engine_size,
+        first_registration_date=result.first_registration_date,
+        tax_status=result.tax_status,
+        tax_due_date=result.tax_due_date,
+        inspection_status=result.inspection_status,
+        inspection_due_date=result.inspection_due_date,
+        capabilities=list(result.capabilities),
     )
 
 
@@ -189,6 +297,98 @@ async def get_vehicle(
     row = await _get_vehicle(db, home_id, vehicle_id)
     if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
+    return _vehicle_response(row, auth, membership)
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)
+async def upload_vehicle_photo(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleResponse:
+    await enforce_rate_limit(request, settings, "vehicle-photo-upload", 20, 3600)
+    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
+    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    raw = await file.read(settings.vehicle_photo_max_upload_bytes + 1)
+    if len(raw) > settings.vehicle_photo_max_upload_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large to upload.",
+        )
+    if not raw:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file was uploaded.")
+    try:
+        processed = process_attachment_upload(raw)
+    except AttachmentResourceError as cause:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large to process.",
+        ) from cause
+    except UnsupportedImageError as cause:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
+
+    storage = get_vehicle_photo_storage(settings)
+    new_key = vehicle_photo_filename()
+    await storage.save(new_key, processed)
+    previous_key = row.photo_key
+    row.photo_key = new_key
+    row.photo_updated_at = datetime.now(UTC)
+    audit(db, request, "driveway.vehicle_photo.uploaded", auth.user.id, home_id, "vehicle", row.id)
+    await db.commit()
+    await db.refresh(row)
+    if previous_key:
+        await storage.delete(previous_key)
+    return _vehicle_response(row, auth, membership)
+
+
+@router.get("/{home_id}/vehicles/{vehicle_id}/photo")
+async def get_vehicle_photo(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
+    if not row.photo_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No vehicle photo set.")
+    data = await get_vehicle_photo_storage(settings).load(row.photo_key)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No vehicle photo set.")
+    return Response(
+        content=data,
+        media_type=OUTPUT_CONTENT_TYPE,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.delete("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)
+async def delete_vehicle_photo(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleResponse:
+    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
+    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    previous_key = row.photo_key
+    row.photo_key = None
+    row.photo_updated_at = None
+    audit(db, request, "driveway.vehicle_photo.deleted", auth.user.id, home_id, "vehicle", row.id)
+    await db.commit()
+    if previous_key:
+        await get_vehicle_photo_storage(settings).delete(previous_key)
     return _vehicle_response(row, auth, membership)
 
 

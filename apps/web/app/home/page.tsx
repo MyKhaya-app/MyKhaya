@@ -5,6 +5,7 @@ import { Children, useEffect, useState } from "react";
 import {
   Bell,
   CalendarPlus,
+  Car,
   Check,
   ChevronRight,
   ClipboardList,
@@ -13,6 +14,7 @@ import {
   Lock,
   UserPlus,
   UtensilsCrossed,
+  WalletCards,
 } from "lucide-react";
 import type {
   BirthdayEntry,
@@ -265,6 +267,8 @@ export default function HomePage() {
   const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
   const [nudgesFeatureOn, setNudgesFeatureOn] = useState(false);
   const [nudgesEntitled, setNudgesEntitled] = useState(false);
+  const [budgetEnabled, setBudgetEnabled] = useState(false);
+  const [drivewayEnabled, setDrivewayEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
@@ -298,6 +302,8 @@ export default function HomePage() {
         setListsEnabled(billing.lists_enabled);
         setWishlistsEnabled(billing.wishlists_enabled);
         setNudgesEntitled(billing.nudges_enabled);
+        setBudgetEnabled(billing.budget_enabled);
+        setDrivewayEnabled(billing.driveway_enabled);
       })
       .catch(() => {
         setCanInviteMore(false);
@@ -305,6 +311,8 @@ export default function HomePage() {
         setListsEnabled(false);
         setWishlistsEnabled(false);
         setNudgesEntitled(false);
+        setBudgetEnabled(false);
+        setDrivewayEnabled(false);
       });
     // Member roster is only used for display (event participant avatars) —
     // its own membership-gated read (Capability.members_view) isn't held by
@@ -780,6 +788,20 @@ export default function HomePage() {
                   )}
                   <Gift size={20} aria-hidden="true" />
                   Wishlists
+                </Link>
+              )}
+            </QuickActionsRow>
+            <QuickActionsRow>
+              {drivewayEnabled && (
+                <Link className="quick-action" href="/driveway">
+                  <Car size={20} aria-hidden="true" />
+                  Driveway
+                </Link>
+              )}
+              {budgetEnabled && (
+                <Link className="quick-action" href="/budget">
+                  <WalletCards size={20} aria-hidden="true" />
+                  Budget
                 </Link>
               )}
             </QuickActionsRow>

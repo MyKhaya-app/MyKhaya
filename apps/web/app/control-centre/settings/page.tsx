@@ -12,6 +12,7 @@ import { CcCard } from "@/components/control-centre/section";
 import { CcNotice, CcLoadingState } from "@/components/control-centre/status-message";
 import { CcField } from "@/components/control-centre/form-field";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
+import { CcBadge } from "@/components/control-centre/badge";
 
 type ValueType = "text" | "email" | "url" | "boolean" | "integer" | "list";
 type Risk = "normal" | "sensitive";
@@ -37,6 +38,7 @@ type SettingItem = {
 type EnvironmentItem = { key: string; value: string; category: string; editable: boolean };
 
 type SettingsResponse = { settings: SettingItem[]; environment: EnvironmentItem[] };
+type DrivewayDvlaStatus = { enabled: boolean; configured: boolean; endpoint: string; health: { state: string; message?: string } };
 
 // Sections render in this order regardless of API response order; any
 // section not listed here (there shouldn't be one) falls back to the end.
@@ -220,12 +222,21 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
 
 export default function PlatformSettingsPage() {
   const [data, setData] = useState<SettingsResponse | null>(null);
+  const [dvla, setDvla] = useState<DrivewayDvlaStatus | null>(null);
+  const [testRegistration, setTestRegistration] = useState("");
+  const [testResult, setTestResult] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     setError("");
     try {
-      setData(await platformApi.get<SettingsResponse>("/settings"));
+      const [settings, dvlaStatus] = await Promise.all([
+        platformApi.get<SettingsResponse>("/settings"),
+        platformApi.get<DrivewayDvlaStatus>("/integrations/dvla"),
+      ]);
+      setData(settings);
+      setDvla(dvlaStatus);
     } catch (cause) {
       setError((cause as Error).message);
     }
@@ -234,6 +245,25 @@ export default function PlatformSettingsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function testDvla() {
+    if (!testRegistration.trim() || testBusy) return;
+    setTestBusy(true);
+    setTestResult("");
+    try {
+      const result = await platformApi.post<{ message: string }>("/integrations/dvla/test", {
+        registration: testRegistration,
+        reason: "Verify the configured DVLA vehicle lookup connection",
+        confirmed: true,
+      });
+      setTestResult(result.message);
+      await load();
+    } catch (cause) {
+      setTestResult(cause instanceof Error ? cause.message : "The DVLA connection test failed.");
+    } finally {
+      setTestBusy(false);
+    }
+  }
 
   return (
     <PlatformShell>
@@ -253,6 +283,22 @@ export default function PlatformSettingsPage() {
                     </CcMetadataItem>
                   ))}
                 </CcMetadataGrid>
+              </CcCard>
+              <CcCard title="Driveway integrations" description="Operational status for the server-side UK vehicle lookup provider.">
+                <CcMetadataGrid>
+                  <CcMetadataItem label="Integration status">
+                    <CcBadge tone={dvla?.enabled ? "success" : "neutral"}>{dvla?.enabled ? "Enabled" : "Disabled"}</CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="API key">{dvla?.configured ? "Configured" : "Not configured"}</CcMetadataItem>
+                  <CcMetadataItem label="Health"><CcBadge tone={dvla?.health.state === "Healthy" ? "success" : "neutral"}>{dvla?.health.state ?? "Loading…"}</CcBadge></CcMetadataItem>
+                  <CcMetadataItem label="Endpoint">{dvla?.endpoint ?? "Loading…"}</CcMetadataItem>
+                </CcMetadataGrid>
+                <p className="cc-page-meta">Enable or disable the provider using the Driveway integrations setting below. The API key is deployment-managed and never displayed.</p>
+                <div className="cc-inline-form">
+                  <label>Test registration<input value={testRegistration} onChange={(event) => setTestRegistration(event.target.value)} placeholder="AB12 CDE" /></label>
+                  <button className="button secondary" type="button" onClick={() => void testDvla()} disabled={testBusy || !testRegistration.trim()}>{testBusy ? "Testing…" : "Test connection"}</button>
+                  {testResult && <p role="status">{testResult}</p>}
+                </div>
               </CcCard>
               {groupBySection(data.settings).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">

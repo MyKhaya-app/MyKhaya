@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { RoutineScope, VehicleCreatePayload } from "@mykhaya/shared-types";
+import type { RoutineScope, VehicleCreatePayload, VehicleLookupResult } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { SettingsPage } from "@/components/settings-page";
@@ -22,6 +22,9 @@ export default function AddVehiclePage() {
   const [scope, setScope] = useState<RoutineScope>("household");
   const [countryCode, setCountryCode] = useState("GB");
   const [registration, setRegistration] = useState("");
+  const [lookup, setLookup] = useState<VehicleLookupResult | null>(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [manual, setManual] = useState(false);
   const [nickname, setNickname] = useState("");
   const [make, setMake] = useState("");
   const [model, setModel] = useState("");
@@ -33,6 +36,37 @@ export default function AddVehiclePage() {
   const [vin, setVin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  async function findVehicle() {
+    if (!activeHomeId || lookupBusy || !registration.trim()) return;
+    setLookupBusy(true);
+    setError("");
+    try {
+      const result = await api.lookupVehicle(activeHomeId, {
+        country_code: countryCode,
+        registration,
+      });
+      setLookup(result);
+      if (!result.found) {
+        setError(result.message ?? "We couldn't find that registration.");
+        setManual(true);
+      } else {
+        setMake(result.make ?? "");
+        setModel(result.model ?? "");
+        setYear(result.year ? String(result.year) : "");
+        setFuelType(result.fuel_type ?? "");
+        setColour(result.colour ?? "");
+        setEngineSize(result.engine_size ?? "");
+        setFirstRegistrationDate(result.first_registration_date ?? "");
+        setRegistration(result.registration ?? registration);
+      }
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "We can't check vehicle details right now.");
+      setManual(true);
+    } finally {
+      setLookupBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,6 +119,32 @@ export default function AddVehiclePage() {
             ))}
           </select>
         </label>
+
+        {countryCode === "GB" && !manual && !lookup?.found && (
+          <>
+            <p className="muted">Pop in the registration and we’ll find the details for you.</p>
+            <button className="button" type="button" onClick={() => void findVehicle()} disabled={lookupBusy || !registration.trim()}>
+              {lookupBusy ? "Checking…" : "Find my vehicle"}
+            </button>
+            <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
+          </>
+        )}
+        {countryCode !== "GB" && !manual && (
+          <>
+            <p className="muted">Automatic vehicle lookup isn’t available for this country yet, but you can still add it manually.</p>
+            <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
+          </>
+        )}
+
+        {lookup?.found && <div className="driveway-lookup-result" role="status">
+          <span className="more-icon-tile blue" aria-hidden="true">🚗</span>
+          <strong>{[lookup.make, lookup.model].filter(Boolean).join(" ") || lookup.registration}</strong>
+          <span>{lookup.registration}</span>
+          <span>{[lookup.year, lookup.fuel_type, lookup.colour].filter(Boolean).join(" · ")}</span>
+          {lookup.capabilities.map((capability) => <small key={capability}>{capability === "inspection" ? "MOT information available" : "Tax information available"}</small>)}
+        </div>}
+
+        {(manual || lookup?.found) && <>
         <label>
           Registration / licence plate
           <input
@@ -184,6 +244,7 @@ export default function AddVehiclePage() {
         <button className="button" type="submit" disabled={busy}>
           {busy ? "Adding…" : "Add vehicle"}
         </button>
+        </>}
       </form>
     </SettingsPage>
   );

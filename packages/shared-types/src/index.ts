@@ -992,6 +992,14 @@ export interface Vehicle {
   // Omitted by the backend (not just null) for a viewer who isn't the
   // vehicle's own owner or a home_admin — see routers.driveway.
   vin: string | null;
+  lookup_provider: string | null;
+  lookup_status: string | null;
+  last_successful_lookup: string | null;
+  tax_status: string | null;
+  tax_due_date: string | null;
+  inspection_status: string | null;
+  inspection_due_date: string | null;
+  photo_version: string | null;
   archived: boolean;
   created_at: string;
   updated_at: string;
@@ -1201,6 +1209,31 @@ export interface FamilyPricing {
   ultimate_annual_saving_formatted?: string | null;
   ultimate_annual_is_best_value?: boolean;
   ultimate_acquisition_enabled?: boolean;
+}
+
+export interface VehicleLookupPayload {
+  country_code: string;
+  registration: string;
+}
+
+export interface VehicleLookupResult {
+  found: boolean;
+  manual_entry_required: boolean;
+  provider: string | null;
+  registration: string | null;
+  make: string | null;
+  model: string | null;
+  colour: string | null;
+  year: number | null;
+  fuel_type: string | null;
+  engine_size: string | null;
+  first_registration_date: string | null;
+  tax_status: string | null;
+  tax_due_date: string | null;
+  inspection_status: string | null;
+  inspection_due_date: string | null;
+  capabilities: string[];
+  message: string | null;
 }
 
 export interface PlanComparisonRow {

@@ -99,7 +99,7 @@ services:
     # of avatar_data, matching that module's own dedicated storage
     # abstraction (mykhaya.attachments.storage, not mykhaya.avatars.storage).
     volumes:
-      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments"]
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos"]
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -196,6 +196,7 @@ services:
       MYPY_CACHE_DIR: /tmp/.mypy_cache
       MYKHAYA_AVATAR_STORAGE_DIR: /tmp/avatars
       MYKHAYA_SUPPORT_ATTACHMENT_STORAGE_DIR: /tmp/support-attachments
+      MYKHAYA_VEHICLE_PHOTO_STORAGE_DIR: /tmp/vehicle-photos
     command: ["python", "-m", "pytest"]
     depends_on:
       {
@@ -295,3 +296,4 @@ volumes:
   caddy_config: {}
   avatar_data: {}
   support_attachment_data: {}
+  vehicle_photo_data: {}

@@ -3606,4 +3606,13 @@ class Vehicle(UuidTimeMixin, Base):
     # Sensitive — defaults to Personal visibility even on a Household-scoped
     # vehicle; never included in audit metadata/logs. See class docstring.
     vin: Mapped[str | None] = mapped_column(String(32))
+    lookup_provider: Mapped[str | None] = mapped_column(String(40))
+    lookup_status: Mapped[str | None] = mapped_column(String(30))
+    last_successful_lookup: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tax_status: Mapped[str | None] = mapped_column(String(30))
+    tax_due_date: Mapped[date | None] = mapped_column(Date())
+    inspection_status: Mapped[str | None] = mapped_column(String(30))
+    inspection_due_date: Mapped[date | None] = mapped_column(Date())
+    photo_key: Mapped[str | None] = mapped_column(String(120))
+    photo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -2829,8 +2829,85 @@ html.native-shell .home-section-overlap {
   font-size: 0.82rem;
   margin-top: 0.2rem;
 }
+.support-request-card {
+  align-items: center;
+  color: inherit;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 1.1rem 1.2rem;
+  text-decoration: none;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.support-request-card:hover,
+.support-request-card:focus-visible {
+  box-shadow: 0 10px 26px rgb(35 48 40 / 10%);
+  transform: translateY(-1px);
+}
+.support-request-card h2 {
+  color: var(--colour-forest-dark);
+  font-size: 1.05rem;
+  line-height: 1.3;
+  margin: 0.35rem 0 0.45rem;
+  overflow-wrap: anywhere;
+}
+.support-request-card > span:last-child {
+  color: var(--colour-sage-dark);
+  font-size: 1.7rem;
+  line-height: 1;
+  padding: 0.25rem;
+}
 .support-request-created {
   font-size: 0.85rem;
+}
+.vehicle-photo-card {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 112px minmax(0, 1fr);
+  margin-bottom: var(--space-card-stack);
+  padding: 1rem;
+}
+.vehicle-photo-preview {
+  align-items: center;
+  aspect-ratio: 4 / 3;
+  background: var(--colour-sage-soft);
+  border-radius: 1rem;
+  color: var(--colour-forest-dark);
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+.vehicle-photo-preview img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.vehicle-photo-copy {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.vehicle-photo-copy p {
+  margin: 0;
+}
+.vehicle-photo-copy button {
+  justify-self: start;
+  margin-top: 0.25rem;
+}
+.vehicle-photo-card > .notice {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+@media (max-width: 430px) {
+  .vehicle-photo-card {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.8rem;
+  }
+  .vehicle-photo-copy button {
+    min-height: 38px;
+  }
 }
 .support-back-link {
   align-items: center;
@@ -8376,6 +8453,9 @@ select.plan-meal-field-input {
   display: grid;
   gap: var(--space-card-stack);
 }
+.plan-card-stack > section:has(.feature-card-grid) {
+  display: none;
+}
 .plan-card {
   padding: 18px;
 }
@@ -8455,6 +8535,187 @@ select.plan-meal-field-input {
 .plan-compare h2 {
   margin: 0 0 0.9rem;
 }
+.plan-compare-redesign {
+  padding: 18px;
+}
+.comparison-table-card {
+  margin-top: -0.45rem;
+}
+.comparison-table-card h2 {
+  display: none;
+}
+.plan-compare-intro {
+  color: var(--colour-slate);
+  font-size: 1.05rem;
+  line-height: 1.45;
+  margin: -0.25rem 0 1.2rem;
+  max-width: 36rem;
+}
+.plan-option-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 1.15rem;
+}
+.plan-option-card {
+  align-items: center;
+  background: var(--colour-warm-white, #fffdf9);
+  border: 1px solid rgba(31, 41, 51, 0.08);
+  border-radius: 1.1rem;
+  box-shadow: 0 5px 18px rgba(35, 48, 40, 0.06);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 1rem 0.7rem 0.85rem;
+  text-align: center;
+}
+.plan-option-card.is-current {
+  background: #f0f5ed;
+  border: 2px solid var(--colour-forest-dark);
+  padding: calc(1rem - 1px) calc(0.7rem - 1px) calc(0.85rem - 1px);
+}
+.plan-option-title {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+}
+.plan-option-title svg {
+  color: var(--colour-forest-dark);
+  height: 1.7rem;
+  width: 1.7rem;
+}
+.plan-option-card:nth-child(2) .plan-option-title svg,
+.plan-option-card:nth-child(3) .plan-option-title svg {
+  color: #e9a522;
+  fill: #e9a522;
+}
+.plan-option-title h3 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+.plan-option-description {
+  color: var(--colour-slate);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 0.7rem 0 1rem;
+  min-height: 2.3rem;
+}
+.plan-option-price {
+  color: var(--colour-ink);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+.plan-option-cadence {
+  color: var(--colour-slate);
+  font-size: 0.78rem;
+  min-height: 1.2rem;
+}
+.plan-option-action {
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-ink);
+  margin-top: auto;
+  min-height: 2.5rem;
+  padding-inline: 0.6rem;
+  width: 100%;
+}
+.plan-option-action.upgrade {
+  background: var(--colour-forest-dark);
+  color: white;
+}
+.plan-option-action.downgrade {
+  background: transparent;
+  border: 1px solid #cbd5cc;
+  color: var(--colour-slate);
+}
+.plan-option-card.is-current .plan-option-action {
+  background: var(--colour-forest-dark);
+  color: white;
+}
+.plan-option-action:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+.plan-compare-table-wrap {
+  overflow-x: auto;
+}
+.plan-value-check {
+  align-items: center;
+  background: var(--colour-forest-dark);
+  border-radius: 999px;
+  color: white;
+  display: inline-flex;
+  height: 1.45rem;
+  padding: 0.25rem;
+  width: 1.45rem;
+}
+.plan-value-dash {
+  color: var(--colour-muted);
+  font-size: 1.15rem;
+  font-weight: 500;
+}
+.billing-manage-backdrop {
+  align-items: flex-end;
+  background: rgba(35, 48, 40, 0.28);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: fixed;
+  z-index: 30;
+}
+.billing-manage-sheet {
+  background: var(--colour-cream, #f2ede3);
+  border-radius: 1.35rem 1.35rem 0 0;
+  box-shadow: 0 -12px 32px rgba(35, 48, 40, 0.18);
+  max-height: min(720px, calc(100dvh - 1rem));
+  max-width: 40rem;
+  overflow: auto;
+  padding: 1.25rem;
+  width: min(100%, 40rem);
+}
+.billing-manage-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+.billing-manage-heading h2 {
+  margin: 0;
+}
+.billing-manage-close {
+  background: transparent;
+  color: var(--colour-slate);
+  font-size: 1.7rem;
+  line-height: 1;
+  min-height: 2.25rem;
+  padding: 0.1rem 0.35rem;
+}
+.billing-manage-summary,
+.billing-upcoming-card {
+  background: white;
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  padding: 1rem;
+}
+.billing-manage-summary strong {
+  color: var(--colour-forest-dark);
+  font-size: 1.3rem;
+}
+.billing-manage-summary span,
+.billing-upcoming-card span,
+.billing-upcoming-card small {
+  color: var(--colour-slate);
+}
+.billing-upcoming-card strong {
+  font-size: 1.15rem;
+}
+.plan-compare-table td,
+.plan-compare-table th {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 .plan-compare-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -8483,14 +8744,27 @@ select.plan-meal-field-input {
   padding-bottom: 0.6rem;
   text-transform: uppercase;
 }
-.plan-compare-family-heading {
+.plan-compare-table thead th:not(:first-child) {
+  text-align: center;
+}
+.plan-compare-heading {
   align-items: center;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  justify-content: center;
+  line-height: 1.1;
+  text-align: center;
+}
+.plan-compare-family-heading {
   color: var(--colour-forest-dark);
-  display: flex;
-  gap: 0.3rem;
+  display: table-cell;
+  text-align: center !important;
+  vertical-align: middle;
 }
 .plan-compare-family-heading svg {
-  flex: none;
+  display: inline-block;
+  vertical-align: middle;
 }
 .plan-compare-row-feature {
   align-items: center;
@@ -8512,6 +8786,13 @@ select.plan-meal-field-input {
 .plan-compare-family-value {
   color: var(--colour-forest-dark);
   font-weight: 700;
+  text-align: center !important;
+}
+.plan-compare-table tbody td {
+  text-align: center;
+}
+.plan-compare-table tbody td.plan-compare-free-value {
+  text-align: center;
 }
 /* The pale-green Family-column highlight: solid, touching cells (no gap —
    border-spacing: 0 above) so it reads as one continuous column, rounded
@@ -8547,12 +8828,89 @@ select.plan-meal-field-input {
   margin: 0.15rem 0 0;
 }
 @media (max-width: 420px) {
+  .plan-compare-redesign {
+    padding: 14px 10px;
+  }
+  .plan-option-grid {
+    gap: 0.35rem;
+  }
+  .plan-option-card {
+    border-radius: 0.85rem;
+    padding-inline: 0.35rem;
+  }
+  .plan-option-card.is-current {
+    padding-inline: calc(0.35rem - 1px);
+  }
+  .plan-option-title {
+    gap: 0.2rem;
+  }
+  .plan-option-title svg {
+    height: 1.35rem;
+    width: 1.35rem;
+  }
+  .plan-option-title h3 {
+    font-size: 0.9rem;
+  }
+  .plan-option-description {
+    font-size: 0.7rem;
+    margin-block: 0.55rem 0.8rem;
+  }
+  .plan-option-price {
+    font-size: 1.25rem;
+  }
+  .plan-option-cadence {
+    font-size: 0.68rem;
+  }
+  .plan-option-action {
+    font-size: 0.72rem;
+    min-height: 2.2rem;
+  }
   .plan-compare-table {
     font-size: 0.75rem;
   }
   .plan-compare-table th,
   .plan-compare-table td {
     padding: 0.5rem 0.35rem;
+  }
+  .plan-compare-intro {
+    font-size: 0.875rem;
+  }
+  .plan-compare-table {
+    font-size: 0.7rem;
+  }
+  .plan-compare-table col.plan-compare-col-feature {
+    width: 31%;
+  }
+  .plan-compare-table col.plan-compare-col-free,
+  .plan-compare-table col.plan-compare-col-family {
+    width: 23%;
+  }
+  .plan-compare-table th,
+  .plan-compare-table td {
+    padding: 0.42rem 0.24rem;
+  }
+  .plan-compare-table thead th {
+    font-size: 0.64rem;
+  }
+  .plan-compare-row-feature {
+    font-size: 0.7rem;
+    gap: 0.24rem;
+  }
+  .plan-compare-row-feature svg {
+    height: 0.85rem;
+    width: 0.85rem;
+  }
+  .plan-compare-family-heading {
+    padding-inline: 0.1rem;
+  }
+  .plan-compare-family-heading svg {
+    height: 0.8rem;
+    width: 0.8rem;
+  }
+  .plan-value-check {
+    height: 1.2rem;
+    padding: 0.22rem;
+    width: 1.2rem;
   }
 }
 

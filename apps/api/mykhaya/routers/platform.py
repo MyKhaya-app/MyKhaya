@@ -37,6 +37,7 @@ from mykhaya.consumer_mfa_policy import (
     resolve_consumer_mfa_policy,
 )
 from mykhaya.db import get_db
+from mykhaya.driveway_providers import UKDVLAProvider, VehicleLookupNotFound, VehicleLookupUnavailable
 from mykhaya.entitlements import (
     calendar_usage,
     complimentary_expired_sql_filter,
@@ -208,6 +209,7 @@ from mykhaya.platform_schemas import (
     MfaPolicyUpdate,
     ConsumerMfaPolicyResponse,
     ConsumerMfaPolicyUpdate,
+    DrivewayDvlaTestRequest,
     ModuleUpdate,
     MoveMemberRequest,
     NoteRequest,
@@ -5791,7 +5793,7 @@ async def update_setting(
         db.add(row)
     else:
         previous_payload = {key: row.value.get("value"), "previous_source": "platform_admin"}
-        row.value = {"value": body.value}
+        row.value = {"value": body.value, **({"health": row.value.get("health")} if key == "driveway_dvla_enabled" and row.value.get("health") else {})}
         row.updated_by = context.administrator.id
     platform_audit(
         db,
@@ -5805,6 +5807,51 @@ async def update_setting(
     )
     await db.commit()
     return {"key": key, "value": body.value, "risk": definition.risk}
+
+
+@router.get("/integrations/dvla")
+async def driveway_dvla_status(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled"))
+    value = row.value if row else {}
+    return {
+        "enabled": value.get("value") is True,
+        "configured": settings.dvla_api_key is not None,
+        "endpoint": settings.dvla_api_url,
+        "health": value.get("health", {"state": "Not configured" if settings.dvla_api_key is None else "Disabled"}),
+    }
+
+
+@router.post("/integrations/dvla/test")
+async def driveway_dvla_test(
+    body: DrivewayDvlaTestRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if settings.dvla_api_key is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DVLA is not configured.")
+    provider = UKDVLAProvider(settings.dvla_api_key, settings.dvla_api_url)
+    try:
+        await provider.lookup(body.registration)
+        result = {"state": "Healthy", "message": "DVLA connection successful."}
+    except VehicleLookupNotFound:
+        result = {"state": "Healthy", "message": "DVLA connection successful; the registration was not found."}
+    except VehicleLookupUnavailable:
+        result = {"state": "Unavailable", "message": "DVLA is currently unavailable."}
+    row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled").with_for_update())
+    if row is None:
+        row = PlatformSetting(key="driveway_dvla_enabled", value={"value": False}, updated_by=context.administrator.id)
+        db.add(row)
+    row.value = {**row.value, "health": result}
+    platform_audit(db, request, context, "driveway.dvla.test_connection", "integration", reason=body.reason, new={"state": result["state"]})
+    await db.commit()
+    return result
 
 
 @router.get("/modules")

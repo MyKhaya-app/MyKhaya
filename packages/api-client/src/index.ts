@@ -1537,6 +1537,11 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").VehicleListResponse>(
       `/homes/${encodeURIComponent(homeId)}/vehicles`,
     );
+  lookupVehicle = (homeId: string, body: import("@mykhaya/shared-types").VehicleLookupPayload) =>
+    this.request<import("@mykhaya/shared-types").VehicleLookupResult>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/lookup`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
   vehicle = (homeId: string, vehicleId: string) =>
     this.request<import("@mykhaya/shared-types").Vehicle>(
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`,
@@ -1559,6 +1564,19 @@ export class MyKhayaClient {
     this.request<void>(`/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`, {
       method: "DELETE",
     });
+  uploadVehiclePhoto = (homeId: string, vehicleId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/photo`,
+      { method: "POST", body },
+    );
+  };
+  deleteVehiclePhoto = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/photo`,
+      { method: "DELETE" },
+    );
   // Reminders linked to one vehicle (Phase 4). Editing/deleting a linked
   // reminder reuses the existing generic updateReminder/deleteReminder
   // methods below — no separate Driveway edit/delete route exists.

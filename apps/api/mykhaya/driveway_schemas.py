@@ -52,6 +52,7 @@ class VehicleResponse(BaseModel):
     country_code: str
     registration: str | None
     first_registration_date: date | None
+    photo_version: str | None
     # Omitted (not just null) for a viewer who isn't the vehicle's own owner
     # or a home_admin — see routers.driveway._vehicle_response.
     vin: str | None = None
@@ -62,6 +63,31 @@ class VehicleResponse(BaseModel):
 
 class VehicleListResponse(BaseModel):
     items: list[VehicleResponse]
+
+
+class VehicleLookupRequest(StrictModel):
+    country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    registration: str = Field(min_length=2, max_length=20)
+
+
+class VehicleLookupResult(BaseModel):
+    found: bool
+    manual_entry_required: bool = False
+    provider: str | None = None
+    registration: str | None = None
+    make: str | None = None
+    model: str | None = None
+    colour: str | None = None
+    year: int | None = None
+    fuel_type: str | None = None
+    engine_size: str | None = None
+    first_registration_date: date | None = None
+    tax_status: str | None = None
+    tax_due_date: date | None = None
+    inspection_status: str | None = None
+    inspection_due_date: date | None = None
+    capabilities: list[str] = []
+    message: str | None = None
 
 
 class VehicleReminderCreate(StrictModel):

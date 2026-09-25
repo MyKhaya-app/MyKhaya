@@ -295,6 +295,10 @@ class SettingUpdate(StrictModel):
     confirmed: Literal[True]
 
 
+class DrivewayDvlaTestRequest(SensitiveActionRequest):
+    registration: str = Field(min_length=2, max_length=20)
+
+
 class ModuleUpdate(StrictModel):
     enabled: bool
     release_state: ReleaseState

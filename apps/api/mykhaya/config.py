@@ -175,6 +175,11 @@ class Settings(BaseSettings):
     # deploying code never itself enables paid acquisition.
     stripe_billing_acquisition_enabled: bool = False
     stripe_ultimate_acquisition_enabled: bool = False
+    dvla_api_key: SecretStr | None = None
+    dvla_api_url: str = "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
+    vehicle_photo_storage_dir: str = "/data/vehicle-photos"
+    vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
     # The transport ceiling protects the API from unbounded multipart bodies;

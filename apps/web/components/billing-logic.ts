@@ -6,9 +6,17 @@
 // Home can actually do; this only decides which card/copy to show for an
 // already-resolved BillingStatus.
 
-import type { BillingStatus } from "@mykhaya/shared-types";
+import type { BillingStatus, SubscriptionPlanValue } from "@mykhaya/shared-types";
 
 export type CheckoutBanner = "success" | "cancelled" | null;
+
+export type PlanAction = "Current plan" | "Upgrade" | "Downgrade";
+
+export function planAction(current: SubscriptionPlanValue, target: SubscriptionPlanValue): PlanAction {
+  const rank: Record<SubscriptionPlanValue, number> = { free: 0, family: 1, ultimate: 2 };
+  if (current === target) return "Current plan";
+  return rank[target] > rank[current] ? "Upgrade" : "Downgrade";
+}
 
 export type BillingStatusLoader = () => Promise<BillingStatus | null>;
 

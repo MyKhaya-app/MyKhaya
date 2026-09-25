@@ -33,6 +33,16 @@ class SettingDefinition:
 
 
 SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
+    "driveway_dvla_enabled": SettingDefinition(
+        key="driveway_dvla_enabled",
+        label="DVLA vehicle lookup",
+        description="Allow UK Driveway registration lookups through the configured DVLA provider.",
+        section="Driveway integrations",
+        value_type="boolean",
+        python_type=bool,
+        risk="sensitive",
+        runtime_effect="effective",
+    ),
     "platform_display_name": SettingDefinition(
         key="platform_display_name",
         label="Platform name",

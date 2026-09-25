@@ -112,6 +112,7 @@ class RequestBodyTooLarge(Exception):
 
 AVATAR_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 ATTACHMENT_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+VEHICLE_PHOTO_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 def _is_support_attachment_upload(request: Request) -> bool:
@@ -120,6 +121,15 @@ def _is_support_attachment_upload(request: Request) -> bool:
         request.method == "POST"
         and path.startswith("/api/v1/support/tickets/")
         and path.endswith("/attachments")
+    )
+
+
+def _is_vehicle_photo_upload(request: Request) -> bool:
+    path = request.url.path
+    return (
+        request.method == "POST"
+        and path.startswith("/api/v1/homes/")
+        and path.endswith("/photo")
     )
 
 
@@ -145,6 +155,11 @@ async def security_and_limits(
         elif _is_support_attachment_upload(request):
             body_limit = (
                 settings.support_attachment_max_upload_bytes + ATTACHMENT_MULTIPART_OVERHEAD_BYTES
+            )
+        elif _is_vehicle_photo_upload(request):
+            body_limit = (
+                settings.vehicle_photo_max_upload_bytes
+                + VEHICLE_PHOTO_MULTIPART_OVERHEAD_BYTES
             )
         else:
             body_limit = settings.request_body_limit

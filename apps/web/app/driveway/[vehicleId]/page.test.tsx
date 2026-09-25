@@ -30,6 +30,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       ...actual.api,
       vehicle: vi.fn(),
       deleteVehicle: vi.fn(),
+      uploadVehiclePhoto: vi.fn(),
     },
   };
 });
@@ -51,6 +52,7 @@ const VEHICLE = {
   country_code: "GB",
   registration: "AP22 OOJ",
   first_registration_date: null,
+  photo_version: null,
   vin: null,
   archived: false,
   created_at: "2026-01-01T00:00:00Z",
@@ -119,6 +121,17 @@ describe("Vehicle detail — real data only", () => {
     renderPage();
     const row = await screen.findByRole("heading", { name: "Vehicle details" });
     expect(row.closest("a")).toHaveAttribute("href", "/driveway/v1/details");
+  });
+
+  it("offers the same photo picker entry point used by profile uploads", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "BMW i4" });
+    await user.click(screen.getByRole("button", { name: "Add photo" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Choose a clear photo of BMW i4.");
+    expect(screen.getByRole("button", { name: "Take photo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose from library" })).toBeInTheDocument();
   });
 
   it("shows a not-found message for a vehicle that does not exist or is not accessible", async () => {
