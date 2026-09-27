@@ -22,7 +22,11 @@ export function BudgetEditEntrySheet({ homeId, entry, onClose, onSaved }: { home
     setSaving(true);
     setError("");
     try {
-      await api.updateBudgetEntry(homeId, entry.id, { category_id: category, description, amount: Number(amount), spent_on: spentOn, note: note.trim() || null });
+      // Changing category off the linked fixed item's own category clears the
+      // link (this sheet has no fixed-item selector of its own); otherwise the
+      // existing link is preserved so payment status isn't reset by unrelated edits.
+      const budgetMonthItemId = category === entry.category_id ? entry.budget_month_item_id ?? null : null;
+      await api.updateBudgetEntry(homeId, entry.id, { category_id: category, description, amount: Number(amount), spent_on: spentOn, note: note.trim() || null, budget_month_item_id: budgetMonthItemId });
       await onSaved();
       onClose();
     } catch {

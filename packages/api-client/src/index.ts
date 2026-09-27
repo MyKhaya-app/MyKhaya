@@ -154,7 +154,15 @@ export type BudgetItem = {
   default_amount: number;
   recurring: boolean;
   starts_on: string;
+  ends_on: string | null;
+  notes: string | null;
   archived: boolean;
+};
+
+export type BudgetMonthItemPaidEntry = {
+  id: string;
+  amount: number;
+  spent_on: string;
 };
 
 export type BudgetMonthItem = {
@@ -165,6 +173,10 @@ export type BudgetMonthItem = {
   item_type: "fixed" | "variable";
   planned_amount: number;
   note?: string | null;
+  starts_on?: string | null;
+  ends_on?: string | null;
+  payment_status?: "paid" | "not_paid" | null;
+  paid_entry?: BudgetMonthItemPaidEntry | null;
 };
 
 export type BudgetMonthIncome = {
@@ -197,6 +209,7 @@ export type BudgetSpendingEntry = {
   amount: number;
   spent_on: string;
   note?: string | null;
+  budget_month_item_id?: string | null;
 };
 
 export type BudgetPartnerShare = {
@@ -530,7 +543,7 @@ export class MyKhayaClient {
   };
   createBudgetItem = (
     homeId: string,
-    body: { category_id: string; name: string; item_type: "fixed" | "variable"; default_amount: number; recurring: boolean; starts_on: string; year?: number; month?: number },
+    body: { category_id: string; name: string; item_type: "fixed" | "variable"; default_amount: number; recurring: boolean; starts_on: string; ends_on?: string | null; notes?: string | null; year?: number; month?: number },
   ) =>
     this.request<BudgetItem>(`/homes/${encodeURIComponent(homeId)}/budget/items`, {
       method: "POST",
@@ -539,7 +552,7 @@ export class MyKhayaClient {
   updateBudgetItem = (
     homeId: string,
     itemId: string,
-    body: { name: string; default_amount: number; recurring: boolean; starts_on: string; year?: number; month?: number; planned_amount?: number },
+    body: { name: string; default_amount: number; recurring: boolean; starts_on: string; ends_on?: string | null; notes?: string | null; year?: number; month?: number; planned_amount?: number },
   ) =>
     this.request<BudgetItem>(
       `/homes/${encodeURIComponent(homeId)}/budget/items/${encodeURIComponent(itemId)}`,
@@ -562,7 +575,7 @@ export class MyKhayaClient {
     );
   createBudgetEntry = (
     homeId: string,
-    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null },
+    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null; budget_month_item_id?: string | null },
   ) =>
     this.request<BudgetSpendingEntry>(`/homes/${encodeURIComponent(homeId)}/budget/entries`, {
       method: "POST",
@@ -584,7 +597,7 @@ export class MyKhayaClient {
   updateBudgetEntry = (
     homeId: string,
     entryId: string,
-    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null },
+    body: { category_id: string; description: string; amount: number; spent_on: string; note?: string | null; budget_month_item_id?: string | null },
   ) =>
     this.request<BudgetSpendingEntry>(
       `/homes/${encodeURIComponent(homeId)}/budget/entries/${encodeURIComponent(entryId)}`,

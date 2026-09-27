@@ -64,6 +64,8 @@ class BudgetItemCreate(BaseModel):
     default_amount: float = Field(ge=0, le=100000000)
     recurring: bool = False
     starts_on: date
+    ends_on: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
     year: int | None = Field(default=None, ge=2000, le=2200)
     month: int | None = Field(default=None, ge=1, le=12)
 
@@ -73,12 +75,20 @@ class BudgetItemCreate(BaseModel):
             raise ValueError("year and month must be supplied together")
         return self
 
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "BudgetItemCreate":
+        if self.ends_on is not None and self.ends_on < self.starts_on:
+            raise ValueError("ends_on cannot be before starts_on")
+        return self
+
 
 class BudgetItemUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     default_amount: float = Field(ge=0, le=100000000)
     recurring: bool
     starts_on: date
+    ends_on: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
     year: int | None = Field(default=None, ge=2000, le=2200)
     month: int | None = Field(default=None, ge=1, le=12)
     planned_amount: float | None = Field(default=None, ge=0, le=100000000)
@@ -87,6 +97,12 @@ class BudgetItemUpdate(BaseModel):
     def selected_month_is_complete(self) -> "BudgetItemUpdate":
         if (self.year is None) != (self.month is None):
             raise ValueError("year and month must be supplied together")
+        return self
+
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "BudgetItemUpdate":
+        if self.ends_on is not None and self.ends_on < self.starts_on:
+            raise ValueError("ends_on cannot be before starts_on")
         return self
 
 
@@ -98,7 +114,15 @@ class BudgetItemResponse(BaseModel):
     default_amount: float
     recurring: bool
     starts_on: date
+    ends_on: date | None = None
+    notes: str | None = None
     archived: bool
+
+
+class BudgetMonthItemPaidEntry(BaseModel):
+    id: uuid.UUID
+    amount: float
+    spent_on: date
 
 
 class BudgetMonthItemResponse(BaseModel):
@@ -109,6 +133,10 @@ class BudgetMonthItemResponse(BaseModel):
     item_type: BudgetItemType
     planned_amount: float
     note: str | None = None
+    starts_on: date | None = None
+    ends_on: date | None = None
+    payment_status: str | None = None
+    paid_entry: BudgetMonthItemPaidEntry | None = None
 
 
 class BudgetMonthCopyRequest(BaseModel):
@@ -184,6 +212,7 @@ class BudgetSpendingEntryCreate(BaseModel):
     amount: float = Field(gt=0, le=100000000)
     spent_on: date
     note: str | None = Field(default=None, max_length=1000)
+    budget_month_item_id: uuid.UUID | None = None
 
 
 class BudgetSpendingEntryUpdate(BaseModel):
@@ -192,6 +221,7 @@ class BudgetSpendingEntryUpdate(BaseModel):
     amount: float = Field(gt=0, le=100000000)
     spent_on: date
     note: str | None = Field(default=None, max_length=1000)
+    budget_month_item_id: uuid.UUID | None = None
 
 
 class BudgetSpendingEntryResponse(BaseModel):
@@ -201,6 +231,7 @@ class BudgetSpendingEntryResponse(BaseModel):
     amount: float
     spent_on: date
     note: str | None = None
+    budget_month_item_id: uuid.UUID | None = None
 
 
 class BudgetActualUpdate(BaseModel):

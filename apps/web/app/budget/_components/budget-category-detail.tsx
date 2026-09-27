@@ -53,6 +53,17 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
       }).catch(() => { setMonth(null); setEntries([]); });
 
   useEffect(() => { void reload(); }, [categoryId, homeId, period.month, period.year, refreshKey]);
+
+  async function viewTransaction(entryId: string) {
+    const found = entries.find((entry) => entry.id === entryId);
+    if (found) { setSelectedEntry(found); return; }
+    try {
+      setSelectedEntry(await api.budgetEntry(homeId, entryId));
+    } catch {
+      // No feedback surface for this edge case; the sheet simply stays closed.
+    }
+  }
+
   const row = month?.categories.find((item) => item.category_id === categoryId);
   if (!row) return <><section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{category?.name ?? "Category"}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section><BudgetTabs /><Period {...period} onChange={(year, month) => setPeriod({ year, month })} /><p role="status">Loading category details…</p></>;
   const remaining = row.planned_amount - row.actual_amount;
@@ -68,7 +79,7 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
     <button type="button" className="budget-quick-actions-toggle" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><strong>Quick actions</strong><ChevronDown size={20} aria-hidden="true" /></button>
     {quickOpen && <div className="budget-list budget-quick-actions"><button type="button" className="budget-action-row" onClick={() => setSheet("plan")}><span className="budget-icon"><CircleDollarSign size={20} /></span><strong>Edit planned amount</strong><ChevronRight size={20} /></button><button type="button" className="budget-action-row" onClick={() => setSheet("actual")}><span className="budget-icon"><BarChart3 size={20} /></span><strong>Update actual amount</strong><ChevronRight size={20} /></button><button type="button" className="budget-action-row" onClick={() => setEntryOpen(true)}><span className="budget-icon"><ShoppingCart size={20} /></span><strong>Add spending entry</strong><ChevronRight size={20} /></button><NotesAction homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} /></div>}
     <section className="budget-transactions" aria-labelledby="budget-transactions-heading"><h2 id="budget-transactions-heading" className="budget-section-title">Transactions</h2>{entries.length ? <div className="budget-list">{entries.map((entry) => <button type="button" className="budget-transaction-row" key={entry.id} onClick={() => setSelectedEntry(entry)} aria-label={`Edit transaction ${entry.description}`}><span className="budget-icon"><ShoppingCart size={19} /></span><span className="budget-row-copy"><strong>{entry.description}</strong><small>{entry.spent_on}</small></span><strong>{money(entry.amount)}</strong></button>)}</div> : <p className="budget-note">No spending recorded yet</p>}</section>
-    <BudgetItemList key={refreshKey} homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} onRefresh={() => setRefreshKey((value) => value + 1)} />
+    <BudgetItemList key={refreshKey} homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} onRefresh={() => setRefreshKey((value) => value + 1)} onViewTransaction={viewTransaction} />
     <BudgetAddAction homeId={homeId} onRefresh={() => setRefreshKey((value) => value + 1)} onSpending={() => setEntryOpen(true)} />
     {entryOpen && <BudgetEntrySheet homeId={homeId} initialCategoryId={categoryId} initialSpentOn={periodDate(period)} onClose={() => setEntryOpen(false)} onSaved={reload} />}
     {sheet === "plan" && <BottomSheet title="Edit planned amount" onDismiss={() => setSheet(null)}><form className="budget-sheet-form" onSubmit={async (event) => { event.preventDefault(); await api.updateBudgetPlan(homeId, period.year, period.month, categoryId, Number(planned)); reload(); setSheet(null); }}><label htmlFor="planned-amount">Planned amount (per month)</label><input id="planned-amount" type="number" min="0" step="0.01" value={planned} onChange={(event) => setPlanned(event.target.value)} required /><button type="submit">Save plan</button></form></BottomSheet>}

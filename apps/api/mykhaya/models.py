@@ -1531,6 +1531,8 @@ class BudgetItem(UuidTimeMixin, Base):
     default_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
     recurring: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     starts_on: Mapped[date] = mapped_column(Date)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(String(1000))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1622,6 +1624,9 @@ class BudgetSpendingEntry(UuidTimeMixin, Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     spent_on: Mapped[date] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(String(1000))
+    budget_month_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("budget_month_items.id", ondelete="SET NULL"), index=True
+    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

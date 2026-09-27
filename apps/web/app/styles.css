@@ -6645,6 +6645,12 @@ button.danger,
   display: grid;
   gap: .65rem;
 }
+/* Planned items is the last section above the floating Add button on the
+   Category Detail screen — without this, a short list's last row (its
+   status pill/chevron) ends up sitting behind the fixed FAB. */
+.budget-item-detail-list {
+  padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 5.5rem);
+}
 .budget-list-row,
 .budget-action-row,
 .budget-plan-row {
@@ -6670,6 +6676,27 @@ button.danger,
 .budget-row-copy strong {
   display: block;
   font-size: 1.05rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Fixed Planned Item payment status: a small coloured pill only, never the
+   whole card — keeps the existing compact two-line row height on mobile. */
+.budget-status-pill {
+  border-radius: 999px;
+  flex: 0 0 auto;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  padding: .2rem .5rem;
+  white-space: nowrap;
+}
+.budget-status-pill-notpaid {
+  background: #fbe9e6;
+  color: var(--colour-danger);
+}
+.budget-status-pill-paid {
+  background: var(--colour-sage-soft);
+  color: #354f38;
 }
 .budget-row-copy small {
   line-height: 1.35;
@@ -6983,6 +7010,45 @@ button.danger,
   gap: .7rem;
 }
 .budget-page .budget-delete-confirm button {
+  width: 100%;
+}
+.budget-page .budget-field-hint {
+  color: var(--colour-muted);
+  font-size: .78rem;
+  margin: -.25rem 0 0;
+}
+.budget-page .budget-item-detail {
+  display: grid;
+  gap: .65rem;
+}
+.budget-page .budget-item-detail-headline {
+  align-items: center;
+  display: flex;
+  gap: .65rem;
+  justify-content: space-between;
+}
+.budget-page .budget-item-detail-headline strong {
+  display: block;
+  font-size: 1.15rem;
+}
+.budget-page .budget-item-detail-headline small {
+  color: var(--colour-muted);
+}
+.budget-page .budget-item-detail-row {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+}
+.budget-page .budget-item-detail-row span {
+  color: var(--colour-muted);
+}
+.budget-page .budget-item-detail-actions {
+  display: grid;
+  gap: .55rem;
+  margin-top: .4rem;
+}
+.budget-page .budget-item-detail-actions button {
   width: 100%;
 }
 .budget-page .budget-detail-stats {

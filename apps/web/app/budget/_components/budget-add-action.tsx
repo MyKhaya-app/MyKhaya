@@ -19,6 +19,9 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [recurring, setRecurring] = useState(true);
+  const [startsOn, setStartsOn] = useState("");
+  const [endsOn, setEndsOn] = useState("");
+  const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const period = currentPeriod();
@@ -34,6 +37,9 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
   function open(next: AddMode) {
     setError("");
     setMode(next);
+    setStartsOn(`${period.year}-${String(period.month).padStart(2, "0")}`);
+    setEndsOn("");
+    setNotes("");
   }
 
   function close() {
@@ -51,8 +57,10 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
         name: name.trim() || categories.find((item) => item.id === categoryId)?.name || "Budget item",
         item_type: mode,
         default_amount: Number(amount),
-        recurring: mode === "fixed" ? recurring : recurring,
-        starts_on: `${period.year}-${String(period.month).padStart(2, "0")}-01`,
+        recurring,
+        starts_on: `${startsOn || `${period.year}-${String(period.month).padStart(2, "0")}`}-01`,
+        ends_on: mode === "fixed" && endsOn ? `${endsOn}-01` : null,
+        notes: mode === "fixed" && notes.trim() ? notes.trim() : null,
         year: period.year,
         month: period.month,
       });
@@ -60,6 +68,8 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
       setMode(null);
       setName("");
       setAmount("");
+      setEndsOn("");
+      setNotes("");
     } catch {
       setError("Couldn’t save budget item. Please try again.");
     } finally {
@@ -89,6 +99,15 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
         <label htmlFor="budget-item-amount">{mode === "fixed" ? "Monthly amount" : "Planned amount"}</label>
         <input id="budget-item-amount" type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required />
         <label className="budget-sheet-toggle"><span><strong>{mode === "fixed" ? "Repeat monthly" : "Carry forward automatically"}</strong></span><input type="checkbox" checked={recurring} onChange={(event) => setRecurring(event.target.checked)} /></label>
+        {mode === "fixed" && <>
+          <label htmlFor="budget-item-starts-on">Start month</label>
+          <input id="budget-item-starts-on" type="month" className="consumer-date-time-control" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required />
+          <label htmlFor="budget-item-ends-on">End month</label>
+          <input id="budget-item-ends-on" type="month" className="consumer-date-time-control" value={endsOn} min={startsOn || undefined} onChange={(event) => setEndsOn(event.target.value)} />
+          <p className="budget-field-hint">Leave empty for no end date</p>
+          <label htmlFor="budget-item-notes">Notes (optional)</label>
+          <textarea id="budget-item-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
+        </>}
         {error && <p role="alert">{error}</p>}
         <button type="submit" disabled={saving}>{saving ? "Saving…" : mode === "fixed" ? "Add fixed cost" : "Add variable budget"}</button>
       </form>

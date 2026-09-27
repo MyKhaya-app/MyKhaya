@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,7 @@ from mykhaya.budget_schemas import (
     BudgetItemResponse,
     BudgetItemUpdate,
     BudgetMonthCopyRequest,
+    BudgetMonthItemPaidEntry,
     BudgetMonthItemResponse,
     BudgetIncomeSourceCreate,
     BudgetIncomeSourceResponse,
@@ -130,7 +131,39 @@ def _entry_response(row: BudgetSpendingEntry, category_id: uuid.UUID) -> BudgetS
         amount=float(row.amount),
         spent_on=row.spent_on,
         note=row.note,
+        budget_month_item_id=row.budget_month_item_id,
     )
+
+
+async def _resolve_linked_item(
+    db: AsyncSession,
+    month: BudgetMonth,
+    category_id: uuid.UUID,
+    budget_month_item_id: uuid.UUID | None,
+) -> BudgetMonthItem | None:
+    """Validate a spending entry's optional link to a fixed BudgetMonthItem.
+
+    The linked item must belong to the same month and category as the entry
+    itself, scoped to the caller's own Budget by construction (the month is
+    already loaded via BudgetMonth.profile_id == profile.id upstream). Cross-
+    profile, cross-category or non-fixed links are rejected outright.
+    """
+    if budget_month_item_id is None:
+        return None
+    item = await db.scalar(
+        select(BudgetMonthItem).where(
+            BudgetMonthItem.id == budget_month_item_id,
+            BudgetMonthItem.month_id == month.id,
+            BudgetMonthItem.archived_at.is_(None),
+        )
+    )
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Fixed item not found for that month")
+    if item.category_id != category_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Fixed item does not belong to that category")
+    if item.item_type_snapshot != BudgetItemType.fixed:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Only fixed items can be linked to a spending entry")
+    return item
 
 
 async def _month_for_owner(
@@ -186,7 +219,7 @@ async def _create_month_snapshot(
                 BudgetItem.item_type == BudgetItemType.fixed,
                 BudgetItem.recurring.is_(True),
                 BudgetItem.archived_at.is_(None),
-                BudgetItem.starts_on <= date(year, month, 1),
+                _item_active_in_month(year, month),
             )
         )
     ).all()
@@ -199,6 +232,7 @@ async def _create_month_snapshot(
                 name_snapshot=item.name,
                 item_type_snapshot=item.item_type,
                 planned_amount=item.default_amount,
+                note=item.notes,
             )
         )
     await db.flush()
@@ -224,6 +258,15 @@ def _is_current_or_future_month(year: int, month: int) -> bool:
     return (year, month) >= (now.year, now.month)
 
 
+def _item_active_in_month(year: int, month: int):
+    """Lifecycle predicate: starts_on <= month AND (ends_on IS NULL OR ends_on >= month), inclusive of the end month."""
+    first_of_month = date(year, month, 1)
+    return and_(
+        BudgetItem.starts_on <= first_of_month,
+        or_(BudgetItem.ends_on.is_(None), BudgetItem.ends_on >= first_of_month),
+    )
+
+
 def _item_response(row: BudgetItem) -> BudgetItemResponse:
     return BudgetItemResponse(
         id=row.id,
@@ -233,6 +276,8 @@ def _item_response(row: BudgetItem) -> BudgetItemResponse:
         default_amount=float(row.default_amount),
         recurring=row.recurring,
         starts_on=row.starts_on,
+        ends_on=row.ends_on,
+        notes=row.notes,
         archived=row.archived_at is not None,
     )
 
@@ -275,7 +320,7 @@ async def _reconcile_month_items(
             select(BudgetItem).where(
                 BudgetItem.profile_id == profile_id,
                 BudgetItem.archived_at.is_(None),
-                BudgetItem.starts_on <= date(month.year, month.month, 1),
+                _item_active_in_month(month.year, month.month),
                 ((BudgetItem.item_type == BudgetItemType.fixed) & BudgetItem.recurring.is_(True))
                 | ((BudgetItem.item_type == BudgetItemType.variable) if include_variables else False),
             )
@@ -302,6 +347,7 @@ async def _reconcile_month_items(
                 name_snapshot=item.name,
                 item_type_snapshot=item.item_type,
                 planned_amount=item.default_amount,
+                note=item.notes,
             )
         )
     if missing:
@@ -413,6 +459,28 @@ async def _reconcile_month_income(
     return len(missing)
 
 
+async def _item_payment_status(
+    db: AsyncSession, month_item_id: uuid.UUID
+) -> tuple[str, BudgetMonthItemPaidEntry | None]:
+    """A fixed item is PAID for a month exactly when a live entry links to it.
+
+    The transaction remains the sole evidence of payment; nothing here is a
+    manually-toggled flag, so archiving/deleting the entry reverts status to
+    NOT PAID and editing the entry keeps status in sync automatically.
+    """
+    entry = await db.scalar(
+        select(BudgetSpendingEntry)
+        .where(
+            BudgetSpendingEntry.budget_month_item_id == month_item_id,
+            BudgetSpendingEntry.archived_at.is_(None),
+        )
+        .order_by(BudgetSpendingEntry.spent_on.desc(), BudgetSpendingEntry.created_at.desc())
+    )
+    if entry is None:
+        return "not_paid", None
+    return "paid", BudgetMonthItemPaidEntry(id=entry.id, amount=float(entry.amount), spent_on=entry.spent_on)
+
+
 async def _month_response(
     db: AsyncSession, month: BudgetMonth, *, include_categories: bool = True
 ) -> BudgetMonthResponse:
@@ -454,6 +522,34 @@ async def _month_response(
                 Decimal("0"),
             )
             planned = fixed_planned + variable_planned if item_rows else row.planned_amount
+            item_responses: list[BudgetMonthItemResponse] = []
+            for item in item_rows:
+                payment_status: str | None = None
+                paid_entry: BudgetMonthItemPaidEntry | None = None
+                master_starts_on: date | None = None
+                master_ends_on: date | None = None
+                if item.item_type_snapshot == BudgetItemType.fixed:
+                    payment_status, paid_entry = await _item_payment_status(db, item.id)
+                    if item.budget_item_id is not None:
+                        master = await db.get(BudgetItem, item.budget_item_id)
+                        if master is not None:
+                            master_starts_on = master.starts_on
+                            master_ends_on = master.ends_on
+                item_responses.append(
+                    BudgetMonthItemResponse(
+                        id=item.id,
+                        budget_item_id=item.budget_item_id,
+                        category_id=item.category_id,
+                        name=item.name_snapshot,
+                        item_type=item.item_type_snapshot,
+                        planned_amount=float(item.planned_amount),
+                        note=item.note,
+                        starts_on=master_starts_on,
+                        ends_on=master_ends_on,
+                        payment_status=payment_status,
+                        paid_entry=paid_entry,
+                    )
+                )
             categories.append(
                 BudgetMonthCategoryResponse(
                     id=row.id,
@@ -470,18 +566,7 @@ async def _month_response(
                     note=row.note,
                     fixed_planned_amount=float(fixed_planned),
                     variable_planned_amount=float(variable_planned),
-                    items=[
-                        BudgetMonthItemResponse(
-                            id=item.id,
-                            budget_item_id=item.budget_item_id,
-                            category_id=item.category_id,
-                            name=item.name_snapshot,
-                            item_type=item.item_type_snapshot,
-                            planned_amount=float(item.planned_amount),
-                            note=item.note,
-                        )
-                        for item in item_rows
-                    ],
+                    items=item_responses,
                 )
             )
     income_rows = (
@@ -707,6 +792,8 @@ async def create_budget_item(
         default_amount=Decimal(str(body.default_amount)),
         recurring=body.recurring,
         starts_on=body.starts_on,
+        ends_on=body.ends_on,
+        notes=body.notes.strip() if body.notes else None,
     )
     db.add(row)
     await db.flush()
@@ -726,6 +813,7 @@ async def create_budget_item(
         name_snapshot=row.name,
         item_type_snapshot=row.item_type,
         planned_amount=row.default_amount,
+        note=row.notes,
     ))
     await db.flush()
     await _sync_category_planned_compatibility(db, month, category.id)
@@ -752,10 +840,13 @@ async def update_budget_item(
     ))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget item not found")
+    lifecycle_changed = row.starts_on != body.starts_on or row.ends_on != body.ends_on
     row.name = body.name.strip()
     row.default_amount = Decimal(str(body.default_amount))
     row.recurring = body.recurring
     row.starts_on = body.starts_on
+    row.ends_on = body.ends_on
+    row.notes = body.notes.strip() if body.notes else None
     if body.year is not None and body.month is not None:
         if not _is_current_or_future_month(body.year, body.month):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be changed")
@@ -773,15 +864,30 @@ async def update_budget_item(
                 name_snapshot=row.name,
                 item_type_snapshot=row.item_type,
                 planned_amount=Decimal(str(body.planned_amount if body.planned_amount is not None else body.default_amount)),
+                note=row.notes,
             )
             db.add(snapshot)
         else:
             snapshot.name_snapshot = row.name
+            snapshot.note = row.notes
             if body.planned_amount is not None:
                 snapshot.planned_amount = Decimal(str(body.planned_amount))
         await db.flush()
         await _sync_category_planned_compatibility(db, month, row.category_id)
     audit(db, request, "budget.item.updated", auth.user.id, target_type="budget_item", target_id=row.id)
+    if lifecycle_changed:
+        audit(
+            db,
+            request,
+            "budget.item.lifecycle_updated",
+            auth.user.id,
+            target_type="budget_item",
+            target_id=row.id,
+            metadata={
+                "starts_on": row.starts_on.isoformat(),
+                "ends_on": row.ends_on.isoformat() if row.ends_on else None,
+            },
+        )
     await db.commit()
     return _item_response(row)
 
@@ -1118,16 +1224,28 @@ async def create_entry(
     month_category = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == category.id))
     if month_category is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
+    linked_item = await _resolve_linked_item(db, month, category.id, body.budget_month_item_id)
     row = BudgetSpendingEntry(
         month_category_id=month_category.id,
         description=body.description.strip(),
         amount=Decimal(str(body.amount)),
         spent_on=body.spent_on,
         note=body.note.strip() if body.note else None,
+        budget_month_item_id=linked_item.id if linked_item else None,
     )
     db.add(row)
     await db.flush()
     audit(db, request, "budget.entry.created", auth.user.id, target_type="budget_entry", target_id=row.id)
+    if linked_item is not None:
+        audit(
+            db,
+            request,
+            "budget.item.payment_recorded",
+            auth.user.id,
+            target_type="budget_month_item",
+            target_id=linked_item.id,
+            metadata={"entry_id": str(row.id), "amount": float(row.amount)},
+        )
     await db.commit()
     return _entry_response(row, category.id)
 
@@ -1229,12 +1347,28 @@ async def update_entry(
     )
     if target_month_category is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
+    previous_link_id = entry.budget_month_item_id
+    linked_item = await _resolve_linked_item(db, target_month, target_category.id, body.budget_month_item_id)
     entry.month_category_id = target_month_category.id
     entry.description = body.description.strip()
     entry.amount = Decimal(str(body.amount))
     entry.spent_on = body.spent_on
     entry.note = body.note.strip() if body.note else None
+    entry.budget_month_item_id = linked_item.id if linked_item else None
     audit(db, request, "budget.entry.updated", auth.user.id, target_type="budget_entry", target_id=entry.id)
+    if previous_link_id != entry.budget_month_item_id:
+        audit(
+            db,
+            request,
+            "budget.item.payment_link_updated",
+            auth.user.id,
+            target_type="budget_entry",
+            target_id=entry.id,
+            metadata={
+                "previous_budget_month_item_id": str(previous_link_id) if previous_link_id else None,
+                "budget_month_item_id": str(entry.budget_month_item_id) if entry.budget_month_item_id else None,
+            },
+        )
     await db.commit()
     return _entry_response(entry, target_category.id)
 
@@ -1250,8 +1384,19 @@ async def delete_entry(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     entry, _, _ = await _entry_for_owner(db, profile.id, entry_id)
+    linked_item_id = entry.budget_month_item_id
     entry.archived_at = datetime.now(UTC)
     audit(db, request, "budget.entry.deleted", auth.user.id, target_type="budget_entry", target_id=entry.id)
+    if linked_item_id is not None:
+        audit(
+            db,
+            request,
+            "budget.item.payment_reverted",
+            auth.user.id,
+            target_type="budget_month_item",
+            target_id=linked_item_id,
+            metadata={"entry_id": str(entry.id)},
+        )
     await db.commit()
 
 
