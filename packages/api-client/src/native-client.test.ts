@@ -285,6 +285,25 @@ describe("NativeMyKhayaClient — protected images", () => {
     expect(headers.get("X-MyKhaya-App-Version")).toBe("1.0.0");
   });
 
+  it("resolves an API-relative meal image exactly once beneath the API base", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/webp" },
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "access-token" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await client.image("/homes/home-1/meals/images/image.webp");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `${BASE_URL}/homes/home-1/meals/images/image.webp`,
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).not.toContain("/api/v1/api/v1/");
+  });
+
   it("rejects API/HTML responses instead of treating them as images", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ detail: "Unauthorized" }), {

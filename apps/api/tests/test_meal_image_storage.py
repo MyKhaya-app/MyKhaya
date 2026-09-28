@@ -46,7 +46,8 @@ async def test_import_saves_processed_photo(import_dependencies: Settings) -> No
         auth=Mock(), db=AsyncMock(), settings=import_dependencies,
     )
     assert result.image_url is not None
-    assert result.image_url.startswith(f"/api/v1/homes/{home_id}/meals/images/")
+    assert result.image_url.startswith(f"/homes/{home_id}/meals/images/")
+    assert result.image_url.count("/api/v1") == 0
     saved = Path(import_dependencies.meal_image_storage_dir) / result.image_url.rsplit("/", 1)[1]
     with Image.open(saved) as image:
         assert image.format == "WEBP"
@@ -94,3 +95,13 @@ def test_meal_volume_matches_existing_non_root_read_only_deployment() -> None:
         line = next(line for line in dockerfile.splitlines() if command in line)
         assert "/data/meal-images" in line
     assert "USER 10001:10001" in dockerfile
+
+
+def test_manual_and_imported_meal_images_share_the_api_relative_reference() -> None:
+    home_id = uuid.uuid4()
+    key = "11111111-1111-1111-1111-111111111111.webp"
+    reference = meal_plans._meal_image_path(home_id, key)
+
+    assert reference == f"/homes/{home_id}/meals/images/{key}"
+    assert meal_plans._meal_image_key(home_id, reference) == key
+    assert meal_plans._meal_image_key(home_id, f"/api/v1{reference}") == key

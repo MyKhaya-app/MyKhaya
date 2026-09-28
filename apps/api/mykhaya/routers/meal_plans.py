@@ -93,17 +93,21 @@ MEAL_IMAGE_KEY = r"[0-9a-fA-F-]{36}\.webp"
 
 
 def _meal_image_path(home_id: uuid.UUID, key: str) -> str:
-    return f"/api/v1/homes/{home_id}/meals/images/{key}"
+    # Protected media references use the same API-relative contract as Avatar
+    # paths. Browser transport prefixes /api/v1; native transport already has
+    # /api/v1 in its base URL.
+    return f"/homes/{home_id}/meals/images/{key}"
 
 
 def _meal_image_key(home_id: uuid.UUID, value: str | None) -> str | None:
     if value is None or value == "":
         return None
-    prefix = _meal_image_path(home_id, "")
-    if value.startswith(prefix):
-        key = value[len(prefix):]
-        if fullmatch(MEAL_IMAGE_KEY, key):
-            return key
+    prefixes = (_meal_image_path(home_id, ""), f"/api/v1{_meal_image_path(home_id, '')}")
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            key = value[len(prefix):]
+            if fullmatch(MEAL_IMAGE_KEY, key):
+                return key
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That meal photo is invalid.")
 
 
@@ -351,7 +355,7 @@ async def import_recipe_draft(
                     processed = process_attachment_upload(raw_image)
                     key = meal_image_filename()
                     await get_meal_image_storage(settings).save(key, processed)
-                    draft["image_url"] = f"/api/v1/homes/{home_id}/meals/images/{key}"
+                    draft["image_url"] = _meal_image_path(home_id, key)
                 else:
                     draft["image_url"] = None
             except (RecipeImportError, AttachmentResourceError, UnsupportedImageError):
@@ -413,7 +417,7 @@ async def upload_meal_image(
             await get_meal_image_storage(settings).delete(previous_image_key)
         except OSError:
             log.warning("meal_image_cleanup_failed", meal_id=str(meal.id))
-    return MealImageResponse(image_url=f"/api/v1/homes/{home_id}/meals/images/{key}")
+    return MealImageResponse(image_url=_meal_image_path(home_id, key))
 
 
 @router.get("/{home_id}/meals/images/{key}")
