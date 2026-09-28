@@ -117,6 +117,8 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public let activeHome: WidgetHome?
     public let upcomingEvents: [WidgetEvent]
     public let todayEvents: [WidgetEvent]
+    /// Legacy v1 wire name: full visible grid range, including adjacent months.
+    /// Never truncate here; row limits and +N counts belong to the views.
     public let monthEvents: [WidgetEvent]
     public let todoItems: [WidgetTodoItem]
 

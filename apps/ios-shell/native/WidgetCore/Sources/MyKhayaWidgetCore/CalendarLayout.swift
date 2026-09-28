@@ -35,6 +35,30 @@ public func dayKey(_ date: Date, calendar: Calendar) -> String {
     return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
 }
 
+/// Exact union needed by the week and six-row month widgets. The current
+/// week is contained in this grid, including its adjacent-month dates.
+/// Keep both local instants and literal date keys: all-day dates are not instants.
+public struct WidgetCalendarRange: Codable, Equatable, Sendable {
+    public let startAt: String
+    public let endAt: String
+    public let startDate: String
+    public let endDate: String
+}
+
+public func widgetCalendarRange(containing reference: Date, calendar: Calendar) -> WidgetCalendarRange? {
+    let days = monthGridDays(containing: reference, calendar: calendar)
+    guard let start = days.first, let last = days.last,
+          let end = calendar.date(byAdding: .day, value: 1, to: last) else { return nil }
+    let iso = ISO8601DateFormatter()
+    let dates = DateFormatter()
+    dates.locale = Locale(identifier: "en_US_POSIX")
+    dates.calendar = calendar
+    dates.timeZone = calendar.timeZone
+    dates.dateFormat = "yyyy-MM-dd"
+    return WidgetCalendarRange(startAt: iso.string(from: start), endAt: iso.string(from: end),
+                               startDate: dates.string(from: start), endDate: dates.string(from: end))
+}
+
 /// A fixed UTC/Gregorian calendar — never the device's own `Calendar.current`
 /// — for reading the calendar-date digits an all-day event's start/end
 /// instants name. Mirrors apps/api/mykhaya/routers/calendar.py's

@@ -707,6 +707,19 @@ export interface MealIngredientInput {
   unit?: string | null;
 }
 
+export interface RecipeImportDraft {
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  instructions: string | null;
+  source_url: string;
+  ingredients: MealIngredientInput[];
+}
+
 export interface Meal {
   id: string;
   name: string;

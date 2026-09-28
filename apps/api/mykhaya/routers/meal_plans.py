@@ -12,11 +12,28 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta
+from re import fullmatch
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+import structlog
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.attachments.processing import (
+    AttachmentResourceError,
+    UnsupportedImageError,
+    process_attachment_upload,
+)
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
@@ -24,6 +41,7 @@ from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
+from mykhaya.meal_images import get_meal_image_storage, meal_image_filename
 from mykhaya.models import (
     FeatureKey,
     HouseholdList,
@@ -43,6 +61,7 @@ from mykhaya.notifications.meal_plans import (
     notify_updated,
     participant_ids,
 )
+from mykhaya.recipe_import import RecipeImportError, download_recipe_image, import_recipe
 from mykhaya.routers.lists import _list_access, _require_list_writable
 from mykhaya.schemas import (
     AddIngredientsToListRequest,
@@ -51,6 +70,7 @@ from mykhaya.schemas import (
     CopyWeekResponse,
     MealCreate,
     MealFavouriteRequest,
+    MealImageResponse,
     MealIngredientResponse,
     MealListResponse,
     MealPlanDayResponse,
@@ -63,8 +83,32 @@ from mykhaya.schemas import (
     MealUpdate,
     RecentMealResponse,
     RecentMealsResponse,
+    RecipeImportRequest,
+    RecipeImportResponse,
 )
 from mykhaya.usage import platform_from_request, record_usage_event
+
+log = structlog.get_logger()
+MEAL_IMAGE_KEY = r"[0-9a-fA-F-]{36}\.webp"
+
+
+def _meal_image_path(home_id: uuid.UUID, key: str) -> str:
+    return f"/api/v1/homes/{home_id}/meals/images/{key}"
+
+
+def _meal_image_key(home_id: uuid.UUID, value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    prefix = _meal_image_path(home_id, "")
+    if value.startswith(prefix):
+        key = value[len(prefix):]
+        if fullmatch(MEAL_IMAGE_KEY, key):
+            return key
+    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That meal photo is invalid.")
+
+
+def _meal_image_url(home_id: uuid.UUID, meal: Meal) -> str | None:
+    return _meal_image_path(home_id, meal.image_key) if meal.image_key else meal.image_url
 
 # Meal Plans has its own dedicated FeatureKey/module_registry entry (unlike
 # household_routines, which currently piggy-backs on the notifications
@@ -154,12 +198,12 @@ async def _ingredient_counts(db: AsyncSession, meal_ids: list[uuid.UUID]) -> dic
     return {meal_id: count for meal_id, count in rows}
 
 
-def _meal_summary(meal: Meal, ingredient_count: int) -> MealSummaryResponse:
+def _meal_summary(home_id: uuid.UUID, meal: Meal, ingredient_count: int) -> MealSummaryResponse:
     return MealSummaryResponse(
         id=meal.id,
         name=meal.name,
         description=meal.description,
-        image_url=meal.image_url,
+        image_url=_meal_image_url(home_id, meal),
         meal_type=meal.meal_type,
         prep_minutes=meal.prep_minutes,
         cook_minutes=meal.cook_minutes,
@@ -172,12 +216,14 @@ def _meal_summary(meal: Meal, ingredient_count: int) -> MealSummaryResponse:
     )
 
 
-def _meal_response(meal: Meal, ingredients: list[MealIngredientResponse]) -> MealResponse:
+def _meal_response(
+    home_id: uuid.UUID, meal: Meal, ingredients: list[MealIngredientResponse]
+) -> MealResponse:
     return MealResponse(
         id=meal.id,
         name=meal.name,
         description=meal.description,
-        image_url=meal.image_url,
+        image_url=_meal_image_url(home_id, meal),
         meal_type=meal.meal_type,
         prep_minutes=meal.prep_minutes,
         cook_minutes=meal.cook_minutes,
@@ -253,7 +299,7 @@ async def _entry_response(
         meal_id=entry.meal_id,
         meal_name=meal.name if meal is not None else None,
         quick_meal_name=entry.quick_meal_name,
-        meal_image_url=meal.image_url if meal is not None else None,
+        meal_image_url=_meal_image_url(entry.group_id, meal) if meal is not None else None,
         is_favourite=meal.is_favourite if meal is not None else False,
         date=entry.date,
         meal_slot=entry.meal_slot,
@@ -286,6 +332,112 @@ async def _meals_by_id(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/{home_id}/meals/import-recipe", response_model=RecipeImportResponse)
+async def import_recipe_draft(
+    home_id: uuid.UUID,
+    body: RecipeImportRequest,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RecipeImportResponse:
+    await require_capability(home_id, Capability.meals_manage, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+    try:
+        draft = await import_recipe(body.url)
+        if draft.get("image_url"):
+            try:
+                raw_image = await download_recipe_image(str(draft["image_url"]))
+                if raw_image:
+                    processed = process_attachment_upload(raw_image)
+                    key = meal_image_filename()
+                    await get_meal_image_storage(settings).save(key, processed)
+                    draft["image_url"] = f"/api/v1/homes/{home_id}/meals/images/{key}"
+                else:
+                    draft["image_url"] = None
+            except (RecipeImportError, AttachmentResourceError, UnsupportedImageError):
+                draft["image_url"] = None
+            except OSError as cause:
+                # A failed optional photo must not discard the imported recipe.
+                # Log no URLs, filesystem paths or recipe contents.
+                log.warning("recipe_import_image_storage_failed", errno=cause.errno)
+                draft["image_url"] = None
+        return RecipeImportResponse.model_validate(draft)
+    except RecipeImportError as cause:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
+
+
+@router.post("/{home_id}/meals/{meal_id}/image", response_model=MealImageResponse)
+async def upload_meal_image(
+    home_id: uuid.UUID,
+    meal_id: uuid.UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MealImageResponse:
+    await require_capability(home_id, Capability.meals_manage, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+    meal = await _get_active_meal(db, home_id, meal_id)
+    previous_image_key = meal.image_key
+    raw = await file.read(settings.meal_image_max_upload_bytes + 1)
+    if len(raw) > settings.meal_image_max_upload_bytes:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "That photo is too large.")
+    if not raw:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file was uploaded.")
+    try:
+        processed = process_attachment_upload(raw)
+    except AttachmentResourceError as cause:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That photo is too large to process.",
+        ) from cause
+    except UnsupportedImageError as cause:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(cause)) from cause
+    key = meal_image_filename()
+    await get_meal_image_storage(settings).save(key, processed)
+    meal.image_key = key
+    meal.image_url = None
+    audit(
+        db,
+        request,
+        "meals.meal.image_added" if previous_image_key is None else "meals.meal.image_replaced",
+        auth.user.id,
+        home_id,
+        "meal",
+        meal.id,
+    )
+    await db.commit()
+    if previous_image_key:
+        try:
+            await get_meal_image_storage(settings).delete(previous_image_key)
+        except OSError:
+            log.warning("meal_image_cleanup_failed", meal_id=str(meal.id))
+    return MealImageResponse(image_url=f"/api/v1/homes/{home_id}/meals/images/{key}")
+
+
+@router.get("/{home_id}/meals/images/{key}")
+async def get_meal_image(
+    home_id: uuid.UUID,
+    key: str,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    await require_capability(home_id, Capability.meals_view, auth, db)
+    await require_entitlement(db, home_id, "meals.enabled")
+    if not key.endswith(".webp") or len(key) != 41:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That image could not be found.")
+    data = await get_meal_image_storage(settings).load(key)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That image could not be found.")
+    return Response(
+        data,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 @router.post("/{home_id}/meals", response_model=MealResponse, status_code=201)
 async def create_meal(
     home_id: uuid.UUID,
@@ -296,12 +448,14 @@ async def create_meal(
 ) -> MealResponse:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
+    image_key = _meal_image_key(home_id, body.image_url)
 
     meal = Meal(
         group_id=home_id,
         name=" ".join(body.name.strip().split()),
         description=body.description,
-        image_url=body.image_url,
+        image_url=None,
+        image_key=image_key,
         meal_type=body.meal_type,
         prep_minutes=body.prep_minutes,
         cook_minutes=body.cook_minutes,
@@ -325,13 +479,15 @@ async def create_meal(
             )
         )
     audit(db, request, "meals.meal.created", auth.user.id, home_id, "meal", meal.id)
+    if image_key:
+        audit(db, request, "meals.meal.image_added", auth.user.id, home_id, "meal", meal.id)
     await db.commit()
     await record_usage_event(
         db, event_name=ProductUsageEventName.meal_added,
         platform=platform_from_request(request), module=ProductUsageModule.meals,
         user_id=auth.user.id, group_id=home_id, event_key=f"meal-added:{meal.id}",
     )
-    return _meal_response(meal, await _meal_ingredients(db, meal.id))
+    return _meal_response(home_id, meal, await _meal_ingredients(db, meal.id))
 
 
 @router.get("/{home_id}/meals", response_model=MealListResponse)
@@ -359,7 +515,7 @@ async def list_meals(
     ).all()
     counts = await _ingredient_counts(db, [meal.id for meal in meals])
     return MealListResponse(
-        items=[_meal_summary(meal, counts.get(meal.id, 0)) for meal in meals]
+        items=[_meal_summary(home_id, meal, counts.get(meal.id, 0)) for meal in meals]
     )
 
 
@@ -395,7 +551,7 @@ async def recent_meals(
     counts = await _ingredient_counts(db, meal_ids)
     items = [
         RecentMealResponse(
-            meal=_meal_summary(meals[meal_id], counts.get(meal_id, 0)),
+            meal=_meal_summary(home_id, meals[meal_id], counts.get(meal_id, 0)),
             last_planned=last_planned,
         )
         for meal_id, last_planned in last_planned_rows
@@ -419,7 +575,7 @@ async def get_meal(
     await require_capability(home_id, Capability.meals_view, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
     meal = await _get_active_meal(db, home_id, meal_id)
-    return _meal_response(meal, await _meal_ingredients(db, meal.id))
+    return _meal_response(home_id, meal, await _meal_ingredients(db, meal.id))
 
 
 @router.patch("/{home_id}/meals/{meal_id}", response_model=MealResponse)
@@ -430,6 +586,7 @@ async def update_meal(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> MealResponse:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
@@ -443,10 +600,13 @@ async def update_meal(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That meal could not be found")
     if meal.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This meal changed. Reload and try again.")
+    previous_image_key = meal.image_key
+    image_key = _meal_image_key(home_id, body.image_url)
 
     meal.name = " ".join(body.name.strip().split())
     meal.description = body.description
-    meal.image_url = body.image_url
+    meal.image_url = None
+    meal.image_key = image_key
     meal.meal_type = body.meal_type
     meal.prep_minutes = body.prep_minutes
     meal.cook_minutes = body.cook_minutes
@@ -474,7 +634,12 @@ async def update_meal(
     # one, and so the attribute access below never triggers an implicit
     # lazy-load outside an awaited context (MissingGreenlet).
     await db.refresh(meal)
-    return _meal_response(meal, await _meal_ingredients(db, meal.id))
+    if previous_image_key and previous_image_key != image_key:
+        try:
+            await get_meal_image_storage(settings).delete(previous_image_key)
+        except OSError:
+            log.warning("meal_image_cleanup_failed", meal_id=str(meal.id))
+    return _meal_response(home_id, meal, await _meal_ingredients(db, meal.id))
 
 
 @router.patch("/{home_id}/meals/{meal_id}/favourite", response_model=MealResponse)
@@ -501,7 +666,7 @@ async def set_meal_favourite(
     )
     await db.commit()
     await db.refresh(meal)
-    return _meal_response(meal, await _meal_ingredients(db, meal.id))
+    return _meal_response(home_id, meal, await _meal_ingredients(db, meal.id))
 
 
 @router.delete("/{home_id}/meals/{meal_id}", status_code=204)
@@ -511,15 +676,24 @@ async def delete_meal(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> None:
     await require_capability(home_id, Capability.meals_manage, auth, db)
     await require_entitlement(db, home_id, "meals.enabled")
     meal = await _get_active_meal(db, home_id, meal_id)
     # Soft delete only — see Meal's docstring: existing MealPlanEntry rows
     # keep pointing at meal_id, so a planned/past meal never loses its name.
+    previous_image_key = meal.image_key
     meal.deleted_at = datetime.now(tz=meal.created_at.tzinfo)
+    meal.image_key = None
+    meal.image_url = None
     audit(db, request, "meals.meal.deleted", auth.user.id, home_id, "meal", meal.id)
     await db.commit()
+    if previous_image_key:
+        try:
+            await get_meal_image_storage(settings).delete(previous_image_key)
+        except OSError:
+            log.warning("meal_image_cleanup_failed", meal_id=str(meal.id))
 
 
 # ---------------------------------------------------------------------------

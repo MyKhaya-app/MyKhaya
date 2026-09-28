@@ -1266,6 +1266,27 @@ class MealIngredientInput(StrictModel):
     unit: str | None = Field(default=None, max_length=40)
 
 
+class RecipeImportRequest(StrictModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+
+class RecipeImportResponse(StrictModel):
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    instructions: str | None
+    source_url: str
+    ingredients: list[MealIngredientInput]
+
+
+class MealImageResponse(StrictModel):
+    image_url: str
+
+
 class MealIngredientResponse(BaseModel):
     id: uuid.UUID
     position: int

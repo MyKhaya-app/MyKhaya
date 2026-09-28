@@ -43,6 +43,7 @@ import {
   upcomingBirthdayLabel,
 } from "./birthday-utils";
 import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
+import { HomeHeroDate } from "./home-hero-date";
 import {
   FALLBACK_TIMEZONE,
   calendarDateAfter,
@@ -503,7 +504,7 @@ export default function HomePage() {
           <h1>{user?.display_name?.split(" ")[0] ?? "there"}</h1>
           <p>
             {activeHome
-              ? `Here's what's happening in your home`
+              ? <HomeHeroDate />
               : "Select a Home to continue"}
           </p>
           {members.length > 0 && (

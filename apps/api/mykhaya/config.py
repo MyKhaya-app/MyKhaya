@@ -193,6 +193,8 @@ class Settings(BaseSettings):
     support_attachment_max_upload_bytes: int = Field(
         default=10_485_760, ge=1024, le=52_428_800
     )
+    meal_image_storage_dir: str = "/data/meal-images"
+    meal_image_max_upload_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments

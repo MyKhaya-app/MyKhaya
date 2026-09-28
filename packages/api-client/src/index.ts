@@ -1336,6 +1336,19 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/meals${query ? `?${query}` : ""}`,
     );
   };
+  importRecipe = (homeId: string, url: string) =>
+    this.request<import("@mykhaya/shared-types").RecipeImportDraft>(
+      `/homes/${encodeURIComponent(homeId)}/meals/import-recipe`,
+      { method: "POST", body: JSON.stringify({ url }) },
+    );
+  uploadMealImage = (homeId: string, mealId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return this.request<{ image_url: string }>(
+      `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}/image`,
+      { method: "POST", body },
+    );
+  };
   meal = (homeId: string, mealId: string) =>
     this.request<import("@mykhaya/shared-types").Meal>(
       `/homes/${encodeURIComponent(homeId)}/meals/${encodeURIComponent(mealId)}`,

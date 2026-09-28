@@ -1,4 +1,31 @@
 import type { EventOccurrence, Home, Reminder, Routine } from "@mykhaya/shared-types";
+import { dateKey } from "@/app/calendar/calendar-utils";
+
+/** Union of the Calendar widget's visible grids. Instants are for timed
+ * events; date keys preserve the calendar-date model of all-day events. */
+export interface WidgetCalendarRange {
+  startAt: string;
+  endAt: string;
+  startDate: string;
+  endDate: string;
+}
+
+/** Older installed shells cannot report their locale's first weekday.
+ * Cover the union of possible 42-cell grids until the native update lands.
+ * This is bounded (48 days), not an extra adjacent-month fetch. */
+export function fallbackWidgetCalendarRange(now: Date): WidgetCalendarRange {
+  const start = new Date(now.getFullYear(), now.getMonth(), 1 - 6);
+  const end = new Date(now.getFullYear(), now.getMonth(), 1 + 42);
+  return { startAt: start.toISOString(), endAt: end.toISOString(),
+    startDate: localDayKey(start.toISOString()), endDate: localDayKey(end.toISOString()) };
+}
+
+export function eventOverlapsWidgetRange(event: EventOccurrence, range: WidgetCalendarRange): boolean {
+  if (event.is_all_day) {
+    return dateKey(event.start_at) < range.endDate && dateKey(event.end_at) > range.startDate;
+  }
+  return new Date(event.start_at) < new Date(range.endAt) && new Date(event.end_at) > new Date(range.startAt);
+}
 
 /**
  * The iOS Home Screen widgets' entire data contract (native widget work,
@@ -64,16 +91,15 @@ export interface WidgetSnapshot {
   /** Every event whose local day is today (all-day and multi-day events that
    *  span today included), soonest first. */
   todayEvents: WidgetEvent[];
-  /** Every event overlapping the current local month, capped at
-   *  MAX_MONTH_EVENTS — the Calendar widget renders a condensed
-   *  representation itself if a day has more than it can show. */
+  /** Every event overlapping the visible calendar grids, including adjacent
+   *  months. Legacy wire name retained for installed schema-v1 widgets.
+   *  Only the renderer limits rows; the payload must retain overflow counts. */
   monthEvents: WidgetEvent[];
   /** Overdue first, then due today, then upcoming; completed items excluded. */
   todoItems: WidgetTodoItem[];
 }
 
 export const MAX_UPCOMING_EVENTS = 3;
-export const MAX_MONTH_EVENTS = 250;
 export const MAX_TODO_ITEMS = 12;
 
 /** The state written to the App Group after logout, or before any snapshot
@@ -139,6 +165,9 @@ function localDayKey(iso: string): string {
 }
 
 function eventSpansLocalDay(occurrence: EventOccurrence, dayKey: string): boolean {
+  if (occurrence.is_all_day) {
+    return dateKey(occurrence.start_at) <= dayKey && dateKey(occurrence.end_at) > dayKey;
+  }
   // All-day and multi-day events are stored as a start/end range; comparing
   // day keys (not instants) avoids the classic "all-day event treated as a
   // midnight-timed event" bug — an all-day event's stored end_at is
@@ -163,6 +192,7 @@ export interface BuildWidgetSnapshotInput {
   routines: Routine[];
   reminders: Reminder[];
   now?: Date;
+  calendarRange?: WidgetCalendarRange;
 }
 
 /** Pure, deterministic snapshot construction — no network/storage access,
@@ -186,15 +216,9 @@ export function buildWidgetSnapshot(input: BuildWidgetSnapshotInput): WidgetSnap
     .filter((e) => eventSpansLocalDay(e, todayKey))
     .map(toWidgetEvent);
 
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const calendarRange = input.calendarRange ?? fallbackWidgetCalendarRange(now);
   const monthEvents = sortedEvents
-    .filter((e) => {
-      const start = new Date(e.start_at);
-      const end = new Date(e.end_at);
-      return end > monthStart && start < monthEnd;
-    })
-    .slice(0, MAX_MONTH_EVENTS)
+    .filter((e) => eventOverlapsWidgetRange(e, calendarRange))
     .map(toWidgetEvent);
 
   const todoItems = buildTodoItems(input.routines, input.reminders, todayKey);

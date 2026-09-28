@@ -3,8 +3,8 @@ import Foundation
 import MyKhayaWidgetCore
 
 /// Native side of apps/web/components/widget-bridge.ts's `WidgetBridge`
-/// plugin. Deliberately tiny: two methods, both delegating straight to
-/// `WidgetSnapshotStore` (shared with the widget extension target — this
+/// plugin. Delegates storage to `WidgetSnapshotStore` and visible-range
+/// calculation to WidgetCore (shared with the widget extension target — this
 /// file must be added to the main app target only, never the extension).
 ///
 /// This is a repo-local plugin (no npm package): Capacitor auto-discovers
@@ -18,6 +18,7 @@ public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "WidgetBridgePlugin"
     public let jsName = "WidgetBridge"
     public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "getCalendarRange", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSnapshot", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearSnapshot", returnType: CAPPluginReturnPromise),
     ]
@@ -74,6 +75,15 @@ public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             NSLog("[MyKhayaWidgets] WidgetBridge.setSnapshot decode failed: %@", error.localizedDescription)
             call.reject("Could not decode widget snapshot")
         }
+    }
+
+    @objc func getCalendarRange(_ call: CAPPluginCall) {
+        guard let range = widgetCalendarRange(containing: Date(), calendar: Calendar.current) else {
+            call.reject("Could not determine widget date range")
+            return
+        }
+        call.resolve(["startAt": range.startAt, "endAt": range.endAt,
+                      "startDate": range.startDate, "endDate": range.endDate])
     }
 
     @objc func clearSnapshot(_ call: CAPPluginCall) {

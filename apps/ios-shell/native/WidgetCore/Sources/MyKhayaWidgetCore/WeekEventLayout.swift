@@ -79,7 +79,10 @@ public func weekEventLayout(
     for event in events {
         guard let start = event.startDate else { continue }
         let end = event.endDate ?? start
-        guard start < weekEnd, end > dayStart else { continue }
+        // All-day boundaries name calendar dates, not local timed instants.
+        let overlapStart = event.isAllDay ? localMidnightOfCalendarDay(containing: start, isAllDay: true, calendar: calendar) : start
+        let overlapEnd = event.isAllDay ? localMidnightOfCalendarDay(containing: end, isAllDay: true, calendar: calendar) : end
+        guard overlapStart < weekEnd, overlapEnd > dayStart else { continue }
 
         // Same exclusive-end convention as eventsByDay in CalendarLayout.swift
         // (end minus one second, then take that instant's calendar day) so a

@@ -1913,7 +1913,8 @@ html.native-shell .home-section-overlap {
   margin: 0;
 }
 .home-todo-section {
-  padding-bottom: 8px;
+  align-self: start;
+  padding-bottom: 16px;
   padding-top: 12px;
 }
 /* Tighter header-to-first-row gap than the shared .home-summary-card rule —
@@ -1931,19 +1932,17 @@ html.native-shell .home-section-overlap {
   min-height: 40px;
   padding: 0.45rem 0.6rem;
 }
-/* Lighter, more compact than a regular list row (see Meals/Coming up) —
-   the "To do" card was visually the most dominant thing on Home relative to
-   its actual importance. The 40px check column is a touch-target minimum,
-   not a visual size — home-routine-check-dot below draws a much smaller
-   circle/tick inside that same tappable area. */
+/* Use the same full-width row rhythm as Today/Coming up. The 40px check
+   column is a touch-target minimum, not a visual size —
+   home-routine-check-dot below draws a smaller circle/tick inside it. */
 .home-routine-row {
   align-items: center;
   border-bottom: 1px solid #f1ece1;
   display: grid;
   gap: 0.7rem;
   grid-template-columns: 40px minmax(0, 1fr);
-  min-height: 42px;
-  padding: 0.35rem 0.1rem;
+  min-height: 60px;
+  padding: 0.65rem 0.3rem;
 }
 .home-routine-row:last-child {
   border-bottom: 0;
@@ -2000,7 +1999,7 @@ html.native-shell .home-section-overlap {
 }
 .home-routine-copy small {
   color: var(--colour-muted);
-  font-size: 0.625rem;
+  font-size: var(--font-small);
 }
 /* The due-date/day line — secondary to the title, but the strongest of the
    two small lines, so "Today · Wednesday" reads before the quieter
@@ -7333,11 +7332,22 @@ button.danger,
     font-size: .92rem;
   }
   .budget-page .budget-stat-card {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    display: grid;
+    gap: .35rem;
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+  .budget-page .budget-stat-card .budget-icon {
+    flex-basis: 24px;
+    height: 24px;
+    width: 24px;
+  }
+  .budget-page .budget-stat-card > span:last-child {
+    min-width: 0;
   }
   .budget-page .budget-stat-card strong {
-    font-size: .92rem;
+    font-size: clamp(.62rem, 2.6vw, .92rem);
+    max-width: 100%;
   }
 }
 
@@ -7493,35 +7503,48 @@ select.plan-meal-field-input {
 }
 .meal-library-toolbar {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.7rem;
+  grid-template-columns: minmax(0, 1fr) auto;
   margin-bottom: 0.7rem;
 }
 .meal-library-toolbar input[type="search"] {
-  flex: 1;
-  min-width: 160px;
+  min-width: 0;
 }
 .meal-library-filter {
-  margin-bottom: 1rem;
-  max-width: 220px;
+  margin: 0;
+  max-width: 11.5rem;
+}
+.meal-library-section {
+  padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 5.5rem);
 }
 .meal-library-grid {
   display: grid;
   gap: 0.9rem;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
-.meal-library-card {
+.meal-card {
   display: grid;
-  gap: 0.5rem;
+  gap: 0;
+  overflow: hidden;
   padding: 0;
+}
+.meal-card-image {
+  height: clamp(140px, 42vw, 170px);
+  object-fit: cover;
+  width: 100%;
+}
+.meal-card-content {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
 }
 .meal-library-card-body {
   background: none;
   color: var(--colour-slate);
   display: grid;
   gap: 0.5rem;
-  padding: 1rem 1.1rem 0;
+  padding: 0;
   text-align: left;
   width: 100%;
 }
@@ -7546,7 +7569,7 @@ select.plan-meal-field-input {
   align-items: center;
   display: flex;
   gap: 0.4rem;
-  padding: 0 1.1rem 1rem;
+  padding: 0;
 }
 .meal-library-actions .secondary {
   flex: 1;
@@ -7588,6 +7611,61 @@ select.plan-meal-field-input {
 }
 .meal-actions-sheet button {
   justify-content: flex-start;
+}
+.meal-add-choice-list,
+.meal-recipe-import-form {
+  display: grid;
+  gap: 0.75rem;
+}
+.meal-add-choice {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid var(--colour-border);
+  border-radius: var(--radius-small);
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.85rem;
+  text-align: left;
+}
+.meal-add-choice > span {
+  display: grid;
+  gap: 0.15rem;
+}
+.meal-add-choice small,
+.meal-recipe-source a {
+  color: var(--colour-muted);
+}
+.meal-image-field {
+  display: grid;
+  gap: 0.5rem;
+}
+.meal-form-image-preview {
+  border-radius: var(--radius-small);
+  height: 150px;
+  object-fit: cover;
+  width: 100%;
+}
+.meal-image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.meal-photo-placeholder {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border: 1px dashed var(--colour-border);
+  border-radius: var(--radius-small);
+  color: var(--colour-forest);
+  display: inline-flex;
+  gap: 0.4rem;
+  justify-content: center;
+  min-height: 64px;
+}
+.meal-recipe-source {
+  display: grid;
+  gap: 0.25rem;
 }
 .meal-copy-week-button {
   margin-bottom: 0.75rem;

@@ -2437,6 +2437,7 @@ class Meal(UuidTimeMixin, Base):
     # deliberately doesn't add a second image-storage pipeline alongside
     # mykhaya/avatars/. See docs/architecture/meal-plans.md "Deferred".
     image_url: Mapped[str | None] = mapped_column(String(2000))
+    image_key: Mapped[str | None] = mapped_column(String(64))
     meal_type: Mapped[MealType] = mapped_column(
         Enum(MealType, name="meal_type"),
         default=MealType.dinner,

@@ -3,6 +3,9 @@ import type { EventOccurrence, Home, Reminder, Routine } from "@mykhaya/shared-t
 import {
   WIDGET_SNAPSHOT_SCHEMA_VERSION,
   buildWidgetSnapshot,
+  eventOverlapsWidgetRange,
+  fallbackWidgetCalendarRange,
+  type WidgetCalendarRange,
   emptyHomeWidgetSnapshot,
   signedOutWidgetSnapshot,
 } from "./widget-snapshot";
@@ -143,10 +146,10 @@ describe("buildWidgetSnapshot — Next Event selection", () => {
   it("does not skip an event still to come later today (regression: today's events must not be dropped)", () => {
     const laterToday = occurrence({
       occurrence_id: "occ-later",
-      start_at: "2026-09-03T18:00:00.000Z",
-      end_at: "2026-09-03T19:00:00.000Z",
+      start_at: new Date(2026, 8, 3, 18).toISOString(),
+      end_at: new Date(2026, 8, 3, 19).toISOString(),
     });
-    const snapshot = buildWidgetSnapshot({ activeHome: HOME, occurrences: [laterToday], routines: [], reminders: [], now: NOW });
+    const snapshot = buildWidgetSnapshot({ activeHome: HOME, occurrences: [laterToday], routines: [], reminders: [], now: new Date(2026, 8, 3, 9, 30) });
     expect(snapshot.upcomingEvents.map((e) => e.id)).toEqual(["occ-later"]);
     expect(snapshot.todayEvents.map((e) => e.id)).toEqual(["occ-later"]);
   });
@@ -242,8 +245,8 @@ describe("buildWidgetSnapshot — Calendar (month) shaping", () => {
     expect(snapshot.monthEvents.map((e) => e.id)).toContain("occ-end");
   });
 
-  it("excludes an event entirely in the following month", () => {
-    const event = occurrence({ occurrence_id: "occ-october", start_at: "2026-10-05T09:00:00.000Z", end_at: "2026-10-05T10:00:00.000Z" });
+  it("excludes an event beyond the visible grid (not merely beyond the month)", () => {
+    const event = occurrence({ occurrence_id: "occ-october", start_at: "2026-10-20T09:00:00.000Z", end_at: "2026-10-20T10:00:00.000Z" });
     const snapshot = buildWidgetSnapshot({ activeHome: HOME, occurrences: [event], routines: [], reminders: [], now: NOW });
     expect(snapshot.monthEvents.map((e) => e.id)).not.toContain("occ-october");
   });
@@ -265,6 +268,75 @@ describe("buildWidgetSnapshot — Calendar (month) shaping", () => {
     );
     const snapshot = buildWidgetSnapshot({ activeHome: HOME, occurrences: events, routines: [], reminders: [], now: NOW });
     expect(snapshot.monthEvents).toHaveLength(5);
+  });
+});
+
+function visibleRange(startDate: string, endDate: string): WidgetCalendarRange {
+  const localMidnight = (key: string) => {
+    const [year, month, day] = key.split("-").map(Number);
+    return new Date(year!, month! - 1, day).toISOString();
+  };
+  return { startDate, endDate, startAt: localMidnight(startDate), endAt: localMidnight(endDate) };
+}
+
+describe("Calendar widget visible range regressions", () => {
+  const week = visibleRange("2026-09-28", "2026-10-05");
+  const allDay = (start: string, end: string, id = start) => occurrence({
+    occurrence_id: id, is_all_day: true,
+    start_at: `${start}T00:00:00Z`, end_at: `${end}T00:00:00Z`,
+  });
+  const build = (occurrences: EventOccurrence[], calendarRange = week) => buildWidgetSnapshot({
+    activeHome: HOME, occurrences, routines: [], reminders: [], calendarRange,
+    now: new Date(2026, 8, 28, 12),
+  });
+
+  it("A: retains September and October dates in the same week", () => {
+    const events = [allDay("2026-09-28", "2026-09-29"), allDay("2026-09-30", "2026-10-01"),
+      allDay("2026-10-01", "2026-10-02"), allDay("2026-10-02", "2026-10-03"), allDay("2026-10-03", "2026-10-04")];
+    expect(build(events).monthEvents.map((e) => e.id)).toEqual(events.map((e) => e.occurrence_id));
+  });
+
+  it("B/E: a 1–5 October exclusive trip covers only 1, 2, 3 and 4 October", () => {
+    const trip = allDay("2026-10-01", "2026-10-05", "trip");
+    expect(build([trip]).monthEvents).toHaveLength(1);
+    for (let day = 1; day <= 5; day++) {
+      expect(eventOverlapsWidgetRange(trip, visibleRange(`2026-10-0${day}`, `2026-10-0${day + 1}`))).toBe(day < 5);
+    }
+    expect(eventOverlapsWidgetRange(trip, visibleRange("2026-09-30", "2026-10-01"))).toBe(false);
+  });
+
+  it("C: excludes all-day and timed events on 5 October and those ending at the range start", () => {
+    const events = [allDay("2026-10-05", "2026-10-06"), allDay("2026-09-27", "2026-09-28"),
+      occurrence({ start_at: week.endAt, end_at: new Date(Date.parse(week.endAt) + 3600000).toISOString() }),
+      occurrence({ start_at: new Date(Date.parse(week.startAt) - 3600000).toISOString(), end_at: week.startAt })];
+    expect(build(events).monthEvents).toEqual([]);
+  });
+
+  it.each([
+    ["2026-12-28", "2027-01-04", "2026-12-31", "2027-01-01", "2027-01-02"],
+    ["2026-10-26", "2026-11-02", "2026-10-31", "2026-11-01", "2026-11-02"],
+    ["2026-09-07", "2026-09-14", "2026-09-09", "2026-09-10", "2026-09-11"],
+  ])("D/F: covers both years/months and ordinary weeks (%s)", (start, end, first, second, third) => {
+    expect(build([allDay(first, second), allDay(second, third)], visibleRange(start, end)).monthEvents).toHaveLength(2);
+  });
+
+  it("retains timed multi-day events starting before the week", () => {
+    const event = occurrence({ start_at: new Date(Date.parse(week.startAt) - 3600000).toISOString(),
+      end_at: new Date(Date.parse(week.startAt) + 3600000).toISOString() });
+    expect(build([event]).monthEvents).toHaveLength(1);
+  });
+
+  it("does not truncate the visible range at 250 events", () => {
+    const events = Array.from({ length: 301 }, (_, i) => allDay("2026-10-01", "2026-10-02", `event-${i}`));
+    expect(build(events).monthEvents).toHaveLength(301);
+  });
+
+  it("supports previous-month events when refreshed in October, and old-shell grid coverage", () => {
+    const range = fallbackWidgetCalendarRange(new Date(2026, 9, 1, 12));
+    expect(eventOverlapsWidgetRange(allDay("2026-09-28", "2026-09-29"), range)).toBe(true);
+    const snapshot = buildWidgetSnapshot({ activeHome: HOME, occurrences: [allDay("2026-10-01", "2026-10-02")],
+      routines: [], reminders: [], now: new Date(2026, 9, 2, 0, 1) });
+    expect(snapshot.todayEvents).toEqual([]);
   });
 });
 

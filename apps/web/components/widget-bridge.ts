@@ -1,10 +1,13 @@
 import { registerPlugin } from "@capacitor/core";
 import { api } from "@mykhaya/api-client";
+import type { EventOccurrence } from "@mykhaya/shared-types";
 import { nativePlatform } from "./native-runtime";
 import {
   type WidgetSnapshot,
+  type WidgetCalendarRange,
   buildWidgetSnapshot,
   emptyHomeWidgetSnapshot,
+  fallbackWidgetCalendarRange,
   signedOutWidgetSnapshot,
 } from "./widget-snapshot";
 
@@ -26,6 +29,8 @@ import {
  * though the native session had already been cleared (Android Phase 2B).
  */
 export interface WidgetBridgePlugin {
+  /** Same Calendar.current/grid helper as the native Calendar widget. */
+  getCalendarRange(): Promise<WidgetCalendarRange>;
   /** Atomically replaces the shared App Group snapshot with `json` (the
    *  JSON-encoded WidgetSnapshot) and requests WidgetKit reload every
    *  MyKhaya widget timeline. */
@@ -36,6 +41,30 @@ export interface WidgetBridgePlugin {
 }
 
 const WidgetBridge = registerPlugin<WidgetBridgePlugin>("WidgetBridge");
+
+async function fetchWidgetEvents(homeId: string, range: { start_at: string; end_at: string }): Promise<EventOccurrence[]> {
+  const ownEvents = async () => {
+    const items: EventOccurrence[] = [];
+    let page = 1;
+    while (true) {
+      const response = await api.listEvents(homeId, { ...range, page, page_size: 300 });
+      items.push(...response.items);
+      if (!response.next_page) return items;
+      if (response.next_page <= page || response.next_page > 10_000) throw new Error("Invalid calendar pagination");
+      page = response.next_page;
+    }
+  };
+  const [own, shares] = await Promise.all([
+    ownEvents().catch(() => []),
+    api.sharedCalendars().catch(() => ({ items: [] })),
+  ]);
+  // Reuse the same accepted-share endpoints as the main Calendar. These
+  // enforce recipient/category permissions and expand recurrences server-side.
+  const shared = await Promise.all(shares.items.map((share) =>
+    api.listSharedEvents(share.id, range).then((response) => response.items).catch(() => []),
+  ));
+  return [...new Map([...own, ...shared.flat()].map((event) => [event.occurrence_id, event])).values()];
+}
 
 let inFlight: Promise<void> | null = null;
 
@@ -75,24 +104,28 @@ export function syncWidgetSnapshot(): Promise<void> {
       }
 
       const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+      // Old App Store binaries don't yet implement this additive method.
+      const calendarRange = await WidgetBridge.getCalendarRange().catch(() => fallbackWidgetCalendarRange(now));
+      // The API accepts instants for both event kinds. Query the union of
+      // timed local-midnight boundaries and canonical UTC all-day boundaries;
+      // snapshot shaping then applies each kind's exact overlap semantics.
+      // No fixed offset or all-day date conversion is involved.
+      const queryStart = new Date(Math.min(Date.parse(calendarRange.startAt), Date.parse(`${calendarRange.startDate}T00:00:00Z`)));
+      const queryEnd = new Date(Math.max(Date.parse(calendarRange.endAt), Date.parse(`${calendarRange.endDate}T00:00:00Z`),
+        // Retain the existing Next Event widget's look-ahead horizon. Only
+        // its next three results, not this whole horizon, enter the cache.
+        new Date(now.getFullYear(), now.getMonth() + 2, 0).getTime()));
 
-      const [eventsResponse, routinesResponse, remindersResponse] = await Promise.all([
-        api
-          .listEvents(activeHome.id, {
-            start_at: monthStart.toISOString(),
-            end_at: monthEnd.toISOString(),
-            page_size: 300,
-          })
-          .catch(() => ({ items: [] })),
+      const [occurrences, routinesResponse, remindersResponse] = await Promise.all([
+        fetchWidgetEvents(activeHome.id, { start_at: queryStart.toISOString(), end_at: queryEnd.toISOString() }),
         api.routines(activeHome.id).catch(() => ({ items: [] })),
         api.reminders(activeHome.id).catch(() => ({ items: [] })),
       ]);
 
       const snapshot = buildWidgetSnapshot({
         activeHome,
-        occurrences: eventsResponse.items,
+        occurrences,
+        calendarRange,
         routines: routinesResponse.items,
         reminders: remindersResponse.items,
         now,

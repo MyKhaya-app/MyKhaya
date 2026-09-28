@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CalendarDays,
@@ -10,6 +10,8 @@ import {
   ChevronRight,
   Clock,
   Copy,
+  FilePlus2,
+  Link2,
   ListPlus,
   MoreVertical,
   Pencil,
@@ -33,14 +35,18 @@ import type {
   MealType,
   Member,
   RecentMeal,
+  RecipeImportDraft,
 } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
+import { ProtectedImage } from "@/components/protected-image";
 import { Avatar, AvatarStack } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
+import { isNativeShell } from "@/components/native-runtime";
+import { pickAvatarFromGallery } from "@/components/native-avatar-picker";
 import { useDaySwipe } from "./use-day-swipe";
 
 // Meal Plans is a native MyKhaya module, not a bolted-on mini-app — this
@@ -154,6 +160,14 @@ function ingredientLine(
   return [ingredient.quantity, ingredient.unit, ingredient.text]
     .filter(Boolean)
     .join(" ");
+}
+
+function recipeSourceName(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 // What PlanFromMealSheet actually needs — satisfied by both the library's
@@ -922,9 +936,9 @@ function MealEntrySheet({
       >
         <div className="meal-view-details">
           {entry.meal_image_url && (
-            <img
+            <ProtectedImage
               className="meal-view-image"
-              src={entry.meal_image_url}
+              path={entry.meal_image_url}
               alt=""
             />
           )}
@@ -1614,6 +1628,9 @@ function MealsLibraryTab({
   // "" is the sentinel for "creating a new meal" — distinct from null
   // (sheet closed) and from any real meal id (editing that meal).
   const [editingMealId, setEditingMealId] = useState<string | null>(null);
+  const [addMealChoiceOpen, setAddMealChoiceOpen] = useState(false);
+  const [recipeImportOpen, setRecipeImportOpen] = useState(false);
+  const [importedDraft, setImportedDraft] = useState<RecipeImportDraft | null>(null);
   const [viewingMealId, setViewingMealId] = useState<string | null>(null);
   const [planning, setPlanning] = useState<PlannableMeal | null>(null);
   const [actionsFor, setActionsFor] = useState<MealSummary | null>(null);
@@ -1687,7 +1704,7 @@ function MealsLibraryTab({
   }
 
   return (
-    <section>
+    <section className="meal-library-section">
       <div className="meal-library-toolbar">
         <input
           type="search"
@@ -1696,34 +1713,40 @@ function MealsLibraryTab({
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Search meals"
         />
-        <button type="button" onClick={() => setEditingMealId("")}>
-          <Plus size={16} aria-hidden="true" /> Add meal
-        </button>
+        <div
+          className="meal-view-toggle meal-library-filter"
+          role="tablist"
+          aria-label="Filter meals"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!favouritesOnly}
+            className={!favouritesOnly ? "toggle-active" : "secondary"}
+            onClick={() => setFavouritesOnly(false)}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={favouritesOnly}
+            className={favouritesOnly ? "toggle-active" : "secondary"}
+            onClick={() => setFavouritesOnly(true)}
+          >
+            Favourites
+          </button>
+        </div>
       </div>
-      <div
-        className="meal-view-toggle meal-library-filter"
-        role="tablist"
-        aria-label="Filter meals"
+      <button
+        type="button"
+        className="rr-fab"
+        aria-label="Add meal"
+        onClick={() => setAddMealChoiceOpen(true)}
       >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!favouritesOnly}
-          className={!favouritesOnly ? "toggle-active" : "secondary"}
-          onClick={() => setFavouritesOnly(false)}
-        >
-          All
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={favouritesOnly}
-          className={favouritesOnly ? "toggle-active" : "secondary"}
-          onClick={() => setFavouritesOnly(true)}
-        >
-          Favourites
-        </button>
-      </div>
+        <Plus size={22} aria-hidden="true" />
+        <span aria-hidden="true">Add</span>
+      </button>
 
       {!query && !favouritesOnly && recent.length > 0 && (
         <div className="meal-recent-section">
@@ -1760,7 +1783,7 @@ function MealsLibraryTab({
             <button
               type="button"
               className="secondary"
-              onClick={() => setEditingMealId("")}
+              onClick={() => setAddMealChoiceOpen(true)}
             >
               <Plus size={16} aria-hidden="true" /> Add your first meal
             </button>
@@ -1769,7 +1792,11 @@ function MealsLibraryTab({
       ) : (
         <div className="meal-library-grid">
           {meals.map((meal) => (
-            <article className="card meal-library-card" key={meal.id}>
+            <article className="card meal-card" key={meal.id}>
+              {meal.image_url && (
+                <ProtectedImage className="meal-card-image" path={meal.image_url} alt="" />
+              )}
+              <div className="meal-card-content">
               <button
                 type="button"
                 className="meal-library-card-body"
@@ -1808,6 +1835,7 @@ function MealsLibraryTab({
                   <MoreVertical size={16} aria-hidden="true" />
                 </button>
               </div>
+              </div>
             </article>
           ))}
         </div>
@@ -1827,6 +1855,36 @@ function MealsLibraryTab({
             setActionsFor(null);
           }}
           onDelete={() => void removeMeal(actionsFor)}
+        />
+      )}
+      {addMealChoiceOpen && (
+        <MealAddChoiceSheet
+          onClose={() => setAddMealChoiceOpen(false)}
+          onCreate={() => {
+            setAddMealChoiceOpen(false);
+            setImportedDraft(null);
+            setEditingMealId("");
+          }}
+          onImport={() => {
+            setAddMealChoiceOpen(false);
+            setRecipeImportOpen(true);
+          }}
+        />
+      )}
+      {recipeImportOpen && (
+        <RecipeImportSheet
+          homeId={homeId}
+          onClose={() => setRecipeImportOpen(false)}
+          onImported={(draft) => {
+            setRecipeImportOpen(false);
+            setImportedDraft(draft);
+            setEditingMealId("");
+          }}
+          onManual={() => {
+            setRecipeImportOpen(false);
+            setImportedDraft(null);
+            setEditingMealId("");
+          }}
         />
       )}
       {viewingMealId && (
@@ -1855,9 +1913,11 @@ function MealsLibraryTab({
           onClose={() => setEditingMealId(null)}
           onSaved={async () => {
             setEditingMealId(null);
+            setImportedDraft(null);
             await load();
             await loadRecent();
           }}
+          initialDraft={importedDraft}
         />
       )}
       {planning && (
@@ -1875,6 +1935,79 @@ function MealsLibraryTab({
         />
       )}
     </section>
+  );
+}
+
+function MealAddChoiceSheet({
+  onClose,
+  onCreate,
+  onImport,
+}: {
+  onClose: () => void;
+  onCreate: () => void;
+  onImport: () => void;
+}) {
+  return (
+    <BottomSheet title="Add meal" onDismiss={onClose}>
+      <div className="meal-add-choice-list">
+        <button type="button" className="meal-add-choice" onClick={onCreate}>
+          <FilePlus2 size={22} aria-hidden="true" />
+          <span><strong>Create a meal</strong><small>Add the details yourself</small></span>
+          <ChevronRight size={18} aria-hidden="true" />
+        </button>
+        <button type="button" className="meal-add-choice" onClick={onImport}>
+          <Link2 size={22} aria-hidden="true" />
+          <span><strong>Import from a recipe</strong><small>Paste a link and we'll fill it in for you</small></span>
+          <ChevronRight size={18} aria-hidden="true" />
+        </button>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function RecipeImportSheet({
+  homeId,
+  onClose,
+  onImported,
+  onManual,
+}: {
+  homeId: string;
+  onClose: () => void;
+  onImported: (draft: RecipeImportDraft) => void;
+  onManual: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      onImported(await api.importRecipe(homeId, url.trim()));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "We couldn't automatically read this recipe.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <BottomSheet title="Import recipe" onDismiss={onClose}>
+      <form className="meal-recipe-import-form" onSubmit={submit}>
+        <p className="muted">Paste a recipe link and we'll fill in as much as we can.</p>
+        <label>
+          Recipe URL
+          <input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.bbcgoodfood.com/recipes/..." required />
+        </label>
+        <FormStatus error={error} />
+        {error && <p className="muted">You can still add it manually.</p>}
+        {error && <button type="button" className="secondary" onClick={onManual}>Add manually</button>}
+        <button className="sheet-primary" disabled={busy}>{busy ? "Importing…" : "Import recipe"}</button>
+        {error && <button type="button" className="tertiary" onClick={() => setError("")}>Try another link</button>}
+      </form>
+    </BottomSheet>
   );
 }
 
@@ -1964,7 +2097,7 @@ function MealDetailSheet({
     >
       <div className="meal-view-details">
         {meal.image_url && (
-          <img className="meal-view-image" src={meal.image_url} alt="" />
+          <ProtectedImage className="meal-view-image" path={meal.image_url} alt="" />
         )}
         <p className="quiet-state">
           {[
@@ -1981,6 +2114,14 @@ function MealDetailSheet({
           </p>
         )}
         {meal.description && <p className="muted">{meal.description}</p>}
+        {meal.source_url && (
+          <div className="meal-recipe-source">
+            <span className="eyebrow">Recipe source</span>
+            <a href={meal.source_url} target="_blank" rel="noreferrer">
+              {recipeSourceName(meal.source_url)} · View original recipe
+            </a>
+          </div>
+        )}
 
         <span className="eyebrow">Ingredients</span>
         {meal.ingredients.length === 0 ? (
@@ -2024,17 +2165,22 @@ function MealFormSheet({
   mealId,
   onClose,
   onSaved,
+  initialDraft = null,
 }: {
   homeId: string;
   mealId: string | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  initialDraft?: RecipeImportDraft | null;
 }) {
   const [meal, setMeal] = useState<Meal | null>(null);
   const [loading, setLoading] = useState(Boolean(mealId));
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [pendingImage, setPendingImage] = useState<File | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [mealType, setMealType] = useState<MealType>("dinner");
   const [prepMinutes, setPrepMinutes] = useState("");
   const [cookMinutes, setCookMinutes] = useState("");
@@ -2083,6 +2229,26 @@ function MealFormSheet({
     );
   }, [meal]);
 
+  useEffect(() => {
+    if (meal || !initialDraft) return;
+    setName(initialDraft.name);
+    setDescription(initialDraft.description ?? "");
+    setImageUrl(initialDraft.image_url ?? "");
+    setMealType(initialDraft.meal_type);
+    setPrepMinutes(initialDraft.prep_minutes?.toString() ?? "");
+    setCookMinutes(initialDraft.cook_minutes?.toString() ?? "");
+    setServings(initialDraft.servings?.toString() ?? "");
+    setInstructions(initialDraft.instructions ?? "");
+    setSourceUrl(initialDraft.source_url);
+    setIngredients(initialDraft.ingredients);
+  }, [initialDraft, meal]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingImage && imageUrl.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+    };
+  }, [imageUrl, pendingImage]);
+
   function updateIngredient(
     index: number,
     patch: Partial<MealIngredientInput>,
@@ -2094,6 +2260,32 @@ function MealFormSheet({
     );
   }
 
+  async function selectImage(file: File | null) {
+    if (!file) return;
+    setPendingImage(file);
+    setImageUrl(URL.createObjectURL(file));
+  }
+
+  async function uploadImage(event: React.ChangeEvent<HTMLInputElement>) {
+    await selectImage(event.target.files?.[0] ?? null);
+    event.target.value = "";
+  }
+
+  async function chooseImage() {
+    if (!isNativeShell()) {
+      imageInputRef.current?.click();
+      return;
+    }
+    setImageBusy(true);
+    try {
+      await selectImage(await pickAvatarFromGallery());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not add that photo.");
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim()) {
@@ -2103,10 +2295,14 @@ function MealFormSheet({
     setBusy(true);
     setError("");
     try {
+      let savedImageUrl = pendingImage ? null : imageUrl.trim() || null;
+      if (meal && pendingImage) {
+        savedImageUrl = (await api.uploadMealImage(homeId, meal.id, pendingImage)).image_url;
+      }
       const payload = {
         name: name.trim(),
         description: description.trim() || null,
-        image_url: imageUrl.trim() || null,
+        image_url: savedImageUrl,
         meal_type: mealType,
         prep_minutes: prepMinutes ? Number(prepMinutes) : null,
         cook_minutes: cookMinutes ? Number(cookMinutes) : null,
@@ -2126,7 +2322,8 @@ function MealFormSheet({
           expected_updated_at: meal.updated_at,
         });
       } else {
-        await api.createMeal(homeId, payload);
+        const created = await api.createMeal(homeId, payload);
+        if (pendingImage) await api.uploadMealImage(homeId, created.id, pendingImage);
       }
       await onSaved();
     } catch (cause) {
@@ -2162,6 +2359,26 @@ function MealFormSheet({
             required
           />
         </label>
+        <div className="meal-image-field">
+          {imageUrl ? (
+            <>
+              {pendingImage ? (
+                <img className="meal-form-image-preview" src={imageUrl} alt="" />
+              ) : (
+                <ProtectedImage className="meal-form-image-preview" path={imageUrl} alt="" />
+              )}
+              <div className="meal-image-actions">
+                <button type="button" className="secondary" onClick={() => void chooseImage()} disabled={imageBusy}>Change photo</button>
+                <button type="button" className="tertiary" onClick={() => { setPendingImage(null); setImageUrl(""); }}>Remove photo</button>
+              </div>
+            </>
+          ) : (
+            <button type="button" className="meal-photo-placeholder" onClick={() => void chooseImage()} disabled={imageBusy}>
+              <Plus size={18} aria-hidden="true" /> {imageBusy ? "Adding photo…" : "Add photo"}
+            </button>
+          )}
+          <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/*" onChange={uploadImage} />
+        </div>
         <div className="meal-form-row">
           <label>
             Category

@@ -148,7 +148,7 @@ kept in sync by hand):
   activeHome: { id, displayName } | null,
   upcomingEvents: WidgetEvent[],   // next 3, not-yet-finished
   todayEvents: WidgetEvent[],      // spans today (all-day/multi-day aware)
-  monthEvents: WidgetEvent[],      // current month, capped at 250
+  monthEvents: WidgetEvent[],      // full visible grid range, including adjacent months
   todoItems: WidgetTodoItem[],     // overdue, then today, then upcoming; capped at 12
 }
 ```
@@ -169,6 +169,38 @@ encoded JSON never contains the substrings `token`, `password`, `cookie`,
 Storage is one atomically-written JSON file in the App Group container
 (`Data.write(options: .atomic)`), not scattered `UserDefaults` keys — see
 `WidgetSnapshotStore.swift`.
+
+### Calendar range contract
+
+`monthEvents` retains its schema-v1 wire name for installed widgets, but is
+not a month-only list. `WidgetBridge.getCalendarRange()` uses WidgetCore's
+`monthGridDays` with `Calendar.current` to report the exact 42-cell visible
+month grid. This contains the complete current week as well, including dates
+in either adjacent month/year. Both widget sizes share that one event list;
+the week renderer clips it to its own seven-day half-open range.
+
+The bridge fetches all `next_page` pages plus the same accepted shared
+calendars as the main Calendar. It retains the existing Next Event look-ahead
+horizon in the fetch, but only grid-overlapping events and the next three
+upcoming events enter the snapshot. The former 250-event snapshot truncation
+is removed so row overflow counts and later visible dates stay correct.
+There is no month-only cache key: the App Group file is atomically replaced.
+
+Timed overlap is `start < range.end && end > range.start`. All-day overlap
+uses canonical calendar-date keys, with inclusive start and exclusive end,
+as in the main Calendar. Because the existing API accepts instants for both
+kinds, the fetch covers the union of local timed boundaries and canonical
+UTC-midnight date boundaries; the payload then applies exact per-kind overlap.
+This does not shift all-day dates or use fixed timezone offsets. Recurrence
+expansion, exceptions and access control remain on the existing endpoints.
+
+For older installed binaries without `getCalendarRange`, the live frontend
+uses the bounded union of possible 42-cell grids (48 days), covering any
+device first-weekday setting. After rebuilding iOS, the exact native range
+is used. No schema bump or widget re-add is required; the next successful
+app sync replaces the old month-trimmed payload. The extension remains
+read-only/offline: timeline reloads alone cannot fetch fresh data after the
+cached range has expired; reopening the app is still required.
 
 **Corruption/mismatch handling** (`WidgetSnapshotStore.load()`): a missing
 file, undecodable JSON, or a `schemaVersion` that doesn't match the
