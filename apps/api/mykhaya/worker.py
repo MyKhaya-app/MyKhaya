@@ -20,6 +20,7 @@ from mykhaya.models import (
     NotificationDeliveryStatus,
     OperationalHeartbeat,
     OutboxEvent,
+    PlatformSetting,
     PushSubscription,
     WorkerJobRecord,
 )
@@ -45,6 +46,12 @@ from mykhaya.notifications.push import (
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
 from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    SyslogDispatcher,
+    configure_structlog_forwarding,
+    syslog_config_from_platform_value,
+)
 
 log = structlog.get_logger()
 
@@ -420,7 +427,21 @@ async def process(event_id: uuid.UUID) -> None:
 
 
 async def run() -> None:
-    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    settings = get_settings()
+
+    async def load_syslog_config() -> SyslogConfig:
+        async with SessionFactory() as db:
+            row = await db.scalar(
+                select(PlatformSetting).where(PlatformSetting.key == "central_syslog")
+            )
+        return syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+
+    dispatcher = SyslogDispatcher(
+        settings, service="mykhaya-worker", config_loader=load_syslog_config
+    )
+    configure_structlog_forwarding(dispatcher)
+    await dispatcher.start()
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         while True:
             item = await redis.blpop("mykhaya:jobs", timeout=5)
@@ -453,6 +474,7 @@ async def run() -> None:
                     )
                     await asyncio.sleep(2)
     finally:
+        await dispatcher.stop()
         await redis.aclose()
 
 

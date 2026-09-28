@@ -5,13 +5,12 @@ from datetime import UTC, date, datetime, timedelta
 from redis.asyncio import Redis
 from sqlalchemy import select
 
-from mykhaya.config import get_settings
 from mykhaya.calendar_highlights import sync_due_holiday_sources
+from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.family_retention import scan_family_retention
 from mykhaya.managed_demo_homes import ManagedDemoService
-from mykhaya.models import OperationalHeartbeat, OutboxEvent
-from mykhaya.usage import aggregate_recent_usage, purge_expired_usage_events
+from mykhaya.models import OperationalHeartbeat, OutboxEvent, PlatformSetting
 from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
 from mykhaya.notifications.nudges import scan_due_daily_nudge_summary, scan_due_nudges
@@ -20,6 +19,13 @@ from mykhaya.notifications.routines import scan_due_routines
 from mykhaya.notifications.standalone_reminders import (
     scan_due_reminders as scan_due_standalone_reminders,
 )
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    SyslogDispatcher,
+    configure_structlog_forwarding,
+    syslog_config_from_platform_value,
+)
+from mykhaya.usage import aggregate_recent_usage, purge_expired_usage_events
 
 # Visibility timeout: how long a dequeued-but-not-yet-completed job is hidden
 # from re-selection. This is a lease, not completion — `processed_at` is only
@@ -33,6 +39,18 @@ _last_usage_maintenance_date: date | None = None
 async def run() -> None:
     global _last_usage_maintenance_date
     settings = get_settings()
+    async def load_syslog_config() -> SyslogConfig:
+        async with SessionFactory() as db:
+            row = await db.scalar(
+                select(PlatformSetting).where(PlatformSetting.key == "central_syslog")
+            )
+        return syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+
+    dispatcher = SyslogDispatcher(
+        settings, service="mykhaya-scheduler", config_loader=load_syslog_config
+    )
+    configure_structlog_forwarding(dispatcher)
+    await dispatcher.start()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         while True:
@@ -84,6 +102,7 @@ async def run() -> None:
                 await db.commit()
             await asyncio.sleep(2)
     finally:
+        await dispatcher.stop()
         await redis.aclose()
 
 

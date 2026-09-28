@@ -8,9 +8,12 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from starlette.types import Message
 
 from mykhaya.config import get_settings
+from mykhaya.db import SessionFactory
+from mykhaya.models import PlatformSetting
 from mykhaya.routers import (
     activity,
     auth,
@@ -46,9 +49,29 @@ from mykhaya.routers import (
 from mykhaya.routers import (
     status as status_router,
 )
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    SyslogDispatcher,
+    configure_structlog_forwarding,
+    syslog_config_from_platform_value,
+)
 
 settings = get_settings()
 log = structlog.get_logger()
+
+
+async def _load_syslog_config() -> SyslogConfig:
+    async with SessionFactory() as db:
+        row = await db.scalar(
+            select(PlatformSetting).where(PlatformSetting.key == "central_syslog")
+        )
+    return syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+
+
+syslog_dispatcher = SyslogDispatcher(
+    settings, service="mykhaya-api", config_loader=_load_syslog_config
+)
+configure_structlog_forwarding(syslog_dispatcher)
 
 
 class ApiDocumentationUrls(TypedDict):
@@ -72,6 +95,32 @@ app = FastAPI(
     redoc_url=documentation_urls["redoc_url"],
     openapi_url=documentation_urls["openapi_url"],
 )
+
+
+@app.exception_handler(Exception)
+async def handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Forward an operationally useful, non-sensitive record for uncaught errors."""
+    await log.aerror(
+        "unhandled_exception",
+        request_id=getattr(request.state, "request_id", None),
+        method=request.method,
+        path=request.url.path,
+        exception_type=type(exc).__name__,
+    )
+    return JSONResponse(
+        {"detail": "An unexpected error occurred."},
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
+
+@app.on_event("startup")
+async def start_syslog_forwarder() -> None:
+    await syslog_dispatcher.start()
+
+
+@app.on_event("shutdown")
+async def stop_syslog_forwarder() -> None:
+    await syslog_dispatcher.stop()
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 app.add_middleware(
     CORSMiddleware,
@@ -222,7 +271,8 @@ async def security_and_limits(
         response.headers["Cache-Control"] = (
             "no-store" if request.url.path.startswith("/api/v1/") else "no-cache"
         )
-    await log.ainfo(
+    log_request = log.aerror if response.status_code >= 500 else log.ainfo
+    await log_request(
         "request",
         request_id=request_id,
         method=request.method,

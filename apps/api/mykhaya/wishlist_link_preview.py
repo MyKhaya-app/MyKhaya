@@ -300,12 +300,12 @@ async def _fetch_safely(
             )
             return None
     except httpx.TimeoutException:
-        log.info(
+        log.warning(
             "wishlist_link_preview.timeout", category="timeout", original_host=original_host
         )
         return None
     except httpx.HTTPError as exc:
-        log.info(
+        log.warning(
             "wishlist_link_preview.fetch_failed",
             category="upstream_http_error",
             error=str(exc),
@@ -487,7 +487,7 @@ def _extract_metadata(html_text: str) -> LinkPreviewResult:
         parser.feed(html_text)
     except Exception as exc:  # HTMLParser is fairly forgiving already, but
         # malformed input must never raise out of this pure function.
-        log.info("wishlist_link_preview.html_parse_failed", error=str(exc))
+        log.warning("wishlist_link_preview.html_parse_failed", error=str(exc))
         return LinkPreviewResult()
 
     try:
@@ -495,7 +495,7 @@ def _extract_metadata(html_text: str) -> LinkPreviewResult:
             parser.json_ld_blocks
         )
     except Exception as exc:
-        log.info("wishlist_link_preview.json_ld_parse_failed", error=str(exc))
+        log.warning("wishlist_link_preview.json_ld_parse_failed", error=str(exc))
         json_ld_name, json_ld_image, price, currency = None, None, None, None
 
     # Title preference: JSON-LD Product.name > og:title > <title> — but a

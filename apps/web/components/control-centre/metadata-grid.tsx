@@ -17,14 +17,16 @@ export function CcMetadataGrid({
   children,
   dense = false,
   columns = "auto",
+  className = "",
 }: {
   children: ReactNode;
   dense?: boolean;
   columns?: "auto" | "fixed-2";
+  className?: string;
 }) {
   const columnsClass = columns === "fixed-2" ? "cc-metadata-grid-2col" : "";
   return (
-    <dl className={`cc-metadata-grid ${dense ? "cc-metadata-grid-dense" : ""} ${columnsClass}`.trim()}>
+    <dl className={`cc-metadata-grid ${dense ? "cc-metadata-grid-dense" : ""} ${columnsClass} ${className}`.trim()}>
       {children}
     </dl>
   );

@@ -76,6 +76,7 @@ services:
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
         MYKHAYA_APNS_PRIVATE_KEY: "",
+        MYKHAYA_SYSLOG_DEBUG: "true"
       }
     depends_on:
       {

@@ -161,6 +161,11 @@ from mykhaya.notifications.templates import (
     validate_required_variables,
 )
 from mykhaya.platform_audit import platform_audit
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    current_dispatcher,
+    syslog_config_from_platform_value,
+)
 from mykhaya.platform_health import current_platform_health
 from mykhaya.platform_mfa import (
     build_authentication_options,
@@ -235,6 +240,7 @@ from mykhaya.platform_schemas import (
     SensitiveActionRequest,
     HolidaySourceUpdate,
     SettingUpdate,
+    SyslogSettingsUpdate,
     SmtpSettingsUpdate,
     StripeBillingDiagnosticResponse,
     StripeBillingDiagnosticsResponse,
@@ -5698,6 +5704,112 @@ async def settings_list(
             },
         ],
     }
+
+
+async def _syslog_row(db: AsyncSession) -> PlatformSetting | None:
+    return await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "central_syslog"))
+
+
+@router.get("/logging/syslog")
+async def syslog_settings(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = await _syslog_row(db)
+    config = syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+    dispatcher = current_dispatcher()
+    return config.public_dict(
+        last_success=dispatcher.last_successful_delivery if dispatcher else None,
+        last_error=dispatcher.last_error if dispatcher else None,
+        dropped_count=dispatcher.dropped_count if dispatcher else 0,
+    )
+
+
+@router.get("/logging/syslog/diagnostics")
+async def syslog_diagnostics(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+) -> dict[str, Any]:
+    dispatcher = current_dispatcher()
+    if dispatcher is None:
+        return {
+            "enabled": False,
+            "dispatcher_running": False,
+            "config_loaded": False,
+            "queue_size": 0,
+            "queue_capacity": 1000,
+            "events_seen": 0,
+            "events_queued": 0,
+            "events_sent": 0,
+            "events_filtered": 0,
+            "events_dropped": 0,
+            "transport_failures": 0,
+            "last_dispatch_attempt": None,
+            "last_successful_delivery": None,
+            "last_error": None,
+        }
+    return dispatcher.diagnostics()
+
+
+@router.put("/logging/syslog")
+async def update_syslog_settings(
+    body: SyslogSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    value = body.model_dump(exclude={"reason", "confirmed"})
+    config = SyslogConfig.from_value(value, settings.environment)
+    row = await _syslog_row(db)
+    previous = row.value.get("value") if row else {"enabled": False}
+    if row is None:
+        row = PlatformSetting(key="central_syslog", value={"value": value}, updated_by=context.administrator.id)
+        db.add(row)
+    else:
+        row.value = {"value": value}
+        row.updated_by = context.administrator.id
+    platform_audit(db, request, context, "central_logging.syslog_settings_changed", "platform_setting", reason=body.reason, previous=previous, new=config.public_dict())
+    await db.commit()
+    return config.public_dict()
+
+
+@router.post("/logging/syslog/test")
+async def test_syslog_settings(
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    row = await _syslog_row(db)
+    config = syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+    if not config.enabled or not config.host:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Remote syslog is not enabled and configured.")
+    dispatcher = current_dispatcher()
+    if dispatcher is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Central logging is not running.")
+    event = {
+        "event": "MyKhaya remote syslog test",
+        "event_type": "syslog_test",
+        "level": "info",
+        "request_id": getattr(request.state, "request_id", None),
+    }
+    try:
+        delivered = await dispatcher.enqueue_and_wait(event)
+    except TimeoutError as exc:
+        platform_audit(db, request, context, "central_logging.syslog_test_failed", "platform_setting", reason=body.reason, outcome="failure", failure_category=type(exc).__name__)
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached.") from exc
+    if not delivered:
+        platform_audit(db, request, context, "central_logging.syslog_test_failed", "platform_setting", reason=body.reason, outcome="failure", failure_category="dispatcher_delivery_failed")
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached.")
+    platform_audit(db, request, context, "central_logging.syslog_test_succeeded", "platform_setting", reason=body.reason, new={"event_type": "syslog_test"})
+    await db.commit()
+    return {"message": "Syslog test message sent."}
 
 
 def _holiday_source_payload(source: PlatformHolidaySource, cached_count: int) -> dict[str, Any]:

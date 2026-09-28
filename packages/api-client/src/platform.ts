@@ -28,6 +28,18 @@ export class PlatformClient {
       if (detail && typeof detail === "object" && "message" in detail) {
         throw new ApiError(response.status, String((detail as { message: unknown }).message));
       }
+      if (response.status === 422 && Array.isArray(detail)) {
+        const messages = detail
+          .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const entry = item as { loc?: unknown[]; msg?: unknown };
+            const location = Array.isArray(entry.loc) ? entry.loc.at(-1) : undefined;
+            const message = typeof entry.msg === "string" ? entry.msg : null;
+            return message ? `${typeof location === "string" ? `${location}: ` : ""}${message}` : null;
+          })
+          .filter((message): message is string => Boolean(message));
+        if (messages.length) throw new ApiError(response.status, messages.join(" "));
+      }
       throw new ApiError(
         response.status,
         typeof detail === "string" ? detail : "The request could not be completed.",

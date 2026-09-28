@@ -295,6 +295,18 @@ class SettingUpdate(StrictModel):
     confirmed: Literal[True]
 
 
+class SyslogSettingsUpdate(SensitiveActionRequest):
+    enabled: bool = False
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=6514, ge=1, le=65535)
+    protocol: Literal["udp", "tcp", "tls"] = "tls"
+    facility: int = Field(default=16, ge=0, le=23)
+    environment: str = Field(min_length=1, max_length=80)
+    tls_verify: bool = True
+    minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    timeout_seconds: float = Field(default=2.0, ge=0.1, le=10)
+
+
 class DrivewayDvlaTestRequest(SensitiveActionRequest):
     registration: str = Field(min_length=2, max_length=20)
 

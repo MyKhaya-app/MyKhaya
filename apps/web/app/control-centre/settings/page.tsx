@@ -39,6 +39,57 @@ type EnvironmentItem = { key: string; value: string; category: string; editable:
 
 type SettingsResponse = { settings: SettingItem[]; environment: EnvironmentItem[] };
 type DrivewayDvlaStatus = { enabled: boolean; configured: boolean; endpoint: string; health: { state: string; message?: string } };
+type SyslogSettings = {
+  enabled: boolean;
+  configured: boolean;
+  host: string;
+  port: number;
+  protocol: "udp" | "tcp" | "tls";
+  facility: number;
+  environment: string;
+  tls_verify: boolean;
+  minimum_level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
+  last_successful_delivery: string | null;
+  last_error: string | null;
+  dropped_count: number;
+};
+type SyslogDiagnostics = {
+  events_seen: number;
+  events_queued: number;
+  events_sent: number;
+  events_filtered: number;
+  events_dropped: number;
+  transport_failures: number;
+};
+type SyslogField = "enabled" | "host" | "port" | "protocol" | "facility" | "environment" | "tls_verify" | "minimum_level" | "reason";
+type SyslogFieldErrors = Partial<Record<SyslogField, string>>;
+
+const SYSLOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
+const SYSLOG_FACILITIES = [
+  ...Array.from({ length: 8 }, (_, index) => ({ value: index, label: `Kernel${index} (${index})` })),
+  { value: 8, label: "User-level (8)" },
+  { value: 9, label: "Mail (9)" },
+  { value: 10, label: "System (10)" },
+  { value: 11, label: "Security (11)" },
+  { value: 12, label: "Syslog (12)" },
+  { value: 13, label: "Line printer (13)" },
+  { value: 14, label: "Network news (14)" },
+  { value: 15, label: "UUCP (15)" },
+  ...Array.from({ length: 8 }, (_, index) => ({ value: index + 16, label: `Local${index} (${index + 16})` })),
+];
+
+function formatSyslogTimestamp(value: string | null): string {
+  if (!value) return "No successful delivery recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
 
 // Sections render in this order regardless of API response order; any
 // section not listed here (there shouldn't be one) falls back to the end.
@@ -223,6 +274,13 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
 export default function PlatformSettingsPage() {
   const [data, setData] = useState<SettingsResponse | null>(null);
   const [dvla, setDvla] = useState<DrivewayDvlaStatus | null>(null);
+  const [syslog, setSyslog] = useState<SyslogSettings | null>(null);
+  const [syslogDraft, setSyslogDraft] = useState<SyslogSettings | null>(null);
+  const [syslogDiagnostics, setSyslogDiagnostics] = useState<SyslogDiagnostics | null>(null);
+  const [syslogReason, setSyslogReason] = useState("");
+  const [syslogBusy, setSyslogBusy] = useState(false);
+  const [syslogResult, setSyslogResult] = useState("");
+  const [syslogErrors, setSyslogErrors] = useState<SyslogFieldErrors>({});
   const [testRegistration, setTestRegistration] = useState("");
   const [testResult, setTestResult] = useState("");
   const [testBusy, setTestBusy] = useState(false);
@@ -231,12 +289,17 @@ export default function PlatformSettingsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [settings, dvlaStatus] = await Promise.all([
+      const [settings, dvlaStatus, syslogStatus, diagnostics] = await Promise.all([
         platformApi.get<SettingsResponse>("/settings"),
         platformApi.get<DrivewayDvlaStatus>("/integrations/dvla"),
+        platformApi.get<SyslogSettings>("/logging/syslog"),
+        platformApi.get<SyslogDiagnostics>("/logging/syslog/diagnostics"),
       ]);
       setData(settings);
       setDvla(dvlaStatus);
+      setSyslog(syslogStatus);
+      setSyslogDraft(syslogStatus);
+      setSyslogDiagnostics(diagnostics);
     } catch (cause) {
       setError((cause as Error).message);
     }
@@ -262,6 +325,65 @@ export default function PlatformSettingsPage() {
       setTestResult(cause instanceof Error ? cause.message : "The DVLA connection test failed.");
     } finally {
       setTestBusy(false);
+    }
+  }
+
+  async function saveSyslog(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!syslogDraft || syslogBusy) return;
+    const errors: SyslogFieldErrors = {};
+    if (syslogDraft.enabled && !syslogDraft.host.trim()) errors.host = "Host is required when central logging is enabled.";
+    if (!Number.isInteger(syslogDraft.port) || syslogDraft.port < 1 || syslogDraft.port > 65535) errors.port = "Port must be between 1 and 65535.";
+    if (!Number.isInteger(syslogDraft.facility) || syslogDraft.facility < 0 || syslogDraft.facility > 23) errors.facility = "Facility must be between 0 and 23.";
+    if (!syslogReason.trim() || syslogReason.trim().length < 10) errors.reason = "Reason for this change must be at least 10 characters.";
+    setSyslogErrors(errors);
+    if (Object.keys(errors).length) return;
+    setSyslogBusy(true);
+    setSyslogResult("");
+    try {
+      const saved = await platformApi.put<SyslogSettings>("/logging/syslog", {
+        enabled: syslogDraft.enabled,
+        host: syslogDraft.host,
+        port: syslogDraft.port,
+        protocol: syslogDraft.protocol,
+        facility: syslogDraft.facility,
+        environment: syslogDraft.environment,
+        tls_verify: syslogDraft.tls_verify,
+        minimum_level: syslogDraft.minimum_level,
+        reason: syslogReason,
+        confirmed: true,
+      });
+      setSyslog(saved);
+      setSyslogDraft(saved);
+      setSyslogReason("");
+      setSyslogResult("Central logging settings saved.");
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Unable to save central logging settings.";
+      setSyslogResult(message);
+      if (message.toLowerCase().includes("host")) setSyslogErrors({ host: message });
+      else if (message.toLowerCase().includes("port")) setSyslogErrors({ port: message });
+      else if (message.toLowerCase().includes("facility")) setSyslogErrors({ facility: message });
+      else if (message.toLowerCase().includes("reason")) setSyslogErrors({ reason: message });
+    } finally {
+      setSyslogBusy(false);
+    }
+  }
+
+  async function testSyslog() {
+    if (syslogBusy || !syslog?.enabled || !syslogDraft || JSON.stringify(syslog) !== JSON.stringify(syslogDraft)) return;
+    setSyslogBusy(true);
+    setSyslogResult("");
+    try {
+      const result = await platformApi.post<{ message: string }>("/logging/syslog/test", {
+        reason: "Verify the configured central logging destination",
+        confirmed: true,
+      });
+      setSyslogResult(result.message);
+      await load();
+    } catch (cause) {
+      setSyslogResult(cause instanceof Error ? cause.message : "The syslog test failed.");
+    } finally {
+      setSyslogBusy(false);
     }
   }
 
@@ -300,6 +422,52 @@ export default function PlatformSettingsPage() {
                   {testResult && <p role="status">{testResult}</p>}
                 </div>
               </CcCard>
+              {syslogDraft && syslog && (
+                <CcCard title="Central logging" description="Forward structured platform logs to an RFC 5424 syslog destination. Disabled by default; browser and household data are never sent directly from the client.">
+                  <form className="setting-row-form central-logging-form" onSubmit={(event) => void saveSyslog(event)}>
+                    <CcMetadataGrid className="central-logging-status-grid">
+                      <CcMetadataItem label="Status"><CcBadge tone={syslog.enabled ? "success" : "neutral"}>{syslog.enabled ? "Enabled" : "Disabled"}</CcBadge></CcMetadataItem>
+                      <CcMetadataItem label="Last delivery">{formatSyslogTimestamp(syslog.last_successful_delivery)}</CcMetadataItem>
+                      <CcMetadataItem label="Dropped messages">{syslog.dropped_count}</CcMetadataItem>
+                      <CcMetadataItem label="Last error" span>{syslog.last_error ?? "None"}</CcMetadataItem>
+                    </CcMetadataGrid>
+                    <div className="central-logging-form-grid">
+                      <section>
+                        <h3>Destination</h3>
+                    <CcField label="Enabled" help="Best-effort delivery uses a bounded queue and never blocks requests.">
+                      <input type="checkbox" checked={syslogDraft.enabled} onChange={(event) => setSyslogDraft({ ...syslogDraft, enabled: event.target.checked })} />
+                    </CcField>
+                    <CcField label="Host" error={syslogErrors.host}><input value={syslogDraft.host} onChange={(event) => { setSyslogErrors({}); setSyslogDraft({ ...syslogDraft, host: event.target.value }); }} /></CcField>
+                    <CcField label="Port" error={syslogErrors.port}><input type="number" min={1} max={65535} value={syslogDraft.port} onChange={(event) => { setSyslogErrors({}); setSyslogDraft({ ...syslogDraft, port: Number(event.target.value) }); }} /></CcField>
+                    <CcField label="Protocol"><select value={syslogDraft.protocol} onChange={(event) => setSyslogDraft({ ...syslogDraft, protocol: event.target.value as SyslogSettings["protocol"] })}><option value="tls">TLS</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></CcField>
+                    <CcField label="Facility" error={syslogErrors.facility}><select value={syslogDraft.facility} onChange={(event) => { setSyslogErrors({}); setSyslogDraft({ ...syslogDraft, facility: Number(event.target.value) }); }}>{SYSLOG_FACILITIES.map((facility) => <option key={facility.value} value={facility.value}>{facility.label}</option>)}</select></CcField>
+                      </section>
+                      <section>
+                        <h3>Logging</h3>
+                        <CcField label="Minimum log level"><select value={syslogDraft.minimum_level} onChange={(event) => setSyslogDraft({ ...syslogDraft, minimum_level: event.target.value as SyslogSettings["minimum_level"] })}>{SYSLOG_LEVELS.map((level) => <option key={level} value={level}>{level.charAt(0) + level.slice(1).toLowerCase()}</option>)}</select></CcField>
+                        <CcField label="Environment"><input maxLength={80} value={syslogDraft.environment} onChange={(event) => setSyslogDraft({ ...syslogDraft, environment: event.target.value })} /></CcField>
+                        <CcField label="Verify TLS certificate" help={syslogDraft.protocol === "tls" ? undefined : "Only applies to TLS connections."}><input type="checkbox" disabled={syslogDraft.protocol !== "tls"} checked={syslogDraft.tls_verify} onChange={(event) => setSyslogDraft({ ...syslogDraft, tls_verify: event.target.checked })} /></CcField>
+                        <span className="cc-field-help">Verify the remote certificate</span>
+                      </section>
+                    </div>
+                    <section className="central-logging-change-control">
+                      <h3>Change control</h3>
+                    <CcField label="Reason for this change" error={syslogErrors.reason}><input minLength={10} maxLength={500} required value={syslogReason} onChange={(event) => { setSyslogErrors({}); setSyslogReason(event.target.value); }} /></CcField>
+                      <p className="cc-page-meta">Recent administrator authentication is required to change central logging configuration.</p>
+                    </section>
+                    <div className="cc-inline-form"><button type="submit" disabled={syslogBusy}>{syslogBusy ? "Saving…" : "Save settings"}</button><button className="button secondary" type="button" onClick={() => void testSyslog()} disabled={syslogBusy || !syslog?.enabled || !syslogDraft || JSON.stringify(syslog) !== JSON.stringify(syslogDraft)}>{syslogBusy ? "Testing…" : "Send test message"}</button></div>
+                  </form>
+                  {syslogDiagnostics && <details className="central-logging-diagnostics"><summary>Advanced diagnostics</summary><CcMetadataGrid>
+                    <CcMetadataItem label="Events seen">{syslogDiagnostics.events_seen}</CcMetadataItem>
+                    <CcMetadataItem label="Events queued">{syslogDiagnostics.events_queued}</CcMetadataItem>
+                    <CcMetadataItem label="Events sent">{syslogDiagnostics.events_sent}</CcMetadataItem>
+                    <CcMetadataItem label="Events filtered">{syslogDiagnostics.events_filtered}</CcMetadataItem>
+                    <CcMetadataItem label="Events dropped">{syslogDiagnostics.events_dropped}</CcMetadataItem>
+                    <CcMetadataItem label="Transport failures">{syslogDiagnostics.transport_failures}</CcMetadataItem>
+                  </CcMetadataGrid></details>}
+                  {syslogResult && <p role="status" className="cc-page-meta">{syslogResult}</p>}
+                </CcCard>
+              )}
               {groupBySection(data.settings).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">
                   <h2>{section}</h2>

@@ -1123,6 +1123,10 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.central-logging-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 
 .cc-technical-value {
   color: var(--cc-text-muted);
@@ -1180,6 +1184,9 @@
 }
 
 @media (max-width: 640px) {
+  .central-logging-status-grid {
+    grid-template-columns: 1fr;
+  }
   .cc-metadata-grid-2col {
     grid-template-columns: 1fr;
   }
@@ -3607,3 +3614,18 @@
 .pcc-root .cc-attachment-tile img { aspect-ratio: 4 / 3; background: var(--cc-bg); border-radius: 4px; object-fit: cover; width: 100%; }
 .pcc-root .cc-attachment-fallback { align-items: center; aspect-ratio: 4 / 3; background: var(--cc-bg); border-radius: 4px; color: var(--cc-text-muted); display: flex; font-size: 0.74rem; justify-content: center; }
 .pcc-root .cc-attachment-name { color: var(--cc-text-muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pcc-root .central-logging-form { gap: 0; max-width: none; }
+.pcc-root .central-logging-status-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; }
+.pcc-root .central-logging-form-grid { display: grid; gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcc-root .central-logging-form-grid section { min-width: 0; }
+.pcc-root .central-logging-form-grid h3, .pcc-root .central-logging-change-control h3 { border-bottom: 1px solid var(--cc-border); color: var(--cc-text); font-size: 13px; margin: 0 0 14px; padding-bottom: 9px; }
+.pcc-root .central-logging-change-control { border-top: 1px solid var(--cc-border); margin-top: 8px; padding-top: 18px; }
+.pcc-root .central-logging-change-control .cc-field { max-width: none; }
+.pcc-root .central-logging-change-control input { max-width: none; width: 100%; }
+.pcc-root .central-logging-diagnostics { border-top: 1px solid var(--cc-border); margin-top: 18px; padding-top: 14px; }
+.pcc-root .central-logging-diagnostics summary { color: var(--cc-text-muted); cursor: pointer; font-size: 12px; font-weight: 700; }
+.pcc-root .central-logging-diagnostics .cc-metadata-grid { margin-top: 10px; }
+@media (max-width: 1024px) { .pcc-root .central-logging-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .pcc-root .central-logging-form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .pcc-root .central-logging-status-grid { grid-template-columns: 1fr; } }

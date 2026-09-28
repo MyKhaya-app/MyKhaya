@@ -78,10 +78,13 @@ function baseSettings() {
   };
 }
 
-function mockRoutes(settings = baseSettings()) {
+function mockRoutes(settings = baseSettings(), syslogOverrides: Record<string, unknown> = {}) {
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
+    if (path === "/integrations/dvla") return Promise.resolve({ enabled: false, configured: false, endpoint: "", health: { state: "Disabled" } });
+    if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
+    if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_dropped: 0, transport_failures: 0 });
     throw new Error(`Unexpected GET ${path}`);
   });
 }
@@ -199,6 +202,81 @@ describe("PCC Settings — saving a normal setting", () => {
     await waitFor(() => expect(put).toHaveBeenCalled());
     await within(row).findByText("That must be a valid http(s) URL.");
     expect(urlInput).toHaveValue("ftp://status.example.com");
+  });
+});
+
+describe("PCC Settings — central logging", () => {
+  it("sends only the backend configuration contract when saving", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", last_successful_delivery: null, last_error: null, dropped_count: 0 });
+    render(<PlatformSettingsPage />);
+
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    await user.click(within(card).getByLabelText("Enabled"));
+    await user.type(within(card).getByLabelText("Host"), "graylog.internal");
+    await user.type(within(card).getByLabelText("Reason for this change"), "Enable central logging safely");
+    await user.click(within(card).getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", {
+      enabled: true,
+      host: "graylog.internal",
+      port: 6514,
+      protocol: "tls",
+      facility: 16,
+      environment: "test",
+      tls_verify: true,
+      minimum_level: "INFO",
+      reason: "Enable central logging safely",
+      confirmed: true,
+    }));
+    const savedPayload = put.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(savedPayload).not.toHaveProperty("configured");
+    expect(savedPayload).not.toHaveProperty("dropped_count");
+  });
+
+  it("shows field validation and does not submit an enabled configuration without a host", async () => {
+    const user = userEvent.setup();
+    render(<PlatformSettingsPage />);
+
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    await user.click(within(card).getByLabelText("Enabled"));
+    await user.type(within(card).getByLabelText("Reason for this change"), "Enable central logging safely");
+    await user.click(within(card).getByRole("button", { name: "Save settings" }));
+
+    expect(put).not.toHaveBeenCalled();
+    expect(screen.getByText("Host is required when central logging is enabled.")).toBeInTheDocument();
+  });
+
+  it("keeps test message disabled until an enabled configuration is saved", async () => {
+    render(<PlatformSettingsPage />);
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    expect(within(card).getByRole("button", { name: "Send test message" })).toBeDisabled();
+    const statusGrid = card.querySelector(".central-logging-status-grid");
+    expect(statusGrid).toBeInTheDocument();
+    expect(within(statusGrid as HTMLElement).getByText("None").parentElement).toHaveClass("cc-metadata-item-span");
+  });
+
+  it("saves the selected minimum level and disables TLS verification for UDP", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({ enabled: false, configured: false, host: "", port: 6514, protocol: "udp", facility: 16, environment: "test", tls_verify: true, minimum_level: "WARNING", last_successful_delivery: null, last_error: null, dropped_count: 0 });
+    render(<PlatformSettingsPage />);
+
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    await user.selectOptions(within(card).getByLabelText("Minimum log level"), "WARNING");
+    await user.selectOptions(within(card).getByLabelText("Protocol"), "udp");
+    expect(within(card).getByLabelText("Verify TLS certificate")).toBeDisabled();
+    await user.type(within(card).getByLabelText("Reason for this change"), "Adjust remote filtering safely");
+    await user.click(within(card).getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", expect.objectContaining({ minimum_level: "WARNING", protocol: "udp" })));
+  });
+
+  it("renders last delivery as a local human-readable timestamp", async () => {
+    mockRoutes(baseSettings(), { last_successful_delivery: "2026-09-28T18:30:20.818411+00:00" });
+    render(<PlatformSettingsPage />);
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    expect(within(card).queryByText("2026-09-28T18:30:20.818411+00:00")).not.toBeInTheDocument();
+    expect(within(card).getByText(/28 Sept? 2026/)).toBeInTheDocument();
   });
 });
 
