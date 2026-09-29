@@ -78,6 +78,19 @@ MANDATORY_EMAIL_TYPES = {
     "support.ticket.follow_up",
 }
 
+# Notification types whose in-app and push/native-push delivery is mandatory
+# — never suppressible by NotificationPreferences (channel toggles or
+# category gates). Distinct from MANDATORY_EMAIL_TYPES, which forces the
+# EMAIL channel only and deliberately skips in-app/push for those types
+# (e.g. password_reset shouldn't also create an in-app notification). This
+# still respects real delivery constraints that aren't a "preference" —
+# no registered push subscription/device means no push is sent, an inactive
+# recipient account still suppresses delivery, and an OS-level notification
+# permission denial is still honoured (MyKhaya never sees or bypasses that).
+MANDATORY_CHANNEL_TYPES = {
+    "support.ticket.reply_notice",
+}
+
 
 async def get_or_create_preferences(
     db: AsyncSession, user_id: uuid.UUID
@@ -184,9 +197,10 @@ async def notify(
 
     prefs = await get_or_create_preferences(db, recipient_user_id)
     category_enabled = _category_enabled(prefs, notification_type)
+    force_channels = notification_type in MANDATORY_CHANNEL_TYPES
 
     notification: Notification | None = None
-    if not is_mandatory and prefs.in_app_enabled and category_enabled:
+    if force_channels or (not is_mandatory and prefs.in_app_enabled and category_enabled):
         in_app_key = f"{idempotency_key}:in_app"
         already_sent = await db.scalar(
             select(NotificationDelivery.id).where(
@@ -217,7 +231,7 @@ async def notify(
                 )
             )
 
-    if not is_mandatory and prefs.push_enabled and category_enabled:
+    if force_channels or (not is_mandatory and prefs.push_enabled and category_enabled):
         await _enqueue_push(
             db,
             settings=settings,

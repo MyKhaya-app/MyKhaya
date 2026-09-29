@@ -292,6 +292,7 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
             "sound": "default",
         },
         "deep_link": payload.get("deep_link"),
+        "deep_link_path": payload.get("deep_link_path"),
         "notification_type": payload.get("notification_type"),
     }
     # NULL is the backward-compatible state for registrations created before
@@ -427,6 +428,7 @@ def send_fcm(config: FcmConfig, device: NativePushDevice, payload: dict[str, obj
                 "deep_link": json.dumps(payload.get("deep_link"))
                 if payload.get("deep_link")
                 else "",
+                "deep_link_path": str(payload.get("deep_link_path") or ""),
             },
             "android": {
                 "priority": "high",

@@ -173,6 +173,7 @@ describe("native push platform boundary", () => {
     expect(safeNativePushPath("//evil.example/path")).toBe("/home");
     expect(safeNativePushPath("/settings/notifications")).toBe("/settings/notifications");
     expect(safeNativePushPath("/admin/users")).toBe("/home");
+    expect(safeNativePushPath("/help-support/requests/abc-123")).toBe("/help-support/requests/abc-123");
   });
 
   it("does not duplicate listeners and can clean them up for account switching", async () => {

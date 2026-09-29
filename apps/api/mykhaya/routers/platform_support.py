@@ -449,7 +449,10 @@ async def reply_to_ticket(
     await db.flush()
     requester = await db.get(User, ticket.requester_user_id)
     if requester is not None:
-        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await ticket_reply(
+            db, settings, ticket, requester, message.message, message.id,
+            visibility=message.visibility,
+        )
     platform_audit(db, request, context, "support.ticket.replied", "support_ticket", ticket.id)
     await db.commit()
     await db.refresh(message)

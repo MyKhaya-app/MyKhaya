@@ -52,7 +52,7 @@ export function safeNativePushPath(value: unknown): string {
   ) {
     return "/home";
   }
-  const allowed = ["/home", "/calendar", "/calendar/", "/meal-plans", "/people", "/settings/", "/notifications"];
+  const allowed = ["/home", "/calendar", "/calendar/", "/meal-plans", "/people", "/settings/", "/notifications", "/help-support/"];
   return allowed.some((prefix) => value === prefix || value.startsWith(prefix)) ? value : "/home";
 }
 

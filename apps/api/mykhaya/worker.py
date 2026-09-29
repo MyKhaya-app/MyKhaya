@@ -26,6 +26,7 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
+from mykhaya.notifications.deep_links import resolve_path
 from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES
 from mykhaya.notifications.lifecycle import (
     is_home_operationally_active,
@@ -193,6 +194,11 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         "title": event.payload["title"],
         "body": event.payload["body"],
         "deep_link": event.payload.get("deep_link"),
+        # The client's tap handler (native-push.ts) needs an already-resolved
+        # app path, not the structured {type, id} dict — mirrors what
+        # routers/notifications.py already does for the in-app list via the
+        # same resolve_path().
+        "deep_link_path": resolve_path(event.payload.get("deep_link")),
         "notification_type": event.payload.get("notification_type"),
     }
     try:

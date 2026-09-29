@@ -60,6 +60,7 @@ def test_legacy_config_enables_all_categories_and_mapping_is_canonical() -> None
         ("dvla_lookup_failed", "integration"),
         ("integration_provider_failed", "integration"),
         ("support.notification_destination_missing", "integration"),
+        ("support.notification_reply", "integration"),
         ("native_push_unsupported_platform", "integration"),
         ("unhandled_exception", "application"),
         ("unknown_event", "application"),

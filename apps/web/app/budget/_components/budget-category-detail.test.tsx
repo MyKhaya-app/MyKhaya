@@ -10,8 +10,13 @@ const apiMock = vi.hoisted(() => ({
   updateBudgetActual: vi.fn(),
   updateBudgetCategoryNote: vi.fn(),
 }));
+const routerMock = vi.hoisted(() => ({ replace: vi.fn() }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/budget/categories/cat-1" }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/budget/categories/cat-1",
+  useSearchParams: () => new URLSearchParams("year=2026&month=10"),
+  useRouter: () => routerMock,
+}));
 vi.mock("@mykhaya/api-client", async (importOriginal) => ({ ...(await importOriginal<typeof import("@mykhaya/api-client")>()), api: apiMock }));
 vi.mock("@/components/bottom-sheet", () => ({ BottomSheet: ({ title, children }: { title: string; children: React.ReactNode }) => <div role="dialog" aria-label={title}>{children}</div> }));
 vi.mock("./budget-add-action", () => ({ BudgetAddAction: () => null }));
@@ -31,8 +36,10 @@ describe("Budget category detail", () => {
   it("shows persisted category transactions and entry-based totals", async () => {
     render(<BudgetCategoryDetail homeId="home-1" categoryId="cat-1" />);
     expect(await screen.findByText("Primark")).toBeInTheDocument();
-    expect(screen.getByText("£50.00")).toBeInTheDocument();
-    expect(screen.getByText("No spending yet")).not.toBeInTheDocument();
+    expect(screen.getAllByText("£50.00").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No spending yet")).not.toBeInTheDocument();
+    expect(apiMock.budgetMonth).toHaveBeenCalledWith("home-1", 2026, 10);
+    expect(apiMock.budgetEntries).toHaveBeenCalledWith("home-1", { year: 2026, month: 10 });
   });
 
   it("keeps quick actions collapsed until opened", async () => {
@@ -42,6 +49,13 @@ describe("Budget category detail", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Add spending entry" })).toBeInTheDocument();
+  });
+
+  it("moves the selected period with the category detail", async () => {
+    render(<BudgetCategoryDetail homeId="home-1" categoryId="cat-1" />);
+    await screen.findByText("October 2026");
+    fireEvent.click(screen.getByRole("button", { name: "Previous month" }));
+    expect(routerMock.replace).toHaveBeenCalledWith("/budget/categories/cat-1?year=2026&month=9");
   });
 
   it("opens an existing transaction in the edit sheet", async () => {

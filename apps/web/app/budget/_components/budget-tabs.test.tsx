@@ -4,7 +4,10 @@ import { BudgetTabs } from "./budget-tabs";
 
 const pathname = vi.hoisted(() => ({ value: "/budget" }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => pathname.value }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => pathname.value,
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 describe("BudgetTabs", () => {
   it.each([

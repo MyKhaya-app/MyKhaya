@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 const tabs = [
   { href: "/budget", label: "Overview" },
@@ -12,6 +12,10 @@ const tabs = [
 
 export function BudgetTabs() {
   const pathname = usePathname();
+  const params = useSearchParams();
+  const periodQuery = params.get("year") && params.get("month")
+    ? `?year=${encodeURIComponent(params.get("year")!)}&month=${encodeURIComponent(params.get("month")!)}`
+    : "";
   const activeHref = pathname === "/budget"
     ? "/budget"
     : pathname.startsWith("/budget/categories") || pathname === "/budget/edit-plan" || pathname.startsWith("/budget/spending")
@@ -25,7 +29,7 @@ export function BudgetTabs() {
   return (
     <nav className="budget-tabs" aria-label="Budget sections">
       {tabs.map((tab) => (
-        <Link className={tab.href === activeHref ? "active" : ""} href={tab.href} key={tab.href}>
+        <Link className={tab.href === activeHref ? "active" : ""} href={`${tab.href}${periodQuery}`} key={tab.href}>
           {tab.label}
         </Link>
       ))}

@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/await-thenable, @typescript-eslint/no-unused-vars */
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowLeft, BarChart3, CalendarDays, ChevronLeft, ChevronRight, CircleDollarSign, Home, Plus, Share2, ShoppingCart, WalletCards } from "lucide-react";
 import { api, type BudgetCategory, type BudgetMonth, type BudgetSpendingEntry } from "@mykhaya/api-client";
@@ -28,15 +28,24 @@ function Gate({ children }: { children: (homeId: string, currency: string) => Re
 function SheetInput({ id, label: text, value, onChange, type = "text" }: { id: string; label: string; value: string; onChange: (value: string) => void; type?: string }) { return <><label htmlFor={id}>{text}</label><input id={id} className={type === "date" ? "consumer-date-time-control" : undefined} type={type} value={value} onChange={(event) => onChange(event.target.value)} required /></>; }
 function CategorySheet({ homeId, period, category, onClose, onRefresh }: { homeId: string; period: { year: number; month: number }; category?: BudgetCategory; onClose: () => void; onRefresh: () => void }) { const [name, setName] = useState(category?.name ?? ""); const [planned, setPlanned] = useState("0"); const [error, setError] = useState(""); const [saving, setSaving] = useState(false); async function save(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { if (category) { await api.updateBudgetCategory(homeId, category.id, { name }); } else { await api.createBudgetCategory(homeId, { name, year: period.year, month: period.month }); } onRefresh(); onClose(); } catch { setError("Couldn’t save category. Please try again."); } finally { setSaving(false); } } return <BottomSheet title={category ? "Edit category" : "Add category"} onDismiss={() => { if (!saving) onClose(); }}><form className="budget-sheet-form" onSubmit={save}><SheetInput id="category-name" label="Category name" value={name} onChange={setName} /><SheetInput id="category-planned" label="Planned amount (per month)" value={planned} onChange={setPlanned} type="number" />{error && <p role="alert">{error}</p>}<button type="submit" disabled={saving}>{saving ? "Saving…" : category ? "Save changes" : "Create category"}</button>{category && <button type="button" className="budget-destructive-link" onClick={() => api.deleteBudgetCategory(homeId, category.id).then(() => { onRefresh(); onClose(); }).catch(() => setError("Couldn’t delete category. Please try again."))}>Delete category</button>}</form></BottomSheet>; }
 function CategoriesScreen({ homeId }: { homeId: string }) {
-  const [period, setPeriod] = useState(periodNow());
+  const params = useSearchParams();
+  const router = useRouter();
+  const [period, setPeriod] = useState(() => ({
+    year: Number(params.get("year")) || periodNow().year,
+    month: Number(params.get("month")) || periodNow().month,
+  }));
   const [items, setItems] = useState<BudgetCategory[]>([]);
   const [month, setMonth] = useState<BudgetMonth | null>(null);
   const [sheet, setSheet] = useState<BudgetCategory | "add" | null>(null);
   const load = () => { api.budgetCategories(homeId).then(setItems); api.budgetMonth(homeId, period.year, period.month).then(setMonth).catch(() => setMonth(null)); };
   useEffect(() => { load(); }, [homeId, period.year, period.month]);
+  function changePeriod(year: number, month: number) {
+    setPeriod({ year, month });
+    router.replace(`/budget/categories?year=${year}&month=${month}`);
+  }
   return <>
     <Header title="Categories" description="Track where your budget goes." />
-    <Period {...period} onChange={(year, month) => setPeriod({ year, month })} />
+    <Period {...period} onChange={changePeriod} />
     <BudgetMonthCopy homeId={homeId} year={period.year} month={period.month} onCreated={load} subtle />
     <div className="budget-list">{items.map((item) => { const row = month?.categories.find((entry) => entry.category_id === item.id); return <Link className="budget-list-row" key={item.id} href={`/budget/categories/${item.id}?year=${period.year}&month=${period.month}`}><span className="budget-icon"><Home size={21} /></span><span className="budget-row-copy"><strong>{item.name}</strong><small>{row ? `Planned ${money(row.planned_amount)} · Actual ${money(row.actual_amount)}` : "Not planned for this month"}</small></span><ChevronRight size={20} /></Link>; })}</div>
     <button type="button" className="budget-add-card" onClick={() => setSheet("add")}><Plus size={20} /><span><strong>Add category</strong><small>Create a new budget category</small></span><ChevronRight size={20} /></button>

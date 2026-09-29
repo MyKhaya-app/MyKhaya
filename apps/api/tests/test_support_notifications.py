@@ -22,9 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.models import (
+    NativePushDevice,
+    Notification,
+    NotificationPreferences,
     OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
+    SupportMessageVisibility,
     SupportTicket,
     SupportTicketAttachment,
     SupportTicketDiagnostic,
@@ -70,6 +74,56 @@ async def _create_admin(display_name: str = "Assigned Admin") -> PlatformAdminis
         await db.commit()
         await db.refresh(admin)
         return admin
+
+
+async def _create_native_device(user_id: uuid.UUID) -> NativePushDevice:
+    async with SessionFactory() as db:
+        device = NativePushDevice(
+            user_id=user_id,
+            platform="ios",
+            token=f"token-{uuid.uuid4().hex}",
+            installation_id=f"installation-{uuid.uuid4().hex}",
+            apns_environment="sandbox",
+        )
+        db.add(device)
+        await db.commit()
+        await db.refresh(device)
+        return device
+
+
+async def _set_preferences(
+    user_id: uuid.UUID, *, push_enabled: bool = True, in_app_enabled: bool = True
+) -> None:
+    async with SessionFactory() as db:
+        db.add(
+            NotificationPreferences(
+                user_id=user_id, push_enabled=push_enabled, in_app_enabled=in_app_enabled
+            )
+        )
+        await db.commit()
+
+
+async def _notifications_for(user_id: uuid.UUID, notification_type: str) -> list[Notification]:
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(
+                select(Notification).where(
+                    Notification.recipient_user_id == user_id,
+                    Notification.notification_type == notification_type,
+                )
+            )
+        ).all()
+        return list(rows)
+
+
+async def _native_push_events_for(device_id: uuid.UUID) -> list[OutboxEvent]:
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(
+                select(OutboxEvent).where(OutboxEvent.topic == "notification.native_push")
+            )
+        ).all()
+        return [row for row in rows if row.payload.get("native_push_device_id") == str(device_id)]
 
 
 async def _create_ticket(
@@ -624,3 +678,215 @@ async def test_support_emails_never_include_diagnostics_attachments_or_internal_
     reply_and_resolved_types = ("support.ticket.reply", "support.ticket.resolved")
     reply_and_resolved = [p for p in payloads if p["notification_type"] in reply_and_resolved_types]
     assert {p["recipient_email"] for p in reply_and_resolved} == {requester.email}
+
+
+# --------------------------------------------------------------------------
+# Mandatory in-app + native push notification for a staff reply (never a
+# user-configurable preference — see notifications.engine.MANDATORY_CHANNEL_TYPES).
+# --------------------------------------------------------------------------
+
+REPLY_NOTICE_TYPE = "support.ticket.reply_notice"
+
+
+@pytest.mark.asyncio
+async def test_staff_reply_creates_in_app_notification_for_requester() -> None:
+    requester = await _create_user()
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester, subject="Cannot sign in")
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message="Reset your password here."
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await db.commit()
+
+    rows = await _notifications_for(requester.id, REPLY_NOTICE_TYPE)
+    assert len(rows) == 1
+    assert rows[0].title == "MyKhaya Support replied"
+    assert "Cannot sign in" in rows[0].body
+    assert rows[0].read_at is None
+    assert rows[0].deep_link == {"type": "support_ticket", "id": str(ticket.id)}
+
+
+@pytest.mark.asyncio
+async def test_staff_reply_queues_native_push_for_registered_device() -> None:
+    requester = await _create_user()
+    device = await _create_native_device(requester.id)
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester, subject="Billing question")
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message="Here is the invoice breakdown."
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await db.commit()
+
+    events = await _native_push_events_for(device.id)
+    assert len(events) == 1
+    payload = events[0].payload
+    assert payload["title"] == "MyKhaya Support replied"
+    assert payload["notification_type"] == REPLY_NOTICE_TYPE
+    assert payload["deep_link"] == {"type": "support_ticket", "id": str(ticket.id)}
+
+
+@pytest.mark.asyncio
+async def test_users_own_follow_up_reply_does_not_notify_themselves() -> None:
+    requester = await _create_user()
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_user_id=requester.id, message="Adding more detail."
+        )
+        db.add(message)
+        await db.flush()
+        # The requester's own reply goes through ticket_follow_up (team-only),
+        # never ticket_reply — this asserts that boundary holds.
+        await ticket_follow_up(db, settings, ticket, message.message, message.id)
+        await db.commit()
+
+    assert await _notifications_for(requester.id, REPLY_NOTICE_TYPE) == []
+
+
+@pytest.mark.asyncio
+async def test_internal_note_does_not_notify_requester() -> None:
+    requester = await _create_user()
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id,
+            author_admin_id=None,
+            message="Internal-only triage note.",
+            visibility=SupportMessageVisibility.internal,
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_reply(
+            db, settings, ticket, requester, message.message, message.id,
+            visibility=SupportMessageVisibility.internal,
+        )
+        await db.commit()
+
+    assert await _notifications_for(requester.id, REPLY_NOTICE_TYPE) == []
+    assert await _outbox_rows_for(requester.email) == []
+
+
+@pytest.mark.asyncio
+async def test_support_reply_notification_is_not_suppressible_by_preferences() -> None:
+    requester = await _create_user()
+    await _set_preferences(requester.id, push_enabled=False, in_app_enabled=False)
+    device = await _create_native_device(requester.id)
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message="Still mandatory."
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await db.commit()
+
+    # Both channel toggles were off, yet the mandatory notification still went out.
+    assert len(await _notifications_for(requester.id, REPLY_NOTICE_TYPE)) == 1
+    assert len(await _native_push_events_for(device.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_push_failure_does_not_prevent_reply_from_persisting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requester = await _create_user()
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        await db.commit()
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("push dispatch exploded")
+
+    monkeypatch.setattr(
+        "mykhaya.support_notifications._notify_reply_in_app_and_push", boom
+    )
+
+    async with SessionFactory() as db:
+        ticket = await _reload_ticket(db, ticket.id)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message="Reply despite push failure."
+        )
+        db.add(message)
+        await db.flush()
+        # Must not raise, despite the patched function above.
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await db.commit()  # must succeed despite the failure above
+        message_id = message.id
+
+    monkeypatch.undo()
+    async with SessionFactory() as db:
+        reloaded = await db.get(SupportTicketMessage, message_id)
+        assert reloaded is not None
+        assert reloaded.message == "Reply despite push failure."
+    # The (unaffected) email path still queued normally.
+    assert len(await _outbox_rows_for(requester.email)) == 1
+
+
+@pytest.mark.asyncio
+async def test_reply_notice_never_contains_the_support_message_body() -> None:
+    requester = await _create_user()
+    device = await _create_native_device(requester.id)
+    settings = get_settings()
+    secret_reply = "Your account PIN is 4471 — do not share this with anyone."
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester, subject="PIN reset")
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message=secret_reply
+        )
+        db.add(message)
+        await db.flush()
+        await ticket_reply(db, settings, ticket, requester, message.message, message.id)
+        await db.commit()
+
+    in_app = await _notifications_for(requester.id, REPLY_NOTICE_TYPE)
+    assert secret_reply not in in_app[0].title
+    assert secret_reply not in in_app[0].body
+    push_events = await _native_push_events_for(device.id)
+    payload_text = f"{push_events[0].payload['title']} {push_events[0].payload['body']}"
+    assert secret_reply not in payload_text
+    assert "4471" not in payload_text
+    # The email channel is the one place the reply text is expected.
+    email_rows = await _outbox_rows_for(requester.email)
+    reply_email = next(
+        r for r in email_rows if r.payload["notification_type"] == "support.ticket.reply"
+    )
+    assert secret_reply in reply_email.payload["body"]
+
+
+@pytest.mark.asyncio
+async def test_reply_notice_idempotency_key_is_stable_per_message_id() -> None:
+    requester = await _create_user()
+    device = await _create_native_device(requester.id)
+    settings = get_settings()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        message = SupportTicketMessage(
+            ticket_id=ticket.id, author_admin_id=None, message="Retried reply."
+        )
+        db.add(message)
+        await db.flush()
+        message_id = message.id
+        await db.commit()
+
+    async with SessionFactory() as db:
+        ticket = await _reload_ticket(db, ticket.id)
+        # Simulates a retried request re-delivering the same persisted message.
+        await ticket_reply(db, settings, ticket, requester, "Retried reply.", message_id)
+        await ticket_reply(db, settings, ticket, requester, "Retried reply.", message_id)
+        await db.commit()
+
+    assert len(await _notifications_for(requester.id, REPLY_NOTICE_TYPE)) == 1
+    assert len(await _native_push_events_for(device.id)) == 1

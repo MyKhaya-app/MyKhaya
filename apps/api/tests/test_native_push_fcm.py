@@ -119,6 +119,7 @@ def test_send_fcm_exchanges_token_then_sends_notification_and_data_payload(
                 "data": {
                     "notification_type": "event_reminder",
                     "deep_link": json.dumps({"type": "calendar_event", "id": "abc"}),
+                    "deep_link_path": "",
                 },
                 "android": {"priority": "high", "notification": {"channel_id": "reminders"}},
             }

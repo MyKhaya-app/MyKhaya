@@ -26,6 +26,7 @@ DeepLinkType = Literal[
     "notifications",
     "settings",
     "home",
+    "support_ticket",
 ]
 
 
@@ -71,6 +72,8 @@ def resolve_path(link: dict[str, Any] | None) -> str:
         return "/settings/routines-reminders"
     if kind == "member" and entity_id:
         return "/people"
+    if kind == "support_ticket" and entity_id:
+        return f"/help-support/requests/{entity_id}"
     if kind == "notifications":
         return "/home?notifications=1"
     if kind == "settings":

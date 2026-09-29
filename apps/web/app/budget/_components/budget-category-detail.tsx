@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ShoppingCart, WalletCards } from "lucide-react";
 import { api, type BudgetCategory, type BudgetMonth, type BudgetSpendingEntry } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -31,7 +32,12 @@ function NotesAction({ homeId, categoryId, year, month }: { homeId: string; cate
 }
 
 export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; categoryId: string }) {
-  const [period, setPeriod] = useState(() => periodNow());
+  const params = useSearchParams();
+  const router = useRouter();
+  const [period, setPeriod] = useState(() => ({
+    year: Number(params.get("year")) || periodNow().year,
+    month: Number(params.get("month")) || periodNow().month,
+  }));
   const [month, setMonth] = useState<BudgetMonth | null>(null);
   const [category, setCategory] = useState<BudgetCategory | null>(null);
   const [entries, setEntries] = useState<BudgetSpendingEntry[]>([]);
@@ -65,7 +71,11 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
   }
 
   const row = month?.categories.find((item) => item.category_id === categoryId);
-  if (!row) return <><section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{category?.name ?? "Category"}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section><BudgetTabs /><Period {...period} onChange={(year, month) => setPeriod({ year, month })} /><p role="status">Loading category details…</p></>;
+  function changePeriod(year: number, month: number) {
+    setPeriod({ year, month });
+    router.replace(`/budget/categories/${categoryId}?year=${year}&month=${month}`);
+  }
+  if (!row) return <><section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{category?.name ?? "Category"}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section><BudgetTabs /><Period {...period} onChange={changePeriod} /><p role="status">Loading category details…</p></>;
   const remaining = row.planned_amount - row.actual_amount;
   const usage = Math.min((row.actual_amount / Math.max(row.planned_amount, 1)) * 100, 100);
   const isAdditiveActual = row.fixed_actual !== null;
@@ -73,7 +83,7 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
   return <>
     <section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{row.category_name}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section>
     <BudgetTabs />
-    <Period {...period} onChange={(year, month) => setPeriod({ year, month })} />
+    <Period {...period} onChange={changePeriod} />
     <section className="budget-detail-stats"><Stat label="Planned" value={money(row.planned_amount)} icon={CircleDollarSign} /><Stat label="Actual" value={money(row.actual_amount)} icon={BarChart3} /><Stat label="Remaining" value={money(remaining)} icon={CircleDollarSign} /></section>
     <div className="budget-usage-card"><strong>{row.actual_amount > 0 ? `${Math.round(usage)}% used` : "No spending yet"}</strong><span className="budget-progress"><span style={{ width: `${usage}%` }} /></span></div>
     <button type="button" className="budget-quick-actions-toggle" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><strong>Quick actions</strong><ChevronDown size={20} aria-hidden="true" /></button>

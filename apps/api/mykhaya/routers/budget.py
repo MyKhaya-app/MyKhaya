@@ -16,25 +16,26 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.budget_periods import budget_period, budget_period_for_date
 from mykhaya.budget_schemas import (
     BudgetActualUpdate,
     BudgetCategoryCreate,
     BudgetCategoryNoteUpdate,
     BudgetCategoryResponse,
     BudgetCategoryUpdate,
-    BudgetItemCreate,
-    BudgetItemResponse,
-    BudgetItemUpdate,
-    BudgetMonthCopyRequest,
-    BudgetMonthItemPaidEntry,
-    BudgetMonthItemResponse,
     BudgetIncomeSourceCreate,
     BudgetIncomeSourceResponse,
     BudgetIncomeSourceUpdate,
     BudgetIncomingShareResponse,
+    BudgetItemCreate,
+    BudgetItemResponse,
+    BudgetItemUpdate,
     BudgetMonthCategoryResponse,
+    BudgetMonthCopyRequest,
     BudgetMonthIncomeResponse,
     BudgetMonthIncomeUpdate,
+    BudgetMonthItemPaidEntry,
+    BudgetMonthItemResponse,
     BudgetMonthResponse,
     BudgetPartnerShareCreate,
     BudgetPartnerShareResponse,
@@ -219,7 +220,7 @@ async def _create_month_snapshot(
                 BudgetItem.item_type == BudgetItemType.fixed,
                 BudgetItem.recurring.is_(True),
                 BudgetItem.archived_at.is_(None),
-                _item_active_in_month(year, month),
+                _item_active_in_month(year, month, profile.month_start_day),
             )
         )
     ).all()
@@ -253,17 +254,17 @@ async def _create_month_snapshot(
     return row
 
 
-def _is_current_or_future_month(year: int, month: int) -> bool:
-    now = datetime.now(UTC)
-    return (year, month) >= (now.year, now.month)
+def _is_current_or_future_month(year: int, month: int, month_start_day: int = 1) -> bool:
+    """Whether a displayed budget period has not ended yet."""
+    return budget_period(year, month, month_start_day).end > datetime.now(UTC).date()
 
 
-def _item_active_in_month(year: int, month: int):
-    """Lifecycle predicate: starts_on <= month AND (ends_on IS NULL OR ends_on >= month), inclusive of the end month."""
-    first_of_month = date(year, month, 1)
+def _item_active_in_month(year: int, month: int, month_start_day: int):
+    """Lifecycle predicate against the start of the displayed budget period."""
+    first_of_period = budget_period(year, month, month_start_day).start
     return and_(
-        BudgetItem.starts_on <= first_of_month,
-        or_(BudgetItem.ends_on.is_(None), BudgetItem.ends_on >= first_of_month),
+        BudgetItem.starts_on <= first_of_period,
+        or_(BudgetItem.ends_on.is_(None), BudgetItem.ends_on >= first_of_period),
     )
 
 
@@ -309,6 +310,7 @@ async def _reconcile_month_items(
     db: AsyncSession,
     profile_id: uuid.UUID,
     month: BudgetMonth,
+    month_start_day: int,
     *,
     include_variables: bool = False,
 ) -> int:
@@ -320,7 +322,7 @@ async def _reconcile_month_items(
             select(BudgetItem).where(
                 BudgetItem.profile_id == profile_id,
                 BudgetItem.archived_at.is_(None),
-                _item_active_in_month(month.year, month.month),
+                _item_active_in_month(month.year, month.month, month_start_day),
                 ((BudgetItem.item_type == BudgetItemType.fixed) & BudgetItem.recurring.is_(True))
                 | ((BudgetItem.item_type == BudgetItemType.variable) if include_variables else False),
             )
@@ -1117,7 +1119,7 @@ async def copy_month(
 ) -> BudgetMonthResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    if not _is_current_or_future_month(year, month):
+    if not _is_current_or_future_month(year, month, profile.month_start_day):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be created")
     target = await db.scalar(select(BudgetMonth).where(
         BudgetMonth.profile_id == profile.id,
@@ -1129,7 +1131,7 @@ async def copy_month(
         target = await _create_month_snapshot(
             db, profile, year, month, request, auth.user.id, copy_income=body.copy_income_sources
         )
-    await _reconcile_month_items(db, profile.id, target, include_variables=False)
+    await _reconcile_month_items(db, profile.id, target, profile.month_start_day, include_variables=False)
     if body.copy_variable_items:
         previous_date = date(year, month, 1) - timedelta(days=1)
         source_month = await db.scalar(select(BudgetMonth).where(
@@ -1199,7 +1201,7 @@ async def get_month(
     month_row = await _month_for_owner(db, profile.id, year, month)
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
     await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
-    await _reconcile_month_items(db, profile.id, month_row)
+    await _reconcile_month_items(db, profile.id, month_row, profile.month_start_day)
     await db.commit()
     return await _month_response(db, month_row)
 
@@ -1217,7 +1219,13 @@ async def create_entry(
     category = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == body.category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
     if category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
-    month = await db.scalar(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.year == body.spent_on.year, BudgetMonth.month == body.spent_on.month, BudgetMonth.archived_at.is_(None)))
+    target_period = budget_period_for_date(body.spent_on, profile.month_start_day)
+    month = await db.scalar(select(BudgetMonth).where(
+        BudgetMonth.profile_id == profile.id,
+        BudgetMonth.year == target_period.year,
+        BudgetMonth.month == target_period.month,
+        BudgetMonth.archived_at.is_(None),
+    ))
     if month is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget month not found")
     await _reconcile_month_categories(db, profile.id, month, request, auth.user.id)
@@ -1329,11 +1337,12 @@ async def update_entry(
     )
     if target_category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
+    target_period = budget_period_for_date(body.spent_on, profile.month_start_day)
     target_month = await db.scalar(
         select(BudgetMonth).where(
             BudgetMonth.profile_id == profile.id,
-            BudgetMonth.year == body.spent_on.year,
-            BudgetMonth.month == body.spent_on.month,
+            BudgetMonth.year == target_period.year,
+            BudgetMonth.month == target_period.month,
             BudgetMonth.archived_at.is_(None),
         )
     )

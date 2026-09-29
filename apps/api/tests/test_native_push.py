@@ -98,6 +98,7 @@ def test_send_apns_uses_signed_bearer_and_safe_alert_payload(
     assert fake.payload == {
         "aps": {"alert": {"title": "Dinner", "body": "Dinner starts soon"}, "sound": "default"},
         "deep_link": {"path": "/calendar"},
+        "deep_link_path": None,
         "notification_type": "event_reminder",
     }
     assert "password" not in json.dumps(fake.payload).lower()

@@ -12,7 +12,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import SupportTicket, SupportTicketStatus, User
+from mykhaya.models import SupportMessageVisibility, SupportTicket, SupportTicketStatus, User
+from mykhaya.notifications.deep_links import DeepLinkTarget, target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
 
@@ -60,6 +61,39 @@ async def _queue(
     )
 
 
+async def _notify_reply_in_app_and_push(
+    db: AsyncSession,
+    settings: Settings,
+    ticket: SupportTicket,
+    requester: User,
+    message_id: uuid.UUID,
+) -> None:
+    """Mandatory service notification (in-app + native/web push) for a
+    customer-visible staff reply — see notifications.engine.MANDATORY_CHANNEL_TYPES.
+    Deliberately a SEPARATE notify() call from the transactional reply email
+    above: the email's title/body legitimately contains the reply text, but
+    a push/lock-screen notification must never expose it (privacy — see
+    docs/architecture/notification-engine.md), so this call uses its own
+    fixed, concise copy and notification_type, and allow_email=False so it
+    never queues a second, redundant email."""
+    deep_link: DeepLinkTarget = target("support_ticket", ticket.id)
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=requester.id,
+        notification_type="support.ticket.reply_notice",
+        title="MyKhaya Support replied",
+        body=f"There's a new reply on your support ticket '{ticket.subject}'.",
+        idempotency_key=f"support.ticket.reply_notice:{ticket.id}:{message_id}",
+        group_id=ticket.group_id,
+        related_entity_type="support_ticket",
+        related_entity_id=ticket.id,
+        deep_link=deep_link,
+        is_critical=True,
+        allow_email=False,
+    )
+
+
 async def ticket_received(
     db: AsyncSession, settings: Settings, ticket: SupportTicket, requester: User
 ) -> None:
@@ -96,7 +130,16 @@ async def ticket_reply(
     requester: User,
     reply_text: str,
     message_id: uuid.UUID,
+    *,
+    visibility: SupportMessageVisibility = SupportMessageVisibility.requester,
 ) -> None:
+    """Called for a staff reply on a support ticket. Only a customer-visible
+    (`SupportMessageVisibility.requester`) reply notifies the requester —
+    an internal/private note (structurally supported by the model for a
+    possible future notes feature; no code path creates one yet) must never
+    reach the requester by email, in-app, or push."""
+    if visibility != SupportMessageVisibility.requester:
+        return
     try:
         await _queue(
             db,
@@ -110,6 +153,22 @@ async def ticket_reply(
         )
     except Exception:
         log.exception("support.ticket_reply_email_queue_failed", ticket_id=str(ticket.id))
+
+    try:
+        await _notify_reply_in_app_and_push(db, settings, ticket, requester, message_id)
+        log.info(
+            "support.notification_reply",
+            ticket_id=str(ticket.id),
+            delivery_type="in_app+push",
+            outcome="queued",
+        )
+    except Exception:
+        log.exception(
+            "support.notification_reply",
+            ticket_id=str(ticket.id),
+            delivery_type="in_app+push",
+            outcome="failed",
+        )
 
 
 async def ticket_follow_up(

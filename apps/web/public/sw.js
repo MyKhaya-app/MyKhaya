@@ -133,6 +133,7 @@ function resolveDeepLinkPath(deepLink) {
   if (deepLink.type === "calendar_today") return "/calendar";
   if (deepLink.type === "routine" && deepLink.id) return `/home?routine=${deepLink.id}`;
   if (deepLink.type === "member") return "/people";
+  if (deepLink.type === "support_ticket" && deepLink.id) return `/help-support/requests/${deepLink.id}`;
   if (deepLink.type === "notifications") return "/home?notifications=1";
   if (deepLink.type === "settings") return "/settings/notifications";
   return "/home";
