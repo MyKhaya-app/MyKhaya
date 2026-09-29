@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { RoutineScope, VehicleCreatePayload, VehicleLookupResult } from "@mykhaya/shared-types";
+import type { Member, VehicleCreatePayload, VehicleLookupResult } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
+import { useAuth } from "@/components/auth-provider";
 import { DRIVEWAY_COUNTRIES } from "../countries";
 
 const FUEL_TYPES = ["Petrol", "Diesel", "Electric", "Hybrid", "Plug-in hybrid", "LPG", "Other"];
@@ -16,11 +17,17 @@ function defaultNickname(make: string, model: string, registration: string): str
   return makeModel || registration.trim() || "My vehicle";
 }
 
+function normaliseRegistration(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
 export default function AddVehiclePage() {
   const router = useRouter();
   const { activeHomeId } = useActiveHome();
-  const [scope, setScope] = useState<RoutineScope>("household");
+  const { user } = useAuth();
   const [countryCode, setCountryCode] = useState("GB");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [ownerUserId, setOwnerUserId] = useState(user?.id ?? "");
   const [registration, setRegistration] = useState("");
   const [lookup, setLookup] = useState<VehicleLookupResult | null>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
@@ -37,14 +44,24 @@ export default function AddVehiclePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
+  }, [activeHomeId]);
+
+  useEffect(() => {
+    if (user?.id && !ownerUserId) setOwnerUserId(user.id);
+  }, [ownerUserId, user?.id]);
+
   async function findVehicle() {
-    if (!activeHomeId || lookupBusy || !registration.trim()) return;
+    const normalizedRegistration = normaliseRegistration(registration);
+    if (!activeHomeId || lookupBusy || !normalizedRegistration) return;
     setLookupBusy(true);
     setError("");
     try {
       const result = await api.lookupVehicle(activeHomeId, {
         country_code: countryCode,
-        registration,
+        registration: normalizedRegistration,
       });
       setLookup(result);
       if (!result.found) {
@@ -58,7 +75,7 @@ export default function AddVehiclePage() {
         setColour(result.colour ?? "");
         setEngineSize(result.engine_size ?? "");
         setFirstRegistrationDate(result.first_registration_date ?? "");
-        setRegistration(result.registration ?? registration);
+        setRegistration(result.registration ?? normalizedRegistration);
       }
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "We can't check vehicle details right now.");
@@ -71,17 +88,18 @@ export default function AddVehiclePage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeHomeId || busy) return;
-    if (!countryCode || !registration.trim()) {
+    const normalizedRegistration = normaliseRegistration(registration);
+    if (!countryCode || !normalizedRegistration || !ownerUserId) {
       setError("Add a country and a registration to continue.");
       return;
     }
     setBusy(true);
     setError("");
     const body: VehicleCreatePayload = {
-      nickname: nickname.trim() || defaultNickname(make, model, registration),
-      scope,
+      nickname: nickname.trim() || defaultNickname(make, model, normalizedRegistration),
+      owner_user_id: ownerUserId,
       country_code: countryCode,
-      registration: registration.trim(),
+      registration: normalizedRegistration,
       make: make.trim() || null,
       model: model.trim() || null,
       colour: colour.trim() || null,
@@ -120,6 +138,25 @@ export default function AddVehiclePage() {
           </select>
         </label>
 
+        {(countryCode === "GB" || manual || lookup?.found) && (
+          <label>
+            Registration / licence plate
+            <input
+              value={registration}
+              onChange={(event) => setRegistration(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && countryCode === "GB" && !manual && !lookup?.found) {
+                  event.preventDefault();
+                  void findVehicle();
+                }
+              }}
+              maxLength={20}
+              required
+              autoCapitalize="characters"
+            />
+          </label>
+        )}
+
         {countryCode === "GB" && !manual && !lookup?.found && (
           <>
             <p className="muted">Pop in the registration and we’ll find the details for you.</p>
@@ -146,39 +183,15 @@ export default function AddVehiclePage() {
 
         {(manual || lookup?.found) && <>
         <label>
-          Registration / licence plate
-          <input
-            value={registration}
-            onChange={(event) => setRegistration(event.target.value)}
-            maxLength={20}
-            required
-            autoCapitalize="characters"
-          />
+          Owner
+          <select value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} required>
+            {(members.length ? members : user ? [{ user_id: user.id, display_name: "You" } as Member] : []).map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {member.user_id === user?.id ? "You" : member.display_name}
+              </option>
+            ))}
+          </select>
         </label>
-
-        <div className="driveway-form-section">
-          <p className="eyebrow">Who is this for?</p>
-          <div className="rr-segmented" role="tablist" aria-label="Vehicle scope">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={scope === "personal"}
-              className={`rr-segment${scope === "personal" ? " rr-segment-active" : ""}`}
-              onClick={() => setScope("personal")}
-            >
-              Personal
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={scope === "household"}
-              className={`rr-segment${scope === "household" ? " rr-segment-active" : ""}`}
-              onClick={() => setScope("household")}
-            >
-              Household
-            </button>
-          </div>
-        </div>
 
         <label>
           Nickname

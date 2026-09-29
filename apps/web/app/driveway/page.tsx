@@ -8,6 +8,8 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
+import { useAuth } from "@/components/auth-provider";
+import { VehiclePhoto } from "@/components/vehicle-photo";
 import { countryName } from "./countries";
 
 // Driveway — vehicle management (Ultimate-only). Phase 3 ships the mobile
@@ -32,16 +34,26 @@ function vehicleMeta(vehicle: Vehicle): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+function vehicleStatus(status: string | null, date: string | null, label: string): string | null {
+  if (!status) return null;
+  const formatted = date ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null;
+  return `${label}: ${status}${formatted ? ` · ${formatted}` : ""}`;
+}
+
 export default function DrivewayPage() {
   const { activeHomeId } = useActiveHome();
+  const { user } = useAuth();
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [moduleReleased, setModuleReleased] = useState<boolean | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[] | null>(null);
   const [error, setError] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [members, setMembers] = useState<{ user_id: string; display_name: string }[]>([]);
 
   useEffect(() => {
     if (!activeHomeId) return;
     api.billingStatus(activeHomeId).then(setBilling).catch(() => setBilling(null));
+    api.members(activeHomeId).then((items) => setMembers(items.map((item) => ({ user_id: item.user_id, display_name: item.display_name })))).catch(() => setMembers([]));
     api
       .featureMatrix(activeHomeId)
       .then((matrix) =>
@@ -64,6 +76,9 @@ export default function DrivewayPage() {
     if (!activeHomeId || moduleReleased !== true || billing?.driveway_enabled !== true) return;
     void load();
   }, [activeHomeId, moduleReleased, billing]);
+
+  const visibleVehicles = vehicles?.filter((vehicle) => ownerFilter === "all" || vehicle.owner_user_id === ownerFilter) ?? null;
+  const ownerName = (ownerId: string) => members.find((member) => member.user_id === ownerId)?.display_name ?? (ownerId === user?.id ? "You" : "Home member");
 
   if (!activeHomeId || !billing || moduleReleased === null) {
     return (
@@ -103,7 +118,7 @@ export default function DrivewayPage() {
                 <Car size={14} aria-hidden="true" /> Driveway
               </p>
               <h1>Driveway</h1>
-              <p className="muted">Keep track of your vehicles, documents and renewals.</p>
+              <p className="muted">Keep the important bits about your vehicles in one place.</p>
             </div>
           </div>
           <div className="empty-mini">
@@ -126,7 +141,8 @@ export default function DrivewayPage() {
               <Car size={14} aria-hidden="true" /> Driveway
             </p>
             <h1>Driveway</h1>
-            <p className="muted">Keep track of your vehicles, documents and renewals.</p>
+              <p className="muted">Keep the important bits about your vehicles in one place.</p>
+              <img className="driveway-heading-art" src="/images/Driveway-asset.png" alt="" aria-hidden="true" />
           </div>
         </div>
         <FormStatus error={error} />
@@ -147,17 +163,21 @@ export default function DrivewayPage() {
           </div>
         ) : (
           <>
-            <div className="section-heading">
-              <h2>Your vehicles</h2>
+            <div className="driveway-owner-filters" aria-label="Filter vehicles by owner">
+              <button type="button" className={ownerFilter === "all" ? "active" : ""} onClick={() => setOwnerFilter("all")}>All</button>
+              {user && <button type="button" className={ownerFilter === user.id ? "active" : ""} onClick={() => setOwnerFilter(user.id)}>Mine</button>}
+              {members.filter((member) => member.user_id !== user?.id).map((member) => <button type="button" className={ownerFilter === member.user_id ? "active" : ""} key={member.user_id} onClick={() => setOwnerFilter(member.user_id)}>{member.display_name}</button>)}
             </div>
             <div className="lists-grid">
-              {vehicles.map((vehicle) => {
+              {visibleVehicles?.map((vehicle) => {
                 const meta = vehicleMeta(vehicle);
+                const tax = vehicleStatus(vehicle.tax_status, vehicle.tax_due_date, "Tax");
+                const mot = vehicleStatus(vehicle.inspection_status, vehicle.inspection_due_date, "MOT");
                 return (
-                  <article className="card lists-card" key={vehicle.id}>
+                  <article className="card lists-card driveway-vehicle-card" key={vehicle.id}>
                     <Link className="lists-card-body" href={`/driveway/${vehicle.id}`}>
-                      <span className="more-icon-tile blue" aria-hidden="true">
-                        <Car size={20} strokeWidth={1.75} />
+                      <span className="driveway-vehicle-image" aria-hidden="true">
+                        <VehiclePhoto homeId={vehicle.group_id} vehicleId={vehicle.id} version={vehicle.photo_version} label="" />
                       </span>
                       <span className="lists-card-copy">
                         <strong>{vehicle.nickname}</strong>
@@ -165,6 +185,8 @@ export default function DrivewayPage() {
                           {vehicle.registration ?? countryName(vehicle.country_code)}
                           {meta ? ` · ${meta}` : ""}
                         </span>
+                        <span className="driveway-owner-badge">{ownerName(vehicle.owner_user_id)}</span>
+                        {(tax || mot) && <span className="driveway-statuses">{[tax, mot].filter(Boolean).join(" · ")}</span>}
                       </span>
                       <ChevronRight size={18} className="lists-card-chevron" aria-hidden="true" />
                     </Link>

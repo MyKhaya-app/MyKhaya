@@ -15,6 +15,7 @@ from mykhaya.household_permissions import (
     Capability,
     require_capability,
 )
+from mykhaya.legal import guardian_authorisation_satisfied
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ChildProfile,
@@ -470,6 +471,17 @@ async def configure_child_login(
         )
 
     was_enabled = profile.login_enabled
+    if not was_enabled and not await guardian_authorisation_satisfied(db, profile.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "guardian_authorisation_required",
+                "message": (
+                    "Guardian authorisation is required before enabling sign-in for this "
+                    "child. Review the Children's Privacy Notice first."
+                ),
+            },
+        )
     profile.login_enabled = True
     profile.login_updated_at = datetime.now(UTC)
 

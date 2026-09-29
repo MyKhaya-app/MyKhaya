@@ -7,10 +7,11 @@ vi.unmock("./auth-provider");
 
 const me = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const renew = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const legalStatus = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const router = { replace: vi.fn<(url: string) => void>() };
 let pathname = "/home";
 vi.mock("next/navigation", () => ({ usePathname: () => pathname, useRouter: () => router }));
-vi.mock("@mykhaya/api-client", () => ({ api: { me: (...args: unknown[]) => me(...args), renew: (...args: unknown[]) => renew(...args) }, ApiError: class ApiError extends Error { status = 401; } }));
+vi.mock("@mykhaya/api-client", () => ({ api: { me: (...args: unknown[]) => me(...args), renew: (...args: unknown[]) => renew(...args), legalStatus: (...args: unknown[]) => legalStatus(...args) }, ApiError: class ApiError extends Error { status = 401; } }));
 const { nativeShellState, platformSurface, bootstrapNativeSession } = vi.hoisted(() => ({
   nativeShellState: { value: false },
   platformSurface: { value: false },
@@ -66,6 +67,7 @@ function Probe() {
   const auth = useAuth();
   return <>
     <div>{auth.initialSessionLoading ? "checking" : auth.status}</div>
+    <button onClick={() => void auth.setAuthenticatedUser({ id: "u1", display_name: "Owner", principal_type: "adult" } as never)}>authenticate</button>
     <button onClick={() => void auth.refreshSession()}>refresh</button>
     <button onClick={() => auth.retryInitialSession()}>retry</button>
   </>;
@@ -74,11 +76,13 @@ function Probe() {
 beforeEach(() => {
   me.mockReset();
   renew.mockReset();
+  legalStatus.mockReset();
   router.replace.mockReset();
   pathname = "/home";
   nativeShellState.value = false;
   platformSurface.value = false;
   me.mockResolvedValue({ id: "u1", display_name: "Owner", principal_type: "adult" });
+  legalStatus.mockResolvedValue({ action_required: false, documents: [], children: [], child_self: null });
   bootstrapNativeSession.mockReset();
   appLock.hasEverBeenBackgrounded = false;
   appLock.wasBackgroundedLongEnoughToLock = false;
@@ -123,6 +127,23 @@ describe("AuthProvider", () => {
     resolve({ id: "u1", display_name: "Owner", principal_type: "adult" });
     await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
     expect(me).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a branded loading state while MFA authentication resolves legal status", async () => {
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+    let resolveLegal!: (value: unknown) => void;
+    legalStatus.mockReturnValueOnce(new Promise((resolve) => { resolveLegal = resolve; }));
+
+    act(() => {
+      screen.getByRole("button", { name: "authenticate" }).click();
+    });
+    expect(screen.getByText("checking")).toBeInTheDocument();
+    expect(screen.queryByText("signed_out")).not.toBeInTheDocument();
+
+    resolveLegal({ action_required: true, documents: [], children: [], child_self: null });
+    await waitFor(() => expect(screen.getByText("legal_action_required")).toBeInTheDocument());
+    expect(screen.queryByText("checking")).not.toBeInTheDocument();
   });
 
   it("keeps the page available during background refresh", async () => {

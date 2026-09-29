@@ -38,7 +38,17 @@ type SettingItem = {
 type EnvironmentItem = { key: string; value: string; category: string; editable: boolean };
 
 type SettingsResponse = { settings: SettingItem[]; environment: EnvironmentItem[] };
-type DrivewayDvlaStatus = { enabled: boolean; configured: boolean; endpoint: string; health: { state: string; message?: string } };
+type DrivewayDvlaStatus = {
+  enabled: boolean;
+  configured: boolean;
+  environment: string | null;
+  endpoint: string | null;
+  health: { state: string; message?: string };
+  last_success_at: string | null;
+  last_success_summary: string | null;
+  last_failure_at: string | null;
+  last_failure_summary: string | null;
+};
 type SyslogSettings = {
   enabled: boolean;
   configured: boolean;
@@ -102,6 +112,34 @@ function formatSyslogTimestamp(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatTimestamp(value: string | null | undefined, fallback: string): string {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function dvlaHealthTone(state: string | undefined): "success" | "warning" | "danger" | "neutral" {
+  switch (state) {
+    case "Healthy":
+      return "success";
+    case "Not configured":
+    case "Disabled":
+      return "neutral";
+    case "Degraded":
+    case "Unavailable":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 function normaliseSyslogSettings(value: SyslogSettings): SyslogSettings {
@@ -431,17 +469,32 @@ export default function PlatformSettingsPage() {
               </CcCard>
               <CcCard title="Driveway integrations" description="Operational status for the server-side UK vehicle lookup provider.">
                 <CcMetadataGrid>
+                  <CcMetadataItem label="Environment">
+                    {dvla ? (dvla.environment ?? "Not configured") : "Loading…"}
+                  </CcMetadataItem>
                   <CcMetadataItem label="Integration status">
                     <CcBadge tone={dvla?.enabled ? "success" : "neutral"}>{dvla?.enabled ? "Enabled" : "Disabled"}</CcBadge>
                   </CcMetadataItem>
                   <CcMetadataItem label="API key">{dvla?.configured ? "Configured" : "Not configured"}</CcMetadataItem>
-                  <CcMetadataItem label="Health"><CcBadge tone={dvla?.health.state === "Healthy" ? "success" : "neutral"}>{dvla?.health.state ?? "Loading…"}</CcBadge></CcMetadataItem>
-                  <CcMetadataItem label="Endpoint">{dvla?.endpoint ?? "Loading…"}</CcMetadataItem>
+                  <CcMetadataItem label="Health"><CcBadge tone={dvlaHealthTone(dvla?.health.state)}>{dvla?.health.state ?? "Loading…"}</CcBadge></CcMetadataItem>
+                  <CcMetadataItem label="Endpoint" span>{dvla?.endpoint ?? "Not configured"}</CcMetadataItem>
+                  {dvla?.last_success_at && (
+                    <CcMetadataItem label="Last successful lookup">{formatTimestamp(dvla.last_success_at, "Never")}</CcMetadataItem>
+                  )}
+                  {dvla?.last_failure_at && (
+                    <CcMetadataItem label="Last failed lookup">{formatTimestamp(dvla.last_failure_at, "Never")}</CcMetadataItem>
+                  )}
+                  {dvla?.last_failure_summary && (
+                    <CcMetadataItem label="Last error" span>{dvla.last_failure_summary}</CcMetadataItem>
+                  )}
                 </CcMetadataGrid>
+                {dvla?.environment === "Production" && (
+                  <CcNotice tone="warning">Production DVLA service — lookups here use real, live vehicle data.</CcNotice>
+                )}
                 <p className="cc-page-meta">Enable or disable the provider using the Driveway integrations setting below. The API key is deployment-managed and never displayed.</p>
                 <div className="cc-inline-form">
                   <label>Test registration<input value={testRegistration} onChange={(event) => setTestRegistration(event.target.value)} placeholder="AB12 CDE" /></label>
-                  <button className="button secondary" type="button" onClick={() => void testDvla()} disabled={testBusy || !testRegistration.trim()}>{testBusy ? "Testing…" : "Test connection"}</button>
+                  <button className="button secondary" type="button" onClick={() => void testDvla()} disabled={testBusy || !testRegistration.trim() || !dvla?.configured}>{testBusy ? "Testing…" : "Test connection"}</button>
                   {testResult && <p role="status">{testResult}</p>}
                 </div>
               </CcCard>

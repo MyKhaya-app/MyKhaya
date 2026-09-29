@@ -137,7 +137,7 @@ export default function Login() {
   }
 
   async function afterSignedIn(user: User) {
-    setAuthenticatedUser(user);
+    await setAuthenticatedUser(user);
     setBiometricHint({
       userId: user.id,
       displayName: user.display_name,

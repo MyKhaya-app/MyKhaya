@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import DrivewayPage from "./page";
 
@@ -32,6 +33,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn(),
       featureMatrix: vi.fn(),
       vehicles: vi.fn(),
+      members: vi.fn(),
     },
   };
 });
@@ -88,6 +90,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockModuleState();
   (api.vehicles as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
 describe("Driveway landing — empty state", () => {
@@ -121,6 +124,17 @@ describe("Driveway landing — vehicle list", () => {
     expect(await screen.findByText("My little run-around")).toBeInTheDocument();
     expect(screen.getByText("BMW i4")).toBeInTheDocument();
     expect(screen.getByText(/AP22 OOJ/)).toBeInTheDocument();
+  });
+
+  it("shows owner badges and filters by the authoritative owner field", async () => {
+    (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([{ user_id: "u2", display_name: "Megan" }]);
+    (api.vehicles as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [PERSONAL_VEHICLE, { ...HOUSEHOLD_VEHICLE, owner_user_id: "u2" }] });
+    render(<DrivewayPage />);
+    expect((await screen.findAllByText("Megan")).length).toBeGreaterThan(0);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Megan" }));
+    expect(screen.queryByText("My little run-around")).not.toBeInTheDocument();
+    expect(screen.getByText("BMW i4")).toBeInTheDocument();
   });
 
   it("does not fabricate MOT/tax/compliance data that the Phase 2 model does not provide", async () => {

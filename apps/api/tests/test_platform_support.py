@@ -38,7 +38,7 @@ from mykhaya.models import (
 from mykhaya.security import derived_token, password_hash
 
 CONSUMER_ORIGIN = "http://localhost:8080"
-ADMIN_ORIGIN = "http://admin.localhost:8080"
+ADMIN_ORIGIN = get_settings().admin_url
 PASSWORD = "Correct horse battery staple!"
 ADMIN_PASSWORD = "A separate operator password!"
 # See tests/test_support_tickets.py's identical constant for why: an

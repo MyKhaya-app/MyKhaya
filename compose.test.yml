@@ -67,4 +67,5 @@ services:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres-test:5432/mykhaya",
         MYKHAYA_REDIS_URL: "redis://redis-test:6379/0",
+        MYKHAYA_TRUSTED_PROXY_CIDRS: '["172.16.0.2/32"]',
       }

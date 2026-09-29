@@ -106,7 +106,7 @@ export default function MfaPage() {
         method,
         code,
       });
-      setAuthenticatedUser(user);
+      await setAuthenticatedUser(user);
       router.push(options?.onboarding ? "/onboarding" : "/home");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 400 && /sign-in attempt has expired/i.test(reason.message)) {

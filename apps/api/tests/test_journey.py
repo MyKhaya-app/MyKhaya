@@ -47,12 +47,19 @@ async def latest_token(email: str, purpose: TokenPurpose) -> str:
         return derived_token(row.id, purpose.value, get_settings().secret_key.get_secret_value())
 
 
-async def create_verified_user(client: AsyncClient, email: str, name: str) -> None:
+async def create_verified_user(
+    client: AsyncClient, email: str, name: str, **registration_fields: object
+) -> None:
     response = await unsafe(
         client,
         "POST",
         "/api/v1/auth/register",
-        json={"email": email, "display_name": name, "password": PASSWORD},
+        json={
+            "email": email,
+            "display_name": name,
+            "password": PASSWORD,
+            **registration_fields,
+        },
     )
     assert response.status_code == 202
     token = await latest_token(email, TokenPurpose.verify_email)

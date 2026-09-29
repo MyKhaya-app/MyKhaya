@@ -84,7 +84,9 @@ async def ensure_vehicles_category(
 
 
 def _reminder_owner(vehicle: Vehicle) -> uuid.UUID | None:
-    return vehicle.owner_user_id if vehicle.scope == RoutineScope.personal else None
+    # Driveway ownership is explicit on Vehicle. Reminder.scope remains a
+    # Reminder-domain visibility field, not a vehicle ownership selector.
+    return vehicle.owner_user_id
 
 
 async def upsert_driveway_reminder(
@@ -116,7 +118,7 @@ async def upsert_driveway_reminder(
     future structured resync (Phase 5+) can call this repeatedly as its
     source data changes without ever creating duplicates.
 
-    Scope/owner are always derived from the vehicle, never client-supplied
+    Reminder visibility/owner are derived from the vehicle owner, never client-supplied
     — see sync_reminder_scope_to_vehicle for what happens when a vehicle's
     own scope later changes.
     """
@@ -139,7 +141,7 @@ async def upsert_driveway_reminder(
             existing.description = description
             existing.due_date = due_date
             existing.due_time = due_time
-            existing.scope = vehicle.scope
+            existing.scope = RoutineScope.personal
             existing.owner_user_id = _reminder_owner(vehicle)
             existing.category_id = category.id
             await db.flush()
@@ -150,7 +152,7 @@ async def upsert_driveway_reminder(
         title=title,
         description=description,
         category_id=category.id,
-        scope=vehicle.scope,
+        scope=RoutineScope.personal,
         owner_user_id=_reminder_owner(vehicle),
         due_date=due_date,
         due_time=due_time,
@@ -204,7 +206,7 @@ async def sync_reminder_scope_to_vehicle(db: AsyncSession, vehicle: Vehicle) -> 
         )
     ).all()
     for reminder in rows:
-        reminder.scope = vehicle.scope
+        reminder.scope = RoutineScope.personal
         reminder.owner_user_id = _reminder_owner(vehicle)
 
 

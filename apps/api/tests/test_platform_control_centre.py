@@ -30,7 +30,7 @@ from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
 from mykhaya.security import password_hash, resolve_forwarded_proto
 
-ADMIN_ORIGIN = "http://admin.localhost:8080"
+ADMIN_ORIGIN = get_settings().admin_url
 PASSWORD = "A separate operator password!"
 TEST_PROXY_PEER = "172.16.0.2"
 TEST_CLIENT_IP = "127.0.0.1"
@@ -378,9 +378,7 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
         await _run_calendar_module_lifecycle(admin_client, admin_factory)
     finally:
         async with SessionFactory() as db:
-            row = await db.scalar(
-                select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar)
-            )
+            row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar))
             if original_existed:
                 assert original_enabled is not None
                 if row is None:
@@ -676,9 +674,7 @@ def test_trusting_a_whole_subnet_lets_a_forged_chain_walk_past_a_gateway_address
         == "203.0.113.99"
     ), "documents the vulnerable behaviour a subnet-wide trust range produces"
 
-    host_only_trust = get_settings().model_copy(
-        update={"trusted_proxy_cidrs": ["10.77.0.5/32"]}
-    )
+    host_only_trust = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.77.0.5/32"]})
     assert (
         resolve_client_ip(make_request("10.77.0.5", forwarded_chain), host_only_trust)
         == "10.77.0.1"

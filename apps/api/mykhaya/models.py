@@ -1710,6 +1710,297 @@ class GuardianAssignment(UuidTimeMixin, Base):
     )
 
 
+class LegalAudience(StrEnum):
+    """Who a LegalDocument is written for and, therefore, which
+    LegalAcceptance record_type(s) it is ever accepted/acknowledged/
+    authorised through — see LegalRecordType. adult documents (Terms,
+    Privacy Policy, Cookie Policy) are acted on directly by a User via
+    user_acceptance/user_acknowledgement. child documents (the Family &
+    Children's Privacy Notice) are never "accepted" by anyone as a
+    contractual matter; they are authorised by a guardian on the child's
+    behalf (guardian_authorisation) and separately acknowledged as read by
+    the child's own managed sign-in (child_notice_acknowledgement)."""
+
+    adult = "adult"
+    child = "child"
+
+
+class LegalActionVerb(StrEnum):
+    """The verb PCC/consumer UI should use for an adult-audience document's
+    user_acceptance/user_acknowledgement record — e.g. Terms are "accepted",
+    a Privacy Policy is "acknowledged". Only meaningful for
+    LegalAudience.adult; child-audience documents use the fixed
+    authorise/acknowledge verbs implied by their record_type instead."""
+
+    accept = "accept"
+    acknowledge = "acknowledge"
+
+
+class LegalDocumentVersionStatus(StrEnum):
+    draft = "draft"
+    scheduled = "scheduled"
+    published = "published"
+    superseded = "superseded"
+
+
+class LegalReacceptanceScope(StrEnum):
+    """Who must act on THIS version for it to count as satisfied, decided
+    deliberately by the publishing administrator (never inferred) — see
+    routers.platform_legal's publish endpoint. Applies uniformly to both
+    audiences a document version can have action recorded against (adult
+    user_acceptance/user_acknowledgement, or child-document
+    guardian_authorisation/child_notice_acknowledgement): a user/guardian/
+    child who already has a record against an earlier version of this same
+    document is "grandfathered" (still compliant) unless this is
+    all_existing_users."""
+
+    # No one is required to act on this version specifically (e.g. a wording/
+    # formatting fix) — a prior acceptance of any earlier version of this
+    # document, if one exists, continues to satisfy compliance. A brand-new
+    # user/guardian/child with no prior record still is not asked to act on
+    # a none-scoped version; this scope is for genuinely non-substantive
+    # documents/edits only, never for a document's first published version.
+    none = "none"
+    # Existing users/guardians/children who already hold a record against an
+    # earlier version of this document remain compliant (identical effect to
+    # `none` for them); only a party with zero prior record for this
+    # document must act on this version.
+    new_users_only = "new_users_only"
+    # Every user/guardian/child must act on this exact version, including
+    # those who already accepted/acknowledged/were authorised under an
+    # earlier version.
+    all_existing_users = "all_existing_users"
+
+
+class LegalRecordType(StrEnum):
+    """Deliberately kept distinct rather than collapsed into one generic
+    "accepted" flag — see AGENTS.md/the Legal & Compliance brief's insistence
+    that a guardian authorising a child's access must never be displayed or
+    audited as though the child personally accepted the Terms."""
+
+    # An adult User accepting a contractual document (Terms) in their own
+    # right.
+    user_acceptance = "user_acceptance"
+    # An adult User acknowledging a non-contractual document (Privacy
+    # Policy, Cookie Policy) in their own right.
+    user_acknowledgement = "user_acknowledgement"
+    # A guardian (an adult User, via their own Membership as the child's
+    # GuardianAssignment) authorising MyKhaya to process a specific child's
+    # information, recorded against the guardian's own user_id AND the
+    # child_profile_id — never against the child's user_id.
+    guardian_authorisation = "guardian_authorisation"
+    # The child's own managed sign-in (SessionKind.managed_child) confirming
+    # they have been shown the current Family & Children's Privacy Notice.
+    # This is an acknowledgement of having seen the notice, not consent and
+    # not Terms acceptance.
+    child_notice_acknowledgement = "child_notice_acknowledgement"
+
+
+class LegalAcceptanceContext(StrEnum):
+    signup = "signup"
+    login_reauth = "login_reauth"
+    policy_update = "policy_update"
+    subscription_purchase = "subscription_purchase"
+    settings = "settings"
+    guardian_child_login_setup = "guardian_child_login_setup"
+    child_login_session = "child_login_session"
+
+
+class LegalPlatform(StrEnum):
+    web = "web"
+    ios = "ios"
+    android = "android"
+
+
+class LegalDocument(UuidTimeMixin, Base):
+    """Source-of-truth registry of legal/policy document *types* (Terms,
+    Privacy Policy, Family & Children's Privacy Notice, Cookie Policy, and
+    any future type) — see routers.platform_legal. `key` is a plain string,
+    not a DB enum, specifically so a new document type can be added by
+    inserting a row rather than by migration, per the brief's "support
+    adding future document types without requiring significant frontend
+    changes"."""
+
+    __tablename__ = "legal_documents"
+    __table_args__ = (UniqueConstraint("key", name="uq_legal_documents_key"),)
+
+    key: Mapped[str] = mapped_column(String(50))
+    display_name: Mapped[str] = mapped_column(String(200))
+    audience: Mapped[LegalAudience] = mapped_column(
+        Enum(
+            LegalAudience,
+            name="legal_audience",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    action_verb: Mapped[LegalActionVerb] = mapped_column(
+        Enum(
+            LegalActionVerb,
+            name="legal_action_verb",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalActionVerb.accept,
+        server_default=LegalActionVerb.accept.value,
+    )
+    # Whether ANY version of this document type is ever gated on
+    # acceptance/acknowledgement at all — a document type an administrator
+    # never intends to require action for (rare; most legal document types
+    # will be True) can still be published and displayed with this False,
+    # in which case it never appears as "required"/"pending" for any user.
+    acceptance_required: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LegalDocumentVersion(UuidTimeMixin, Base):
+    """One version of a LegalDocument's content. `content_markdown` of a
+    published or superseded version must never be edited in place — see
+    routers.platform_legal's publish/supersede handling, which is the only
+    place `status` moves off `draft`/`scheduled`. Editing a published
+    version's wording is done by creating a new draft version, never by
+    mutating this row, so a LegalAcceptance's document_version_id always
+    keeps meaning exactly what it meant when it was recorded."""
+
+    __tablename__ = "legal_document_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "version_sequence", name="uq_legal_document_version_sequence"
+        ),
+        Index("ix_legal_document_versions_document_status", "document_id", "status"),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_documents.id", ondelete="CASCADE"), index=True
+    )
+    # Monotonically increasing per document, assigned at creation — the
+    # reliable ordering key. `version` is the human-facing label (e.g.
+    # "1.0", "1.1", "2.0") an administrator types in and is never assumed
+    # to sort correctly on its own.
+    version_sequence: Mapped[int] = mapped_column(Integer)
+    version: Mapped[str] = mapped_column(String(20))
+    status: Mapped[LegalDocumentVersionStatus] = mapped_column(
+        Enum(
+            LegalDocumentVersionStatus,
+            name="legal_document_version_status",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalDocumentVersionStatus.draft,
+        server_default=LegalDocumentVersionStatus.draft.value,
+    )
+    # Test-channel versions share the immutable version/history model but are
+    # never considered by production public pages or compliance evaluation.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    content_markdown: Mapped[str] = mapped_column(Text)
+    change_summary: Mapped[str | None] = mapped_column(String(2000))
+    effective_date: Mapped[date | None] = mapped_column(Date)
+    reacceptance_scope: Mapped[LegalReacceptanceScope] = mapped_column(
+        Enum(
+            LegalReacceptanceScope,
+            name="legal_reacceptance_scope",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalReacceptanceScope.new_users_only,
+        server_default=LegalReacceptanceScope.new_users_only.value,
+    )
+    created_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    published_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_by_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("legal_document_versions.id", ondelete="SET NULL")
+    )
+
+
+class LegalAcceptance(Base):
+    """An immutable historical record that a specific action (adult
+    acceptance/acknowledgement, guardian authorisation, or child notice
+    acknowledgement) happened against an exact, immutable
+    LegalDocumentVersion. Deliberately has no updated_at and no PCC edit/
+    delete endpoint — see the brief's "never rewrite history". A genuine
+    correction must add a separate, audited corrective row, never mutate
+    this one.
+
+    record_type decides which of (user_id only) / (user_id + child_profile_id)
+    / (child_profile_id only) is populated — see LegalRecordType and the
+    ck_legal_acceptance_actor_shape constraint below. document_version_id is
+    RESTRICT, not CASCADE: a LegalDocumentVersion this table references must
+    never be deletable while acceptance history depends on it (in practice
+    versions are never deleted at all, only superseded)."""
+
+    __tablename__ = "legal_acceptances"
+    __table_args__ = (
+        Index("ix_legal_acceptances_document_version_id", "document_version_id"),
+        Index("ix_legal_acceptances_user_id", "user_id"),
+        Index("ix_legal_acceptances_child_profile_id", "child_profile_id"),
+        CheckConstraint(
+            "("
+            "  record_type IN ('user_acceptance', 'user_acknowledgement')"
+            "  AND user_id IS NOT NULL AND child_profile_id IS NULL"
+            ") OR ("
+            "  record_type = 'guardian_authorisation'"
+            "  AND user_id IS NOT NULL AND child_profile_id IS NOT NULL"
+            ") OR ("
+            "  record_type = 'child_notice_acknowledgement'"
+            "  AND user_id IS NULL AND child_profile_id IS NOT NULL"
+            ")",
+            name="ck_legal_acceptance_actor_shape",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    record_type: Mapped[LegalRecordType] = mapped_column(
+        Enum(
+            LegalRecordType,
+            name="legal_record_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_document_versions.id", ondelete="RESTRICT")
+    )
+    # The acting adult: the User themself for user_acceptance/
+    # user_acknowledgement, or the guardian's own User for
+    # guardian_authorisation. Null for child_notice_acknowledgement — the
+    # child's own managed-sign-in User id is intentionally NOT stored here;
+    # see child_profile_id, which identifies the child without conflating
+    # their managed User row with an adult "user acceptance".
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    child_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("child_profiles.id", ondelete="SET NULL")
+    )
+    context: Mapped[LegalAcceptanceContext] = mapped_column(
+        Enum(
+            LegalAcceptanceContext,
+            name="legal_acceptance_context",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    platform: Mapped[LegalPlatform] = mapped_column(
+        Enum(
+            LegalPlatform,
+            name="legal_platform",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    app_version: Mapped[str | None] = mapped_column(String(40))
+    # A hashed reference (mykhaya.platform_security.safe_session_reference-
+    # style), never the raw session token.
+    session_reference: Mapped[str | None] = mapped_column(String(64))
+    # Recorded only for the higher-stakes adult-performed actions
+    # (user_acceptance/user_acknowledgement/guardian_authorisation) — never
+    # for child_notice_acknowledgement, per data-minimisation for the child.
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+
+
 class IncidentLifecycleState(StrEnum):
     """Where a status incident sits in its own investigation/communication
     process — distinct from ServiceState, which is the customer-facing
@@ -3299,6 +3590,99 @@ class HomeRetentionMembership(UuidTimeMixin, Base):
     restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class PrivacyRequestType(StrEnum):
+    subject_access = "subject_access"
+    rectification = "rectification"
+    erasure = "erasure"
+    restriction = "restriction"
+    objection = "objection"
+    data_portability = "data_portability"
+    other = "other"
+
+
+class PrivacyRequestStatus(StrEnum):
+    received = "received"
+    identity_check = "identity_check"
+    in_progress = "in_progress"
+    awaiting_user = "awaiting_user"
+    completed = "completed"
+    declined = "declined"
+
+
+class PrivacyIdentityStatus(StrEnum):
+    pending = "pending"
+    verified = "verified"
+    failed = "failed"
+
+
+class PrivacyRequest(UuidTimeMixin, Base):
+    __tablename__ = "privacy_requests"
+    __table_args__ = (
+        UniqueConstraint("reference", name="uq_privacy_requests_reference"),
+        Index("ix_privacy_requests_status_due", "status", "due_date"),
+    )
+    reference: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    request_type: Mapped[PrivacyRequestType] = mapped_column(
+        Enum(PrivacyRequestType, name="privacy_request_type"), nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    identity_status: Mapped[PrivacyIdentityStatus] = mapped_column(
+        Enum(PrivacyIdentityStatus, name="privacy_identity_status"),
+        default=PrivacyIdentityStatus.pending,
+        server_default=PrivacyIdentityStatus.pending.value,
+        nullable=False,
+    )
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[PrivacyRequestStatus] = mapped_column(
+        Enum(PrivacyRequestStatus, name="privacy_request_status"),
+        default=PrivacyRequestStatus.received,
+        server_default=PrivacyRequestStatus.received.value,
+        nullable=False,
+    )
+    assigned_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    internal_notes: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    declined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SubprocessorState(StrEnum):
+    active = "active"
+    inactive = "inactive"
+    configuration_dependent = "configuration_dependent"
+
+
+class Subprocessor(Base):
+    __tablename__ = "subprocessors"
+    __table_args__ = (UniqueConstraint("provider", name="uq_subprocessors_provider"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    provider: Mapped[str] = mapped_column(String(160), nullable=False)
+    category: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    data_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    processing_location: Mapped[str | None] = mapped_column(String(160))
+    international_transfer: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    transfer_mechanism: Mapped[str | None] = mapped_column(String(300))
+    dpa_status: Mapped[str | None] = mapped_column(String(80))
+    privacy_url: Mapped[str | None] = mapped_column(String(500))
+    state: Mapped[SubprocessorState] = mapped_column(
+        Enum(SubprocessorState, name="subprocessor_state"),
+        default=SubprocessorState.configuration_dependent,
+        server_default=SubprocessorState.configuration_dependent.value,
+        nullable=False,
+    )
+    last_reviewed_at: Mapped[date | None] = mapped_column(Date)
+    internal_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class StripeWebhookEvent(Base):
     """Durable, transactional deduplication for Stripe webhook delivery —
     Stripe retries events, and can deliver the same event more than once even
@@ -3579,9 +3963,9 @@ class Vehicle(UuidTimeMixin, Base):
     manual entry; every field below is always manually editable regardless
     of provider support.
 
-    `scope`/`owner_user_id` reuse the same Personal/Household primitive as
-    ListTemplate. `vin` defaults to Personal visibility even on a
-    Household-scoped vehicle (see routers.driveway's field-level filtering)
+    `owner_user_id` is the authoritative Home-member owner. The legacy
+    `scope` column remains for compatibility with existing rows and is not
+    part of Driveway's API contract or authorization rules. VIN visibility is
     — the column itself has no separate visibility flag; that's an API
     presentation-layer rule, not a schema one, matching the "no new
     encryption subsystem yet" Phase 1.5 decision. Never write vin/

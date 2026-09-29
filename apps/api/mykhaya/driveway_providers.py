@@ -32,6 +32,12 @@ class VehicleLookupUnavailable(Exception):
     pass
 
 
+class VehicleLookupAuthFailed(Exception):
+    """The provider rejected our credentials (401/403) — distinct from a
+    general outage so PCC's Test connection can say "DVLA authentication
+    failed." rather than the more general "DVLA service is unavailable.\""""
+
+
 def normalize_registration(value: str) -> str:
     return "".join(value.upper().split())
 
@@ -57,7 +63,9 @@ class UKDVLAProvider:
             raise VehicleLookupUnavailable from exc
         if response.status_code == 404:
             raise VehicleLookupNotFound
-        if response.status_code in {401, 403, 408, 429} or response.status_code >= 500:
+        if response.status_code in {401, 403}:
+            raise VehicleLookupAuthFailed
+        if response.status_code in {408, 429} or response.status_code >= 500:
             raise VehicleLookupUnavailable
         if response.status_code >= 400:
             raise VehicleLookupNotFound

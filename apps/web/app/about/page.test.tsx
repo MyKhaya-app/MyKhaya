@@ -24,6 +24,13 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      publicLegalDocuments: vi.fn().mockResolvedValue([]),
+      legalStatus: vi.fn().mockResolvedValue({
+        documents: [],
+        children: [],
+        child_self: null,
+        action_required: false,
+      }),
     },
   };
 });
@@ -79,7 +86,7 @@ describe("About — browser", () => {
 
     render(<About />);
 
-    await screen.findByText("0.1.0");
+    await screen.findByText("0.1.0 (Web)");
     expect(screen.queryByText(/iOS app/i)).not.toBeInTheDocument();
     expect(getInfo).not.toHaveBeenCalled();
   });
@@ -89,7 +96,7 @@ describe("About — browser", () => {
 
     render(<About />);
 
-    await screen.findByText("0.1.0");
+    await screen.findByText("0.1.0 (Web)");
     expect(screen.queryByText("Environment")).not.toBeInTheDocument();
   });
 
@@ -99,6 +106,15 @@ describe("About — browser", () => {
     render(<About />);
 
     await screen.findByText("Development");
+  });
+
+  it("shows a graceful fallback, never the raw word 'unknown', when the version can't be resolved", async () => {
+    mockBuild({ version: "unknown", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+
+    render(<About />);
+
+    expect(await screen.findByText(/Version unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText("unknown")).not.toBeInTheDocument();
   });
 });
 
@@ -180,7 +196,7 @@ describe("About — native Notifications diagnostics", () => {
 
     render(<About />);
 
-    await screen.findByText("0.1.0");
+    await screen.findByText("0.1.0 (Web)");
     expect(screen.queryByText("Notification permission")).not.toBeInTheDocument();
   });
 
@@ -271,5 +287,250 @@ describe("About — Service Status link", () => {
 
     const heading = await screen.findByRole("heading", { name: "Service Status" });
     expect(heading.closest("a")).toHaveAttribute("href", "/service-status");
+  });
+});
+
+const termsDoc = {
+  key: "terms",
+  display_name: "Terms & Conditions",
+  audience: "adult" as const,
+  action_verb: "accept" as const,
+  acceptance_required: true,
+  current_version: "1.0",
+  current_version_id: "v-terms-1",
+  effective_date: "2026-09-01",
+};
+const privacyDoc = {
+  ...termsDoc,
+  key: "privacy",
+  display_name: "Privacy Policy",
+  action_verb: "acknowledge" as const,
+  current_version_id: "v-privacy-1",
+};
+const childrenDoc = {
+  ...termsDoc,
+  key: "children_privacy",
+  display_name: "Family & Children's Privacy",
+  audience: "child" as const,
+  current_version_id: "v-children-1",
+};
+
+function statusEntry(overrides: Record<string, unknown>) {
+  return {
+    document_key: "terms",
+    display_name: "Terms & Conditions",
+    audience: "adult",
+    action_verb: "accept",
+    current_version_id: "v-terms-1",
+    current_version_label: "1.0",
+    effective_date: "2026-09-01",
+    required: true,
+    satisfied: true,
+    last_version_label: "1.0",
+    last_version_id: "v-terms-1",
+    last_accepted_at: "2026-09-29T14:32:00Z",
+    is_test: false,
+    ...overrides,
+  };
+}
+
+describe("About — Legal & Compliance", () => {
+  beforeEach(() => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+  });
+
+  it("shows a polished empty-state panel, not a loose line of text, when nothing is published", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    const heading = await screen.findByRole("heading", { name: "No legal documents published yet" });
+    expect(heading.closest(".legal-empty-state")).not.toBeNull();
+    expect(
+      screen.getByText("Your current legal documents will appear here when they become available."),
+    ).toBeInTheDocument();
+    // "Keeping you informed" still renders underneath the empty state.
+    expect(screen.getByText("Keeping you informed")).toBeInTheDocument();
+  });
+
+  it("shows each applicable document with its current version", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc, privacyDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [
+        statusEntry({}),
+        statusEntry({
+          document_key: "privacy",
+          action_verb: "acknowledge",
+          current_version_id: "v-privacy-1",
+          last_version_id: "v-privacy-1",
+        }),
+      ],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText("Terms & Conditions")).toBeInTheDocument();
+    expect(
+      screen.getAllByText((_, element) => Boolean(element?.textContent?.startsWith("Version 1.0")))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("Privacy Policy")).toBeInTheDocument();
+  });
+
+  it("shows Accepted with the recorded timestamp for Terms", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [statusEntry({})],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText(/Accepted$/)).toBeInTheDocument();
+    expect(screen.getByText(/Accepted on/)).toBeInTheDocument();
+  });
+
+  it("shows Acknowledged, not Accepted, for a document with action_verb acknowledge", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([privacyDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [
+        statusEntry({
+          document_key: "privacy",
+          action_verb: "acknowledge",
+          current_version_id: "v-privacy-1",
+          last_version_id: "v-privacy-1",
+        }),
+      ],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText(/Acknowledged$/)).toBeInTheDocument();
+    expect(screen.getByText(/Acknowledged on/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Accepted$/)).not.toBeInTheDocument();
+  });
+
+  it("shows Authorised for the Family & Children's Privacy row when a guardian has authorised it", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([childrenDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [],
+      children: [
+        {
+          child_membership_id: "child-1",
+          document_key: "children_privacy",
+          display_name: "Family & Children's Privacy",
+          guardian_authorisation: statusEntry({
+            document_key: "children_privacy",
+            action_verb: null,
+            current_version_id: "v-children-1",
+            last_version_id: "v-children-1",
+          }),
+          child_acknowledgement: null,
+        },
+      ],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText(/Authorised$/)).toBeInTheDocument();
+    expect(screen.getByText(/Authorised on/)).toBeInTheDocument();
+  });
+
+  it("shows Review required and no timestamp when re-acceptance is outstanding — never fabricates a date", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [
+        statusEntry({
+          satisfied: false,
+          current_version_label: "2.0",
+          last_version_label: "1.0",
+          last_accepted_at: "2026-01-01T00:00:00Z",
+        }),
+      ],
+      children: [],
+      child_self: null,
+      action_required: true,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText("Review required")).toBeInTheDocument();
+    expect(screen.queryByText(/Accepted on/)).not.toBeInTheDocument();
+  });
+
+  it("marks a TEST version distinctly, never as ordinary production history", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [statusEntry({ is_test: true })],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText("TEST")).toBeInTheDocument();
+  });
+
+  it("shows only the Family & Children's Privacy acknowledgement for a managed-child session, never adult Terms", async () => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "c1",
+      display_name: "Kiddo",
+      principal_type: "managed_child",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc, childrenDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [],
+      children: [],
+      child_self: {
+        child_membership_id: "child-1",
+        document_key: "children_privacy",
+        display_name: "Family & Children's Privacy",
+        guardian_authorisation: null,
+        child_acknowledgement: statusEntry({
+          document_key: "children_privacy",
+          action_verb: "acknowledge",
+          current_version_id: "v-children-1",
+          last_version_id: "v-children-1",
+        }),
+      },
+      action_required: false,
+    });
+
+    render(<About />);
+
+    expect(await screen.findByText("Family & Children's Privacy")).toBeInTheDocument();
+    expect(screen.queryByText("Terms & Conditions")).not.toBeInTheDocument();
+  });
+
+  it("links each row to its own document reader", async () => {
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([termsDoc]);
+    (api.legalStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      documents: [statusEntry({})],
+      children: [],
+      child_self: null,
+      action_required: false,
+    });
+
+    render(<About />);
+
+    const heading = await screen.findByRole("heading", { name: "Terms & Conditions" });
+    expect(heading.closest("a")).toHaveAttribute("href", "/about/legal/terms");
   });
 });

@@ -2,6 +2,101 @@ import type { Home, Member, User } from "@mykhaya/shared-types";
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
+// Mirrors apps/api/mykhaya/legal_schemas.py exactly — see mykhaya.legal for
+// the backend semantics (the backend is always the source of truth for
+// which documents/versions are current; these types only describe its
+// responses, never a client-side re-derivation of them).
+export type LegalAudience = "adult" | "child";
+export type LegalActionVerb = "accept" | "acknowledge";
+export type LegalAcceptanceContext =
+  | "signup"
+  | "login_reauth"
+  | "policy_update"
+  | "subscription_purchase"
+  | "settings"
+  | "guardian_child_login_setup"
+  | "child_login_session";
+export type LegalPlatform = "web" | "ios" | "android";
+
+export type PublicLegalDocumentSummary = {
+  key: string;
+  display_name: string;
+  audience: LegalAudience;
+  action_verb: LegalActionVerb;
+  acceptance_required: boolean;
+  current_version: string | null;
+  current_version_id: string | null;
+  effective_date: string | null;
+};
+
+export type PublicLegalDocumentContent = {
+  key: string;
+  display_name: string;
+  version: string;
+  effective_date: string | null;
+  published_at: string | null;
+  change_summary: string | null;
+  content_markdown: string;
+};
+
+export type LegalDocumentStatus = {
+  document_key: string;
+  display_name: string;
+  audience: LegalAudience;
+  action_verb: LegalActionVerb | null;
+  current_version_id: string | null;
+  current_version_label: string | null;
+  effective_date: string | null;
+  required: boolean;
+  satisfied: boolean;
+  last_version_label: string | null;
+  last_version_id: string | null;
+  last_accepted_at: string | null;
+  is_test?: boolean;
+};
+
+export type ChildLegalStatus = {
+  child_membership_id: string;
+  document_key: string;
+  display_name: string;
+  guardian_authorisation: LegalDocumentStatus | null;
+  child_acknowledgement: LegalDocumentStatus | null;
+};
+
+export type LegalStatusResponse = {
+  documents: LegalDocumentStatus[];
+  children: ChildLegalStatus[];
+  child_self: ChildLegalStatus | null;
+  action_required: boolean;
+};
+
+export type LegalAcceptanceRequest = {
+  document_key: string;
+  document_version_id: string;
+  context: LegalAcceptanceContext;
+  platform: LegalPlatform;
+  app_version?: string;
+};
+
+export type GuardianAuthorisationRequest = {
+  child_membership_id: string;
+  document_version_id: string;
+  context: LegalAcceptanceContext;
+  platform: LegalPlatform;
+  app_version?: string;
+};
+
+export type ChildAcknowledgementRequest = {
+  document_version_id: string;
+  platform: LegalPlatform;
+  app_version?: string;
+};
+
+export type SignupLegalAcceptanceItem = {
+  document_key: string;
+  document_version_id: string;
+};
+
 export type ConsumerMfaStatus = {
   required: boolean;
   allowed_methods: ("totp" | "email")[];
@@ -343,6 +438,28 @@ export class MyKhayaClient {
     this.request<{ providers: Array<{ provider: string; enabled: boolean }> }>(
       "/auth/providers",
     );
+  publicLegalDocuments = () =>
+    this.request<PublicLegalDocumentSummary[]>("/legal/documents");
+  publicLegalDocument = (key: string) =>
+    this.request<PublicLegalDocumentContent>(`/legal/documents/${encodeURIComponent(key)}`);
+  legalStatus = () => this.request<LegalStatusResponse>("/legal/status");
+  legalVersion = (versionId: string) =>
+    this.request<PublicLegalDocumentContent>(`/legal/versions/${encodeURIComponent(versionId)}`);
+  acceptLegalDocument = (body: LegalAcceptanceRequest) =>
+    this.request<LegalDocumentStatus>("/legal/acceptances", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  authoriseChildLegalDocument = (body: GuardianAuthorisationRequest) =>
+    this.request<LegalDocumentStatus>("/legal/guardian-authorisations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  acknowledgeChildLegalDocument = (body: ChildAcknowledgementRequest) =>
+    this.request<LegalDocumentStatus>("/legal/child-acknowledgements", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   renew = () => this.request<User>("/auth/renew", { method: "POST", body: "{}" });
   devices = () =>
     this.request<{

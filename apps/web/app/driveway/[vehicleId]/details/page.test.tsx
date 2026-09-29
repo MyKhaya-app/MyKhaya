@@ -34,6 +34,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       vehicle: vi.fn(),
+      members: vi.fn(),
       updateVehicle: vi.fn(),
     },
   };
@@ -81,6 +82,10 @@ beforeEach(() => {
   relationship = "home_admin";
   currentUserId = "u1";
   (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+    { user_id: "u1", display_name: "Megan" },
+    { user_id: "u2", display_name: "Partner" },
+  ]);
 });
 
 describe("Vehicle details — editing", () => {
@@ -126,6 +131,17 @@ describe("Vehicle details — editing", () => {
     expect(vehicleId).toBe("v1");
     expect(body).toMatchObject({ nickname: "i4", expected_updated_at: VEHICLE.updated_at });
     await waitFor(() => expect(push).toHaveBeenCalledWith("/driveway/v1"));
+  });
+
+  it("submits a selected Home-member owner", async () => {
+    (api.updateVehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByDisplayValue("BMW i4");
+    await user.selectOptions(screen.getByLabelText("Owner"), "u2");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(api.updateVehicle).toHaveBeenCalled());
+    expect((api.updateVehicle as ReturnType<typeof vi.fn>).mock.calls.at(0)?.[2]).toMatchObject({ owner_user_id: "u2" });
   });
 
   it("stays on the form and shows the API error when saving fails", async () => {

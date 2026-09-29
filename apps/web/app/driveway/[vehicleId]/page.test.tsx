@@ -146,6 +146,24 @@ describe("Vehicle detail — real data only", () => {
     const row = await screen.findByRole("heading", { name: "Reminders" });
     expect(row.closest("a")).toHaveAttribute("href", "/driveway/v1/reminders");
   });
+
+  it("only exposes implemented vehicle detail destinations", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    renderPage();
+    await screen.findByRole("heading", { name: "BMW i4" });
+
+    for (const title of ["Vehicle details", "Reminders"]) {
+      expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+    }
+    for (const title of ["MOT history", "Documents", "Service history", "Insurance", "Notes"]) {
+      expect(screen.queryByRole("heading", { name: title })).not.toBeInTheDocument();
+    }
+
+    const detailsRow = screen.getByRole("heading", { name: "Vehicle details" }).closest("a");
+    const remindersRow = screen.getByRole("heading", { name: "Reminders" }).closest("a");
+    expect(detailsRow?.querySelector("svg")).toBeTruthy();
+    expect(remindersRow?.querySelector("svg")).toBeTruthy();
+  });
 });
 
 describe("Vehicle detail — remove vehicle", () => {

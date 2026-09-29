@@ -41,10 +41,23 @@ async def new_client() -> AsyncClient:
     )
 
 
-async def _make_home_with_child(client: AsyncClient, suffix: str) -> tuple[str, str, str]:
+async def _make_home_with_child(
+    client: AsyncClient,
+    suffix: str,
+    *,
+    legal_acceptances: list[dict[str, Any]] | None = None,
+) -> tuple[str, str, str]:
     """Registers a Home Admin, creates a Home and a Child profile. Returns
     (group_id, membership_id, home_code)."""
-    await create_verified_user(client, f"admin-{suffix}@example.com", "Home Admin")
+    registration_fields = (
+        {"legal_acceptances": legal_acceptances} if legal_acceptances is not None else {}
+    )
+    await create_verified_user(
+        client,
+        f"admin-{suffix}@example.com",
+        "Home Admin",
+        **registration_fields,
+    )
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": f"Home {suffix}"})
     assert group.status_code == 201, group.text
     group_id = group.json()["id"]

@@ -160,6 +160,8 @@ export function nativeRegister(body: {
   display_name: unknown;
   password: unknown;
   invitation_token?: unknown;
+  legal_acceptances?: { document_key: string; document_version_id: string }[];
+  platform?: "web" | "ios" | "android";
 }): Promise<{ message: string; verification_required: boolean }> {
   return client().register(body);
 }

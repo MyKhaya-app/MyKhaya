@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, use, useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
-import type { RoutineScope, Vehicle } from "@mykhaya/shared-types";
+import type { Member, Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { useAuth } from "@/components/auth-provider";
@@ -34,8 +34,9 @@ export default function VehicleDetailsEditPage({
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  const [scope, setScope] = useState<RoutineScope>("household");
   const [countryCode, setCountryCode] = useState("GB");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [ownerUserId, setOwnerUserId] = useState("");
   const [registration, setRegistration] = useState("");
   const [nickname, setNickname] = useState("");
   const [make, setMake] = useState("");
@@ -51,12 +52,13 @@ export default function VehicleDetailsEditPage({
 
   useEffect(() => {
     if (!activeHomeId) return;
+    api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
     setNotFound(false);
     api
       .vehicle(activeHomeId, vehicleId)
       .then((row) => {
         setVehicle(row);
-        setScope(row.scope);
+        setOwnerUserId(row.owner_user_id);
         setCountryCode(row.country_code);
         setRegistration(row.registration ?? "");
         setNickname(row.nickname);
@@ -81,6 +83,7 @@ export default function VehicleDetailsEditPage({
   // which would otherwise look like (and risk becoming) clearing it.
   const canSeeVin =
     !!vehicle && !!user && (vehicle.owner_user_id === user.id || activeHome?.relationship === "home_admin");
+  const ownerOptions = members.length ? members : user ? [{ user_id: user.id, display_name: "You" } as Member] : [];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -94,7 +97,7 @@ export default function VehicleDetailsEditPage({
     try {
       await api.updateVehicle(activeHomeId, vehicle.id, {
         nickname: nickname.trim(),
-        scope,
+        owner_user_id: ownerUserId,
         country_code: countryCode,
         registration: registration.trim(),
         make: make.trim() || null,
@@ -184,29 +187,14 @@ export default function VehicleDetailsEditPage({
             />
           </label>
 
-          <div className="driveway-form-section">
-            <p className="eyebrow">Who is this for?</p>
-            <div className="rr-segmented" role="tablist" aria-label="Vehicle scope">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={scope === "personal"}
-                className={`rr-segment${scope === "personal" ? " rr-segment-active" : ""}`}
-                onClick={() => setScope("personal")}
-              >
-                Personal
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={scope === "household"}
-                className={`rr-segment${scope === "household" ? " rr-segment-active" : ""}`}
-                onClick={() => setScope("household")}
-              >
-                Household
-              </button>
-            </div>
-          </div>
+          <label>
+            Owner
+            <select value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} required>
+              {ownerOptions.map((member) => (
+                <option key={member.user_id} value={member.user_id}>{member.user_id === user?.id ? "You" : member.display_name}</option>
+              ))}
+            </select>
+          </label>
 
           <label>
             Make

@@ -991,7 +991,6 @@ export interface Vehicle {
   id: string;
   group_id: string;
   owner_user_id: string;
-  scope: RoutineScope;
   nickname: string;
   make: string | null;
   model: string | null;
@@ -1024,7 +1023,7 @@ export interface VehicleListResponse {
 
 export interface VehicleCreatePayload {
   nickname: string;
-  scope: RoutineScope;
+  owner_user_id: string;
   make?: string | null;
   model?: string | null;
   colour?: string | null;

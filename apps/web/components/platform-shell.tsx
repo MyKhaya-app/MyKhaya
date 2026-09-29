@@ -18,6 +18,7 @@ import {
   ListChecks,
   Mail,
   MessageSquare,
+  Scale,
   ScrollText,
   Send,
   Settings,
@@ -83,6 +84,10 @@ const navGroups: NavGroup[] = [
       { label: "Tickets", href: "/support/tickets", icon: LifeBuoy },
       { label: "Settings", href: "/support/settings", icon: Settings },
     ],
+  },
+  {
+    label: "Legal",
+    items: [{ label: "Legal & Compliance", href: "/legal", icon: Scale }],
   },
   {
     label: "Operations",

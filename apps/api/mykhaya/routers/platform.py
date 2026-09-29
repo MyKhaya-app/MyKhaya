@@ -37,7 +37,12 @@ from mykhaya.consumer_mfa_policy import (
     resolve_consumer_mfa_policy,
 )
 from mykhaya.db import get_db
-from mykhaya.driveway_providers import UKDVLAProvider, VehicleLookupNotFound, VehicleLookupUnavailable
+from mykhaya.driveway_providers import (
+    UKDVLAProvider,
+    VehicleLookupAuthFailed,
+    VehicleLookupNotFound,
+    VehicleLookupUnavailable,
+)
 from mykhaya.entitlements import (
     calendar_usage,
     complimentary_expired_sql_filter,
@@ -5930,11 +5935,29 @@ async def driveway_dvla_status(
 ) -> dict[str, Any]:
     row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled"))
     value = row.value if row else {}
+    enabled = value.get("value") is True
+    configured = settings.dvla_configured
+    stored_health = dict(value.get("health") or {})
+    # State always reflects live configuration/toggle state, never a stale
+    # value left over from before a credential was removed or the provider
+    # was disabled — only the last-success/last-failure history below is
+    # allowed to be historical.
+    if not configured:
+        state = "Not configured"
+    elif not enabled:
+        state = "Disabled"
+    else:
+        state = stored_health.get("state", "Unknown")
     return {
-        "enabled": value.get("value") is True,
-        "configured": settings.dvla_api_key is not None,
-        "endpoint": settings.dvla_api_url,
-        "health": value.get("health", {"state": "Not configured" if settings.dvla_api_key is None else "Disabled"}),
+        "enabled": enabled,
+        "configured": configured,
+        "environment": settings.dvla_environment_label,
+        "endpoint": settings.dvla_active_endpoint,
+        "health": {"state": state},
+        "last_success_at": stored_health.get("last_success_at"),
+        "last_success_summary": stored_health.get("last_success_summary"),
+        "last_failure_at": stored_health.get("last_failure_at"),
+        "last_failure_summary": stored_health.get("last_failure_summary"),
     }
 
 
@@ -5947,21 +5970,37 @@ async def driveway_dvla_test(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    if settings.dvla_api_key is None:
+    if not settings.dvla_configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DVLA is not configured.")
-    provider = UKDVLAProvider(settings.dvla_api_key, settings.dvla_api_url)
+    assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
+    environment_label = settings.dvla_environment_label or "DVLA"
+    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
     try:
         await provider.lookup(body.registration)
-        result = {"state": "Healthy", "message": "DVLA connection successful."}
+        result = {"state": "Healthy", "message": f"DVLA {environment_label} connection successful."}
     except VehicleLookupNotFound:
-        result = {"state": "Healthy", "message": "DVLA connection successful; the registration was not found."}
+        result = {
+            "state": "Healthy",
+            "message": "Vehicle registration was not found, but the DVLA connection is working.",
+        }
+    except VehicleLookupAuthFailed:
+        result = {"state": "Unavailable", "message": "DVLA authentication failed."}
     except VehicleLookupUnavailable:
-        result = {"state": "Unavailable", "message": "DVLA is currently unavailable."}
+        result = {"state": "Unavailable", "message": "DVLA service is unavailable."}
     row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled").with_for_update())
     if row is None:
         row = PlatformSetting(key="driveway_dvla_enabled", value={"value": False}, updated_by=context.administrator.id)
         db.add(row)
-    row.value = {**row.value, "health": result}
+    health = dict(row.value.get("health") or {})
+    now = datetime.now(UTC).isoformat()
+    health["state"] = result["state"]
+    if result["state"] == "Healthy":
+        health["last_success_at"] = now
+        health["last_success_summary"] = result["message"]
+    else:
+        health["last_failure_at"] = now
+        health["last_failure_summary"] = result["message"]
+    row.value = {**row.value, "health": health}
     platform_audit(db, request, context, "driveway.dvla.test_connection", "integration", reason=body.reason, new={"state": result["state"]})
     await db.commit()
     return result

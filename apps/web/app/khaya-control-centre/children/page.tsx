@@ -2,11 +2,12 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import type { ChildAgeBand, ChildProfile, Member } from "@mykhaya/shared-types";
-import { ApiError, api } from "@mykhaya/api-client";
+import { ApiError, api, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { KhayaControlShell } from "@/components/khaya-control-shell";
 import { useActiveHome } from "@/components/use-active-home";
 import { FamilyUpsell } from "@/components/family-upsell";
+import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 
 const permissionLabels: Record<string, string> = {
   calendar_view: "View the household calendar",
@@ -42,6 +43,7 @@ export default function ChildrenPage() {
   const { activeHome, activeHomeId } = useActiveHome();
   const [children, setChildren] = useState<ChildProfile[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [legalDocuments, setLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,9 +60,11 @@ export default function ChildrenPage() {
       api.members(activeHomeId),
       api.billingStatus(activeHomeId),
     ]);
+    const publishedLegal = await api.publicLegalDocuments().catch(() => []);
     setChildren(childRows);
     setMembers(memberRows);
     setFamilyAccess(billing.family_access);
+    setLegalDocuments(publishedLegal);
   }
 
   useEffect(() => {
@@ -248,6 +252,22 @@ export default function ChildrenPage() {
     const username = formText(data, "login_username");
     const pin = formText(data, "login_pin");
     try {
+      const childNotice = legalDocuments.find(
+        (document) => document.audience === "child" && document.acceptance_required,
+      );
+      if (childNotice?.current_version_id) {
+        const confirmed = window.confirm(
+          `Before enabling ${child.display_name}'s sign-in, review the Family & Children's Privacy Notice (version ${childNotice.current_version ?? "current"}) at /legal/children. Continue and record your guardian authorisation?`,
+        );
+        if (!confirmed) return;
+        const currentPlatform = isNativeShell() ? nativePlatform() : "web";
+        await api.authoriseChildLegalDocument({
+          child_membership_id: child.membership_id,
+          document_version_id: childNotice.current_version_id,
+          context: "guardian_child_login_setup",
+          platform: currentPlatform === "ios" || currentPlatform === "android" ? currentPlatform : "web",
+        });
+      }
       await api.updateChildLogin(activeHomeId, child.membership_id, {
         enabled: true,
         username,

@@ -9624,6 +9624,103 @@ select.plan-meal-field-input {
   flex: none;
 }
 
+/* Driveway vehicle presentation */
+.driveway-page .page-heading {
+  position: relative;
+}
+.driveway-heading-art {
+  height: 116px;
+  object-fit: contain;
+  object-position: right center;
+  position: absolute;
+  right: 0;
+  top: -0.8rem;
+  width: 150px;
+}
+.driveway-owner-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 0.75rem;
+}
+.driveway-owner-filters button {
+  background: var(--colour-cream, #f7f4ed);
+  border: 1px solid var(--colour-border, #e5dfd3);
+  border-radius: 999px;
+  color: var(--colour-forest-dark);
+  font: inherit;
+  font-size: var(--font-small);
+  min-height: 38px;
+  padding: 0.35rem 0.9rem;
+}
+.driveway-owner-filters button.active {
+  background: var(--colour-forest);
+  border-color: var(--colour-forest);
+  color: white;
+}
+.driveway-vehicle-card {
+  padding: 0.55rem;
+}
+.driveway-vehicle-card .lists-card-body {
+  gap: 0.8rem;
+}
+.driveway-vehicle-image {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 0.85rem;
+  color: var(--colour-forest-dark);
+  display: flex;
+  flex: 0 0 92px;
+  height: 78px;
+  justify-content: center;
+  overflow: hidden;
+}
+.driveway-vehicle-image img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.driveway-owner-badge {
+  align-self: flex-start;
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-forest-dark);
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.55rem;
+  width: fit-content;
+}
+.driveway-statuses {
+  color: var(--colour-forest-dark);
+  font-size: var(--font-small);
+}
+.driveway-owner-note {
+  background: var(--colour-sage-soft);
+  border-radius: 0.8rem;
+  color: var(--colour-forest-dark);
+  margin: 0;
+  padding: 0.8rem 1rem;
+}
+.driveway-compliance-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: var(--space-card-stack);
+}
+.driveway-compliance-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+.driveway-compliance-card svg { color: var(--colour-forest); }
+.driveway-compliance-card b { color: var(--colour-forest-dark); }
+.driveway-compliance-card small { color: var(--colour-muted); }
+@media (max-width: 430px) {
+  .driveway-heading-art { height: 92px; right: -0.6rem; top: -0.35rem; width: 110px; }
+  .driveway-vehicle-image { flex-basis: 78px; height: 70px; }
+}
+
 /* --- More: green hero header + grouped destination cards --- */
 /* A full-bleed continuation of the header's green field, the same
    mechanism as .home-hero (see AppShell's `flush` prop, generalised to
@@ -10842,5 +10939,318 @@ a.family-feed-row {
   .app-shell:not(.native-shell-app) .rr-layout {
     align-items: start;
     grid-template-columns: minmax(0, 1fr) 320px;
+  }
+}
+
+/* Legal & Privacy (consumer) — public legal pages, in-app Legal & Privacy,
+   and the legal-action-required gate. Reuses the existing .card/.notice/
+   .standard-page/.page-heading vocabulary; only the Markdown prose styling
+   and the gate's own layout are new. */
+.legal-prose {
+  color: var(--colour-slate, #233028);
+  font-size: 0.98rem;
+  line-height: 1.7;
+  max-width: 68ch;
+}
+.legal-prose h1,
+.legal-prose h2,
+.legal-prose h3 {
+  line-height: 1.3;
+  margin: 1.4em 0 0.5em;
+}
+.legal-prose h1:first-child,
+.legal-prose h2:first-child,
+.legal-prose h3:first-child {
+  margin-top: 0;
+}
+.legal-prose p {
+  margin: 0 0 1em;
+}
+.legal-prose ul,
+.legal-prose ol {
+  margin: 0 0 1em;
+  padding-left: 1.4em;
+}
+.legal-prose li {
+  margin-bottom: 0.35em;
+}
+.legal-prose a {
+  color: var(--colour-sage-dark, #566b58);
+}
+
+.legal-meta {
+  color: var(--colour-slate, #233028);
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0 0 1.25rem;
+}
+
+.legal-gate {
+  align-items: center;
+  background: var(--colour-cream-light, #faf7f1);
+  display: flex;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: calc(var(--safe-top, 0px) + 1.5rem) 1rem calc(var(--safe-bottom, 0px) + 1.5rem);
+}
+.legal-gate-card {
+  border: 1px solid rgba(35, 48, 40, 0.1);
+  box-shadow: 0 18px 45px rgba(35, 48, 40, 0.1);
+  max-width: 34rem;
+  padding: clamp(1.35rem, 4vw, 2.25rem);
+  width: 100%;
+}
+.legal-gate-brand { margin-bottom: 1.5rem; }
+.legal-gate-brand .brand { align-items: center; display: inline-flex; }
+.legal-gate-brand .brand-mark { height: 2.75rem; width: 2.75rem; }
+.legal-gate-brand .brand > span:last-child { color: var(--colour-sage-dark, #566b58); font-weight: 750; }
+.legal-gate-heading h1 { margin: 0 0 0.55rem; }
+.legal-gate-heading > .muted { margin: 0 0 1rem; }
+.legal-test-banner { background: #edf7f1; border: 1px solid #b8dcca; border-radius: 0.75rem; color: #285f47; display: flex; flex-direction: column; gap: 0.2rem; margin: 0 0 1.25rem; padding: 0.75rem 0.9rem; }
+.legal-test-banner strong { font-size: 0.72rem; letter-spacing: 0.08em; }
+.legal-test-banner span { font-size: 0.86rem; }
+.legal-gate-document {
+  background: rgba(250, 247, 241, 0.7);
+  border: 1px solid rgba(35, 48, 40, 0.1);
+  border-radius: 0.8rem;
+  margin-top: 1.1rem;
+  padding: 1rem;
+}
+.legal-gate-document-heading { align-items: flex-start; display: flex; gap: 0.75rem; justify-content: space-between; }
+.legal-gate-document h3 { margin: 0 0 0.25rem; }
+.legal-gate-version { color: var(--colour-slate, #233028); font-size: 0.82rem; margin: 0; opacity: 0.72; }
+.legal-test-badge { background: #dcefe4; border-radius: 999px; color: #285f47; flex: 0 0 auto; font-size: 0.68rem; font-weight: 750; letter-spacing: 0.06em; padding: 0.3rem 0.5rem; }
+.legal-gate-document .muted {
+  margin: 0 0 0.75rem;
+}
+.legal-gate-review-button { margin-top: 0.25rem; }
+.legal-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.legal-gate-secondary-actions {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+.legal-gate-reject { font-size: 0.9rem; }
+.legal-gate-confirm-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; justify-content: flex-end; }
+.legal-gate-essentials {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+.legal-gate-essentials ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+.legal-document-reader {
+  background: var(--colour-cream-light, #faf7f1);
+  border-radius: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem;
+}
+@media (max-width: 420px) {
+  .legal-gate { align-items: flex-start; }
+  .legal-gate-card { padding: 1.15rem; }
+}
+
+.legal-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.legal-status-row {
+  align-items: center;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 0.75rem;
+}
+.legal-status-row:last-child {
+  border-bottom: 0;
+}
+
+.mk-footer-legal-links {
+  gap: 1rem;
+  margin: 0 0 1rem;
+}
+.mk-footer-legal-links a {
+  color: var(--colour-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* About MyKhaya — Version card: Logo + "MyKhaya" header row above the
+   existing .details dl key/value rows (reused as-is — every other row on
+   this card, and on the Notifications card below it, already uses that
+   same label/value pattern). */
+.about-brand-row {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+.about-brand-row strong {
+  font-size: 1.15rem;
+}
+
+/* About MyKhaya — Legal & Compliance card. `.details` (see app/styles.css's
+   base rule) supplies the card's own padding — the same class the Version
+   and Notifications cards already use — so this card was never missing
+   padding by design; it just wasn't applied. `.section-heading` (also
+   already used elsewhere, e.g. Home's summary cards) supplies the
+   icon-tile + title + description header row; only the icon-tile column
+   is added here, scoped to this card so the shared default is untouched. */
+.legal-compliance-heading {
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-bottom: 1.1rem;
+}
+.legal-compliance-heading .more-icon-tile {
+  flex: none;
+}
+.legal-compliance-heading h2 {
+  margin: 0 0 0.15rem;
+}
+.legal-compliance-heading p {
+  margin: 0;
+}
+.legal-document-rows {
+  border: 1px solid #efe9dd;
+  border-radius: var(--radius-card);
+  margin-bottom: 1.1rem;
+  overflow: hidden;
+}
+.legal-document-rows .more-row {
+  padding: 14px;
+}
+/* .more-row's shared grid (icon / text / chevron — see the base rule) gets
+   a fourth column here for the status pill(s) + date, scoped to this
+   modifier class only so the plain 3-column row used everywhere else in
+   More is untouched. */
+.more-row-with-status {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.more-row-status {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  text-align: right;
+}
+.legal-status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+.legal-status-pill {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.76rem;
+  font-weight: 700;
+  gap: 0.25rem;
+  padding: 0.25rem 0.65rem;
+  white-space: nowrap;
+}
+.legal-status-pill.satisfied {
+  background: var(--colour-sage-soft);
+  color: #354f38;
+}
+.legal-status-pill.required {
+  background: var(--cc-warning-bg, #fff2d8);
+  color: var(--cc-warning, #8a5a12);
+}
+.legal-status-pill.neutral {
+  background: var(--colour-cream-light);
+  color: var(--colour-muted);
+}
+.legal-status-pill.test {
+  background: #fdecea;
+  color: #8b2d20;
+}
+.legal-status-date {
+  color: var(--colour-muted);
+  font-size: 0.76rem;
+  line-height: 1.3;
+}
+.legal-empty-state {
+  align-items: center;
+  background: var(--colour-cream-light);
+  border-radius: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+  padding: 1rem 1.1rem;
+}
+.legal-empty-state .more-icon-tile {
+  flex: none;
+}
+.legal-empty-state h3 {
+  font-size: 0.9rem;
+  margin: 0 0 0.2rem;
+}
+.legal-empty-state p {
+  font-size: 0.85rem;
+  margin: 0;
+}
+.legal-info-panel {
+  align-items: flex-start;
+  background: var(--colour-sage-soft);
+  border-radius: 0.75rem;
+  color: #354f38;
+  display: flex;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem;
+}
+.legal-info-panel svg {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+.legal-info-panel h3 {
+  font-size: 0.9rem;
+  margin: 0 0 0.3rem;
+}
+.legal-info-panel p {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* About → legal document reader */
+.legal-reader-status {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1.25rem;
+}
+
+/* Small widths (≈375-430px, this page's primary target): stack each row's
+   status block under its title/description instead of squeezing a fourth
+   grid column into an already-narrow row — avoids clipped pills/crushed
+   timestamps/overlapping chevrons. */
+@media (max-width: 420px) {
+  .more-row-with-status {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 0.5rem;
+  }
+  .more-row-status {
+    align-items: flex-start;
+    grid-column: 2 / 3;
+    text-align: left;
+  }
+  .legal-status-pills {
+    justify-content: flex-start;
   }
 }

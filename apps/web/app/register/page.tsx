@@ -3,13 +3,21 @@ export const dynamic = "force-dynamic";
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError } from "@mykhaya/api-client";
+import { api, ApiError, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
 import { intervalName } from "@/components/billing-logic";
 import { parseIntentFromParams, saveOnboardingIntent } from "@/components/onboarding-intent";
 import { nativeRegister } from "@/components/native-auth";
-import { isNativeShell } from "@/components/native-runtime";
+import { isNativeShell, nativePlatform } from "@/components/native-runtime";
+
+const LEGAL_PAGE_BY_KEY: Record<string, string> = {
+  terms: "/legal/terms",
+  privacy: "/legal/privacy",
+  children_privacy: "/legal/children",
+  cookies: "/legal/cookies",
+};
+
 export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
@@ -27,6 +35,10 @@ export default function Register() {
       ? null
       : parseIntentFromParams(params.get("plan"), params.get("interval"));
   const [error, setError] = useState(""),
+    [legalDocuments, setLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [legalLoading, setLegalLoading] = useState(true),
+    [legalLoadFailed, setLegalLoadFailed] = useState(false),
+    [legalChecked, setLegalChecked] = useState<Record<string, boolean>>({}),
     [busy, setBusy] = useState(false),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
@@ -39,6 +51,16 @@ export default function Register() {
       invited_by_display_name: string;
       recipient_email: string;
     } | null>(null);
+  useEffect(() => {
+    api
+      .publicLegalDocuments()
+      .then(setLegalDocuments)
+      .catch(() => {
+        setLegalDocuments([]);
+        setLegalLoadFailed(true);
+      })
+      .finally(() => setLegalLoading(false));
+  }, []);
   useEffect(() => {
     if (!invitation) return;
     api
@@ -64,11 +86,41 @@ export default function Register() {
       return;
     }
     try {
+      const requiredLegal = legalDocuments.filter(
+        (document) => document.audience === "adult" && document.acceptance_required,
+      );
+      const missingLegal = requiredLegal.filter(
+        (document) => !document.current_version_id || !legalChecked[document.key],
+      );
+      if (legalLoading) {
+        setError("Please wait while the current legal documents load.");
+        setBusy(false);
+        return;
+      }
+      if (legalLoadFailed) {
+        setError("The current legal documents could not be loaded. Please try again.");
+        setBusy(false);
+        return;
+      }
+      if (missingLegal.length) {
+        setError("Please review and confirm the required legal documents before continuing.");
+        setBusy(false);
+        return;
+      }
       const body = {
         email: d.get("email"),
         display_name: d.get("name"),
         password: d.get("password"),
         invitation_token: invitation,
+        legal_acceptances: requiredLegal.map((document) => ({
+          document_key: document.key,
+          document_version_id: document.current_version_id!,
+        })),
+        platform: isNativeShell()
+          ? nativePlatform() === "ios" || nativePlatform() === "android"
+            ? nativePlatform()
+            : "web"
+          : "web",
       };
       const result = isNativeShell()
         ? await nativeRegister(body)
@@ -144,6 +196,45 @@ export default function Register() {
           Your name
           <input name="name" autoComplete="name" required maxLength={100} />
         </label>
+        {legalDocuments.length > 0 && (
+          <fieldset className="auth-legal-consent">
+            <legend>Before you create your account</legend>
+            <p className="muted">
+              Please review the current documents. The version shown is recorded with your
+              account.
+            </p>
+            {legalDocuments.map((document) => {
+              const required = document.audience === "adult" && document.acceptance_required;
+              return (
+                <label className="check-row" key={document.key}>
+                  {required && (
+                    <input
+                      type="checkbox"
+                      checked={legalChecked[document.key] === true}
+                      onChange={(event) =>
+                        setLegalChecked((current) => ({
+                          ...current,
+                          [document.key]: event.target.checked,
+                        }))
+                      }
+                    />
+                  )}
+                  <span>
+                    <Link href={LEGAL_PAGE_BY_KEY[document.key] ?? `/legal/${document.key}`}>
+                      {document.display_name}
+                    </Link>
+                    {document.current_version ? ` · version ${document.current_version}` : ""}
+                    {required
+                      ? document.action_verb === "acknowledge"
+                        ? " (I acknowledge this)"
+                        : " (I accept this)"
+                      : " (please review)"}
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+        )}
         <label>
           Email
           <input

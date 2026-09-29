@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { FamilyPricing, HomeJoinCodeLookup } from "@mykhaya/shared-types";
+import type { PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { api, ApiError } from "@mykhaya/api-client";
 import { Logo } from "@/components/logo";
 import { FormStatus } from "@/components/form-status";
@@ -42,6 +43,7 @@ export default function Onboarding() {
   const [homeId, setHomeId] = useState<string | null>(null);
   const [pricing, setPricing] = useState<FamilyPricing | null>(null);
   const [pricingError, setPricingError] = useState(false);
+  const [legalDocuments, setLegalDocuments] = useState<PublicLegalDocumentSummary[] | null>(null);
   const [billingInterval, setBillingInterval] = useState<BillingIntervalChoice>("month");
   const [requestedPlan, setRequestedPlan] = useState<"family" | "ultimate">("family");
   const [joinCodeInput, setJoinCodeInput] = useState("");
@@ -54,10 +56,8 @@ export default function Onboarding() {
       setBillingInterval(intent.interval);
       if (intent.plan === "ultimate") setRequestedPlan("ultimate");
     }
-    api
-      .familyPricing()
-      .then(setPricing)
-      .catch(() => setPricingError(true));
+    api.familyPricing().then(setPricing).catch(() => setPricingError(true));
+    api.publicLegalDocuments().then(setLegalDocuments).catch(() => setLegalDocuments([]));
   }, [step]);
 
   async function submitHome(e: FormEvent<HTMLFormElement>) {
@@ -320,6 +320,10 @@ export default function Onboarding() {
     const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
     const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
     const bestValue = pricing ? isBestValueInterval(pricing, billingInterval) : false;
+    const paidCheckoutLegalReady = Boolean(
+      legalDocuments?.some((document) => document.key === "terms" && document.current_version_id) &&
+      legalDocuments?.some((document) => document.key === "privacy" && document.current_version_id),
+    );
     return (
       <main className="onboarding">
         <Logo />
@@ -388,6 +392,15 @@ export default function Onboarding() {
                     Renews {billingInterval === "month" ? "monthly" : "annually"} until cancelled.
                     {saving ? ` ${saving}.` : ""}
                   </p>
+              <p className="hint">
+                Before checkout, review the current <a href="/legal/terms">Terms &amp; Conditions</a>{" "}
+                and <a href="/legal/privacy">Privacy Policy</a>.
+              </p>
+              {legalDocuments && !paidCheckoutLegalReady && (
+                <p className="notice error" role="alert">
+                  Paid checkout is temporarily unavailable until the current legal documents are available.
+                </p>
+              )}
                 </>
               )}
               <FormStatus error={error} />
@@ -399,7 +412,7 @@ export default function Onboarding() {
               ) : (
                 <button
                   type="button"
-                  disabled={busy || pricingError || !selected}
+                  disabled={busy || pricingError || !selected || !paidCheckoutLegalReady}
                   onClick={() => void upgradeToFamily()}
                 >
                   {busy ? "One moment…" : "Upgrade to Family"}

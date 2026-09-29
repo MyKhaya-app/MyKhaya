@@ -123,6 +123,8 @@ export function CcConfirmDialog({
   description,
   extraFields,
   confirmLabel,
+  reasonLabel = "Reason for this administrative action (at least 10 characters)",
+  reasonHint,
   variant = "default",
   onConfirm,
 }: {
@@ -132,6 +134,8 @@ export function CcConfirmDialog({
   description?: ReactNode;
   extraFields?: ReactNode;
   confirmLabel: string;
+  reasonLabel?: string;
+  reasonHint?: string;
   variant?: "default" | "destructive";
   onConfirm: (formData: FormData) => void | Promise<void>;
 }) {
@@ -148,8 +152,9 @@ export function CcConfirmDialog({
           {description && <p>{description}</p>}
           {extraFields}
           <label>
-            Reason for this administrative action (at least 10 characters)
+            {reasonLabel}
             <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+            {reasonHint && <small>{reasonHint}</small>}
           </label>
         </div>
         <CcDialogActions>

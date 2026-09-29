@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useParams, usePathname } from "next/navigation";
+import Link from "next/link";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { readableDate } from "@/components/platform-format";
 import { PlatformShell } from "@/components/platform-shell";
@@ -49,6 +50,7 @@ type UserDetail = {
   notes: { id: string; body: string; created_at: string }[];
   authentication_mfa: UserMfaState;
 };
+type LegalStatus = { account_type: "adult" | "managed_child"; current_status: Array<{ display_name: string; action_verb: string; current_version: string | null; satisfied: boolean }>; history: Array<{ id: string }> };
 
 type GatedAction =
   | "suspend"
@@ -91,6 +93,7 @@ export default function PlatformUserDetail() {
               ? "notes"
               : "overview";
   const [data, setData] = useState<UserDetail | null>(null);
+  const [legal, setLegal] = useState<LegalStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -106,6 +109,9 @@ export default function PlatformUserDetail() {
     try {
       const result = await platformApi.get<UserDetail>(`/users/${encodeURIComponent(id)}`);
       setData(result);
+      void platformApi.get<LegalStatus>(`/compliance/acceptance/${encodeURIComponent(id)}`).then((result) => {
+        setLegal(Array.isArray(result.current_status) ? result : null);
+      }).catch(() => setLegal(null));
     } catch (cause) {
       setError(safeError(cause, "Unable to load this user."));
     } finally {
@@ -366,6 +372,7 @@ export default function PlatformUserDetail() {
         <nav className="cc-user-profile-tabs-route-top" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <nav className="cc-user-profile-tabs" aria-label="User detail sections"><a className="is-active" href="#overview"><Clock3 size={17} /> Overview</a><a href="#account"><UserRoundCog size={17} /> Account</a><a href="#authentication"><Shield size={17} /> Authentication</a><a href="#homes"><Home size={17} /> Homes</a><a href="#permissions"><UsersRound size={17} /> Permissions</a><a href="#activity"><Clock3 size={17} /> Activity</a><a href="#notes"><FileText size={17} /> Notes</a></nav>
         <section className="cc-user-summary" id="overview"><div className="cc-user-summary-person"><span className="cc-user-summary-avatar">{initials(data.display_name)}</span><div><strong>{data.display_name}</strong><span>{data.email}</span></div></div><div className="cc-user-summary-item"><span>Status</span><strong><CcBadge tone={statusTone}>{statusLabel}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Email</span><strong><Mail size={16} /><CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></strong></div><div className="cc-user-summary-item"><span>MFA</span><strong><Shield size={16} /><CcBadge tone="info">{methodLabel(data.authentication_mfa.effective)}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Homes</span><strong><Home size={16} /> {data.homes.length}</strong></div><div className="cc-user-summary-item"><span>Member since</span><strong><CalendarDays size={16} /> {detailDate(data.created_at)}</strong></div></section>
+        {legal && <section className="cc-user-profile-card cc-user-legal-card"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FileText size={19} /></span><h2>Legal &amp; Privacy</h2><Link className="cc-user-profile-link-button" href={`/legal/acceptance/${data.id}`}>View history</Link></div><p className="muted">{legal.account_type === "managed_child" ? "Managed-child privacy notice status. Contractual Terms are not applied to this account." : "Current legal document status for this user."}</p>{legal.current_status.map((item) => <div className="cc-user-legal-row" key={item.display_name}><strong>{item.display_name}</strong><span>Version {item.current_version ?? "—"} · {item.satisfied ? "Current" : "Action required"} · {item.action_verb}</span></div>)}</section>}
         <nav className="cc-user-profile-tabs-route" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <div className="cc-user-detail-grid">
           <section className="cc-user-profile-card" id="account"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UserRoundCog size={19} /></span><h2>Account Details</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>Full name</dt><dd>{data.display_name}</dd></div><div><dt>Email address</dt><dd>{data.email} <CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></dd></div><div><dt>Phone number</dt><dd className="is-muted">Not provided</dd></div><div><dt>Date of birth</dt><dd className="is-muted">Not provided</dd></div><div><dt>Account created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div><div><dt>Status</dt><dd><CcBadge tone={statusTone}>{statusLabel}</CcBadge></dd></div></dl></section>

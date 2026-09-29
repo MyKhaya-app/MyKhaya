@@ -1,6 +1,6 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from email_validator import EmailNotValidError, validate_email
@@ -12,6 +12,9 @@ from mykhaya.models import (
     HouseholdRelationship,
     IncidentLifecycleState,
     PlatformRole,
+    PrivacyIdentityStatus,
+    PrivacyRequestStatus,
+    PrivacyRequestType,
     ServiceState,
     SubscriptionPlan,
     SubscriptionProvider,
@@ -1195,3 +1198,139 @@ class PlatformSupportSettingsResponse(BaseModel):
     editable support-team notification destination."""
 
     support_notification_email: str | None
+
+
+class AcceptanceDocumentSummary(BaseModel):
+    key: str
+    display_name: str
+    action_verb: str
+    current_version: str | None
+    current_version_id: uuid.UUID | None
+    is_test: bool = False
+
+
+class AcceptanceUserRow(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    # This is an account identifier in the operational dashboard. Managed-child
+    # principals intentionally use an internal @managed.mykhaya.invalid value,
+    # which is not a deliverable email address.
+    email: str
+    account_type: Literal["adult", "managed_child"]
+    documents: list[dict[str, Any]]
+    last_action_at: datetime | None
+    last_action: str | None
+    status: Literal["up_to_date", "action_required", "no_applicable_documents"]
+
+
+class AcceptanceDashboardResponse(BaseModel):
+    active_users: int
+    up_to_date: int
+    action_required: int
+    pending_guardian_action: int
+    documents: list[AcceptanceDocumentSummary]
+    rows: list[AcceptanceUserRow]
+
+
+class AcceptanceHistoryItem(BaseModel):
+    id: uuid.UUID
+    document_key: str
+    document_id: uuid.UUID
+    display_name: str
+    version: str
+    version_id: uuid.UUID
+    record_type: str
+    context: str
+    platform: str
+    created_at: datetime
+    guardian_user_id: uuid.UUID | None = None
+    child_profile_id: uuid.UUID | None = None
+    is_test: bool = False
+
+
+class AcceptanceHistoryResponse(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    # As with AcceptanceUserRow.email, managed-child principals may have an
+    # internal non-deliverable account identifier rather than an email address.
+    email: str
+    account_type: Literal["adult", "managed_child"]
+    current_status: list[dict[str, Any]]
+    history: list[AcceptanceHistoryItem]
+
+
+class LegalTestModeUpdate(SensitiveActionRequest):
+    enabled: bool
+    test_user_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+
+
+class LegalTestModeResponse(BaseModel):
+    enabled: bool
+    test_user_ids: list[uuid.UUID]
+
+
+class PrivacyRequestCreate(StrictModel):
+    user_id: uuid.UUID | None = None
+    request_type: PrivacyRequestType
+    received_at: datetime | None = None
+    due_date: date
+    identity_status: PrivacyIdentityStatus = PrivacyIdentityStatus.pending
+    internal_notes: str | None = Field(default=None, max_length=10000)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class PrivacyRequestUpdate(StrictModel):
+    status: PrivacyRequestStatus | None = None
+    identity_status: PrivacyIdentityStatus | None = None
+    due_date: date | None = None
+    assigned_administrator_id: uuid.UUID | None = None
+    internal_notes: str | None = Field(default=None, max_length=10000)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class PrivacyRequestResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    user_id: uuid.UUID | None
+    user_display_name: str | None
+    user_email: EmailStr | None
+    request_type: PrivacyRequestType
+    received_at: datetime
+    identity_status: PrivacyIdentityStatus
+    due_date: date
+    status: PrivacyRequestStatus
+    assigned_administrator_id: uuid.UUID | None
+    internal_notes: str | None
+    completed_at: datetime | None
+    declined_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    overdue: bool
+
+
+class SubprocessorCreate(StrictModel):
+    provider: str = Field(min_length=1, max_length=160)
+    category: str = Field(min_length=1, max_length=120)
+    purpose: str = Field(min_length=1, max_length=5000)
+    data_categories: list[str] = Field(default_factory=list, max_length=30)
+    processing_location: str | None = Field(default=None, max_length=160)
+    international_transfer: bool = False
+    transfer_mechanism: str | None = Field(default=None, max_length=300)
+    dpa_status: str | None = Field(default=None, max_length=80)
+    privacy_url: str | None = Field(default=None, max_length=500)
+    state: str = "configuration_dependent"
+    last_reviewed_at: date | None = None
+    internal_notes: str | None = Field(default=None, max_length=10000)
+
+
+class SubprocessorResponse(SubprocessorCreate):
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class SubprocessorMutation(SubprocessorCreate):
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]

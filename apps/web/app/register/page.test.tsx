@@ -3,9 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Register from "./page";
 
-const { push, post, nativeRegister, nativeShellState } = vi.hoisted(() => ({
+const { push, post, publicLegalDocuments, nativeRegister, nativeShellState } = vi.hoisted(() => ({
   push: vi.fn(),
   post: vi.fn(),
+  publicLegalDocuments: vi.fn(),
   nativeRegister: vi.fn(),
   nativeShellState: { value: false },
 }));
@@ -17,6 +18,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/components/native-runtime", () => ({
   isNativeShell: () => nativeShellState.value,
+  nativePlatform: () => "ios",
 }));
 
 vi.mock("@/components/native-auth", () => ({
@@ -30,6 +32,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       post,
+      publicLegalDocuments,
     },
   };
 });
@@ -39,6 +42,7 @@ beforeEach(() => {
   nativeShellState.value = false;
   nativeRegister.mockResolvedValue({ message: "Check your inbox.", verification_required: true });
   post.mockResolvedValue({ message: "Check your inbox.", verification_required: true });
+  publicLegalDocuments.mockResolvedValue([]);
 });
 
 async function submitRegistration() {

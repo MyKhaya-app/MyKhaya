@@ -9,13 +9,13 @@ from datetime import date, datetime, time
 
 from pydantic import BaseModel, Field
 
-from mykhaya.models import ReminderCadence, ReminderRepeat, RoutineScope
+from mykhaya.models import ReminderCadence, ReminderRepeat
 from mykhaya.schemas import StrictModel
 
 
 class VehicleCreate(StrictModel):
     nickname: str = Field(min_length=1, max_length=120)
-    scope: RoutineScope = RoutineScope.household
+    owner_user_id: uuid.UUID
     make: str | None = Field(default=None, max_length=80)
     model: str | None = Field(default=None, max_length=80)
     colour: str | None = Field(default=None, max_length=40)
@@ -41,7 +41,6 @@ class VehicleResponse(BaseModel):
     id: uuid.UUID
     group_id: uuid.UUID
     owner_user_id: uuid.UUID
-    scope: RoutineScope
     nickname: str
     make: str | None
     model: str | None
@@ -52,6 +51,10 @@ class VehicleResponse(BaseModel):
     country_code: str
     registration: str | None
     first_registration_date: date | None
+    tax_status: str | None
+    tax_due_date: date | None
+    inspection_status: str | None
+    inspection_due_date: date | None
     photo_version: str | None
     # Omitted (not just null) for a viewer who isn't the vehicle's own owner
     # or a home_admin — see routers.driveway._vehicle_response.

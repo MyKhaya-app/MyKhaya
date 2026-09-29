@@ -29,6 +29,35 @@ fails that check in production. `api.mykhaya.app` is already served by
 `trusted_hosts` list, so no other production change is required — only adding this one
 setting to the real, deployed `.env`.
 
+## Driveway / DVLA integration (UAT)
+
+Vehicle lookup credentials live only in `.env`, never in the database or a
+PCC text field — see `Settings.dvla_environment`/`dvla_uat_*`/`dvla_production_*`
+in `apps/api/mykhaya/config.py`. To switch environments:
+
+1. Set `MYKHAYA_DVLA_ENVIRONMENT` to `uat` or `production` (blank/unset is a
+   valid "not configured" state — no lookup provider runs, and Driveway's
+   vehicle lookup always offers manual entry).
+2. Fill in the matching endpoint/key pair only — `MYKHAYA_DVLA_UAT_ENDPOINT`
+   + `MYKHAYA_DVLA_UAT_API_KEY`, or the `_PRODUCTION_` equivalents. There is
+   no fallback between the two: an incomplete UAT configuration never uses
+   the production endpoint or key, and selecting `production` never uses UAT
+   credentials.
+3. Redeploy (or restart `api`/`worker`/`scheduler`) so the new `.env` values
+   are picked up.
+
+PCC's Settings page (Driveway integrations card) reflects the active
+environment (labelled "UAT"/"Production", never the raw value), whether an
+API key is configured, the endpoint in use, current health, and the last
+successful/failed lookup — the key itself is never displayed or returned by
+any API response. Use its "Test connection" control (an admin-entered
+registration, never persisted as a vehicle) to verify connectivity safely
+before relying on the integration.
+
+Never commit a real API key to `.env.example` or any tracked file — if one
+is ever accidentally committed, rotate it with DVLA immediately and treat
+the old key as compromised.
+
 ## Upgrade and rollback
 
 1. Take and verify an off-host encrypted backup.

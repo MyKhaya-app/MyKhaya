@@ -13,6 +13,7 @@ from mykhaya.models import (
     ChildTransitionStatus,
     HomeJoinRequestStatus,
     HouseholdRelationship,
+    LegalPlatform,
     MealSlot,
     MealType,
     PermissionProfile,
@@ -34,11 +35,28 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SignupLegalAcceptanceItem(StrictModel):
+    """One document/version pair exactly as the signup screen displayed it
+    to the user — see mykhaya.legal.validate_signup_acceptances, which
+    checks each of these against the backend's actual current published
+    version rather than trusting the client's claim."""
+
+    document_key: str = Field(max_length=50)
+    document_version_id: uuid.UUID
+
+
 class RegisterRequest(StrictModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=12, max_length=128)
     invitation_token: str | None = Field(default=None, min_length=30, max_length=500)
+    # Empty by default so every existing caller (tests, invitation-accept
+    # flows predating this field) keeps working unchanged; enforcement in
+    # the register() handler only ever engages once an adult document is
+    # actually configured as acceptance_required — see
+    # mykhaya.legal.validate_signup_acceptances.
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: LegalPlatform = LegalPlatform.web
 
     @field_validator("display_name")
     @classmethod

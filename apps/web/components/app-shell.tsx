@@ -10,6 +10,7 @@ import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
 import { genericUnlockPromptCopy } from "./native-biometric";
+import { LegalGate } from "./legal-gate";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { useNativeKeyboardOpen } from "./use-native-keyboard";
@@ -121,6 +122,7 @@ export function AppShell({
       </main>
     );
   }
+  if (status === "legal_action_required") return <LegalGate />;
   if (status === "signed_out") return null;
 
   return (
@@ -166,6 +168,11 @@ const PUBLIC_PATH_PREFIXES = [
   // Browser MFA is a short-lived pre-auth route. It must render without the
   // normal application shell/session while the handoff is completed.
   "/mfa",
+  // Public legal pages (Terms/Privacy/Children's Privacy/Cookies) must work
+  // for a signed-out visitor — linked from the marketing footer and from
+  // signup — without ever triggering session bootstrap/redirect. See
+  // app/legal/[slug]/page.tsx and AuthProvider's own identical exclusion.
+  "/legal",
 ];
 const EXCLUDED_SHELL_PATH_PREFIXES = [
   "/control-centre",

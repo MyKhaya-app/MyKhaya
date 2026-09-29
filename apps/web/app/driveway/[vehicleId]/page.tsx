@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, use, useEffect, useRef, useState } from "react";
-import { Bell, Camera, Car, ChevronLeft, Info, Trash2 } from "lucide-react";
+import { Bell, Camera, Car, ChevronLeft, ChevronRight, FileText, Info, Shield, Trash2 } from "lucide-react";
 import type { Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
+import { useAuth } from "@/components/auth-provider";
 import { countryName } from "../countries";
 import { fetchNativeImage } from "@/components/native-auth";
 import { isNativeShell } from "@/components/native-runtime";
@@ -50,6 +51,7 @@ function loadErrorMessage(cause: unknown, fallback: string): string {
 export default function VehicleDetailPage({ params }: { params: Promise<{ vehicleId: string }> }) {
   const { vehicleId } = use(params);
   const { activeHomeId } = useActiveHome();
+  const { user } = useAuth();
   const router = useRouter();
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -155,7 +157,6 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     { label: "Colour", value: vehicle.colour ?? "" },
     { label: "Country", value: countryName(vehicle.country_code) },
   ].filter((row) => row.value);
-
   return (
     <AppShellContent>
       <main className="standard-page driveway-detail-page">
@@ -167,6 +168,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
             <p className="eyebrow">Vehicle</p>
             <h1>{vehicle.nickname}</h1>
             {vehicle.registration && <p className="muted">{vehicle.registration}</p>}
+            <span className="driveway-owner-badge">{vehicle.owner_user_id === user?.id ? "You" : "Home member"}</span>
           </div>
         </div>
         <FormStatus error={error} />
@@ -188,6 +190,13 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
           </>}
           {photoError && <p className="notice error" role="alert">{photoError}</p>}
         </section>
+
+        {(vehicle.tax_status || vehicle.inspection_status) && (
+          <div className="driveway-compliance-grid">
+            {vehicle.tax_status && <section className="card driveway-compliance-card"><FileText size={22} aria-hidden="true" /><strong>Vehicle tax</strong><b>{vehicle.tax_status}</b>{vehicle.tax_due_date && <small>Due {vehicle.tax_due_date}</small>}</section>}
+            {vehicle.inspection_status && <section className="card driveway-compliance-card"><Shield size={22} aria-hidden="true" /><strong>MOT</strong><b>{vehicle.inspection_status}</b>{vehicle.inspection_due_date && <small>Expires {vehicle.inspection_due_date}</small>}</section>}
+          </div>
+        )}
 
         <div className="card-stack">
           {rows.length > 0 && (
@@ -214,7 +223,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
                   <p>Edit make, model, registration and more</p>
                 </span>
                 <span className="more-row-chevron" aria-hidden="true">
-                  ›
+                  <ChevronRight size={18} strokeWidth={1.75} />
                 </span>
               </Link>
               <Link className="more-row" href={`/driveway/${vehicle.id}/reminders`}>
@@ -226,7 +235,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
                   <p>MOT, tax, service and anything else to keep an eye on</p>
                 </span>
                 <span className="more-row-chevron" aria-hidden="true">
-                  ›
+                  <ChevronRight size={18} strokeWidth={1.75} />
                 </span>
               </Link>
             </div>

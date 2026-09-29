@@ -42,6 +42,7 @@ from mykhaya.config import get_settings
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
+CURRENT_USER_ID: uuid.UUID | None = None
 
 
 @pytest.fixture
@@ -66,6 +67,7 @@ def unique_email(prefix: str) -> str:
 
 
 async def create_verified_user(client: AsyncClient, email: str, name: str) -> uuid.UUID:
+    global CURRENT_USER_ID
     response = await unsafe(
         client,
         "POST",
@@ -92,6 +94,7 @@ async def create_verified_user(client: AsyncClient, email: str, name: str) -> uu
         client, "POST", "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
     )
     assert login.status_code == 200
+    CURRENT_USER_ID = user_id
     return user_id
 
 
@@ -124,13 +127,15 @@ async def create_driveway_home(client: AsyncClient, name: str = "Driveway Test H
 
 
 async def create_vehicle(
-    client: AsyncClient, home_id: uuid.UUID, *, scope: str = "household", nickname: str = "BMW i4"
+    client: AsyncClient, home_id: uuid.UUID, *, scope: str = "household", nickname: str = "BMW i4",
+    owner_user_id: uuid.UUID | None = None,
 ) -> dict:
+    assert owner_user_id or CURRENT_USER_ID
     response = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/vehicles",
-        json={"nickname": nickname, "scope": scope, "country_code": "GB", "registration": "AP22 OOJ"},
+        json={"nickname": nickname, "owner_user_id": str(owner_user_id or CURRENT_USER_ID), "country_code": "GB", "registration": "AP22 OOJ"},
     )
     assert response.status_code == 201, response.text
     return response.json()

@@ -47,6 +47,7 @@ from mykhaya.consumer_mfa_policy import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
@@ -56,6 +57,10 @@ from mykhaya.models import (
     Group,
     HouseholdRelationship,
     Invitation,
+    LegalAcceptance,
+    LegalAcceptanceContext,
+    LegalActionVerb,
+    LegalRecordType,
     Membership,
     MfaEmailChallenge,
     Session,
@@ -1284,6 +1289,14 @@ async def register(
                 "This invitation is invalid for the supplied email address.",
             )
 
+    # Validated before the existing-email lookup, unconditionally, so a
+    # re-used email and a genuinely new one are rejected identically by
+    # this check — it must never become a second account-discovery signal
+    # alongside the dummy-hash password-timing equalisation below.
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+    )
+
     existing = await db.scalar(select(User).where(User.email == email))
     if existing is None:
         user = User(
@@ -1294,6 +1307,23 @@ async def register(
         db.add(user)
         await db.flush()
         db.add(AuthIdentity(user_id=user.id, password_hash=password_hash.hash(body.password)))
+        for resolved in resolved_legal_acceptances:
+            record_type = (
+                LegalRecordType.user_acceptance
+                if resolved.document.action_verb == LegalActionVerb.accept
+                else LegalRecordType.user_acknowledgement
+            )
+            db.add(
+                LegalAcceptance(
+                    record_type=record_type,
+                    document_version_id=resolved.version.id,
+                    user_id=user.id,
+                    context=LegalAcceptanceContext.signup,
+                    platform=body.platform,
+                    ip_address=resolve_client_ip(request, settings),
+                    user_agent=request.headers.get("user-agent", "")[:300] or None,
+                )
+            )
         if settings.email_verification_enabled:
             token = await create_action_token(
                 db, user.id, TokenPurpose.verify_email, settings, 60 * 24

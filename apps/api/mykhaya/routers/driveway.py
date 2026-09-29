@@ -24,6 +24,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
+    VehicleLookupAuthFailed,
     VehicleLookupNotFound,
     VehicleLookupUnavailable,
 )
@@ -47,7 +49,6 @@ from mykhaya.driveway_reminders import (
     DrivewayReminderEventType,
     delete_reminders_for_vehicle,
     reminders_for_vehicle,
-    sync_reminder_scope_to_vehicle,
     upsert_driveway_reminder,
 )
 from mykhaya.driveway_schemas import (
@@ -82,6 +83,7 @@ async def _require_driveway(home_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 
 router = APIRouter(prefix="/homes", tags=["driveway"], dependencies=[Depends(_require_driveway)])
+log = structlog.get_logger()
 
 
 def _may_see_sensitive_fields(vehicle: Vehicle, auth: AuthContext, membership: Membership) -> bool:
@@ -96,7 +98,6 @@ def _vehicle_response(vehicle: Vehicle, auth: AuthContext, membership: Membershi
         id=vehicle.id,
         group_id=vehicle.group_id,
         owner_user_id=vehicle.owner_user_id,
-        scope=vehicle.scope,
         nickname=vehicle.nickname,
         make=vehicle.make,
         model=vehicle.model,
@@ -139,31 +140,62 @@ async def _get_vehicle(
 
 
 async def _record_lookup_health(db: AsyncSession, *, success: bool, summary: str) -> None:
-    row = await db.scalar(
-        select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled").with_for_update()
-    )
-    if row is None:
-        row = PlatformSetting(key="driveway_dvla_enabled", value={"value": True})
-        db.add(row)
-    health = dict(row.value.get("health") or {})
-    health.update({"state": "Healthy" if success else "Degraded", "last_result": summary})
-    row.value = {**row.value, "health": health}
-    await db.commit()
+    """Best-effort health tracking for PCC's Driveway integrations card
+    (last successful/failed lookup + sanitised summary). `summary` must
+    already be a safe, generic string — never a raw provider response,
+    header, or API key (see mykhaya.driveway_providers' exception types,
+    which never carry response bodies). A failure here is logged and
+    swallowed rather than raised, so a monitoring write can never break the
+    actual vehicle lookup the caller is waiting on."""
+    try:
+        row = await db.scalar(
+            select(PlatformSetting)
+            .where(PlatformSetting.key == "driveway_dvla_enabled")
+            .with_for_update()
+        )
+        if row is None:
+            row = PlatformSetting(key="driveway_dvla_enabled", value={"value": True})
+            db.add(row)
+        health = dict(row.value.get("health") or {})
+        now = datetime.now(UTC).isoformat()
+        health["state"] = "Healthy" if success else "Degraded"
+        if success:
+            health["last_success_at"] = now
+            health["last_success_summary"] = summary
+        else:
+            health["last_failure_at"] = now
+            health["last_failure_summary"] = summary
+        row.value = {**row.value, "health": health}
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.warning("driveway.dvla.health_record_failed")
 
 
-async def _require_vehicle_owner_or_household_manage(
+async def _require_vehicle_manage(
     db: AsyncSession, home_id: uuid.UUID, row: Vehicle, auth: AuthContext
 ) -> None:
-    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "You do not have permission to edit that vehicle."
-        )
     await require_capability(home_id, Capability.driveway_manage, auth, db)
+
+
+async def _require_home_member_owner(
+    db: AsyncSession, home_id: uuid.UUID, owner_user_id: uuid.UUID
+) -> Membership:
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == home_id,
+            Membership.user_id == owner_user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if membership is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The vehicle owner must be an active member of this Home.")
+    return membership
 
 
 def _audit_metadata(vehicle: Vehicle) -> dict[str, object]:
     """Never includes vin/registration — see module docstring."""
-    return {"scope": vehicle.scope.value, "country_code": vehicle.country_code}
+    return {"owner_user_id": str(vehicle.owner_user_id), "country_code": vehicle.country_code}
 
 
 @router.get("/{home_id}/vehicles", response_model=VehicleListResponse)
@@ -174,10 +206,6 @@ async def list_vehicles(
 ) -> VehicleListResponse:
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     filters = [Vehicle.group_id == home_id, Vehicle.archived_at.is_(None)]
-    filters.append(
-        (Vehicle.scope == RoutineScope.household)
-        | ((Vehicle.scope == RoutineScope.personal) & (Vehicle.owner_user_id == auth.user.id))
-    )
     rows = (
         await db.scalars(select(Vehicle).where(*filters).order_by(Vehicle.created_at.asc()))
     ).all()
@@ -206,7 +234,7 @@ async def lookup_vehicle(
             manual_entry_required=True,
             message="Automatic vehicle lookup isn't available for this country yet, but you can still add the vehicle manually.",
         )
-    if settings.dvla_api_key is None:
+    if not settings.dvla_configured:
         return VehicleLookupResult(
             found=False,
             manual_entry_required=True,
@@ -221,12 +249,16 @@ async def lookup_vehicle(
             manual_entry_required=True,
             message="Automatic UK vehicle lookup is temporarily unavailable. You can still add the vehicle manually.",
         )
-    provider = UKDVLAProvider(settings.dvla_api_key, settings.dvla_api_url)
+    assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
+    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
     try:
         result = await provider.lookup(body.registration)
     except VehicleLookupNotFound:
         await _record_lookup_health(db, success=True, summary="Vehicle registration not found")
         return VehicleLookupResult(found=False, manual_entry_required=True, message="We couldn't find that registration. Check it and try again, or add the vehicle manually.")
+    except VehicleLookupAuthFailed:
+        await _record_lookup_health(db, success=False, summary="Provider authentication failed")
+        return VehicleLookupResult(found=False, manual_entry_required=True, message="We can't check vehicle details right now. You can try again later or add the vehicle manually.")
     except VehicleLookupUnavailable:
         await _record_lookup_health(db, success=False, summary="Provider unavailable")
         return VehicleLookupResult(found=False, manual_entry_required=True, message="We can't check vehicle details right now. You can try again later or add the vehicle manually.")
@@ -259,10 +291,11 @@ async def create_vehicle(
     db: AsyncSession = Depends(get_db),
 ) -> VehicleResponse:
     membership = await require_capability(home_id, Capability.driveway_manage, auth, db)
+    await _require_home_member_owner(db, home_id, body.owner_user_id)
     row = Vehicle(
         group_id=home_id,
-        owner_user_id=auth.user.id,
-        scope=body.scope,
+        owner_user_id=body.owner_user_id,
+        scope=RoutineScope.household,
         nickname=" ".join(body.nickname.strip().split()),
         make=body.make.strip() if body.make else None,
         model=body.model.strip() if body.model else None,
@@ -295,8 +328,6 @@ async def get_vehicle(
 ) -> VehicleResponse:
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     row = await _get_vehicle(db, home_id, vehicle_id)
-    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
     return _vehicle_response(row, auth, membership)
 
 
@@ -312,7 +343,7 @@ async def upload_vehicle_photo(
 ) -> VehicleResponse:
     await enforce_rate_limit(request, settings, "vehicle-photo-upload", 20, 3600)
     row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     raw = await file.read(settings.vehicle_photo_max_upload_bytes + 1)
     if len(raw) > settings.vehicle_photo_max_upload_bytes:
@@ -356,8 +387,6 @@ async def get_vehicle_photo(
 ) -> Response:
     await require_capability(home_id, Capability.driveway_view, auth, db)
     row = await _get_vehicle(db, home_id, vehicle_id)
-    if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
     if not row.photo_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No vehicle photo set.")
     data = await get_vehicle_photo_storage(settings).load(row.photo_key)
@@ -380,7 +409,7 @@ async def delete_vehicle_photo(
     settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
     row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     previous_key = row.photo_key
     row.photo_key = None
@@ -402,12 +431,12 @@ async def update_vehicle(
     db: AsyncSession = Depends(get_db),
 ) -> VehicleResponse:
     row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     if row.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again.")
-    scope_changed = row.scope != body.scope
-    row.scope = body.scope
+    await _require_home_member_owner(db, home_id, body.owner_user_id)
+    row.owner_user_id = body.owner_user_id
     row.nickname = " ".join(body.nickname.strip().split())
     row.make = body.make.strip() if body.make else None
     row.model = body.model.strip() if body.model else None
@@ -425,11 +454,6 @@ async def update_vehicle(
     # who could see the real value may overwrite it.
     if _may_see_sensitive_fields(row, auth, membership):
         row.vin = body.vin.strip() if body.vin else None
-    if scope_changed:
-        # Linked managed reminders follow the vehicle's own scope; a
-        # standalone reminder is never touched (see docstring on
-        # sync_reminder_scope_to_vehicle).
-        await sync_reminder_scope_to_vehicle(db, row)
     audit(
         db, request, "driveway.vehicle.updated", auth.user.id, home_id, "vehicle", row.id,
         _audit_metadata(row),
@@ -448,7 +472,7 @@ async def delete_vehicle(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_owner_or_household_manage(db, home_id, row, auth)
+    await _require_vehicle_manage(db, home_id, row, auth)
     row.archived_at = datetime.now(UTC)
     # Reminder has no soft-delete of its own (see routers.reminders.
     # delete_reminder) — a managed reminder must never keep pointing at a
@@ -463,8 +487,7 @@ async def delete_vehicle(
 
 
 def _require_vehicle_visible(vehicle: Vehicle, auth: AuthContext) -> None:
-    if vehicle.scope == RoutineScope.personal and vehicle.owner_user_id != auth.user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
+    return None
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}/reminders", response_model=ReminderListResponse)

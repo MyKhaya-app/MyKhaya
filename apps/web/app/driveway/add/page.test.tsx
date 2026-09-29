@@ -32,6 +32,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       me: vi.fn(),
       featureMatrix: vi.fn(),
       billingStatus: vi.fn(),
+      lookupVehicle: vi.fn(),
+      members: vi.fn(),
       createVehicle: vi.fn(),
     },
   };
@@ -48,16 +50,16 @@ beforeEach(() => {
   });
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({ features: [] });
   (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
+    { user_id: "test-user", display_name: "You" },
+    { user_id: "u2", display_name: "Megan" },
+  ]);
 });
 
 describe("Add vehicle — validation", () => {
   it("requires a country and registration before submitting", async () => {
-    const user = userEvent.setup();
     render(<AddVehiclePage />);
-    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
-    expect(
-      await screen.findByText("Add a country and a registration to continue."),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find my vehicle" })).toBeDisabled();
     expect(api.createVehicle).not.toHaveBeenCalled();
   });
 });
@@ -71,15 +73,12 @@ describe("Add vehicle — manual creation", () => {
     expect(screen.getByRole("option", { name: "United States" })).toBeInTheDocument();
   });
 
-  it("defaults scope to Household and allows switching to Personal", async () => {
+  it("shows the signed-in owner without exposing the legacy scope switch", async () => {
     const user = userEvent.setup();
     render(<AddVehiclePage />);
-    const household = await screen.findByRole("tab", { name: "Household" });
-    const personal = screen.getByRole("tab", { name: "Personal" });
-    expect(household).toHaveAttribute("aria-selected", "true");
-    await user.click(personal);
-    expect(personal).toHaveAttribute("aria-selected", "true");
-    expect(household).toHaveAttribute("aria-selected", "false");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
+    expect(await screen.findByText(/Owner/)).toHaveTextContent("OwnerYou");
+    expect(screen.queryByRole("tab", { name: "Household" })).not.toBeInTheDocument();
   });
 
   it("submits a manually-entered vehicle and routes to its detail page on success", async () => {
@@ -87,7 +86,6 @@ describe("Add vehicle — manual creation", () => {
       id: "v1",
       group_id: "home-1",
       owner_user_id: "u1",
-      scope: "household",
       nickname: "BMW i4",
       make: "BMW",
       model: "i4",
@@ -106,6 +104,7 @@ describe("Add vehicle — manual creation", () => {
     const user = userEvent.setup();
     render(<AddVehiclePage />);
     await user.type(await screen.findByLabelText("Registration / licence plate"), "AP22 OOJ");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
     await user.type(screen.getByLabelText(/^make$/i), "BMW");
     await user.type(screen.getByLabelText(/^model$/i), "i4");
     await user.click(screen.getByRole("button", { name: "Add vehicle" }));
@@ -119,7 +118,7 @@ describe("Add vehicle — manual creation", () => {
     expect(body).toMatchObject({
       registration: "AP22 OOJ",
       country_code: "GB",
-      scope: "household",
+      owner_user_id: "test-user",
       make: "BMW",
       model: "i4",
       // Nickname was left blank, so it is derived from make + model — the
@@ -137,6 +136,7 @@ describe("Add vehicle — manual creation", () => {
     const user = userEvent.setup();
     render(<AddVehiclePage />);
     await user.type(await screen.findByLabelText("Registration / licence plate"), "AP22 OOJ");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
     await user.click(screen.getByRole("button", { name: "Add vehicle" }));
 
     expect(await screen.findByText("That registration is already in use.")).toBeInTheDocument();

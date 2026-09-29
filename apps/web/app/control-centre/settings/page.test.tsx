@@ -19,6 +19,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 const { platformApi } = await import("@mykhaya/api-client");
 const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
 const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
+const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
 
 const actor = {
   id: "op-1",
@@ -78,11 +79,27 @@ function baseSettings() {
   };
 }
 
-function mockRoutes(settings = baseSettings(), syslogOverrides: Record<string, unknown> = {}) {
+function mockRoutes(
+  settings = baseSettings(),
+  syslogOverrides: Record<string, unknown> = {},
+  dvlaOverrides: Record<string, unknown> = {},
+) {
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
-    if (path === "/integrations/dvla") return Promise.resolve({ enabled: false, configured: false, endpoint: "", health: { state: "Disabled" } });
+    if (path === "/integrations/dvla")
+      return Promise.resolve({
+        enabled: false,
+        configured: false,
+        environment: null,
+        endpoint: null,
+        health: { state: "Not configured" },
+        last_success_at: null,
+        last_success_summary: null,
+        last_failure_at: null,
+        last_failure_summary: null,
+        ...dvlaOverrides,
+      });
     if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
     if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_category_filtered: 0, events_dropped: 0, transport_failures: 0 });
     throw new Error(`Unexpected GET ${path}`);
@@ -315,5 +332,91 @@ describe("PCC Settings — sensitive settings require confirmation", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/does not currently change user access or behaviour/i)).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
+  });
+});
+
+describe("PCC Settings — Driveway/DVLA integration", () => {
+  function driveawayCard() {
+    return screen.findByRole("heading", { name: "Driveway integrations" }).then(
+      (heading) => heading.closest(".cc-card") as HTMLElement,
+    );
+  }
+
+  it("shows Not configured and disables Test connection when no environment is selected", async () => {
+    mockRoutes();
+    render(<PlatformSettingsPage />);
+    const card = await driveawayCard();
+    expect(within(card).getAllByText("Not configured").length).toBeGreaterThan(0);
+    expect(within(card).getByRole("button", { name: "Test connection" })).toBeDisabled();
+  });
+
+  it("shows the friendly UAT label, endpoint, and never renders the API key", async () => {
+    mockRoutes(baseSettings(), {}, {
+      enabled: true,
+      configured: true,
+      environment: "UAT",
+      endpoint: "https://uat.dvla.example/vehicle-enquiry",
+      health: { state: "Healthy" },
+    });
+    render(<PlatformSettingsPage />);
+    const card = await driveawayCard();
+    expect(within(card).getByText("UAT")).toBeInTheDocument();
+    expect(within(card).getByText("https://uat.dvla.example/vehicle-enquiry")).toBeInTheDocument();
+    expect(screen.queryByText(/uat-secret|api-key|apikey/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a Production warning notice only when the active environment is Production", async () => {
+    mockRoutes(baseSettings(), {}, {
+      enabled: true,
+      configured: true,
+      environment: "Production",
+      endpoint: "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles",
+      health: { state: "Healthy" },
+    });
+    render(<PlatformSettingsPage />);
+    const card = await driveawayCard();
+    expect(within(card).getByText(/Production DVLA service/)).toBeInTheDocument();
+  });
+
+  it("shows last successful and failed lookup timestamps when available", async () => {
+    mockRoutes(baseSettings(), {}, {
+      enabled: true,
+      configured: true,
+      environment: "UAT",
+      endpoint: "https://uat.dvla.example/vehicle-enquiry",
+      health: { state: "Degraded" },
+      last_success_at: "2026-09-20T10:00:00Z",
+      last_failure_at: "2026-09-29T08:15:00Z",
+      last_failure_summary: "Provider unavailable",
+    });
+    render(<PlatformSettingsPage />);
+    const card = await driveawayCard();
+    expect(within(card).getByText(/20 Sept? 2026/)).toBeInTheDocument();
+    expect(within(card).getByText(/29 Sept? 2026/)).toBeInTheDocument();
+    expect(within(card).getByText("Provider unavailable")).toBeInTheDocument();
+  });
+
+  it("runs the test connection using the entered registration and shows the result", async () => {
+    const user = userEvent.setup();
+    mockRoutes(baseSettings(), {}, {
+      enabled: true,
+      configured: true,
+      environment: "UAT",
+      endpoint: "https://uat.dvla.example/vehicle-enquiry",
+      health: { state: "Healthy" },
+    });
+    post.mockResolvedValue({ state: "Healthy", message: "DVLA UAT connection successful." });
+    render(<PlatformSettingsPage />);
+    const card = await driveawayCard();
+    await user.type(within(card).getByLabelText("Test registration"), "AB12 CDE");
+    await user.click(within(card).getByRole("button", { name: "Test connection" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        "/integrations/dvla/test",
+        expect.objectContaining({ registration: "AB12 CDE", confirmed: true }),
+      ),
+    );
+    expect(await within(card).findByText("DVLA UAT connection successful.")).toBeInTheDocument();
   });
 });

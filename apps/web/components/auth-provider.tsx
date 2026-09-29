@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { usePathname, useRouter } from "next/navigation";
 import { App } from "@capacitor/app";
 import type { User } from "@mykhaya/shared-types";
-import { api, ApiError } from "@mykhaya/api-client";
+import { api, ApiError, type LegalStatusResponse } from "@mykhaya/api-client";
 import { recordAuthDiagnostic } from "./auth-diagnostics";
 import { bootstrapNativeSession } from "./native-auth";
 import { hasEverBeenBackgrounded, markUnlocked, startAppLockTracking, wasBackgroundedLongEnoughToLock } from "./native-app-lock";
@@ -12,15 +12,42 @@ import { initializeNativePush, reconcileNativePush } from "./native-push";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
-type AuthStatus = "initializing" | "ready" | "offline" | "locked" | "signed_out";
+// legal_action_required sits between a fully-authenticated session and
+// ordinary app access — modelled on the existing "locked" (native biometric
+// re-lock/MFA) interrupt AppShell already renders full-screen for, not as a
+// second application shell. The backend's GET /legal/status is always the
+// source of truth for whether this status applies; nothing here re-derives
+// compliance rules client-side. See components/legal-gate.tsx.
+type AuthStatus =
+  | "initializing"
+  | "ready"
+  | "offline"
+  | "locked"
+  | "legal_action_required"
+  | "signed_out";
 type AuthContextValue = {
   user: User | null;
   status: AuthStatus;
   initialSessionLoading: boolean;
   sessionRefreshing: boolean;
+  /** The legal status snapshot behind the current `status` — populated
+   *  whenever an auth transition resolves it (login, session restore,
+   *  renewal), and refreshed on demand via `refreshLegalStatus` (e.g. after
+   *  the legal gate records an acceptance). Never null while `status` is
+   *  "legal_action_required"; may be null otherwise (not yet checked, or the
+   *  check failed and the gate fails open — see `refreshLegalStatus`). */
+  legalStatus: LegalStatusResponse | null;
+  /** Re-fetches GET /legal/status and updates `status`/`legalStatus`
+   *  accordingly — released back to "ready" only once the backend itself
+   *  reports full compliance, never optimistically from client-side state.
+   *  Fails open to "ready" on a network error: the legal gate is a
+   *  compliance UX nudge on top of a session that is already fully
+   *  authenticated, not a second security boundary, so a transient failure
+   *  here must never behave like a lost/expired session. */
+  refreshLegalStatus: () => Promise<LegalStatusResponse | null>;
   retryInitialSession: () => void;
   refreshSession: () => Promise<boolean>;
-  setAuthenticatedUser: (user: User) => void;
+  setAuthenticatedUser: (user: User) => Promise<void>;
   /** Sign-out's client-state counterpart to setAuthenticatedUser: clears the
    *  in-memory user/status so no previously-authenticated route can keep
    *  rendering (or be restored via browser Back) after the server session is
@@ -33,7 +60,10 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function isPublicPath(path: string) {
-  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding", "/mfa"].some(
+  // "/legal" (Terms/Privacy/Children's Privacy/Cookies) must never trigger
+  // session bootstrap for a signed-out visitor — see app-shell.tsx's
+  // identical PUBLIC_PATH_PREFIXES entry.
+  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding", "/mfa", "/legal"].some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
 }
@@ -54,7 +84,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(nativeStartup ? "initializing" : "signed_out");
   const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
+  const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
   const bootstrapped = useRef(false);
+
+  // The single place that turns "session is authenticated" into either
+  // "ready" or "legal_action_required" — every auth-success path below
+  // (native restore, cookie `/users/me`, cookie renewal, and a fresh
+  // password/MFA sign-in via setAuthenticatedUser) calls this instead of
+  // setting "ready" directly, so the legal gate can never be bypassed by a
+  // path that forgets to check it.
+  const applyLegalStatus = useCallback(async (): Promise<LegalStatusResponse | null> => {
+    try {
+      const result = await api.legalStatus();
+      setLegalStatus(result);
+      setStatus(result.action_required ? "legal_action_required" : "ready");
+      return result;
+    } catch {
+      // Fail open — see refreshLegalStatus's doc comment on the context
+      // type above.
+      setLegalStatus(null);
+      setStatus("ready");
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "auth_state", { route: path, native: nativeStartup, status, initialSessionLoading });
@@ -81,7 +133,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
         setUser(restored);
-        setStatus("ready");
         // Phase 4: whether this call originated from cold-launch bootstrap
         // or a Phase-4 resume re-lock, reaching "ready" here means whatever
         // the last background period was has just been fully accounted
@@ -90,13 +141,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // comment on markUnlocked() for the short-dip-after-unlock bug this
         // prevents.
         markUnlocked();
+        await applyLegalStatus();
         recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_AUTHENTICATED");
         return true;
       }
       recordAuthDiagnostic("ME_REQUEST_STARTED");
       setUser(await api.me());
-      setStatus("ready");
       markUnlocked();
+      await applyLegalStatus();
       recordAuthDiagnostic("ME_RESULT_200");
       recordAuthDiagnostic("AUTHENTICATED");
       return true;
@@ -109,8 +161,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isNativeShell() && cause instanceof ApiError && cause.status === 401) {
         try {
           setUser(await api.renew());
-          setStatus("ready");
           markUnlocked();
+          await applyLegalStatus();
           recordAuthDiagnostic("RENEW_RESULT_200");
           return true;
         } catch (renewalCause) {
@@ -135,7 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (initial) setInitialSessionLoading(false);
       else setSessionRefreshing(false);
     }
-  }, [redirectToLogin]);
+  }, [redirectToLogin, applyLegalStatus]);
 
   useEffect(() => {
     if (
@@ -245,25 +297,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     status,
     initialSessionLoading,
     sessionRefreshing,
+    legalStatus,
+    refreshLegalStatus: applyLegalStatus,
     retryInitialSession: () => void loadSession(true),
     refreshSession: () => loadSession(false),
-    setAuthenticatedUser: (authenticatedUser) => {
+    setAuthenticatedUser: async (authenticatedUser) => {
       bootstrapped.current = true;
       setUser(authenticatedUser);
-      setStatus("ready");
-      setInitialSessionLoading(false);
+      // Keep the shell in its branded loading state while MFA completion's
+      // legal-status request and React state commit settle. Without this,
+      // navigation can briefly render the old signed_out branch as blank.
+      setInitialSessionLoading(true);
       // A fresh sign-in (password or MFA) starts this device's Phase-4
       // app-lock clock over from nothing — any "backgrounded at" timestamp
       // recorded before this login belongs to whatever was previously
       // signed in (or to no one, on a first-ever login) and must never be
       // read as if it applied to this session.
       markUnlocked();
+      // authentication → required MFA (already complete by the time either
+      // caller reaches this point) → legal compliance → application.
+      try {
+        await applyLegalStatus();
+      } finally {
+        setInitialSessionLoading(false);
+      }
     },
     clearSession: () => {
       setUser(null);
       setStatus("signed_out");
+      setLegalStatus(null);
     },
-  }), [user, status, initialSessionLoading, sessionRefreshing, loadSession]);
+  }), [user, status, initialSessionLoading, sessionRefreshing, legalStatus, applyLegalStatus, loadSession]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

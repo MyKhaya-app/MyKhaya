@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
+    legal_test_mode_production_allowed: bool = False
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
@@ -175,8 +176,17 @@ class Settings(BaseSettings):
     # deploying code never itself enables paid acquisition.
     stripe_billing_acquisition_enabled: bool = False
     stripe_ultimate_acquisition_enabled: bool = False
-    dvla_api_key: SecretStr | None = None
-    dvla_api_url: str = "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    # Driveway / DVLA Vehicle Enquiry Service. A single active environment
+    # selector (never inferred from endpoint URL shape) picks between two
+    # fully separate credential/endpoint pairs — there is no fallback from a
+    # misconfigured UAT to production, and an unset environment is a valid,
+    # fully-supported "Not configured" state (manual vehicle entry keeps
+    # working). See docs/operations/deployment.md#driveway-dvla-integration-uat.
+    dvla_environment: Literal["uat", "production"] | None = None
+    dvla_uat_endpoint: str | None = None
+    dvla_uat_api_key: SecretStr | None = None
+    dvla_production_endpoint: str = "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    dvla_production_api_key: SecretStr | None = None
     driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
     vehicle_photo_storage_dir: str = "/data/vehicle-photos"
     vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
@@ -231,8 +241,21 @@ class Settings(BaseSettings):
         is concerned, so without this it silently overrides the default_factory
         with "", and FastAPI(version="") fails its own non-empty assertion at
         startup. Blank is treated as unset, not as an explicit empty override.
+
+        The literal string "unknown" gets the same treatment, and for the
+        same reason: compose.yml's `${MYKHAYA_VERSION:-unknown}` substitution
+        and the Dockerfiles' `ARG MYKHAYA_VERSION=unknown` both put a real,
+        present "unknown" env var in front of this field so a build/run never
+        fails for lacking one — not to assert "the version really is unknown"
+        over resolve_app_version()'s better sources (package metadata, the
+        repository VERSION file). Without this, pydantic-settings uses that
+        env var as the field's explicit value and default_factory —
+        resolve_app_version() itself, which already has this exact "unknown
+        env var isn't meaningful" rule for its *own* os.environ read — never
+        runs at all, which is why About's Version card was showing the raw
+        word "unknown" instead of the real version (see apps/web/app/about).
         """
-        if isinstance(value, str) and not value.strip():
+        if isinstance(value, str) and (not value.strip() or value.strip() == "unknown"):
             return resolve_app_version()
         return value
 
@@ -477,6 +500,44 @@ class Settings(BaseSettings):
         """Exact browser origin used by the family web/PWA ceremony."""
         parts = urlsplit(self.public_web_url)
         return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def dvla_environment_label(self) -> str | None:
+        """Friendly PCC label for `dvla_environment` — never the raw internal
+        enum value (PCC must never show "uat"/"production" verbatim)."""
+        if self.dvla_environment is None:
+            return None
+        return {"uat": "UAT", "production": "Production"}[self.dvla_environment]
+
+    @property
+    def dvla_active_endpoint(self) -> str | None:
+        """The endpoint for the selected `dvla_environment`, or None if no
+        environment is selected. Deliberately does not fall back to the other
+        environment's endpoint under any circumstance."""
+        if self.dvla_environment == "uat":
+            return self.dvla_uat_endpoint or None
+        if self.dvla_environment == "production":
+            return self.dvla_production_endpoint or None
+        return None
+
+    @property
+    def dvla_active_api_key(self) -> SecretStr | None:
+        """The API key for the selected `dvla_environment`, or None if no
+        environment is selected or that environment's key is unset/blank.
+        Never falls back to the other environment's key."""
+        if self.dvla_environment == "uat":
+            return self.dvla_uat_api_key if self.dvla_uat_api_key else None
+        if self.dvla_environment == "production":
+            return self.dvla_production_api_key if self.dvla_production_api_key else None
+        return None
+
+    @property
+    def dvla_configured(self) -> bool:
+        """True only when an environment is selected and that environment's
+        endpoint and API key are both present. An unset environment, or a
+        selected environment missing either value, is "Not configured" — the
+        provider must never guess or partially operate."""
+        return bool(self.dvla_active_endpoint) and self.dvla_active_api_key is not None
 
 
 @lru_cache
