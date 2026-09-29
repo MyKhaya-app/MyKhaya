@@ -334,7 +334,16 @@ function statusEntry(overrides: Record<string, unknown>) {
   };
 }
 
-describe("About — Legal & Compliance", () => {
+describe("About — legal navigation", () => {
+  it("does not expose Legal & Privacy in About", async () => {
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+    render(<About />);
+    expect(screen.queryByText("Legal & Compliance")).not.toBeInTheDocument();
+    expect(screen.queryByText("Legal & Privacy")).not.toBeInTheDocument();
+  });
+});
+
+describe.skip("About — retired Legal & Compliance presentation", () => {
   beforeEach(() => {
     mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
   });

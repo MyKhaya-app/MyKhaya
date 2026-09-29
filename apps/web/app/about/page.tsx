@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { App } from "@capacitor/app";
 import { Cookie, FileText, Info, Shield, Users } from "lucide-react";
@@ -197,6 +197,7 @@ export default function About() {
   const pushDiagnostics = useNativePushDiagnostics();
   const legal = useLegalCompliance();
   const native = isNativeShell();
+  const showLegacyLegal = useRef(false).current;
 
   return (
     <SettingsPage title="About MyKhaya">
@@ -268,7 +269,7 @@ export default function About() {
           </section>
         )}
 
-        <section className="card details legal-compliance-card">
+        {showLegacyLegal && <section className="card details legal-compliance-card">
           <div className="section-heading legal-compliance-heading">
             <span className="more-icon-tile sage" aria-hidden="true">
               <FileText size={20} strokeWidth={1.75} />
@@ -352,7 +353,7 @@ export default function About() {
               </p>
             </div>
           </div>
-        </section>
+        </section>}
 
         <div className="settings-list">
           <Link className="card" href="/service-status">

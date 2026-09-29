@@ -1,25 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type LegalStatusResponse, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
-
-const links: Record<string, string> = {
-  terms: "/legal/terms",
-  privacy: "/legal/privacy",
-  children_privacy: "/legal/children",
-  cookies: "/legal/cookies",
-};
-
-function readableDate(value: string | null) {
-  if (!value) return "Not recorded";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? value
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
-}
+import { LegalPrivacyContent } from "@/components/legal-privacy-content";
+import { LegalPrivacyDocument } from "@/components/legal-privacy-document";
+import { useSearchParams } from "next/navigation";
 
 export default function LegalPrivacyPage() {
+  const documentKey = useSearchParams().get("document");
+  return (
+    <SettingsPage
+      title={documentKey ? "Legal document" : "Legal & Privacy"}
+      description={documentKey ? undefined : "Review MyKhaya's current legal notices and the versions recorded for your account."}
+      backLink={{ href: documentKey ? "/settings/legal" : "/settings", label: documentKey ? "Back to Legal & Privacy" : "Back to More" }}
+    >
+      {documentKey ? <LegalPrivacyDocument documentKey={documentKey} /> : <LegalPrivacyContent />}
+    </SettingsPage>
+  );
+  /*
   const [documents, setDocuments] = useState<PublicLegalDocumentSummary[]>([]);
   const [status, setStatus] = useState<LegalStatusResponse | null>(null);
   const [error, setError] = useState("");
@@ -90,4 +87,5 @@ export default function LegalPrivacyPage() {
       )}
     </SettingsPage>
   );
+  */
 }

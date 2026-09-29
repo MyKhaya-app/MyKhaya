@@ -11131,6 +11131,52 @@ a.family-feed-row {
   margin-bottom: 1.1rem;
   overflow: hidden;
 }
+.legal-privacy-card {
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+.legal-document-row {
+  align-items: center;
+  border-top: 1px solid #efe9dd;
+  color: inherit;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 0.9rem 0;
+  text-decoration: none;
+}
+.legal-document-row:first-child {
+  border-top: 0;
+}
+.legal-document-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.legal-document-row-copy strong {
+  font-size: var(--font-body);
+}
+.legal-document-row-copy span,
+.legal-document-row-copy small,
+.legal-document-row-status small {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+}
+.legal-document-row-copy span,
+.legal-document-row-copy small {
+  overflow-wrap: anywhere;
+}
+.legal-document-row-status {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: right;
+}
+.legal-document-row > svg {
+  color: var(--colour-muted);
+  flex: none;
+}
 .legal-document-rows .more-row {
   padding: 14px;
 }
@@ -11241,6 +11287,16 @@ a.family-feed-row {
    grid column into an already-narrow row — avoids clipped pills/crushed
    timestamps/overlapping chevrons. */
 @media (max-width: 420px) {
+  .legal-document-row {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 0.35rem;
+  }
+  .legal-document-row-status {
+    align-items: flex-start;
+    grid-column: 2 / 3;
+    text-align: left;
+  }
   .more-row-with-status {
     grid-template-columns: auto minmax(0, 1fr) auto;
     row-gap: 0.5rem;
