@@ -103,6 +103,18 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it("keeps the browser marketing homepage public without session bootstrap or redirect", async () => {
+    pathname = "/";
+    me.mockRejectedValue(new (await import("@mykhaya/api-client")).ApiError(401, "Unauthenticated"));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+    expect(me).not.toHaveBeenCalled();
+    expect(renew).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it("shows initial bootstrap state, then remains ready without reloading", async () => {
     let resolve!: (value: unknown) => void;
     me.mockReturnValue(new Promise((r) => { resolve = r; }));
@@ -140,6 +152,7 @@ describe("AuthProvider", () => {
 
   it("restores a native session through the bearer client and keeps it offline on a transient startup failure", async () => {
     nativeShellState.value = true;
+    pathname = "/";
     bootstrapNativeSession.mockResolvedValue({ id: "native-u1", display_name: "Owner", principal_type: "adult" });
     const view = render(<AuthProvider><Probe /></AuthProvider>);
 

@@ -3626,6 +3626,42 @@
 .pcc-root .central-logging-diagnostics { border-top: 1px solid var(--cc-border); margin-top: 18px; padding-top: 14px; }
 .pcc-root .central-logging-diagnostics summary { color: var(--cc-text-muted); cursor: pointer; font-size: 12px; font-weight: 700; }
 .pcc-root .central-logging-diagnostics .cc-metadata-grid { margin-top: 10px; }
+.pcc-root .central-logging-categories {
+  border: 0;
+  border-top: 1px solid var(--cc-border);
+  margin: 24px 0 0;
+  min-inline-size: 0;
+  padding: 18px 0 0;
+}
+.pcc-root .central-logging-categories legend {
+  color: var(--cc-text);
+  font-size: 13px;
+  font-weight: 800;
+  padding: 0;
+}
+.pcc-root .central-logging-category-grid {
+  display: grid;
+  gap: 10px 24px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+.pcc-root .central-logging-category-option {
+  align-items: center;
+  background: var(--cc-surface-muted);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 9px;
+  min-height: 42px;
+  padding: 9px 12px;
+}
+.pcc-root .central-logging-category-option input { accent-color: var(--cc-accent); }
+@media (max-width: 900px) {
+  .pcc-root .central-logging-category-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .pcc-root .central-logging-category-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 1024px) { .pcc-root .central-logging-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .pcc-root .central-logging-form-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .pcc-root .central-logging-status-grid { grid-template-columns: 1fr; } }

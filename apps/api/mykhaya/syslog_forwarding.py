@@ -26,6 +26,10 @@ from mykhaya.config import Settings
 
 SyslogProtocol = Literal["udp", "tcp", "tls"]
 SyslogMinimumLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+SyslogCategory = Literal["application", "http", "security", "audit", "worker", "integration"]
+SYSLOG_CATEGORIES = (
+    "application", "http", "security", "audit", "worker", "integration"
+)
 MINIMUM_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 LEVEL_ALIASES = {
     "DEBUG": "DEBUG",
@@ -101,6 +105,7 @@ class SyslogConfig:
     environment: str = "development"
     tls_verify: bool = True
     minimum_level: SyslogMinimumLevel = "INFO"
+    categories: frozenset[str] = frozenset(SYSLOG_CATEGORIES)
     timeout_seconds: float = 2.0
 
     @classmethod
@@ -115,6 +120,15 @@ class SyslogConfig:
             raise ValueError(
                 "Syslog minimum level must be DEBUG, INFO, WARNING, ERROR or CRITICAL."
             )
+        raw_categories = value.get("categories")
+        if raw_categories is None:
+            categories = frozenset(SYSLOG_CATEGORIES)
+        elif isinstance(raw_categories, (list, tuple, set, frozenset)):
+            categories = frozenset(str(category).casefold() for category in raw_categories)
+            if not categories.issubset(SYSLOG_CATEGORIES):
+                raise ValueError("Syslog categories contain an unsupported value.")
+        else:
+            raise ValueError("Syslog categories must be a list.")
         host = str(value.get("host", "")).strip()
         if any(character.isspace() or ord(character) < 32 for character in host):
             raise ValueError("Syslog host must not contain whitespace or control characters.")
@@ -135,7 +149,7 @@ class SyslogConfig:
             facility=facility,
             environment=str(value.get("environment") or environment)[:80],
             tls_verify=bool(value.get("tls_verify", True)),
-            minimum_level=minimum_level, timeout_seconds=timeout,
+            minimum_level=minimum_level, categories=categories, timeout_seconds=timeout,
         )
 
     def public_dict(
@@ -150,6 +164,9 @@ class SyslogConfig:
             "port": self.port, "protocol": self.protocol, "facility": self.facility,
             "environment": self.environment, "tls_verify": self.tls_verify,
             "minimum_level": self.minimum_level,
+            "categories": [
+                category for category in SYSLOG_CATEGORIES if category in self.categories
+            ],
             "last_successful_delivery": last_success,
             "last_error": last_error,
             "dropped_count": dropped_count,
@@ -176,6 +193,54 @@ def normalize_event_level(value: Any) -> str:
     return LEVEL_ALIASES.get(str(value or "INFO").strip().upper(), "INFO")
 
 
+def categorize_event(event: Mapping[str, Any]) -> SyslogCategory:
+    """Assign exactly one remote category from event semantics.
+
+    New external integrations should emit a deliberate integration-prefixed
+    event (preferably ``integration_*``) or add an explicit recognised prefix
+    here; unknown events intentionally remain application events.
+    """
+    event_name = str(event.get("event_type") or event.get("event") or "").casefold()
+    if event_name == "request":
+        return "http"
+    if event_name in {"audit_event", "administrative_audit_event"}:
+        return "audit"
+    if (
+        event_name.startswith(
+            (
+                "stripe_",
+                "dvla_",
+                "dvla.",
+                "driveway.dvla.",
+                "driveway_dvla_",
+                "wishlist_link_preview.",
+                "apns_",
+                "fcm_",
+                "support.ticket_",
+                "support.notification_",
+                "integration_",
+            )
+        )
+        or event_name
+        in {
+            "platform_test_email_failed",
+            "platform_test_push_device_failed",
+            "native_push_unsupported_platform",
+        }
+    ):
+        return "integration"
+    if event_name == "auth_diag" or any(
+        marker in event_name for marker in ("authentication", "auth_", "mfa", "session", "security")
+    ):
+        return "security"
+    if (
+        event_name.startswith(("worker.", "worker_", "scheduler.", "scheduler_", "job."))
+        or event_name == "job_retry_enqueue_failed"
+    ):
+        return "worker"
+    return "application"
+
+
 def format_rfc5424(config: SyslogConfig, event: Mapping[str, Any], *, service: str) -> bytes:
     clean = redact(dict(event))
     level = normalize_event_level(clean.pop("level", "INFO"))
@@ -188,11 +253,14 @@ def format_rfc5424(config: SyslogConfig, event: Mapping[str, Any], *, service: s
     )
     event_type = str(clean.pop("event_type", "") or clean.get("event", "") or "application_event")
     message = str(clean.pop("event", clean.pop("message", "")))
+    clean.pop("category", None)
+    category = categorize_event({**clean, "event_type": event_type})
     fields = {
         "environment": config.environment,
         "service": service,
         "level": level,
         "event_type": event_type,
+        "category": category,
         **clean,
     }
     def structured_field(key: str, value: Any) -> str:
@@ -301,9 +369,15 @@ async def send_syslog(
 
 
 class _QueuedEvent(dict[str, Any]):
-    def __init__(self, event: dict[str, Any], completion: asyncio.Future[bool] | None) -> None:
+    def __init__(
+        self,
+        event: dict[str, Any],
+        completion: asyncio.Future[bool] | None,
+        bypass_filters: bool,
+    ) -> None:
         super().__init__(event)
         self.completion = completion
+        self.bypass_filters = bypass_filters
 
 
 class SyslogDispatcher:
@@ -327,6 +401,7 @@ class SyslogDispatcher:
         self.events_sent = 0
         self.transport_failures = 0
         self.events_filtered = 0
+        self.events_category_filtered = 0
         self.last_dispatch_attempt: str | None = None
         self.debug = os.getenv("MYKHAYA_SYSLOG_DEBUG", "").casefold() in {"1", "true", "yes"}
 
@@ -368,8 +443,22 @@ class SyslogDispatcher:
         event: Mapping[str, Any],
         *,
         completion: asyncio.Future[bool] | None = None,
+        bypass_filters: bool = False,
     ) -> bool:
         event = redact(dict(event))
+        event["category"] = categorize_event(event)
+        # A process with a persisted-config loader must let the consumer
+        # refresh that source before filtering.  Standalone dispatchers with
+        # no loader can reject synchronously without risking stale state.
+        if (
+            not bypass_filters
+            and self.config_loader is None
+            and event["category"] not in self.config.categories
+        ):
+            self.events_category_filtered += 1
+            if completion and not completion.done():
+                completion.set_result(False)
+            return False
         loop = self._loop
         try:
             running_loop = asyncio.get_running_loop()
@@ -383,17 +472,17 @@ class SyslogDispatcher:
         # direct path.
         if loop is None:
             if running_loop is not None:
-                return self._enqueue_now(event, completion)
+                return self._enqueue_now(event, completion, bypass_filters)
             else:
                 self._drop(completion)
                 return False
         if running_loop is loop:
-            return self._enqueue_now(event, completion)
+            return self._enqueue_now(event, completion, bypass_filters)
         self._debug(
             f"event loop available=true scheduling event thread={threading.get_ident()}"
         )
         try:
-            loop.call_soon_threadsafe(self._enqueue_now, event, completion)
+            loop.call_soon_threadsafe(self._enqueue_now, event, completion, bypass_filters)
             return True
         except RuntimeError:
             self._drop(completion)
@@ -405,10 +494,13 @@ class SyslogDispatcher:
             completion.set_result(False)
 
     def _enqueue_now(
-        self, event: dict[str, Any], completion: asyncio.Future[bool] | None = None
+        self,
+        event: dict[str, Any],
+        completion: asyncio.Future[bool] | None = None,
+        bypass_filters: bool = False,
     ) -> bool:
         try:
-            self.queue.put_nowait(_QueuedEvent(event, completion))
+            self.queue.put_nowait(_QueuedEvent(event, completion, bypass_filters))
             self.events_queued += 1
             self._debug(f"event queued queue size={self.queue.qsize()}")
             return True
@@ -417,11 +509,15 @@ class SyslogDispatcher:
             return False
 
     async def enqueue_and_wait(
-        self, event: Mapping[str, Any], timeout_seconds: float = 5
+        self,
+        event: Mapping[str, Any],
+        timeout_seconds: float = 5,
+        *,
+        bypass_filters: bool = False,
     ) -> bool:
         loop = asyncio.get_running_loop()
         completion = loop.create_future()
-        if not self.enqueue(event, completion=completion):
+        if not self.enqueue(event, completion=completion, bypass_filters=bypass_filters):
             return False
         return await asyncio.wait_for(completion, timeout_seconds)
 
@@ -454,7 +550,17 @@ class SyslogDispatcher:
             try:
                 self._debug("dispatcher consumed event")
                 await self._refresh_config()
-                if not self._event_is_allowed(event):
+                if (
+                    not event.bypass_filters
+                    and event["category"] not in self.config.categories
+                ):
+                    self.events_category_filtered += 1
+                    self._debug(
+                        f"event category filtered category={event['category']}"
+                    )
+                    if event.completion and not event.completion.done():
+                        event.completion.set_result(False)
+                elif not event.bypass_filters and not self._event_is_allowed(event):
                     self.events_filtered += 1
                     self._debug(
                         f"event filtered minimum_level={self.config.minimum_level} "
@@ -479,7 +585,6 @@ class SyslogDispatcher:
                     if event.completion and not event.completion.done():
                         event.completion.set_result(True)
                 else:
-                    self.events_filtered += 1
                     if event.completion and not event.completion.done():
                         event.completion.set_result(False)
             except Exception as exc:  # noqa: BLE001 - logging must never escape
@@ -502,6 +607,7 @@ class SyslogDispatcher:
             "events_queued": self.events_queued,
             "events_sent": self.events_sent,
             "events_filtered": self.events_filtered,
+            "events_category_filtered": self.events_category_filtered,
             "events_dropped": self.dropped_count,
             "transport_failures": self.transport_failures,
             "last_dispatch_attempt": self.last_dispatch_attempt,

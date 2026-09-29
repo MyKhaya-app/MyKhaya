@@ -49,6 +49,7 @@ type SyslogSettings = {
   environment: string;
   tls_verify: boolean;
   minimum_level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
+  categories: SyslogCategory[];
   last_successful_delivery: string | null;
   last_error: string | null;
   dropped_count: number;
@@ -58,13 +59,25 @@ type SyslogDiagnostics = {
   events_queued: number;
   events_sent: number;
   events_filtered: number;
+  events_category_filtered: number;
   events_dropped: number;
   transport_failures: number;
 };
 type SyslogField = "enabled" | "host" | "port" | "protocol" | "facility" | "environment" | "tls_verify" | "minimum_level" | "reason";
 type SyslogFieldErrors = Partial<Record<SyslogField, string>>;
+type SyslogCategory = "application" | "http" | "security" | "audit" | "worker" | "integration";
 
 const SYSLOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
+const SYSLOG_CATEGORIES: Array<{ value: SyslogCategory; label: string }> = [
+  { value: "application", label: "Application" },
+  { value: "http", label: "HTTP / API Requests" },
+  { value: "security", label: "Security & Authentication" },
+  { value: "audit", label: "Audit" },
+  { value: "worker", label: "Workers & Scheduler" },
+  { value: "integration", label: "External Integrations" },
+];
+
+const DEFAULT_SYSLOG_CATEGORIES = SYSLOG_CATEGORIES.map(({ value }) => value);
 const SYSLOG_FACILITIES = [
   ...Array.from({ length: 8 }, (_, index) => ({ value: index, label: `Kernel${index} (${index})` })),
   { value: 8, label: "User-level (8)" },
@@ -89,6 +102,13 @@ function formatSyslogTimestamp(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function normaliseSyslogSettings(value: SyslogSettings): SyslogSettings {
+  return {
+    ...value,
+    categories: Array.isArray(value.categories) ? value.categories : DEFAULT_SYSLOG_CATEGORIES,
+  };
 }
 
 // Sections render in this order regardless of API response order; any
@@ -297,8 +317,9 @@ export default function PlatformSettingsPage() {
       ]);
       setData(settings);
       setDvla(dvlaStatus);
-      setSyslog(syslogStatus);
-      setSyslogDraft(syslogStatus);
+      const normalisedSyslog = normaliseSyslogSettings(syslogStatus);
+      setSyslog(normalisedSyslog);
+      setSyslogDraft(normalisedSyslog);
       setSyslogDiagnostics(diagnostics);
     } catch (cause) {
       setError((cause as Error).message);
@@ -350,11 +371,13 @@ export default function PlatformSettingsPage() {
         environment: syslogDraft.environment,
         tls_verify: syslogDraft.tls_verify,
         minimum_level: syslogDraft.minimum_level,
+        categories: syslogDraft.categories,
         reason: syslogReason,
         confirmed: true,
       });
-      setSyslog(saved);
-      setSyslogDraft(saved);
+      const normalisedSaved = normaliseSyslogSettings(saved);
+      setSyslog(normalisedSaved);
+      setSyslogDraft(normalisedSaved);
       setSyslogReason("");
       setSyslogResult("Central logging settings saved.");
     } catch (cause) {
@@ -455,6 +478,28 @@ export default function PlatformSettingsPage() {
                     <CcField label="Reason for this change" error={syslogErrors.reason}><input minLength={10} maxLength={500} required value={syslogReason} onChange={(event) => { setSyslogErrors({}); setSyslogReason(event.target.value); }} /></CcField>
                       <p className="cc-page-meta">Recent administrator authentication is required to change central logging configuration.</p>
                     </section>
+                    <fieldset className="central-logging-categories">
+                      <legend>Events to send</legend>
+                      <p className="cc-page-meta">Choose which MyKhaya events are forwarded. Local application logging is unaffected.</p>
+                      <div className="central-logging-category-grid">
+                        {SYSLOG_CATEGORIES.map((category) => (
+                          <label key={category.value} className="central-logging-category-option">
+                            <input
+                              type="checkbox"
+                              checked={syslogDraft.categories.includes(category.value)}
+                              onChange={(event) => setSyslogDraft({
+                                ...syslogDraft,
+                                categories: event.target.checked
+                                  ? [...syslogDraft.categories, category.value]
+                                  : syslogDraft.categories.filter((item) => item !== category.value),
+                              })}
+                            />
+                            <span>{category.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {syslogDraft.categories.length === 0 && <p className="cc-field-help">Central Logging remains enabled, but no normal application events will be forwarded.</p>}
+                    </fieldset>
                     <div className="cc-inline-form"><button type="submit" disabled={syslogBusy}>{syslogBusy ? "Saving…" : "Save settings"}</button><button className="button secondary" type="button" onClick={() => void testSyslog()} disabled={syslogBusy || !syslog?.enabled || !syslogDraft || JSON.stringify(syslog) !== JSON.stringify(syslogDraft)}>{syslogBusy ? "Testing…" : "Send test message"}</button></div>
                   </form>
                   {syslogDiagnostics && <details className="central-logging-diagnostics"><summary>Advanced diagnostics</summary><CcMetadataGrid>
@@ -462,6 +507,7 @@ export default function PlatformSettingsPage() {
                     <CcMetadataItem label="Events queued">{syslogDiagnostics.events_queued}</CcMetadataItem>
                     <CcMetadataItem label="Events sent">{syslogDiagnostics.events_sent}</CcMetadataItem>
                     <CcMetadataItem label="Events filtered">{syslogDiagnostics.events_filtered}</CcMetadataItem>
+                    <CcMetadataItem label="Category-filtered">{syslogDiagnostics.events_category_filtered}</CcMetadataItem>
                     <CcMetadataItem label="Events dropped">{syslogDiagnostics.events_dropped}</CcMetadataItem>
                     <CcMetadataItem label="Transport failures">{syslogDiagnostics.transport_failures}</CcMetadataItem>
                   </CcMetadataGrid></details>}

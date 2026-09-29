@@ -83,8 +83,8 @@ function mockRoutes(settings = baseSettings(), syslogOverrides: Record<string, u
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
     if (path === "/integrations/dvla") return Promise.resolve({ enabled: false, configured: false, endpoint: "", health: { state: "Disabled" } });
-    if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
-    if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_dropped: 0, transport_failures: 0 });
+    if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
+    if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_category_filtered: 0, events_dropped: 0, transport_failures: 0 });
     throw new Error(`Unexpected GET ${path}`);
   });
 }
@@ -208,7 +208,7 @@ describe("PCC Settings — saving a normal setting", () => {
 describe("PCC Settings — central logging", () => {
   it("sends only the backend configuration contract when saving", async () => {
     const user = userEvent.setup();
-    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", last_successful_delivery: null, last_error: null, dropped_count: 0 });
+    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0 });
     render(<PlatformSettingsPage />);
 
     const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
@@ -226,6 +226,7 @@ describe("PCC Settings — central logging", () => {
       environment: "test",
       tls_verify: true,
       minimum_level: "INFO",
+      categories: ["application", "http", "security", "audit", "worker", "integration"],
       reason: "Enable central logging safely",
       confirmed: true,
     }));
@@ -269,6 +270,26 @@ describe("PCC Settings — central logging", () => {
     await user.click(within(card).getByRole("button", { name: "Save settings" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", expect.objectContaining({ minimum_level: "WARNING", protocol: "udp" })));
+  });
+
+  it("saves category selections and clearly explains an empty selection", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["http"], last_successful_delivery: null, last_error: null, dropped_count: 0 });
+    mockRoutes(baseSettings(), { enabled: true, configured: true, host: "graylog.internal", categories: ["application", "http", "security", "audit", "worker", "integration"] });
+    render(<PlatformSettingsPage />);
+
+    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
+    await user.click(within(card).getByLabelText("Application"));
+    await user.click(within(card).getByLabelText("HTTP / API Requests"));
+    await user.click(within(card).getByLabelText("Security & Authentication"));
+    await user.click(within(card).getByLabelText("Audit"));
+    await user.click(within(card).getByLabelText("Workers & Scheduler"));
+    await user.click(within(card).getByLabelText("External Integrations"));
+    expect(within(card).getByText("Central Logging remains enabled, but no normal application events will be forwarded.")).toBeInTheDocument();
+    await user.type(within(card).getByLabelText("Reason for this change"), "Disable normal remote categories");
+    await user.click(within(card).getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", expect.objectContaining({ categories: [] })));
   });
 
   it("renders last delivery as a local human-readable timestamp", async () => {

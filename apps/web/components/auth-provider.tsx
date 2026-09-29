@@ -45,7 +45,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Native shells start at the live frontend origin (`/`) and restore their
   // bearer session asynchronously. Start in restoring state in that case so
   // the first render cannot be mistaken for an anonymous browser session.
-  const nativeStartup = isNativeShell() && !isPublicPath(path) && !platformControlCentre;
+  // `/` is the public marketing homepage in a browser, but it is the native
+  // shell's startup entry point. Keep those two meanings separate so a
+  // browser visit never triggers cookie renewal/redirects while Capacitor
+  // still restores its bearer session from the same root URL.
+  const nativeStartup = isNativeShell() && (!isPublicPath(path) || path === "/") && !platformControlCentre;
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>(nativeStartup ? "initializing" : "signed_out");
   const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
@@ -134,7 +138,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [redirectToLogin]);
 
   useEffect(() => {
-    if (platformControlCentre || isPublicPath(path)) {
+    if (
+      platformControlCentre
+      || isPublicPath(path)
+      || (!isNativeShell() && path === "/")
+    ) {
       setInitialSessionLoading(false);
       if (status !== "ready") setStatus("signed_out");
       return;

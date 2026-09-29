@@ -304,6 +304,11 @@ class SyslogSettingsUpdate(SensitiveActionRequest):
     environment: str = Field(min_length=1, max_length=80)
     tls_verify: bool = True
     minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    categories: list[
+        Literal["application", "http", "security", "audit", "worker", "integration"]
+    ] = Field(default_factory=lambda: [
+        "application", "http", "security", "audit", "worker", "integration"
+    ])
     timeout_seconds: float = Field(default=2.0, ge=0.1, le=10)
 
 

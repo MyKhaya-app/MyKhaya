@@ -5742,6 +5742,7 @@ async def syslog_diagnostics(
             "events_queued": 0,
             "events_sent": 0,
             "events_filtered": 0,
+            "events_category_filtered": 0,
             "events_dropped": 0,
             "transport_failures": 0,
             "last_dispatch_attempt": None,
@@ -5798,7 +5799,7 @@ async def test_syslog_settings(
         "request_id": getattr(request.state, "request_id", None),
     }
     try:
-        delivered = await dispatcher.enqueue_and_wait(event)
+        delivered = await dispatcher.enqueue_and_wait(event, bypass_filters=True)
     except TimeoutError as exc:
         platform_audit(db, request, context, "central_logging.syslog_test_failed", "platform_setting", reason=body.reason, outcome="failure", failure_category=type(exc).__name__)
         await db.commit()

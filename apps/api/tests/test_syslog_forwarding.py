@@ -11,6 +11,7 @@ from mykhaya.syslog_forwarding import (
     REDACTED,
     SyslogConfig,
     SyslogDispatcher,
+    categorize_event,
     format_rfc5424,
     normalize_event_level,
     redact,
@@ -36,8 +37,52 @@ def test_rfc5424_contains_environment_service_and_structured_fields() -> None:
     assert 'service="mykhaya-api"' in payload
     assert 'level="INFO"' in payload
     assert 'event_type="request"' in payload
+    assert 'category="http"' in payload
     assert 'request_id="req-1"' in payload
     assert payload.endswith(" request\n")
+
+
+def test_legacy_config_enables_all_categories_and_mapping_is_canonical() -> None:
+    assert SyslogConfig.from_value({}, "test").categories == {
+        "application", "http", "security", "audit", "worker", "integration"
+    }
+    assert categorize_event({"event": "request"}) == "http"
+    assert categorize_event({"event": "auth_diag"}) == "security"
+    assert categorize_event({"event": "audit_event"}) == "audit"
+    assert categorize_event({"event": "worker.job_failed"}) == "worker"
+    assert categorize_event({"event": "stripe_checkout_session_error"}) == "integration"
+    assert categorize_event({"event": "unhandled_exception"}) == "application"
+
+
+@pytest.mark.parametrize(
+    ("event_name", "expected_category"),
+    [
+        ("dvla_lookup_failed", "integration"),
+        ("integration_provider_failed", "integration"),
+        ("support.notification_destination_missing", "integration"),
+        ("native_push_unsupported_platform", "integration"),
+        ("unhandled_exception", "application"),
+        ("unknown_event", "application"),
+    ],
+)
+def test_external_integration_and_application_fallback_categories(
+    event_name: str, expected_category: str
+) -> None:
+    assert categorize_event({"event": event_name}) == expected_category
+
+
+def test_canonical_category_overwrites_supplied_category_and_event_type_wins() -> None:
+    assert categorize_event({"event": "request", "category": "security"}) == "http"
+    assert categorize_event(
+        {"event": "request", "event_type": "dvla_lookup_failed", "category": "application"}
+    ) == "integration"
+    payload = format_rfc5424(
+        config(),
+        {"event": "request", "category": "security"},
+        service="mykhaya-api",
+    ).decode()
+    assert 'category="http"' in payload
+    assert 'category="security"' not in payload
 
 
 @pytest.mark.parametrize(
@@ -155,6 +200,63 @@ async def test_minimum_level_filters_remote_events_without_counting_drops(
         await dispatcher.stop()
 
 
+@pytest.mark.asyncio
+async def test_disabled_category_is_filtered_before_queue_without_drop_or_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Settings:
+        environment = "test"
+
+    sent: list[bytes] = []
+
+    async def capture(_config: SyslogConfig, payload: bytes) -> None:
+        sent.append(payload)
+
+    dispatcher = SyslogDispatcher(Settings(), service="test")  # type: ignore[arg-type]
+    dispatcher.config = config(categories={"application"})
+    monkeypatch.setattr("mykhaya.syslog_forwarding.send_syslog", capture)
+    await dispatcher.start()
+    try:
+        assert not await dispatcher.enqueue_and_wait({"event": "request", "level": "info"})
+        assert dispatcher.queue.qsize() == 0
+        assert dispatcher.events_category_filtered == 1
+        assert dispatcher.events_filtered == 0
+        assert dispatcher.dropped_count == 0
+        assert dispatcher.transport_failures == 0
+        assert not sent
+    finally:
+        await dispatcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_test_message_bypasses_category_and_severity_filters_through_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Settings:
+        environment = "test"
+
+    sent: list[bytes] = []
+
+    async def capture(_config: SyslogConfig, payload: bytes) -> None:
+        sent.append(payload)
+
+    dispatcher = SyslogDispatcher(Settings(), service="test")  # type: ignore[arg-type]
+    dispatcher.config = config(minimum_level="CRITICAL", categories=set())
+    monkeypatch.setattr("mykhaya.syslog_forwarding.send_syslog", capture)
+    await dispatcher.start()
+    try:
+        assert await dispatcher.enqueue_and_wait(
+            {"event": "syslog_test", "event_type": "syslog_test", "level": "info"},
+            bypass_filters=True,
+        )
+        assert len(sent) == 1
+        assert b'category="application"' in sent[0]
+        assert dispatcher.events_filtered == 0
+        assert dispatcher.events_category_filtered == 0
+    finally:
+        await dispatcher.stop()
+
+
 def test_pcc_schema_accepts_only_configuration_fields_and_rejects_response_fields() -> None:
     body = SyslogSettingsUpdate.model_validate(
         {
@@ -165,11 +267,13 @@ def test_pcc_schema_accepts_only_configuration_fields_and_rejects_response_field
             "facility": 16,
             "environment": "test",
             "tls_verify": True,
+            "categories": ["http", "integration"],
             "reason": "Disable central logging for testing",
             "confirmed": True,
         }
     )
     assert body.enabled is False
+    assert body.categories == ["http", "integration"]
     with pytest.raises(ValueError):
         SyslogSettingsUpdate.model_validate(
             {
@@ -265,16 +369,18 @@ async def test_configuration_changes_are_seen_without_restarting_dispatcher(
             **persisted["value"],
             "enabled": True,
             "host": "graylog.internal",
+            "categories": ["http"],
         }
         dispatcher._last_config_load = 0
-        assert await dispatcher.enqueue_and_wait({"event": "enabled"})
+        assert await dispatcher.enqueue_and_wait({"event": "request"})
         assert dispatcher.config.enabled is True
         assert dispatcher.config.host == "graylog.internal"
+        assert dispatcher.config.categories == {"http"}
         assert len(sent) == 1
 
         persisted["value"] = {**persisted["value"], "enabled": False}
         dispatcher._last_config_load = 0
-        assert not await dispatcher.enqueue_and_wait({"event": "disabled-again"})
+        assert not await dispatcher.enqueue_and_wait({"event": "request"})
         assert dispatcher.config.enabled is False
         assert len(sent) == 1
     finally:
