@@ -121,7 +121,7 @@ export default function VehicleDetailsEditPage({
   if (notFound) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <Link className="tertiary" href="/driveway">
             <ChevronLeft size={16} aria-hidden="true" /> Driveway
           </Link>
@@ -134,7 +134,7 @@ export default function VehicleDetailsEditPage({
   if (!activeHomeId || !vehicle) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <p role="status">Loading vehicle…</p>
         </main>
       </AppShellContent>
@@ -143,7 +143,7 @@ export default function VehicleDetailsEditPage({
 
   return (
     <AppShellContent>
-      <main className="standard-page">
+      <main className="standard-page module-page">
         <Link className="tertiary" href={`/driveway/${vehicle.id}`}>
           <ChevronLeft size={16} aria-hidden="true" /> {vehicle.nickname}
         </Link>

@@ -280,10 +280,17 @@ export type BudgetMonthIncome = {
   source_name: string;
   expected_amount: number;
   received_amount: number;
+  usual_payday_day: number;
+  recurring: boolean;
+  expected_date?: string | null;
+  received_date?: string | null;
+  budget_year: number;
+  budget_month: number;
 };
 
 export type BudgetMonth = {
-  id: string;
+  configured?: boolean;
+  id: string | null;
   year: number;
   month: number;
   categories: BudgetMonthCategory[];
@@ -294,6 +301,8 @@ export type BudgetIncomeSource = {
   id: string;
   name: string;
   sort_order: number;
+  usual_payday_day: number;
+  recurring: boolean;
   archived: boolean;
 };
 
@@ -623,7 +632,7 @@ export class MyKhayaClient {
     );
   createBudgetIncomeSource = (
     homeId: string,
-    body: { name: string; sort_order?: number; year?: number; month?: number },
+    body: { name: string; sort_order?: number; usual_payday_day?: number; recurring?: boolean; received_date?: string | null; year?: number; month?: number },
   ) =>
     this.request<BudgetIncomeSource>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources`,
@@ -632,7 +641,7 @@ export class MyKhayaClient {
   updateBudgetIncomeSource = (
     homeId: string,
     sourceId: string,
-    body: { name: string; sort_order?: number },
+    body: { name: string; sort_order?: number; usual_payday_day?: number; recurring?: boolean },
   ) =>
     this.request<BudgetIncomeSource>(
       `/homes/${encodeURIComponent(homeId)}/budget/income-sources/${encodeURIComponent(sourceId)}`,
@@ -757,7 +766,7 @@ export class MyKhayaClient {
     year: number,
     month: number,
     sourceId: string,
-    body: { expected_amount: number; received_amount: number },
+    body: { expected_amount: number; received_amount: number; received_date?: string | null; budget_year?: number; budget_month?: number },
   ) =>
     this.request<BudgetMonthIncome>(
       `/homes/${encodeURIComponent(homeId)}/budget/months/${year}/${month}/income/${encodeURIComponent(sourceId)}`,

@@ -43,7 +43,7 @@ vi.mock("@/components/app-shell", () => ({ AppShellContent: ({ children }: { chi
 vi.mock("@/components/bottom-sheet", () => ({ BottomSheet: ({ title, children }: { title: string; children: React.ReactNode }) => <div role="dialog" aria-label={title}>{children}</div> }));
 vi.mock("@mykhaya/api-client", async (importOriginal) => ({ ...(await importOriginal<typeof import("@mykhaya/api-client")>()), api: apiMock }));
 
-const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-cat-1", category_id: "cat-1", category_name: "Groceries", planned_amount: 600, actual_source: "entries", manual_actual: null, entries_actual: 74.22, actual_amount: 74.22 }], income: [{ id: "income-1", source_id: "source-1", source_name: "Salary", expected_amount: 4850, received_amount: 4200 }] };
+const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-cat-1", category_id: "cat-1", category_name: "Groceries", planned_amount: 600, actual_source: "entries", manual_actual: null, entries_actual: 74.22, actual_amount: 74.22 }], income: [{ id: "income-1", source_id: "source-1", source_name: "Salary", expected_amount: 4850, received_amount: 4200, usual_payday_day: 25, recurring: true, expected_date: "2026-09-25", received_date: null, budget_year: 2026, budget_month: 9 }] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,11 +80,11 @@ describe("Budget consumer API wiring", () => {
 
   it("saves monthly expected and received income", async () => {
     render(<BudgetModule screen="income" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Salary" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     fireEvent.change(screen.getByLabelText("Expected amount (per month)"), { target: { value: "4900" } });
     fireEvent.change(screen.getByLabelText("Received amount (per month)"), { target: { value: "4300" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4900, received_amount: 4300 }));
+    await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4900, received_amount: 4300, received_date: null, budget_year: 2026, budget_month: 9 }));
   });
 
   it("opens the add-income BottomSheet and closes after saving", async () => {
@@ -98,12 +98,12 @@ describe("Budget consumer API wiring", () => {
     fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "NNUH" } });
     fireEvent.click(screen.getByRole("button", { name: "Create income source" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add income source" })).not.toBeInTheDocument());
-    expect(await screen.findByRole("button", { name: "NNUH" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /NNUH/ })).toBeInTheDocument();
   });
 
   it("opens edit and then the destructive income-source confirmation", async () => {
     render(<BudgetModule screen="income" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Salary" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete income source" }));
     expect(screen.getByRole("dialog", { name: "Delete income source?" })).toBeInTheDocument();
     expect(screen.getByText(/Historical data will be kept/)).toBeInTheDocument();
@@ -114,14 +114,15 @@ describe("Budget consumer API wiring", () => {
       new ApiError(409, "Income source already exists"),
     );
     render(<BudgetModule screen="income" />);
-    const input = await screen.findByLabelText("Add income source");
+    fireEvent.click(await screen.findByRole("button", { name: /Add income source/ }));
+    const input = await screen.findByLabelText("Source name");
     fireEvent.change(input, { target: { value: "NNUH" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create income source" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Income source already exists",
     );
     expect(input).toHaveValue("NNUH");
-    expect(screen.getByRole("button", { name: "Add" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create income source" })).not.toBeDisabled();
   });
 
   it("loads and saves user-owned Budget settings", async () => {

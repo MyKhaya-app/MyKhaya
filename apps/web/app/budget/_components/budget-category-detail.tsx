@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ShoppingCart, WalletCards } from "lucide-react";
-import { api, type BudgetCategory, type BudgetMonth, type BudgetSpendingEntry } from "@mykhaya/api-client";
+import { ApiError, api, type BudgetCategory, type BudgetMonth, type BudgetSpendingEntry } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { BudgetAddAction } from "./budget-add-action";
 import { BudgetEntrySheet, periodDate } from "./budget-entry-sheet";
@@ -48,15 +48,39 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
   const [entryOpen, setEntryOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<BudgetSpendingEntry | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [missing, setMissing] = useState(false);
+  const [error, setError] = useState("");
 
-  const reload = () => Promise.all([api.budgetCategories(homeId), api.budgetMonth(homeId, period.year, period.month), api.budgetEntries(homeId, period)])
-      .then(([categories, nextMonth, nextEntries]) => {
-        setCategory(categories.find((item) => item.id === categoryId) ?? null);
-        setMonth(nextMonth);
-        setEntries(nextEntries.filter((entry) => entry.category_id === categoryId).sort((a, b) => b.spent_on.localeCompare(a.spent_on) || b.id.localeCompare(a.id)));
-        const row = nextMonth.categories.find((item) => item.category_id === categoryId);
-        if (row) { setPlanned(String(row.planned_amount)); setActual(String(row.fixed_actual ?? row.manual_actual ?? 0)); }
-      }).catch(() => { setMonth(null); setEntries([]); });
+  const reload = async () => {
+    setLoading(true);
+    setMissing(false);
+    setError("");
+    try {
+      const [categories, nextMonth] = await Promise.all([
+        api.budgetCategories(homeId),
+        api.budgetMonth(homeId, period.year, period.month),
+      ]);
+      setCategory(categories.find((item) => item.id === categoryId) ?? null);
+      setMonth(nextMonth);
+      if (nextMonth.configured === false) {
+        setEntries([]);
+        setMissing(true);
+        return;
+      }
+      const nextEntries = await api.budgetEntries(homeId, period);
+      setEntries(nextEntries.filter((entry) => entry.category_id === categoryId).sort((a, b) => b.spent_on.localeCompare(a.spent_on) || b.id.localeCompare(a.id)));
+      const row = nextMonth.categories.find((item) => item.category_id === categoryId);
+      if (row) { setPlanned(String(row.planned_amount)); setActual(String(row.fixed_actual ?? row.manual_actual ?? 0)); }
+    } catch (cause) {
+      setMonth(null);
+      setEntries([]);
+      if (cause instanceof ApiError && cause.status === 404) setMissing(true);
+      else setError("That Budget period could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => { void reload(); }, [categoryId, homeId, period.month, period.year, refreshKey]);
 
@@ -75,7 +99,11 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
     setPeriod({ year, month });
     router.replace(`/budget/categories/${categoryId}?year=${year}&month=${month}`);
   }
-  if (!row) return <><section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{category?.name ?? "Category"}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section><BudgetTabs /><Period {...period} onChange={changePeriod} /><p role="status">Loading category details…</p></>;
+  const header = <><section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{category?.name ?? "Category"}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section><BudgetTabs /><Period {...period} onChange={changePeriod} /></>;
+  if (loading) return <>{header}<p role="status">Loading category details…</p></>;
+  if (error) return <>{header}<div className="budget-empty-state"><p role="alert">{error}</p><button type="button" onClick={() => void reload()}>Try again</button></div></>;
+  if (missing) return <>{header}<div className="budget-empty-state"><h2>{monthLabel(period.year, period.month)}</h2><p>This Budget period has not been set up yet.</p><button type="button" onClick={() => void api.createBudgetMonth(homeId, period.year, period.month).then(reload).catch(() => setError("That Budget period could not be created."))}>Set up this period</button></div></>;
+  if (!row) return <>{header}<div className="budget-empty-state"><h2>{category?.name ?? "Category"}</h2><p>This category is not included in the selected Budget period.</p></div></>;
   const remaining = row.planned_amount - row.actual_amount;
   const usage = Math.min((row.actual_amount / Math.max(row.planned_amount, 1)) * 100, 100);
   const isAdditiveActual = row.fixed_actual !== null;

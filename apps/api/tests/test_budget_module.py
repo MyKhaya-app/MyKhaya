@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from mykhaya.budget_periods import budget_period, budget_period_for_date
+from mykhaya.budget_periods import budget_period, budget_period_for_date, expected_income_date
 from mykhaya.budget_schemas import (
     BudgetActualUpdate,
     BudgetIncomingShareResponse,
@@ -150,10 +150,10 @@ def test_budget_month_start_is_bounded_to_safe_calendar_days() -> None:
 def test_budget_period_uses_configured_start_day_and_exclusive_end() -> None:
     assert budget_period(2026, 10, 1).start.isoformat() == "2026-10-01"
     assert budget_period(2026, 10, 1).end.isoformat() == "2026-11-01"
-    assert budget_period(2026, 9, 25).start.isoformat() == "2026-09-25"
-    assert budget_period(2026, 9, 25).end.isoformat() == "2026-10-25"
-    assert budget_period(2026, 10, 25).start.isoformat() == "2026-10-25"
-    assert budget_period(2026, 10, 25).end.isoformat() == "2026-11-25"
+    assert budget_period(2026, 9, 25).start.isoformat() == "2026-08-25"
+    assert budget_period(2026, 9, 25).end.isoformat() == "2026-09-25"
+    assert budget_period(2026, 10, 25).start.isoformat() == "2026-09-25"
+    assert budget_period(2026, 10, 25).end.isoformat() == "2026-10-25"
 
 
 def test_budget_period_resolves_boundary_dates_to_displayed_month() -> None:
@@ -161,6 +161,12 @@ def test_budget_period_resolves_boundary_dates_to_displayed_month() -> None:
     assert budget_period_for_date(date(2026, 9, 25), 25).month == 10
     assert budget_period_for_date(date(2026, 10, 24), 25).month == 10
     assert budget_period_for_date(date(2026, 10, 25), 25).month == 11
+
+
+def test_expected_income_date_uses_period_start_and_clamps_short_months() -> None:
+    assert expected_income_date(2026, 10, 25, 25) == date(2026, 9, 25)
+    assert expected_income_date(2026, 10, 25, 1) == date(2026, 10, 1)
+    assert expected_income_date(2026, 10, 25, 31) == date(2026, 9, 30)
 
 
 def test_incoming_share_discovery_has_metadata_only() -> None:

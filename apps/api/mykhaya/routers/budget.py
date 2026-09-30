@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
-from mykhaya.budget_periods import budget_period, budget_period_for_date
+from mykhaya.budget_periods import budget_period, budget_period_for_date, expected_income_date
 from mykhaya.budget_schemas import (
     BudgetActualUpdate,
     BudgetCategoryCreate,
@@ -249,7 +249,15 @@ async def _create_month_snapshot(
             )
         ).all()
         for source in income_sources:
-            db.add(BudgetMonthIncome(month_id=row.id, source_id=source.id, source_name=source.name))
+            db.add(
+                BudgetMonthIncome(
+                    month_id=row.id,
+                    source_id=source.id,
+                    source_name=source.name,
+                    usual_payday_day=source.usual_payday_day,
+                    recurring=source.recurring,
+                )
+            )
     audit(db, request, "budget.month.created", user_id, target_type="budget_month", target_id=row.id)
     return row
 
@@ -439,13 +447,13 @@ async def _reconcile_month_income(
     )
     missing = [source for source in sources if source.id not in existing_ids]
     for source in missing:
-        db.add(
-            BudgetMonthIncome(
-                month_id=month.id,
-                source_id=source.id,
-                source_name=source.name,
-            )
-        )
+        db.add(BudgetMonthIncome(
+            month_id=month.id,
+            source_id=source.id,
+            source_name=source.name,
+            usual_payday_day=source.usual_payday_day,
+            recurring=source.recurring,
+        ))
     if missing:
         await db.flush()
         if request is not None:
@@ -486,6 +494,8 @@ async def _item_payment_status(
 async def _month_response(
     db: AsyncSession, month: BudgetMonth, *, include_categories: bool = True
 ) -> BudgetMonthResponse:
+    profile = await db.get(BudgetProfile, month.profile_id)
+    month_start_day = profile.month_start_day if profile is not None else 1
     rows = (
         await db.scalars(
             select(BudgetMonthCategory)
@@ -581,6 +591,21 @@ async def _month_response(
             source_name=row.source_name,
             expected_amount=float(row.expected_amount),
             received_amount=float(row.received_amount),
+            usual_payday_day=row.usual_payday_day,
+            recurring=row.recurring,
+            expected_date=(
+                expected_income_date(
+                    month.year,
+                    month.month,
+                    month_start_day,
+                    row.usual_payday_day,
+                )
+                if row.recurring
+                else None
+            ),
+            received_date=row.received_date,
+            budget_year=month.year,
+            budget_month=month.month,
         )
         for row in income_rows
     ]
@@ -946,7 +971,14 @@ async def list_income_sources(
         )
     ).all()
     return [
-        BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+        BudgetIncomeSourceResponse(
+            id=row.id,
+            name=row.name,
+            sort_order=row.sort_order,
+            usual_payday_day=row.usual_payday_day,
+            recurring=row.recurring,
+            archived=False,
+        )
         for row in rows
     ]
 
@@ -962,22 +994,38 @@ async def create_income_source(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     name = body.name.strip()
-    row = BudgetIncomeSource(profile_id=profile.id, name=name, sort_order=body.sort_order)
+    row = BudgetIncomeSource(
+        profile_id=profile.id,
+        name=name,
+        sort_order=body.sort_order,
+        usual_payday_day=body.usual_payday_day,
+        recurring=body.recurring,
+    )
     db.add(row)
     try:
         await db.flush()
-        if body.year is not None and body.month is not None:
+        target_year = body.year
+        target_month_number = body.month
+        if (
+            not body.recurring
+            and body.received_date is not None
+            and target_year is None
+            and target_month_number is None
+        ):
+            period = budget_period_for_date(body.received_date, profile.month_start_day)
+            target_year, target_month_number = period.year, period.month
+        if target_year is not None and target_month_number is not None:
             month_row = await db.scalar(
                 select(BudgetMonth).where(
                     BudgetMonth.profile_id == profile.id,
-                    BudgetMonth.year == body.year,
-                    BudgetMonth.month == body.month,
+                    BudgetMonth.year == target_year,
+                    BudgetMonth.month == target_month_number,
                     BudgetMonth.archived_at.is_(None),
                 )
             )
             if month_row is None:
                 month_row = await _create_month_snapshot(
-                    db, profile, body.year, body.month, request, auth.user.id
+                    db, profile, target_year, target_month_number, request, auth.user.id
                 )
             await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
         audit(db, request, "budget.income_source.created", auth.user.id, target_type="budget_income_source", target_id=row.id)
@@ -988,7 +1036,14 @@ async def create_income_source(
             status.HTTP_409_CONFLICT,
             f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
         ) from None
-    return BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+    return BudgetIncomeSourceResponse(
+        id=row.id,
+        name=row.name,
+        sort_order=row.sort_order,
+        usual_payday_day=row.usual_payday_day,
+        recurring=row.recurring,
+        archived=False,
+    )
 
 
 @router.put("/{home_id}/budget/income-sources/{source_id}", response_model=BudgetIncomeSourceResponse)
@@ -1014,6 +1069,10 @@ async def update_income_source(
     name = body.name.strip()
     row.name = name
     row.sort_order = body.sort_order
+    if body.usual_payday_day is not None:
+        row.usual_payday_day = body.usual_payday_day
+    if body.recurring is not None:
+        row.recurring = body.recurring
     current_future = (
         await db.scalars(
             select(BudgetMonth).where(
@@ -1033,6 +1092,8 @@ async def update_income_source(
                 )
                 if membership is not None:
                     membership.source_name = name
+                    membership.usual_payday_day = row.usual_payday_day
+                    membership.recurring = row.recurring
         audit(db, request, "budget.income_source.updated", auth.user.id, target_type="budget_income_source", target_id=row.id)
         await db.commit()
     except IntegrityError:
@@ -1041,7 +1102,14 @@ async def update_income_source(
             status.HTTP_409_CONFLICT,
             f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
         ) from None
-    return BudgetIncomeSourceResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+    return BudgetIncomeSourceResponse(
+        id=row.id,
+        name=row.name,
+        sort_order=row.sort_order,
+        usual_payday_day=row.usual_payday_day,
+        recurring=row.recurring,
+        archived=False,
+    )
 
 
 @router.delete("/{home_id}/budget/income-sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1198,7 +1266,18 @@ async def get_month(
 ) -> BudgetMonthResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    month_row = await _month_for_owner(db, profile.id, year, month)
+    if not 1 <= month <= 12:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Month must be between 1 and 12")
+    month_row = await db.scalar(
+        select(BudgetMonth).where(
+            BudgetMonth.profile_id == profile.id,
+            BudgetMonth.year == year,
+            BudgetMonth.month == month,
+            BudgetMonth.archived_at.is_(None),
+        )
+    )
+    if month_row is None:
+        return BudgetMonthResponse(configured=False, year=year, month=month, categories=[], income=[])
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
     await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
     await _reconcile_month_items(db, profile.id, month_row, profile.month_start_day)
@@ -1327,7 +1406,7 @@ async def update_entry(
 ) -> BudgetSpendingEntryResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    entry, _, _ = await _entry_for_owner(db, profile.id, entry_id)
+    entry, _, entry_month = await _entry_for_owner(db, profile.id, entry_id)
     target_category = await db.scalar(
         select(BudgetCategory).where(
             BudgetCategory.id == body.category_id,
@@ -1357,7 +1436,16 @@ async def update_entry(
     if target_month_category is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
     previous_link_id = entry.budget_month_item_id
-    linked_item = await _resolve_linked_item(db, target_month, target_category.id, body.budget_month_item_id)
+    requested_link_id = body.budget_month_item_id
+    # The edit sheet preserves an unchanged fixed-item link.  A link belongs
+    # to one monthly snapshot, so carrying that ID across a period boundary
+    # would make an otherwise valid date change fail with "Fixed item not
+    # found for that month".  Moving the spending entry starts it unlinked;
+    # the user can record payment against the destination month's item from
+    # that month.
+    if target_month.id != entry_month.id and requested_link_id == previous_link_id:
+        requested_link_id = None
+    linked_item = await _resolve_linked_item(db, target_month, target_category.id, requested_link_id)
     entry.month_category_id = target_month_category.id
     entry.description = body.description.strip()
     entry.amount = Decimal(str(body.amount))
@@ -1537,8 +1625,27 @@ async def update_month_income(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Income source not found for that month")
+    target_month = month_row
+    if body.budget_year is not None and body.budget_month is not None:
+        target_month = await _month_for_owner(db, profile.id, body.budget_year, body.budget_month)
+        if target_month.id != month_row.id:
+            conflicting = await db.scalar(
+                select(BudgetMonthIncome).where(
+                    BudgetMonthIncome.month_id == target_month.id,
+                    BudgetMonthIncome.source_id == source_id,
+                )
+            )
+            if conflicting is not None:
+                # Recurring sources are normally present in every snapshot. An
+                # explicit period override selects the destination snapshot
+                # rather than failing because reconciliation already created it.
+                await db.delete(row)
+                row = conflicting
+            else:
+                row.month_id = target_month.id
     row.expected_amount = Decimal(str(body.expected_amount))
     row.received_amount = Decimal(str(body.received_amount))
+    row.received_date = body.received_date
     audit(db, request, "budget.month_income.updated", auth.user.id, target_type="budget_month_income", target_id=row.id)
     await db.commit()
     return BudgetMonthIncomeResponse(
@@ -1547,6 +1654,21 @@ async def update_month_income(
         source_name=row.source_name,
         expected_amount=float(row.expected_amount),
         received_amount=float(row.received_amount),
+        usual_payday_day=row.usual_payday_day,
+        recurring=row.recurring,
+        expected_date=(
+            expected_income_date(
+                target_month.year,
+                target_month.month,
+                profile.month_start_day,
+                row.usual_payday_day,
+            )
+            if row.recurring
+            else None
+        ),
+        received_date=row.received_date,
+        budget_year=target_month.year,
+        budget_month=target_month.month,
     )
 
 

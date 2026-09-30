@@ -30,6 +30,7 @@ from mykhaya.main import app
 from mykhaya.models import (
     AuditEvent,
     BudgetCategory,
+    BudgetMonth,
     BudgetMonthCategory,
     BudgetMonthIncome,
     BudgetMonthItem,
@@ -322,6 +323,103 @@ async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculate
 
 
 @pytest.mark.asyncio
+async def test_spending_entry_create_and_update_follow_configured_budget_period(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-period-edit-{suffix}@example.com", "Period Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Period Edit Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Enable period edit coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+    settings = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/settings",
+        json={"currency": "GBP", "month_start_day": 25},
+    )
+    assert settings.status_code == 200
+    category = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/categories",
+        json={"name": "Housing", "year": 2026, "month": 10},
+    )
+    assert category.status_code == 201
+    category_id = category.json()["id"]
+    item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/items",
+        json={
+            "category_id": category_id,
+            "name": "Rent",
+            "item_type": "fixed",
+            "default_amount": 1000,
+            "recurring": True,
+            "starts_on": "2026-09-25",
+            "year": 2026,
+            "month": 10,
+        },
+    )
+    assert item.status_code == 201, item.text
+    october = await client.get(f"/api/v1/homes/{home_id}/budget/months/2026/10")
+    assert october.status_code == 200
+    housing = next(row for row in october.json()["categories"] if row["category_id"] == category_id)
+    item_id = housing["items"][0]["id"]
+    november = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/budget/months/2026/11")
+    assert november.status_code == 201
+
+    entry = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/entries",
+        json={"category_id": category_id, "description": "Rent", "amount": 1000, "spent_on": "2026-10-01", "budget_month_item_id": item_id},
+    )
+    assert entry.status_code == 201, entry.text
+    entry_id = entry.json()["id"]
+    unchanged_period = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
+        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-01", "budget_month_item_id": item_id},
+    )
+    assert unchanged_period.status_code == 200, unchanged_period.text
+
+    moved_to_november = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
+        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-25", "budget_month_item_id": item_id},
+    )
+    assert moved_to_november.status_code == 200, moved_to_november.text
+    assert moved_to_november.json()["budget_month_item_id"] is None
+    moved_back = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
+        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-24"},
+    )
+    assert moved_back.status_code == 200, moved_back.text
+
+    async with SessionFactory() as db:
+        stored = await db.scalar(select(BudgetSpendingEntry).where(BudgetSpendingEntry.id == uuid.UUID(entry_id)))
+        assert stored is not None
+        month_category = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.id == stored.month_category_id))
+        assert month_category is not None
+        month = await db.scalar(select(BudgetMonth).where(BudgetMonth.id == month_category.month_id))
+        assert month is not None
+        assert (month.year, month.month) == (2026, 10)
+
+
+@pytest.mark.asyncio
 async def test_current_snapshot_reconciles_pre_fix_missing_category_without_touching_history(
     client: AsyncClient,
 ) -> None:
@@ -457,6 +555,17 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
     )
     assert enabled.status_code == 200
 
+    unconfigured = await client.get(f"/api/v1/homes/{home_id}/budget/months/2099/1")
+    assert unconfigured.status_code == 200
+    assert unconfigured.json() == {
+        "configured": False,
+        "id": None,
+        "year": 2099,
+        "month": 1,
+        "categories": [],
+        "income": [],
+    }
+
     current = datetime.now(UTC)
     year, month = current.year, current.month
     created = await unsafe(
@@ -526,6 +635,70 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
             )
         ).all()
     assert len(memberships) == 1
+
+
+@pytest.mark.asyncio
+async def test_income_received_date_and_budget_period_assignment_are_independent(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"budget-income-period-{suffix}@example.com", "Income Period Owner")
+    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Income Period Home"})
+    assert home.status_code == 201
+    home_id = home.json()["id"]
+    await _set_ultimate_plan(home_id)
+    enabled = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/features/{home_id}/budget/household",
+        json={"enabled": True, "reason": "Income period coverage", "confirmed": True},
+    )
+    assert enabled.status_code == 200
+    settings = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/settings",
+        json={"currency": "GBP", "month_start_day": 25},
+    )
+    assert settings.status_code == 200
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/budget/income-sources",
+        json={"name": "Salary", "usual_payday_day": 25, "recurring": True, "year": 2026, "month": 10},
+    )
+    assert created.status_code == 201, created.text
+    source_id = created.json()["id"]
+
+    received = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/months/2026/10/income/{source_id}",
+        json={"expected_amount": 4000, "received_amount": 4000, "received_date": "2026-10-01"},
+    )
+    assert received.status_code == 200, received.text
+    assert received.json()["budget_year"] == 2026
+    assert received.json()["budget_month"] == 10
+    assert received.json()["expected_date"] == "2026-09-25"
+    assert received.json()["received_date"] == "2026-10-01"
+
+    november = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/budget/months/2026/11")
+    assert november.status_code == 201, november.text
+    moved = await unsafe(
+        client,
+        "PUT",
+        f"/api/v1/homes/{home_id}/budget/months/2026/10/income/{source_id}",
+        json={
+            "expected_amount": 4000,
+            "received_amount": 4000,
+            "received_date": "2026-10-25",
+            "budget_year": 2026,
+            "budget_month": 11,
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["budget_month"] == 11
 
 
 @pytest.mark.asyncio

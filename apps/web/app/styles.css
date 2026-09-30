@@ -2862,16 +2862,16 @@ html.native-shell .home-section-overlap {
 .vehicle-photo-card {
   align-items: center;
   display: grid;
-  gap: 1rem;
-  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 0.85rem;
+  grid-template-columns: 76px minmax(0, 1fr);
   margin-bottom: var(--space-card-stack);
-  padding: 1rem;
+  padding: 0.65rem 0.85rem;
 }
 .vehicle-photo-preview {
   align-items: center;
   aspect-ratio: 4 / 3;
   background: var(--colour-sage-soft);
-  border-radius: 1rem;
+  border-radius: 0.85rem;
   color: var(--colour-forest-dark);
   display: flex;
   justify-content: center;
@@ -2884,7 +2884,7 @@ html.native-shell .home-section-overlap {
 }
 .vehicle-photo-copy {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.2rem;
   min-width: 0;
 }
 .vehicle-photo-copy p {
@@ -2892,7 +2892,9 @@ html.native-shell .home-section-overlap {
 }
 .vehicle-photo-copy button {
   justify-self: start;
-  margin-top: 0.25rem;
+  margin-top: 0.3rem;
+  min-height: 34px;
+  padding: 0.35rem 0.7rem;
 }
 .vehicle-photo-card > .notice {
   grid-column: 1 / -1;
@@ -2900,12 +2902,12 @@ html.native-shell .home-section-overlap {
 }
 @media (max-width: 430px) {
   .vehicle-photo-card {
-    grid-template-columns: 88px minmax(0, 1fr);
-    gap: 0.75rem;
-    padding: 0.8rem;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 0.65rem;
+    padding: 0.55rem 0.7rem;
   }
   .vehicle-photo-copy button {
-    min-height: 38px;
+    min-height: 34px;
   }
 }
 .support-back-link {
@@ -9628,30 +9630,38 @@ select.plan-meal-field-input {
 .driveway-page .page-heading {
   position: relative;
 }
+.driveway-page .page-heading > div {
+  padding-right: 140px;
+}
 .driveway-heading-art {
-  height: 116px;
+  height: 96px;
   object-fit: contain;
-  object-position: right center;
+  object-position: right top;
   position: absolute;
   right: 0;
-  top: -0.8rem;
-  width: 150px;
+  top: 0;
+  width: 128px;
 }
 .driveway-owner-filters {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.45rem;
   margin: 0 0 0.75rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 .driveway-owner-filters button {
   background: var(--colour-cream, #f7f4ed);
   border: 1px solid var(--colour-border, #e5dfd3);
   border-radius: 999px;
   color: var(--colour-forest-dark);
+  flex: none;
   font: inherit;
   font-size: var(--font-small);
   min-height: 38px;
   padding: 0.35rem 0.9rem;
+  white-space: nowrap;
 }
 .driveway-owner-filters button.active {
   background: var(--colour-forest);
@@ -9717,7 +9727,8 @@ select.plan-meal-field-input {
 .driveway-compliance-card b { color: var(--colour-forest-dark); }
 .driveway-compliance-card small { color: var(--colour-muted); }
 @media (max-width: 430px) {
-  .driveway-heading-art { height: 92px; right: -0.6rem; top: -0.35rem; width: 110px; }
+  .driveway-heading-art { height: 78px; right: 0; top: 0; width: 104px; }
+  .driveway-page .page-heading > div { padding-right: 112px; }
   .driveway-vehicle-image { flex-basis: 78px; height: 70px; }
 }
 

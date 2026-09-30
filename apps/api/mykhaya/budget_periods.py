@@ -28,9 +28,15 @@ def _period_start(year: int, month: int, month_start_day: int) -> date:
 
 def budget_period(year: int, month: int, month_start_day: int) -> BudgetPeriod:
     """Return the displayed period using an inclusive start/exclusive end."""
-    start = _period_start(year, month, month_start_day)
-    next_year, next_month = _next_month(year, month)
-    return BudgetPeriod(year, month, start, _period_start(next_year, next_month, month_start_day))
+    if month_start_day <= 1:
+        start = _period_start(year, month, 1)
+        next_year, next_month = _next_month(year, month)
+        end = _period_start(next_year, next_month, 1)
+    else:
+        previous_year, previous_month = (year - 1, 12) if month == 1 else (year, month - 1)
+        start = _period_start(previous_year, previous_month, month_start_day)
+        end = _period_start(year, month, month_start_day)
+    return BudgetPeriod(year, month, start, end)
 
 
 def budget_period_for_date(value: date, month_start_day: int) -> BudgetPeriod:
@@ -40,3 +46,28 @@ def budget_period_for_date(value: date, month_start_day: int) -> BudgetPeriod:
         return budget_period(value.year, value.month, month_start_day)
     next_year, next_month = _next_month(value.year, value.month)
     return budget_period(next_year, next_month, month_start_day)
+
+
+def expected_income_date(
+    year: int, month: int, month_start_day: int, usual_payday_day: int
+) -> date:
+    """Return the usual payday date represented by a displayed Budget period.
+
+    A payday before the configured period start day belongs to the following
+    calendar month; paydays on/after it belong to the period's start month.
+    Short months use their final valid calendar day.  This is a display/default
+    helper only: the BudgetMonth assignment remains authoritative.
+    """
+    period = budget_period(year, month, month_start_day)
+    start = period.start
+    payday = min(max(usual_payday_day, 1), 31)
+    if payday < month_start_day:
+        next_year, next_month = _next_month(start.year, start.month)
+        target_year, target_month = next_year, next_month
+    else:
+        target_year, target_month = start.year, start.month
+    return date(
+        target_year,
+        target_month,
+        min(payday, monthrange(target_year, target_month)[1]),
+    )

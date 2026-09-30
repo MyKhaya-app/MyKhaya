@@ -129,7 +129,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
   if (notFound) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <Link className="tertiary" href="/driveway">
             <ChevronLeft size={16} aria-hidden="true" /> Driveway
           </Link>
@@ -142,7 +142,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
   if (!activeHomeId || !vehicle) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <p role="status">Loading vehicle…</p>
         </main>
       </AppShellContent>
@@ -159,7 +159,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
   ].filter((row) => row.value);
   return (
     <AppShellContent>
-      <main className="standard-page driveway-detail-page">
+      <main className="standard-page module-page driveway-detail-page">
         <Link className="tertiary" href="/driveway">
           <ChevronLeft size={16} aria-hidden="true" /> Driveway
         </Link>
@@ -179,7 +179,9 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
           </div>
           <div className="vehicle-photo-copy">
             <strong>{vehicle.photo_version ? "Vehicle photo" : "Add a vehicle photo"}</strong>
-            <p className="muted">Keep a clear photo of your car with its details.</p>
+            {!vehicle.photo_version && (
+              <p className="muted">Keep a clear photo of your car with its details.</p>
+            )}
             <button type="button" className="secondary" onClick={() => setPhotoSheetOpen(true)} disabled={photoBusy}>
               <Camera size={17} aria-hidden="true" /> {photoBusy ? "Working…" : vehicle.photo_version ? "Change photo" : "Add photo"}
             </button>

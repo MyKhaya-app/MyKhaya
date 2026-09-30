@@ -7,6 +7,7 @@ import {
   Bell,
   Calendar,
   Car,
+  ChevronRight,
   CircleUserRound,
   CreditCard,
   ExternalLink,
@@ -335,7 +336,7 @@ export function SettingsPage({
                             </p>
                           </span>
                           <span className="more-row-chevron" aria-hidden="true">
-                            ›
+                            <ChevronRight size={18} strokeWidth={1.75} />
                           </span>
                         </Link>
                       );

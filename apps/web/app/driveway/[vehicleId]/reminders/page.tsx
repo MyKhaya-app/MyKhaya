@@ -76,7 +76,7 @@ export default function VehicleRemindersPage({
   if (notFound) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <Link className="tertiary" href="/driveway">
             <ChevronLeft size={16} aria-hidden="true" /> Driveway
           </Link>
@@ -89,7 +89,7 @@ export default function VehicleRemindersPage({
   if (!activeHomeId || !vehicle) {
     return (
       <AppShellContent>
-        <main className="standard-page">
+        <main className="standard-page module-page">
           <p role="status">Loading reminders…</p>
         </main>
       </AppShellContent>
@@ -98,7 +98,7 @@ export default function VehicleRemindersPage({
 
   return (
     <AppShellContent>
-      <main className="standard-page">
+      <main className="standard-page module-page">
         <Link className="tertiary" href={`/driveway/${vehicle.id}`}>
           <ChevronLeft size={16} aria-hidden="true" /> {vehicle.nickname}
         </Link>

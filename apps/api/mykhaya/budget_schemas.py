@@ -148,6 +148,9 @@ class BudgetMonthCopyRequest(BaseModel):
 class BudgetIncomeSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = Field(default=0, ge=0, le=10000)
+    usual_payday_day: int = Field(default=1, ge=1, le=31)
+    recurring: bool = True
+    received_date: date | None = None
     year: int | None = Field(default=None, ge=1)
     month: int | None = Field(default=None, ge=1, le=12)
 
@@ -162,12 +165,16 @@ class BudgetIncomeSourceResponse(BaseModel):
     id: uuid.UUID
     name: str
     sort_order: int
+    usual_payday_day: int = 1
+    recurring: bool = True
     archived: bool
 
 
 class BudgetIncomeSourceUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = Field(default=0, ge=0, le=10000)
+    usual_payday_day: int | None = Field(default=None, ge=1, le=31)
+    recurring: bool | None = None
 
 
 class BudgetMonthIncomeResponse(BaseModel):
@@ -176,6 +183,12 @@ class BudgetMonthIncomeResponse(BaseModel):
     source_name: str
     expected_amount: float
     received_amount: float
+    usual_payday_day: int = 1
+    recurring: bool = True
+    expected_date: date | None = None
+    received_date: date | None = None
+    budget_year: int
+    budget_month: int
 
 
 class BudgetMonthCategoryResponse(BaseModel):
@@ -199,7 +212,8 @@ class BudgetCategoryNoteUpdate(BaseModel):
 
 
 class BudgetMonthResponse(BaseModel):
-    id: uuid.UUID
+    configured: bool = True
+    id: uuid.UUID | None = None
     year: int
     month: int
     categories: list[BudgetMonthCategoryResponse]
@@ -254,6 +268,15 @@ class BudgetPlanAmountUpdate(BaseModel):
 class BudgetMonthIncomeUpdate(BaseModel):
     expected_amount: float = Field(ge=0, le=100000000)
     received_amount: float = Field(ge=0, le=100000000)
+    received_date: date | None = None
+    budget_year: int | None = Field(default=None, ge=1)
+    budget_month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_period_override(self) -> "BudgetMonthIncomeUpdate":
+        if (self.budget_year is None) != (self.budget_month is None):
+            raise ValueError("budget_year and budget_month must be supplied together")
+        return self
 
 
 class BudgetPartnerShareCreate(BaseModel):
