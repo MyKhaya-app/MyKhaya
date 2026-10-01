@@ -11,7 +11,7 @@ import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
 import { CcNotice } from "@/components/control-centre/status-message";
 import { CcDialog, CcDialogActions } from "@/components/control-centre/dialog";
-import { Archive, PowerOff } from "lucide-react";
+import { Archive, Home, PowerOff, Search, Trash2, UserRound, Users } from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived";
 type LifecycleFilter = Lifecycle | "all";
@@ -236,8 +236,17 @@ export default function CleanupPage() {
         />
       ),
     },
-    { key: "name", header: "Home", render: (row) => row.name },
-    { key: "id", header: "Home ID", render: (row) => <code className="cc-cleanup-id">{row.id}</code> },
+    {
+      key: "name",
+      header: "Home",
+      render: (row) => (
+        <span className="cc-table-primary-cell cc-cleanup-name-cell">
+          <span className="cc-cleanup-row-icon" aria-hidden="true"><Home size={16} /></span>
+          <strong>{row.name}</strong>
+        </span>
+      ),
+    },
+    { key: "id", header: "Home ID", render: (row) => <code className="cc-cleanup-id" title={row.id}>{row.id}</code> },
     { key: "lifecycle", header: "Status", render: (row) => <LifecycleBadge lifecycle={row.lifecycle} /> },
     { key: "members", header: "Members", render: (row) => row.member_count, align: "right" },
     { key: "created", header: "Created", render: (row) => new Date(row.created_at).toLocaleDateString() },
@@ -265,9 +274,18 @@ export default function CleanupPage() {
         />
       ),
     },
-    { key: "name", header: "User", render: (row) => row.display_name },
+    {
+      key: "name",
+      header: "User",
+      render: (row) => (
+        <span className="cc-table-primary-cell cc-cleanup-name-cell">
+          <span className="cc-cleanup-row-icon" aria-hidden="true"><UserRound size={16} /></span>
+          <strong>{row.display_name}</strong>
+        </span>
+      ),
+    },
     { key: "email", header: "Email", render: (row) => row.email },
-    { key: "id", header: "User ID", render: (row) => <code className="cc-cleanup-id">{row.id}</code> },
+    { key: "id", header: "User ID", render: (row) => <code className="cc-cleanup-id" title={row.id}>{row.id}</code> },
     { key: "lifecycle", header: "Status", render: (row) => <LifecycleBadge lifecycle={row.lifecycle} /> },
     { key: "homes", header: "Homes", render: (row) => row.home_count, align: "right" },
     { key: "created", header: "Created", render: (row) => new Date(row.created_at).toLocaleDateString() },
@@ -283,6 +301,10 @@ export default function CleanupPage() {
   // (Slice 4 §3/§14) rather than only relying on the server to reject it.
   const canDisable = selectionSize > 0 && !currentSelectedLifecycles.includes("archived");
   const canArchive = selectionSize > 0;
+  const summaryPrimary = active.rows?.length ?? 0;
+  const summarySecondary = tab === "homes"
+    ? (active.rows as HomeRow[] | null)?.reduce((total, row) => total + row.member_count, 0) ?? 0
+    : (active.rows as UserRow[] | null)?.reduce((total, row) => total + row.home_count, 0) ?? 0;
 
   function openConfirm(action: LifecycleAction) {
     setPending({ entity: tab, action, ids: Array.from(active.selected) });
@@ -292,30 +314,60 @@ export default function CleanupPage() {
 
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage wide className="pcc-cleanup-page">
         <CcPageHeader
           eyebrow="Administration"
           title="Account & Home cleanup"
           description="Bulk Disable or Archive test/retired Homes and Users. This tool never permanently deletes anything — every action can be reversed on the individual record's detail page."
         />
 
+        <div className="cc-cleanup-intro-row">
+          <p className="cc-page-meta cc-cleanup-meta">
+            Review test or retired records, then disable or archive them in a reversible way.
+          </p>
+          <aside className="cc-cleanup-how-it-works">
+            <span className="cc-cleanup-info-icon"><Trash2 size={22} aria-hidden="true" /></span>
+            <div>
+              <strong>How this works</strong>
+              <p>You can bulk disable or archive Homes and Users. Disabled Homes can be re-enabled and archived items can be restored from the individual record&apos;s detail page.</p>
+            </div>
+          </aside>
+        </div>
+
+        <div className="cc-cleanup-summary" aria-label={`${tab === "homes" ? "Home" : "User"} summary`}>
+          <div className="cc-cleanup-summary-card">
+            <span className="cc-cleanup-summary-icon"><Home size={22} aria-hidden="true" /></span>
+            <span><small>{tab === "homes" ? "Total Homes" : "Total Users"}</small><strong>{summaryPrimary}</strong><em>Showing current results</em></span>
+          </div>
+          <div className="cc-cleanup-summary-card">
+            <span className="cc-cleanup-summary-icon"><Users size={22} aria-hidden="true" /></span>
+            <span><small>{tab === "homes" ? "Total Members" : "Home memberships"}</small><strong>{summarySecondary}</strong><em>Across shown {tab === "homes" ? "Homes" : "Users"}</em></span>
+          </div>
+        </div>
+
         <div className="cc-cleanup-tabs" role="tablist" aria-label="Cleanup type">
           <button
             type="button"
             role="tab"
+            id="cleanup-tab-homes"
+            aria-controls="cleanup-panel"
             aria-selected={tab === "homes"}
             className={tab === "homes" ? "cc-cleanup-tab-active" : undefined}
             onClick={() => setTab("homes")}
           >
+            <Home size={16} aria-hidden="true" />
             Homes
           </button>
           <button
             type="button"
             role="tab"
+            id="cleanup-tab-users"
+            aria-controls="cleanup-panel"
             aria-selected={tab === "users"}
             className={tab === "users" ? "cc-cleanup-tab-active" : undefined}
             onClick={() => setTab("users")}
           >
+            <Users size={16} aria-hidden="true" />
             Users
           </button>
         </div>
@@ -339,23 +391,27 @@ export default function CleanupPage() {
         )}
         {active.error && <CcNotice tone="error">{active.error}</CcNotice>}
 
+        <div id="cleanup-panel" role="tabpanel" aria-labelledby={tab === "homes" ? "cleanup-tab-homes" : "cleanup-tab-users"}>
         <CcSection
           title={tab === "homes" ? "Homes" : "Users"}
           actions={
             <div className="cc-cleanup-toolbar">
-              <input
-                type="text"
-                value={active.query}
-                onChange={(event) => active.setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void active.load();
-                  }
-                }}
-                placeholder={tab === "homes" ? "Search Homes by name" : "Search users by name or email"}
-                aria-label={tab === "homes" ? "Search Homes" : "Search users"}
-              />
+              <label className="cc-cleanup-search-field">
+                <Search size={17} aria-hidden="true" />
+                <input
+                  type="text"
+                  value={active.query}
+                  onChange={(event) => active.setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void active.load();
+                    }
+                  }}
+                  placeholder={tab === "homes" ? "Search Homes by name" : "Search users by name or email"}
+                  aria-label={tab === "homes" ? "Search Homes" : "Search users"}
+                />
+              </label>
               <button type="button" className="secondary" onClick={() => void active.load()}>
                 Search
               </button>
@@ -404,6 +460,7 @@ export default function CleanupPage() {
             />
           )}
         </CcSection>
+        </div>
       </CcPage>
 
       <CcDialog

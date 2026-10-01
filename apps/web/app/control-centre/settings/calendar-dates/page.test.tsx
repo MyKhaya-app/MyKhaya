@@ -27,6 +27,7 @@ const sources = [
     flag_emoji: "🇿🇦",
     region_name: "National holidays",
     provider: "South African Government",
+    source_url: "https://www.gov.za/about-government/national-holidays",
     enabled: true,
     sync_status: "healthy" as const,
     last_successful_sync: "2026-09-12T20:22:00Z",
@@ -65,6 +66,16 @@ describe("Calendar & Dates", () => {
     const row = within(table).getAllByRole("row")[1]!;
     expect(within(row).getByText(/South Africa$/)).toBeInTheDocument();
     expect(within(table).getByText("Healthy")).toBeInTheDocument();
+    expect(screen.getByText("Supported countries")).toBeInTheDocument();
+    expect(screen.getByText("Total sources")).toBeInTheDocument();
+    expect(screen.getAllByText("Available to Homes").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("How this works")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open South African Government official source" })).toHaveAttribute(
+      "href",
+      "https://www.gov.za/about-government/national-holidays",
+    );
+    expect(within(row).getByText("official source")).toBeInTheDocument();
+    expect(within(row).getByText(/Last synced 12 Sept 2026/)).toBeInTheDocument();
 
     fireEvent.click(within(table).getByRole("checkbox"));
     await waitFor(() =>
