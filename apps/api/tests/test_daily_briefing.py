@@ -30,8 +30,10 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.briefing import (
+    BriefingOccurrence,
     deliver_daily_briefing,
     empty_day_message,
+    format_daily_briefing,
     oxford_join,
     scan_due_briefings,
 )
@@ -185,6 +187,98 @@ def test_empty_day_message_is_stable_within_a_day_but_varies_across_days() -> No
     assert empty_day_message(day_one) != empty_day_message(day_two) or day_one == day_two
 
 
+def briefing_occurrence(
+    title: str,
+    start: str,
+    *,
+    all_day: bool = False,
+    event_id: str | None = None,
+) -> BriefingOccurrence:
+    return BriefingOccurrence(
+        event_id=uuid.UUID(event_id or uuid.uuid4().hex),
+        title=title,
+        start_at=datetime.fromisoformat(start),
+        is_all_day=all_day,
+    )
+
+
+def test_format_daily_briefing_uses_bullets_and_singular_title() -> None:
+    title, body = format_daily_briefing(
+        [briefing_occurrence("Contact Lens Check", "2026-08-17T08:50:00+01:00")],
+        local_date=date(2026, 8, 17),
+        tz=TZ,
+    )
+    assert title == "You have 1 event today."
+    assert body == "Please take care of yourself!\n• 08:50 Contact Lens Check"
+
+
+def test_format_daily_briefing_sorts_events_in_recipient_timezone() -> None:
+    title, body = format_daily_briefing(
+        [
+            briefing_occurrence("Later", "2026-08-17T17:30:00+01:00"),
+            briefing_occurrence("Earlier", "2026-08-17T09:50:00+01:00"),
+            briefing_occurrence("Middle", "2026-08-17T11:20:00+01:00"),
+        ],
+        local_date=date(2026, 8, 17),
+        tz=TZ,
+    )
+    assert title == "You have 3 events today."
+    assert body == (
+        "Please take care of yourself!\n"
+        "• 09:50 Earlier\n"
+        "• 11:20 Middle\n"
+        "• 17:30 Later"
+    )
+
+
+def test_format_daily_briefing_formats_all_day_and_local_timezone() -> None:
+    title, body = format_daily_briefing(
+        [
+            briefing_occurrence("All-day thing", "2026-08-17T00:00:00+00:00", all_day=True),
+            briefing_occurrence("Local appointment", "2026-08-17T08:50:00+00:00"),
+        ],
+        local_date=date(2026, 8, 17),
+        tz=TZ,
+    )
+    assert title == "You have 2 events today."
+    assert body == (
+        "Please take care of yourself!\n"
+        "• All day – All-day thing\n"
+        "• 09:50 Local appointment"
+    )
+
+
+def test_format_daily_briefing_limits_visible_events_and_reports_remainder() -> None:
+    occurrences = [
+        briefing_occurrence(
+            f"Event {index}",
+            f"2026-08-17T{index + 8:02d}:00:00+00:00",
+            event_id=f"00000000-0000-0000-0000-{index + 1:012d}",
+        )
+        for index in range(6)
+    ]
+    title, body = format_daily_briefing(occurrences, local_date=date(2026, 8, 17), tz=UTC)
+    assert title == "You have 6 events today."
+    assert body.count("\n• ") == 6
+    assert body.endswith("• +1 more events")
+
+
+def test_format_daily_briefing_sanitises_control_characters_and_zero_events() -> None:
+    title, body = format_daily_briefing(
+        [briefing_occurrence("Bad\nTitle\r\t\x00", "2026-08-17T09:00:00+00:00")],
+        local_date=date(2026, 8, 17),
+        tz=UTC,
+    )
+    assert title == "You have 1 event today."
+    assert body == "Please take care of yourself!\n• 09:00 Bad Title"
+
+    empty_title, empty_body = format_daily_briefing(
+        [], local_date=date(2026, 8, 17), tz=UTC, birthday_phrases=[]
+    )
+    assert empty_title == "You have 0 events today."
+    assert "\n• " not in empty_body
+
+
 @pytest.mark.asyncio
 async def test_scan_enqueues_a_due_briefing_and_is_idempotent(client: AsyncClient) -> None:
     user_id = await create_verified_user(client, unique_email("briefscan"), "Briefing Owner")
@@ -261,7 +355,7 @@ async def test_scan_respects_weekdays_only_preference(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_deliver_composes_events_into_one_sentence_and_is_visibility_safe(
+async def test_deliver_composes_events_into_bullets_and_is_visibility_safe(
     client: AsyncClient,
 ) -> None:
     user_id = await create_verified_user(client, unique_email("content"), "Content Owner")
@@ -292,7 +386,9 @@ async def test_deliver_composes_events_into_one_sentence_and_is_visibility_safe(
             select(Notification).where(Notification.recipient_user_id == user_id)
         )
         assert notification is not None
-        assert "Swimming at 09:30" in notification.body
+        assert notification.title == "You have 1 event today."
+        assert notification.body == "Please take care of yourself!\n• 09:30 Swimming"
+        assert notification.deep_link == {"type": "calendar_today"}
 
 
 @pytest.mark.asyncio
@@ -366,7 +462,9 @@ async def test_deliver_sends_empty_day_message_when_no_events(client: AsyncClien
             select(Notification).where(Notification.recipient_user_id == user_id)
         )
         assert notification is not None
-        assert notification.body == empty_day_message(today_local)
+        assert notification.body == (
+            f"Please take care of yourself!\n{empty_day_message(today_local)}"
+        )
 
 
 @pytest.mark.asyncio

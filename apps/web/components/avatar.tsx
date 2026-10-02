@@ -1,7 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { contrastText, resolveColour } from "@mykhaya/design-tokens";
+import { fetchNativeImage } from "./native-auth";
+import { isNativeShell } from "./native-runtime";
+import {
+  type AvatarStackPerson,
+  avatarStackLabel,
+  buildAvatarStack,
+} from "./avatar-stack-logic";
+
+export type { AvatarStackPerson } from "./avatar-stack-logic";
 
 // Identity belongs to a person, not an event category — every family
 // member gets one colour, used everywhere they appear (avatar, their
@@ -31,7 +40,11 @@ const SIZES = { sm: 32, md: 44, lg: 56, xl: 72 } as const;
  *  means a changed avatar always invalidates any cached copy of the old URL, while
  *  the image itself is served with a long, immutable Cache-Control. */
 export function avatarUrl(id: string, version: string): string {
-  return `/api/v1/users/${encodeURIComponent(id)}/avatar?v=${encodeURIComponent(version)}`;
+  return `/api/v1${avatarPath(id, version)}`;
+}
+
+function avatarPath(id: string, version: string): string {
+  return `/users/${encodeURIComponent(id)}/avatar?v=${encodeURIComponent(version)}`;
 }
 
 export function Avatar({
@@ -52,27 +65,115 @@ export function Avatar({
   size?: keyof typeof SIZES;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [nativeImageUrl, setNativeImageUrl] = useState<string | null>(null);
   const bg = memberColour(id, colour);
   const text = contrastText(bg);
   const px = SIZES[size];
   const initial = name.trim().charAt(0).toUpperCase() || "?";
   const showImage = Boolean(avatarVersion) && !imageFailed;
+  useEffect(() => {
+    setImageFailed(false);
+    setNativeImageUrl(null);
+    if (!isNativeShell() || !avatarVersion) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void fetchNativeImage(avatarPath(id, avatarVersion))
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setNativeImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[AVATAR DEBUG] native image fetch failed");
+          }
+          setImageFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id, avatarVersion]);
+  const imageSrc = isNativeShell() ? nativeImageUrl : avatarVersion ? avatarUrl(id, avatarVersion) : null;
   return (
     <span
       className={`avatar avatar-${size}`}
       style={{ width: px, height: px, background: bg, color: text }}
       aria-hidden="true"
     >
-      {showImage ? (
+      {showImage && imageSrc ? (
         <img
-          src={avatarUrl(id, avatarVersion!)}
+          src={imageSrc}
           alt=""
           width={px}
           height={px}
-          onError={() => setImageFailed(true)}
+          onError={() => {
+            if (process.env.NODE_ENV !== "production") {
+              console.warn("[AVATAR DEBUG] image render failed");
+            }
+            setImageFailed(true);
+          }}
         />
       ) : (
         initial
+      )}
+    </span>
+  );
+}
+
+/** A compact overlapping avatar group for "who's involved in this" contexts
+ *  (event cards, etc.) — one Avatar for a single person (byte-for-byte the
+ *  same markup Avatar alone would render, so single-participant call sites
+ *  see no visual change), an overlapping row of up to MAX_STACK_AVATARS for
+ *  more, and a "+N" tile for the remainder. Ordering is whatever order
+ *  `people` is passed in — callers own that (see home/page.tsx, which
+ *  reuses GET /groups/{id}/members' existing display_name order rather than
+ *  this component inventing its own).
+ *
+ *  Individual Avatars stay aria-hidden (as Avatar always is); the group
+ *  carries one combined aria-label instead of one announcement per circle,
+ *  so a screen reader hears "Alice, Bob and Charlie" once rather than three
+ *  redundant "image" announcements. */
+export function AvatarStack({
+  people,
+  size = "sm",
+}: {
+  people: AvatarStackPerson[];
+  size?: keyof typeof SIZES;
+}) {
+  if (people.length === 0) return null;
+  if (people.length === 1) {
+    const [person] = people;
+    return (
+      <Avatar
+        id={person!.user_id}
+        name={person!.display_name}
+        colour={person!.colour}
+        avatarVersion={person!.avatar_version}
+        size={size}
+      />
+    );
+  }
+  const { shown, extra } = buildAvatarStack(people);
+  const label = avatarStackLabel(people);
+  return (
+    <span className="avatar-stack" role="img" aria-label={label}>
+      {shown.map((person) => (
+        <Avatar
+          key={person.user_id}
+          id={person.user_id}
+          name={person.display_name}
+          colour={person.colour}
+          avatarVersion={person.avatar_version}
+          size={size}
+        />
+      ))}
+      {extra > 0 && (
+        <span className={`avatar avatar-${size} avatar-stack-more`} aria-hidden="true">
+          +{extra}
+        </span>
       )}
     </span>
   );

@@ -1,0 +1,682 @@
+"""Stripe billing: public read-only pricing, per-Home Checkout/Portal
+session creation (household-authenticated, billing_manage capability
+required), a minimal billing-status surface, and the Stripe webhook
+endpoint. See docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+
+The webhook route is deliberately NOT under mykhaya.routers.platform — it
+must be reachable without the admin-subdomain/admin-network restrictions
+that gate the Platform Control Centre, since Stripe calls it directly from
+Stripe's own infrastructure. Its only trust mechanism is Stripe's
+cryptographic signature (see mykhaya.billing.webhooks).
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import stripe
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.billing.checkout import (
+    DuplicateSubscriptionError,
+    NoStripeCustomerError,
+    create_checkout_session,
+    create_portal_session,
+)
+from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
+from mykhaya.billing.config import StripeNotConfiguredError, resolve_stripe_config
+from mykhaya.billing.diagnostics import record_billing_diagnostic
+from mykhaya.billing.pricing import (
+    StripePriceConfigurationError,
+    fetch_price_amount,
+    format_amount,
+    get_family_pricing,
+)
+from mykhaya.billing.reconciliation import (
+    CheckoutConfirmationError,
+    CheckoutNotCompleteError,
+    confirm_checkout_session,
+)
+from mykhaya.billing.webhooks import (
+    WebhookSignatureError,
+    process_webhook_event,
+    verify_and_parse_event,
+)
+from mykhaya.billing_schemas import (
+    BillingStatusResponse,
+    CheckoutConfirmationRequest,
+    CheckoutConfirmationResponse,
+    CheckoutSessionRequest,
+    CheckoutSessionResponse,
+    FamilyPricingResponse,
+    PlanComparisonResponse,
+    PlanComparisonRow,
+    PortalSessionResponse,
+    PricingOptionResponse,
+    SubscriptionPriceResponse,
+)
+from mykhaya.config import Settings, get_settings
+from mykhaya.db import get_db
+from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.entitlements import (
+    calendar_usage,
+    category_usage,
+    effective_plan,
+    ensure_home_subscription,
+    get_home_subscription,
+    has_entitlement,
+    has_user_entitlement,
+    list_usage,
+    member_usage,
+    plan_definition_for,
+    resolve_effective_state,
+    retained_member_id,
+    transition_expired_family_home,
+)
+from mykhaya.family_retention import start_family_retention
+from mykhaya.household_permissions import Capability, capabilities_for, require_capability
+from mykhaya.models import (
+    HomeRetentionLifecycle,
+    HomeSubscription,
+    HouseholdRelationship,
+    Membership,
+    StripeWebhookFailure,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
+    User,
+)
+from mykhaya.rate_limit import enforce_rate_limit
+
+router = APIRouter(prefix="/billing", tags=["billing"])
+group_router = APIRouter(prefix="/groups/{group_id}/billing", tags=["billing"])
+log = structlog.get_logger()
+
+
+@router.get("/pricing", response_model=FamilyPricingResponse)
+async def pricing(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FamilyPricingResponse:
+    await enforce_rate_limit(request, settings, "billing-pricing", 60, 60)
+    # Pricing stays informational even while new acquisition is disabled
+    # (the billing kill switch) — a visitor can still see what Family
+    # costs; only actually starting Checkout is blocked (see
+    # checkout_session below). The frontend uses acquisition_enabled to
+    # decide whether to show "Choose Family" or a "temporarily paused"
+    # notice, never by treating a pricing-fetch failure as the signal.
+    acquisition_enabled = (await resolve_stripe_config(settings, db)).acquisition_enabled
+    try:
+        family_pricing = await get_family_pricing(settings, db)
+    except StripeNotConfiguredError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    except StripePriceConfigurationError as exc:
+        await log.aerror("stripe_price_configuration_error", detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+
+    monthly, annual = family_pricing.options
+    is_best_value = (
+        family_pricing.annual_saving_unit_amount is not None
+        and family_pricing.annual_saving_unit_amount > 0
+    )
+    saving = (
+        format_amount(family_pricing.annual_saving_unit_amount, annual.currency)
+        if is_best_value and family_pricing.annual_saving_unit_amount is not None
+        else None
+    )
+    ultimate_options = family_pricing.ultimate_options
+    ultimate_annual_is_best_value = (
+        family_pricing.ultimate_annual_saving_unit_amount is not None
+        and family_pricing.ultimate_annual_saving_unit_amount > 0
+    )
+    ultimate_saving = (
+        format_amount(
+            family_pricing.ultimate_annual_saving_unit_amount,
+            ultimate_options[1].currency,
+        )
+        if ultimate_annual_is_best_value
+        and family_pricing.ultimate_annual_saving_unit_amount is not None
+        and ultimate_options is not None
+        else None
+    )
+    return FamilyPricingResponse(
+        plan=family_pricing.plan,
+        options=[
+            PricingOptionResponse(
+                interval=option.interval,
+                currency=option.currency,
+                unit_amount=option.unit_amount,
+                formatted_amount=option.formatted_amount,
+            )
+            for option in (monthly, annual)
+        ],
+        annual_saving_formatted=saving,
+        annual_is_best_value=is_best_value,
+        acquisition_enabled=acquisition_enabled,
+        ultimate_options=(
+            [
+                PricingOptionResponse(
+                    interval=option.interval,
+                    currency=option.currency,
+                    unit_amount=option.unit_amount,
+                    formatted_amount=option.formatted_amount,
+                )
+                for option in ultimate_options
+            ]
+            if ultimate_options
+            else None
+        ),
+        ultimate_annual_saving_formatted=ultimate_saving,
+        ultimate_annual_is_best_value=ultimate_annual_is_best_value,
+        ultimate_acquisition_enabled=family_pricing.ultimate_acquisition_enabled,
+    )
+
+
+def _people_display(max_members: int | None) -> str:
+    return "1 person" if max_members == 1 else "Whole household"
+
+
+def _categories_display(max_categories: int | None) -> str:
+    if max_categories is None:
+        return "Unlimited"
+    return f"{max_categories} category" if max_categories == 1 else f"{max_categories} categories"
+
+
+def _personal_routines_display(max_active: int | None) -> str:
+    return f"Up to {max_active}" if max_active is not None else "Unlimited"
+
+
+def _included_display(enabled: bool) -> str:
+    return "Included" if enabled else "Not included"
+
+
+@router.get("/plans", response_model=PlanComparisonResponse)
+async def plan_comparison(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> PlanComparisonResponse:
+    """Free vs Family, sourced from mykhaya.entitlements.PLAN_DEFINITIONS —
+    never duplicated by hand in the frontend. Deliberately limited to
+    dimensions that are both (a) genuinely enforced today and (b) backed by
+    a released/reachable module — PLAN_DEFINITIONS carries several other
+    keys (lists/chores/wishlists/notes, shared family events, external
+    invites, Family Plans, priority support) that are either unreleased
+    modules or intentionally-unenforced commercial data pending a focused
+    follow-up (see "Deferred enforcement" in
+    docs/architecture/commercial-entitlements.md) — surfacing any of those
+    here would market something that doesn't actually exist/work yet.
+    Preserves Platform Feature Flag -> Commercial Entitlement -> Home/User
+    Permission: an entitlement being technically "on" for Family is not
+    enough to advertise it."""
+    await enforce_rate_limit(request, settings, "billing-plans", 60, 60)
+    free = plan_definition_for(SubscriptionPlan.free)
+    family = plan_definition_for(SubscriptionPlan.family)
+    ultimate = plan_definition_for(SubscriptionPlan.ultimate)
+    free_members = free.limits.get("home.max_members")
+    family_members = family.limits.get("home.max_members")
+    free_categories = free.limits.get("calendar.max_tags")
+    family_categories = family.limits.get("calendar.max_tags")
+    free_personal_routines = free.limits.get("routines.personal.max_active")
+    family_personal_routines = family.limits.get("routines.personal.max_active")
+    return PlanComparisonResponse(
+        rows=[
+            PlanComparisonRow(
+                key="home.max_members",
+                label="People",
+                free_display=_people_display(free_members),
+                family_display=_people_display(family_members),
+                ultimate_display=_people_display(ultimate.limits.get("home.max_members")),
+            ),
+            PlanComparisonRow(
+                key="calendar.max_tags",
+                label="Calendar Tags",
+                free_display=_categories_display(free_categories),
+                family_display=_categories_display(family_categories),
+                ultimate_display=_categories_display(ultimate.limits.get("calendar.max_tags")),
+            ),
+            PlanComparisonRow(
+                key="routines.personal.max_active",
+                label="Personal routines",
+                free_display=_personal_routines_display(free_personal_routines),
+                family_display=_personal_routines_display(family_personal_routines),
+                ultimate_display=_personal_routines_display(ultimate.limits.get("routines.personal.max_active")),
+            ),
+            PlanComparisonRow(
+                key="routines.household.enabled",
+                label="Household routines",
+                free_display=_included_display(
+                    free.booleans.get("routines.household.enabled", False)
+                ),
+                family_display=_included_display(
+                    family.booleans.get("routines.household.enabled", False)
+                ),
+                ultimate_display=_included_display(
+                    ultimate.booleans.get("routines.household.enabled", False)
+                ),
+            ),
+            PlanComparisonRow(
+                key="budget.enabled",
+                label="Budget",
+                free_display=_included_display(free.booleans.get("budget.enabled", False)),
+                family_display=_included_display(family.booleans.get("budget.enabled", False)),
+                ultimate_display=_included_display(ultimate.booleans.get("budget.enabled", False)),
+            ),
+            PlanComparisonRow(
+                key="driveway.enabled",
+                label="Driveway",
+                free_display=_included_display(free.booleans.get("driveway.enabled", False)),
+                family_display=_included_display(family.booleans.get("driveway.enabled", False)),
+                ultimate_display=_included_display(ultimate.booleans.get("driveway.enabled", False)),
+            ),
+            PlanComparisonRow(
+                key="premium.future",
+                label="Future premium modules",
+                free_display="Not included",
+                family_display="Not included",
+                ultimate_display="Included",
+            ),
+        ]
+    )
+
+
+@group_router.get("", response_model=BillingStatusResponse)
+async def billing_status(
+    group_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BillingStatusResponse:
+    """The household-facing Plan & Billing read model (Phase 4) — a single
+    backend-prepared, display-safe view of the Home's commercial state, so
+    the frontend never has to infer Stripe semantics itself. See
+    docs/architecture/commercial-entitlements.md#household-plan-billing."""
+    subscription = await get_home_subscription(db, group_id)
+    await transition_expired_family_home(db, group_id)
+    lifecycle = await start_family_retention(db, group_id)
+    await db.commit()
+    if lifecycle is None:
+        lifecycle = await db.scalar(
+            select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == group_id)
+        )
+    membership = await membership_for(group_id, auth, db)
+    subscription = await get_home_subscription(db, group_id)
+    resolved_plan = await effective_plan(db, group_id)
+    resolution = resolve_effective_state(subscription)
+    capabilities = await capabilities_for(db, membership)
+    config = await resolve_stripe_config(settings, db)
+    retained_user = await retained_member_id(db, group_id)
+    affected_adult_members = list(
+        (
+            await db.scalars(
+                select(User.display_name)
+                .join(Membership, Membership.user_id == User.id)
+                .where(
+                    Membership.group_id == group_id,
+                    Membership.removed_at.is_(None),
+                    Membership.user_id != retained_user,
+                    Membership.relationship != HouseholdRelationship.child,
+                )
+                .order_by(User.display_name.asc())
+            )
+        ).all()
+    )
+
+    price: SubscriptionPriceResponse | None = None
+    if (
+        subscription
+        and subscription.provider == SubscriptionProvider.stripe
+        and subscription.external_price_id
+    ):
+        if config.configured and config.secret_key:
+            price_option = await fetch_price_amount(
+                config.secret_key, subscription.external_price_id
+            )
+            if price_option is not None:
+                price = SubscriptionPriceResponse(
+                    currency=price_option.currency,
+                    unit_amount=price_option.unit_amount,
+                    formatted_amount=price_option.formatted_amount,
+                )
+
+    return BillingStatusResponse(
+        stored_plan=subscription.plan if subscription else resolved_plan,
+        provider=subscription.provider if subscription else SubscriptionProvider.free,
+        status=subscription.status if subscription else SubscriptionStatus.active,
+        effective_plan=resolved_plan,
+        effective_status_reason=resolution.reason,
+        billing_interval=subscription.billing_interval if subscription else None,
+        price=price,
+        current_period_end=subscription.current_period_end.isoformat()
+        if subscription and subscription.current_period_end
+        else None,
+        cancel_at_period_end=bool(
+            subscription and subscription.status == SubscriptionStatus.cancel_at_period_end
+        ),
+        affected_adult_members=affected_adult_members,
+        retention_state=lifecycle.state.value if lifecycle else None,
+        retention_deadline=lifecycle.retention_deadline.isoformat() if lifecycle else None,
+        complimentary_expires_at=subscription.complimentary_expires_at.isoformat()
+        if subscription and subscription.complimentary_expires_at
+        else None,
+        can_manage_billing=Capability.billing_manage in capabilities,
+        has_stripe_customer=bool(subscription and subscription.external_customer_id),
+        # Whether *starting a new Checkout* is actually possible right now —
+        # Stripe configured AND new acquisition enabled (Phase 7's kill
+        # switch). Deliberately not just "configured": Settings -> Plan &
+        # Billing's upgrade section (canShowUpgradeOptions) reads this to
+        # decide whether to show Checkout at all, so a disabled kill switch
+        # correctly hides it there too, not only at the API layer.
+        stripe_billing_available=config.configured
+        and (config.family_signups_enabled or config.ultimate_signups_enabled),
+        family_access=await has_user_entitlement(
+            db, auth.user.id, group_id, "family_plans.enabled"
+        ),
+        calendar_usage=await calendar_usage(db, group_id),
+        category_usage=await category_usage(db, group_id),
+        member_usage=await member_usage(db, group_id),
+        household_routines_enabled=await has_entitlement(
+            db, group_id, "routines.household.enabled"
+        ),
+        shared_events_enabled=await has_entitlement(db, group_id, "events.shared.enabled"),
+        external_invites_enabled=await has_entitlement(
+            db, group_id, "members.external_invites.enabled"
+        ),
+        meals_enabled=await has_entitlement(db, group_id, "meals.enabled"),
+        lists_enabled=await has_entitlement(db, group_id, "lists.enabled"),
+        list_usage=await list_usage(db, group_id),
+        wishlists_enabled=await has_entitlement(db, group_id, "wishlists.enabled"),
+        nudges_enabled=await has_entitlement(db, group_id, "nudges.enabled"),
+        budget_enabled=await has_entitlement(db, group_id, "budget.enabled"),
+        driveway_enabled=await has_entitlement(db, group_id, "driveway.enabled"),
+    )
+
+
+@group_router.post("/checkout-session", response_model=CheckoutSessionResponse)
+async def checkout_session(
+    group_id: uuid.UUID,
+    body: CheckoutSessionRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CheckoutSessionResponse:
+    await enforce_rate_limit(request, settings, "billing-checkout", 10, 300)
+    membership = await require_capability(group_id, Capability.billing_manage, auth, db)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    plan_enabled = (
+        config.family_signups_enabled if body.plan == SubscriptionPlan.family
+        else config.ultimate_signups_enabled if body.plan == SubscriptionPlan.ultimate
+        else False
+    )
+    if not plan_enabled:
+        # The Phase 7 kill switch — deliberately separate from "configured".
+        # Existing Stripe-backed Homes, webhooks, renewals, cancellations,
+        # the Portal, and reconciliation are all unaffected by this; only a
+        # *new* Checkout Session is refused. See
+        # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"New {body.plan.value.capitalize()} subscriptions are temporarily unavailable. Please try again later.",
+        )
+
+    # Serialises concurrent checkout attempts for the same Home (double-click,
+    # multiple tabs, monthly+annual submitted together) — see
+    # mykhaya.billing.checkout's module docstring.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"billing:{group_id}"}
+    )
+    subscription = await ensure_home_subscription(db, group_id)
+    await db.commit()
+
+    try:
+        checkout_url = await create_checkout_session(
+            db,
+            settings,
+            config,
+            membership.group,
+            subscription,
+            auth.user.id,
+            auth.user.email,
+            body.plan,
+            body.interval,
+        )
+    except DuplicateSubscriptionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_checkout_session_error", group_id=str(group_id), detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    except (StripeNotConfiguredError, ValueError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return CheckoutSessionResponse(checkout_url=checkout_url)
+
+
+@router.post("/stripe/confirm-checkout", response_model=CheckoutConfirmationResponse)
+async def confirm_checkout(
+    body: CheckoutConfirmationRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CheckoutConfirmationResponse:
+    """Immediately reconcile the authenticated user's completed Checkout.
+
+    The request supplies only Stripe's opaque Checkout Session ID. The Home is
+    derived from Stripe metadata and then authorized against the current user.
+    Webhooks remain the primary lifecycle path; this is a safe, idempotent
+    self-healing path for a browser return that outruns webhook delivery.
+    """
+    await enforce_rate_limit(request, settings, "billing-confirm-checkout", 20, 60)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+
+    # The service validates the Stripe-owned Home metadata before mutating it.
+    # It is intentionally called only after the caller is authenticated; the
+    # resulting group is then checked through the normal billing capability.
+    # Retrieve the session once here to discover the Home would duplicate a
+    # Stripe call, so the service returns ownership failures without exposing
+    # whether another Home's session exists. The session's group metadata is
+    # validated inside confirm_checkout_session before any mutation.
+    try:
+        # A session must carry MyKhaya metadata, so use a narrowly scoped
+        # lookup via the Stripe API, then authorize the derived Home below.
+        session = await call_stripe(
+            lambda: stripe.checkout.Session.retrieve(
+                body.session_id,
+                expand=["subscription", "customer"],
+                api_key=config.secret_key,
+            )
+        )
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_checkout_confirmation_lookup_failed", detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't confirm your subscription yet. Please try again shortly.",
+        ) from None
+    raw_group_id = (session.get("metadata") or {}).get("mykhaya_group_id") or session.get(
+        "client_reference_id"
+    )
+    try:
+        group_id = uuid.UUID(str(raw_group_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkout Session not found.") from None
+    await require_capability(group_id, Capability.billing_manage, auth, db)
+
+    # The service performs its own authoritative retrieval and all validation;
+    # the first lookup above exists only to derive the server-side Home binding.
+    subscription: HomeSubscription | None = None
+    try:
+        confirmed, subscription = await confirm_checkout_session(
+            db, config, group_id, body.session_id
+        )
+    except CheckoutNotCompleteError:
+        subscription = await get_home_subscription(db, group_id)
+        confirmed = False
+    except CheckoutConfirmationError as exc:
+        await log.awarning(
+            "stripe_checkout_confirmation_rejected",
+            checkout_session_id=body.session_id,
+            group_id=str(group_id),
+            detail=str(exc),
+        )
+        await record_billing_diagnostic(
+            db,
+            source="checkout_confirmation",
+            stage="checkout_validation",
+            result="failed",
+            stripe_mode=config.mode,
+            checkout_session_id=body.session_id,
+            group_id=group_id,
+            safe_error_code="checkout_confirmation_rejected",
+            safe_error_message="The Checkout Session could not be confirmed for this Home.",
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Checkout Session cannot be confirmed."
+        ) from None
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror(
+            "stripe_checkout_confirmation_failed",
+            checkout_session_id=body.session_id,
+            group_id=str(group_id),
+            detail=str(exc),
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't confirm your subscription yet. Please try again shortly.",
+        ) from None
+
+    if subscription is None:
+        subscription = await ensure_home_subscription(db, group_id)
+        await db.commit()
+    resolved_plan = await effective_plan(db, group_id)
+    await log.ainfo(
+        "stripe_checkout_reconciled",
+        checkout_session_id=body.session_id,
+        stripe_subscription_id=subscription.external_subscription_id,
+        stripe_customer_id=subscription.external_customer_id,
+        mykhaya_group_id=str(group_id),
+        stripe_mode=config.mode,
+        subscription_status=subscription.status.value,
+        reconciliation_result="confirmed" if confirmed else "pending",
+    )
+    return CheckoutConfirmationResponse(
+        confirmed=confirmed and resolved_plan == SubscriptionPlan.family,
+        effective_plan=resolved_plan,
+        subscription_status=subscription.status,
+    )
+
+
+@group_router.post("/portal-session", response_model=PortalSessionResponse)
+async def portal_session(
+    group_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PortalSessionResponse:
+    await enforce_rate_limit(request, settings, "billing-portal", 20, 300)
+    await require_capability(group_id, Capability.billing_manage, auth, db)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Home has no billing account yet.")
+    try:
+        portal_url = await create_portal_session(settings, config, subscription)
+    except NoStripeCustomerError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_portal_session_error", group_id=str(group_id), detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    return PortalSessionResponse(portal_url=portal_url)
+
+
+@router.post("/stripe/webhook", status_code=status.HTTP_200_OK)
+async def stripe_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured or not config.webhook_secret:
+        # Not "not found" (which would confirm/deny the route's existence to
+        # a prober) — a clear, static 503 either way, no signature-dependent
+        # branching in the response.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not configured.")
+
+    payload = await request.body()
+    signature_header = request.headers.get("stripe-signature", "")
+    try:
+        event = verify_and_parse_event(payload, signature_header, config.webhook_secret)
+    except WebhookSignatureError as exc:
+        await log.awarning("stripe_webhook_signature_rejected")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid signature.") from exc
+
+    try:
+        outcome = await process_webhook_event(db, event, config)
+    except Exception as exc:
+        await db.rollback()
+        # Deliberately generic — Stripe retries on a non-2xx, and no detail
+        # about *why* processing failed should be observable from the
+        # response. Full context goes to the sanitised server log only.
+        await log.aerror(
+            "stripe_webhook_processing_failed",
+            event_id=event.get("id"),
+            event_type=event.get("type"),
+        )
+        # Observability only — never a dedup mechanism (see
+        # StripeWebhookFailure's docstring). Recorded *after* the rollback
+        # above, in a fresh transaction on the same session, so it survives
+        # even though the failed processing attempt itself was discarded.
+        db.add(
+            StripeWebhookFailure(
+                stripe_event_id=event.get("id"),
+                event_type=event.get("type"),
+                error_message=f"{type(exc).__name__}: {exc}"[:500],
+            )
+        )
+        await db.commit()
+        try:
+            await record_billing_diagnostic(
+                db,
+                source="webhook",
+                stage="subscription_reconciliation",
+                result="failed",
+                stripe_mode=config.mode,
+                stripe_event_id=event.get("id"),
+                safe_error_code="webhook_processing_failed",
+                safe_error_message=(
+                    "MyKhaya could not process the Stripe event; Stripe should retry it."
+                ),
+            )
+        except Exception:
+            await db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not process this event."
+        ) from None
+
+    await log.ainfo(
+        "stripe_webhook_processed",
+        event_id=event.get("id"),
+        event_type=event.get("type"),
+        outcome=outcome,
+    )
+    return Response(status_code=status.HTTP_200_OK)

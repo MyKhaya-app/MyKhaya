@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -26,6 +27,7 @@ from mykhaya.models import (
     OutboxEvent,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -106,6 +108,13 @@ async def create_home(client: AsyncClient, name: str = "Birthday Test Home") -> 
         db.add(
             FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
         )
+        # These tests are about birthday visibility/scheduling, not commercial
+        # plan enforcement — a child adds a Membership row (home.max_members),
+        # so every caller of this helper needs Family, not just the ones that
+        # happen to add a child today.
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 
@@ -174,6 +183,11 @@ async def test_guardian_can_set_child_birthday_and_visibility(client: AsyncClien
     await create_verified_user(client, unique_email("guardian"), "Guardian")
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Child Birthday Home"})
     home_id = group.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
     members = await client.get(f"/api/v1/groups/{home_id}/members")
     owner_membership_id = members.json()[0]["membership_id"]
 
@@ -214,6 +228,11 @@ async def test_non_guardian_cannot_set_child_birthday(client: AsyncClient) -> No
     await create_verified_user(client, unique_email("owner3"), "Owner")
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Restricted Home"})
     home_id = group.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
     members = await client.get(f"/api/v1/groups/{home_id}/members")
     owner_membership_id = members.json()[0]["membership_id"]
     child = await unsafe(
@@ -341,6 +360,11 @@ async def test_scan_is_idempotent_for_a_due_birthday(client: AsyncClient) -> Non
         rows_after = await birthday_rows("user", str(user_id))
         assert len(rows_after) == len(rows)
         assert len(rows) <= 1
+        if rows:
+            rows[0].processed_at = datetime.now(UTC)
+            await db.commit()
+            await scan_due_birthdays(db, get_settings())
+            assert len(await birthday_rows("user", str(user_id))) == 1
 
 
 @pytest.mark.asyncio

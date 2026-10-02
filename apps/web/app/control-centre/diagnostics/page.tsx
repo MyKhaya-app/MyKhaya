@@ -1,9 +1,17 @@
 "use client";
 
 import { FormEvent, useCallback, useState } from "react";
-import { platformApi } from "@mykhaya/api-client";
+import { Search } from "lucide-react";
+import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { readableDate, titleCase } from "@/components/platform-format";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcCard } from "@/components/control-centre/section";
+import { CcNotice } from "@/components/control-centre/status-message";
+import { CcField } from "@/components/control-centre/form-field";
+import { CcActionBar } from "@/components/control-centre/action-bar";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 
 type DiagnosticsEntry = {
   id: string;
@@ -17,6 +25,10 @@ type DiagnosticsEntry = {
   retry_count: number;
   idempotency_key: string;
 };
+
+function safeError(cause: unknown, fallback: string): string {
+  return cause instanceof ApiError ? cause.message : fallback;
+}
 
 export default function DiagnosticsPage() {
   const [items, setItems] = useState<DiagnosticsEntry[]>([]);
@@ -39,7 +51,7 @@ export default function DiagnosticsPage() {
       setNextPage(response.next_page);
       setSearched(true);
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(safeError(cause, "The diagnostics search failed."));
     } finally {
       setLoading(false);
     }
@@ -65,86 +77,75 @@ export default function DiagnosticsPage() {
     await search(params, 1, false);
   }
 
+  const columns: CcTableColumn<DiagnosticsEntry>[] = [
+    { key: "when", header: "When", render: (row) => readableDate(row.occurred_at) },
+    { key: "type", header: "Type", render: (row) => row.label },
+    { key: "channel", header: "Channel", render: (row) => titleCase(row.channel) },
+    { key: "status", header: "Status", render: (row) => titleCase(row.status) },
+    { key: "recipient", header: "Recipient", render: (row) => row.recipient_email ?? "—" },
+    { key: "retries", header: "Retries", render: (row) => row.retry_count },
+    { key: "failure", header: "Failure reason", render: (row) => row.sanitised_failure_reason ?? "—" },
+  ];
+
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Communications</p>
-            <h1>Diagnostics</h1>
-          </div>
-        </div>
-        <p>Why did this one fail? Filter by status, channel, type or recipient.</p>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
-        <form className="action-panel" onSubmit={onSearch}>
-          <label>
-            Status
-            <select name="status" defaultValue="">
-              <option value="">Any</option>
-              <option value="queued">Queued</option>
-              <option value="sent">Sent</option>
-              <option value="failed">Failed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </label>
-          <label>
-            Channel
-            <select name="channel" defaultValue="">
-              <option value="">Any</option>
-              <option value="email">Email</option>
-              <option value="push">Push</option>
-              <option value="in_app">In-app</option>
-            </select>
-          </label>
-          <label>
-            Notification type
-            <input name="notification_type" placeholder="e.g. event_reminder" />
-          </label>
-          <label>
-            Recipient email
-            <input name="recipient_email" type="email" />
-          </label>
-          <button disabled={loading}>{loading ? "Searching…" : "Search"}</button>
-        </form>
+      <CcPage wide>
+        <CcPageHeader
+          eyebrow="Communications"
+          title="Diagnostics"
+          description={`Why did this one fail? Filter by status, channel, type or recipient.`}
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
 
-        {searched && items.length === 0 && !loading && (
-          <p className="quiet-state">No deliveries match those filters.</p>
-        )}
+        <CcCard title="Search deliveries" icon={Search}>
+          <form onSubmit={onSearch}>
+            <CcField label="Status">
+              <select name="status" defaultValue="">
+                <option value="">Any</option>
+                <option value="queued">Queued</option>
+                <option value="sent">Sent</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </CcField>
+            <CcField label="Channel">
+              <select name="channel" defaultValue="">
+                <option value="">Any</option>
+                <option value="email">Email</option>
+                <option value="push">Push</option>
+                <option value="in_app">In-app</option>
+              </select>
+            </CcField>
+            <CcField label="Notification type">
+              <input name="notification_type" placeholder="e.g. event_reminder" />
+            </CcField>
+            <CcField label="Recipient email">
+              <input name="recipient_email" type="email" />
+            </CcField>
+            <CcActionBar
+              actions={[
+                {
+                  key: "search",
+                  label: loading ? "Searching…" : "Search",
+                  variant: "primary",
+                  type: "submit",
+                  disabled: loading,
+                },
+              ]}
+            />
+          </form>
+        </CcCard>
 
-        {items.length > 0 && (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Type</th>
-                  <th>Channel</th>
-                  <th>Status</th>
-                  <th>Recipient</th>
-                  <th>Retries</th>
-                  <th>Failure reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{readableDate(entry.occurred_at)}</td>
-                    <td>{entry.label}</td>
-                    <td>{titleCase(entry.channel)}</td>
-                    <td>{titleCase(entry.status)}</td>
-                    <td>{entry.recipient_email ?? "—"}</td>
-                    <td>{entry.retry_count}</td>
-                    <td>{entry.sanitised_failure_reason ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <CcCard title="Results">
+          <CcTable
+            columns={columns}
+            rows={searched ? items : []}
+            rowKey={(row) => row.id}
+            emptyMessage={searched ? "No deliveries match those filters." : "Run a search to see results."}
+            caption="Diagnostics results"
+          />
+        </CcCard>
+
         {nextPage && (
           <button
             className="secondary"
@@ -157,7 +158,7 @@ export default function DiagnosticsPage() {
             {loading ? "Loading…" : "Load more"}
           </button>
         )}
-      </main>
+      </CcPage>
     </PlatformShell>
   );
 }

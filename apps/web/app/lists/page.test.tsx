@@ -1,0 +1,458 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import ListsPage from "./page";
+
+// Coverage for the Lists overview — see docs/architecture/lists.md. Mirrors
+// the Meal Plans locked-state/feature-gate pattern established in
+// app/meal-plans/page.test.tsx.
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/lists",
+}));
+
+vi.mock("@/components/use-active-home", () => ({
+  useActiveHome: () => ({
+    activeHome: { id: "home-1", name: "Hales Home" },
+    activeHomeId: "home-1",
+    homes: [{ id: "home-1", name: "Hales Home" }],
+    setActiveHomeId: vi.fn(),
+    loading: false,
+  }),
+}));
+
+vi.mock("@mykhaya/api-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      me: vi.fn(),
+      billingStatus: vi.fn(),
+      members: vi.fn(),
+      featureMatrix: vi.fn(),
+      lists: vi.fn(),
+      listTemplates: vi.fn(),
+      createList: vi.fn(),
+      renameList: vi.fn(),
+      deleteList: vi.fn(),
+      moveListScope: vi.fn(),
+    },
+  };
+});
+
+const { api } = await import("@mykhaya/api-client");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+    id: "u1",
+    display_name: "Megan",
+    principal_type: "adult",
+  });
+  (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+    features: [{ feature: "shopping", enabled: true }],
+  });
+});
+
+describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
+  it("shows the ordinary overview for a Free Home under its limit — no upsell", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 1, limit: 2, over_limit: false },
+    });
+
+    render(<ListsPage />);
+
+    expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/view family plan/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the at-limit message once a Free Home has reached lists.max_lists", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 2, limit: 2, over_limit: false },
+    });
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "l1",
+          name: "Groceries",
+          icon: null,
+          item_count: 0,
+          remaining_count: 0,
+          created_by: "u1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          commercial_access: "normal",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+
+    expect(
+      await screen.findByText("You've reached the Free plan limit of 2 lists."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a read-only badge on a list over the plan limit after a downgrade", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: { count: 3, limit: 2, over_limit: true },
+    });
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "l3",
+          name: "Extra list",
+          icon: null,
+          item_count: 0,
+          remaining_count: 0,
+          created_by: "u1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          commercial_access: "read_only_due_to_plan",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+
+    expect(
+      await screen.findByText(/Read-only on Free — included with Family/),
+    ).toBeInTheDocument();
+  });
+});
+
+// Free/Family visual QA follow-up, Part B: unify the Lists at-limit
+// create-flow with the same Family/upgrade CTA pattern used elsewhere
+// (FamilyUpsell's own markup/wording), and never submit a create request
+// the frontend already knows the Free plan limit would reject.
+describe("Lists — at-limit create flow (Part B)", () => {
+  function mockBilling(usage: { count: number; limit: number | null; over_limit: boolean }) {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      lists_enabled: true,
+      list_usage: usage,
+    });
+  }
+
+  it("6. Free with 0 Lists -> Add opens the ordinary create form", async () => {
+    mockBilling({ count: 0, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create list/i })).toBeInTheDocument();
+  });
+
+  it("7. Free with 1 List -> Add opens the ordinary create form", async () => {
+    mockBilling({ count: 1, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+  });
+
+  it("8. Free with 2 Lists -> Add reflects the limit before any submission, no create form shown", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    // The sheet-only CTA line, unique to the at-limit view (unlike the
+    // limit sentence itself, which is also shown passively near the FAB).
+    expect(
+      await screen.findByText("Upgrade to MyKhaya Family for unlimited lists."),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/list name/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create list/i })).not.toBeInTheDocument();
+  });
+
+  it("9. At-limit view shows the same Family/upgrade CTA pattern used elsewhere (FamilyUpsell's link)", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "View Family plan" });
+    expect(link).toHaveAttribute("href", "/settings/billing");
+  });
+
+  it("10. No create API call happens when the UI already knows the limit is reached", async () => {
+    mockBilling({ count: 2, limit: 2, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.");
+    expect(api.createList).not.toHaveBeenCalled();
+  });
+
+  it("11. A raced backend plan_limit_reached rejection still maps to the same unified message", async () => {
+    mockBilling({ count: 1, limit: 2, over_limit: false }); // stale client-side: under limit
+    const { ApiError } = await import("@mykhaya/api-client");
+    (api.createList as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(
+        403,
+        "This would exceed what your current plan allows. Upgrade to add more.",
+        "plan_limit_reached",
+        { entitlement: "lists.max_lists", limit: 2 },
+      ),
+    );
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.type(await screen.findByLabelText(/list name/i), "Third list");
+    await userEvent.click(screen.getByRole("button", { name: /create list/i }));
+    expect(
+      await screen.findByText(
+        "You've reached the Free plan limit of 2 lists. Upgrade to MyKhaya Family for unlimited lists.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("12. Family (unlimited) -> Add always opens the ordinary create form, never the at-limit view", async () => {
+    mockBilling({ count: 5, limit: null, over_limit: false });
+    render(<ListsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reached the Free plan limit/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Lists — feature-gate consistency", () => {
+  it("shows a calm message instead of the interactive overview when the module isn't released", async () => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ lists_enabled: true });
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [{ feature: "shopping", enabled: false }],
+    });
+
+    render(<ListsPage />);
+
+    expect(await screen.findByText(/isn't available for this home yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^not found$/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("Lists — Family plan overview", () => {
+  beforeEach(() => {
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ lists_enabled: true });
+  });
+
+  it("shows the empty state with a call to action when there are no lists", async () => {
+    render(<ListsPage />);
+
+    expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create your first list/i })).toBeInTheDocument();
+  });
+
+  it("renders the hero artwork with the correct asset path and alt text, and uses the shared compact module-page spacing", async () => {
+    const { container } = render(<ListsPage />);
+    await screen.findByRole("heading", { name: "Lists", level: 1 });
+
+    const art = screen.getByAltText("Small lists, big things together");
+    expect(art.tagName).toBe("IMG");
+    expect(art).toHaveAttribute("src", expect.stringContaining("/images/lists-hero.png"));
+
+    const main = container.querySelector("main");
+    expect(main).toHaveClass("standard-page");
+    expect(main).toHaveClass("module-page");
+  });
+
+  it("opens the existing create flow from the browser Quick add panel", async () => {
+    render(<ListsPage />);
+
+    await screen.findByText(/no lists yet/i);
+    await userEvent.click(screen.getByRole("button", { name: "New list" }));
+
+    expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
+  });
+
+  it("keeps the existing Lists view functional and opens Templates from the secondary action", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "list-1",
+          name: "Groceries",
+          icon: "groceries",
+          item_count: 8,
+          remaining_count: 3,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+    render(<ListsPage />);
+    const user = userEvent.setup();
+
+    expect(await screen.findAllByRole("link", { name: /groceries/i })).not.toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: /templates/i }));
+
+    expect(screen.getByText(/no templates yet/i)).toBeInTheDocument();
+    expect(document.querySelector(".lists-grid")).toBeNull();
+    // No fabricated template data — Templates never calls a lists-fetching
+    // endpoint of its own, since no such backend concept exists yet.
+    expect(api.lists).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives each recognised list category a real image icon, and falls back to the generic icon for an unrecognised/custom one", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "list-1",
+          name: "Groceries",
+          icon: "groceries",
+          item_count: 1,
+          remaining_count: 1,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "list-2",
+          name: "Something bespoke",
+          icon: null,
+          item_count: 1,
+          remaining_count: 1,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+    const groceriesLink = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(groceriesLink).toBeDefined();
+    const groceriesCard = groceriesLink?.closest(".lists-card");
+    const customLink = (await screen.findAllByRole("link", { name: /something bespoke/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(customLink).toBeDefined();
+    const customCard = customLink?.closest(".lists-card");
+
+    expect(groceriesCard?.querySelector(".lists-card-icon")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/lists-groceries.png"),
+    );
+    expect(customCard?.querySelector(".lists-card-icon")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/images/lists-other.png"),
+    );
+  });
+
+  it("renders list cards with remaining/total counts", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          id: "list-1",
+          name: "Groceries",
+          icon: "groceries",
+          item_count: 8,
+          remaining_count: 3,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "list-2",
+          name: "School supplies",
+          icon: null,
+          item_count: 6,
+          remaining_count: 0,
+          created_by: "u1",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<ListsPage />);
+    const groceries = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
+      link.closest(".lists-card"),
+    );
+    expect(groceries).toBeDefined();
+    expect(groceries).toHaveAttribute("href", "/lists/list-1");
+    expect(screen.getByText(/3 remaining · 8 items/i)).toBeInTheDocument();
+    expect(screen.getByText(/complete · 6 items/i)).toBeInTheDocument();
+  });
+
+  it("uses the shared segmented control and creates a new list from the floating Add action", async () => {
+    (api.createList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "list-9",
+      name: "Packing",
+      icon: null,
+      items: [],
+      item_count: 0,
+      remaining_count: 0,
+      created_by: "u1",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    });
+
+    render(<ListsPage />);
+    const user = userEvent.setup();
+    const add = await screen.findByRole("button", { name: "Add" });
+    const segmented = screen.getByRole("tablist", { name: "Lists scope" });
+    expect(segmented).toHaveClass("rr-segmented");
+    expect(screen.getByRole("tab", { name: "Personal" })).toHaveClass("rr-segment-active");
+
+    expect(add).toHaveClass("rr-fab");
+    await user.click(add);
+    await user.type(screen.getByLabelText(/list name/i), "Packing");
+    await user.click(screen.getByRole("button", { name: /create list/i }));
+
+    expect(api.createList).toHaveBeenCalledWith("home-1", { name: "Packing", icon: null, scope: "personal" });
+  });
+
+  it("filters lists by search", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+    render(<ListsPage />);
+    await screen.findByRole("button", { name: "Add" });
+    fireEvent.change(screen.getByLabelText(/search lists/i), { target: { value: "pack" } });
+
+    await waitFor(
+      () => {
+        expect(api.lists).toHaveBeenCalledWith("home-1", { q: "pack", scope: "personal" });
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  it("scopes the list query to the selected Personal or Household segment", async () => {
+    render(<ListsPage />);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Add" });
+
+    await user.click(screen.getByRole("tab", { name: "Household" }));
+
+    await waitFor(
+      () => {
+        expect(api.lists).toHaveBeenCalledWith("home-1", { scope: "household" });
+      },
+      { timeout: 3000 },
+    );
+    expect(screen.getByRole("heading", { name: "Household Lists" })).toBeInTheDocument();
+  });
+
+  it("offers the dynamic scope move from a list action sheet and confirms it", async () => {
+    (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{
+        id: "list-1", name: "Groceries", icon: "groceries", item_count: 1,
+        remaining_count: 1, created_by: "u1", scope: "household",
+        created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+        commercial_access: "normal",
+      }],
+    });
+    (api.moveListScope as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    render(<ListsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /more actions for groceries/i }));
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(screen.getByRole("heading", { name: "Move to Personal?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Move to Personal" }));
+    expect(api.moveListScope).toHaveBeenCalledWith("home-1", "list-1", {
+      scope: "personal", expected_updated_at: "2026-08-01T00:00:00Z",
+    });
+  });
+});

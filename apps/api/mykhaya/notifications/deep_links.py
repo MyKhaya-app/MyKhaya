@@ -12,7 +12,22 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal, TypedDict
 
-DeepLinkType = Literal["calendar_event", "member", "routine", "notifications", "settings", "home"]
+DeepLinkType = Literal[
+    "calendar_event",
+    "calendar_today",
+    "calendar_share",
+    "meal_plan",
+    "list",
+    "wishlist",
+    "member",
+    "routine",
+    "reminder",
+    "nudges",
+    "notifications",
+    "settings",
+    "home",
+    "support_ticket",
+]
 
 
 class DeepLinkTarget(TypedDict, total=False):
@@ -39,10 +54,26 @@ def resolve_path(link: dict[str, Any] | None) -> str:
     entity_id = link.get("id")
     if kind == "calendar_event" and entity_id:
         return f"/calendar?event={entity_id}"
+    if kind == "calendar_today":
+        return "/calendar"
+    if kind == "calendar_share":
+        return "/calendar/shared"
+    if kind == "meal_plan":
+        return "/meal-plans"
+    if kind == "list" and entity_id:
+        return f"/lists/{entity_id}"
+    if kind == "wishlist" and entity_id:
+        return f"/wish-lists/{entity_id}"
     if kind == "routine" and entity_id:
         return f"/home?routine={entity_id}"
+    if kind == "reminder" and entity_id:
+        return f"/settings/reminders?reminder={entity_id}"
+    if kind == "nudges":
+        return "/settings/routines-reminders"
     if kind == "member" and entity_id:
         return "/people"
+    if kind == "support_ticket" and entity_id:
+        return f"/help-support/requests/{entity_id}"
     if kind == "notifications":
         return "/home?notifications=1"
     if kind == "settings":

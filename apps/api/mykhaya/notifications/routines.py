@@ -10,24 +10,33 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
+import structlog
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.features import is_feature_enabled
 from mykhaya.models import (
-    FeatureKey,
+    Group,
     HouseholdRoutine,
     HouseholdRoutineMember,
     Membership,
     OutboxEvent,
     RoutineReminderTiming,
+    RoutineScope,
 )
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import notify
+from mykhaya.notifications.nudges import (
+    is_covered_by_daily_nudge_summary,
+    is_nudges_notification_eligible,
+)
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.routine_occurrences import is_occurrence_date
+from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import active_membership
+
+log = structlog.get_logger()
 
 LOOKAHEAD = timedelta(minutes=2)
 ROUTINE_TOPIC = "notification.household_routine"
@@ -54,23 +63,20 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
     now_utc = datetime.now(UTC)
     window_end_utc = now_utc + LOOKAHEAD
 
-    pending = (
+    routines = (
         await db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.topic == ROUTINE_TOPIC, OutboxEvent.processed_at.is_(None)
-            )
+            select(HouseholdRoutine)
+            .join(Group, Group.id == HouseholdRoutine.group_id)
+            .where(HouseholdRoutine.enabled.is_(True), Group.is_active.is_(True))
         )
     ).all()
-    already_queued = {
-        (row.payload["routine_id"], row.payload["occurrence_date"], row.payload["timing"])
-        for row in pending
-    }
-
-    routines = (
-        await db.scalars(select(HouseholdRoutine).where(HouseholdRoutine.enabled.is_(True)))
-    ).all()
     for routine in routines:
-        if not await is_feature_enabled(db, FeatureKey.notifications, routine.group_id):
+        # Phase 3A: household routine reminders are a Nudges-owned scheduled
+        # notification — see is_nudges_notification_eligible. A Home whose
+        # Nudges module/entitlement (not just Notifications) is currently
+        # blocked never even gets an OutboxEvent enqueued; the routine data
+        # itself is untouched either way.
+        if not await is_nudges_notification_eligible(db, routine.group_id):
             continue
         tz = await home_timezone(db, routine.group_id, settings.default_timezone)
         now_local = now_utc.astimezone(tz)
@@ -87,22 +93,28 @@ async def scan_due_routines(db: AsyncSession, settings: Settings) -> None:
             if not (scheduled_local <= now_local < window_end_local):
                 continue
             key = (str(routine.id), occurrence_date.isoformat(), timing)
-            if key in already_queued:
-                continue
-            db.add(
-                OutboxEvent(
+            await db.execute(
+                pg_insert(OutboxEvent)
+                .values(
                     topic=ROUTINE_TOPIC,
                     payload={
                         "routine_id": key[0],
                         "occurrence_date": key[1],
                         "timing": key[2],
                     },
+                    dedupe_key=f"routine:{key[0]}:{key[1]}:{key[2]}",
                 )
+                .on_conflict_do_nothing(index_elements=["dedupe_key"])
             )
     await db.commit()
 
 
 async def _recipients_for(db: AsyncSession, routine: HouseholdRoutine) -> set[uuid.UUID]:
+    if routine.scope == RoutineScope.personal:
+        # A personal routine's only recipient is its owner — never derived from
+        # group_id/household membership, and HouseholdRoutineMember rows (a
+        # household-routine concept) are never consulted here even if present.
+        return {routine.owner_user_id} if routine.owner_user_id else set()
     explicit = (
         await db.scalars(
             select(HouseholdRoutineMember.user_id).where(
@@ -132,6 +144,11 @@ async def deliver_routine_reminder(
     routine = await db.get(HouseholdRoutine, uuid.UUID(routine_id))
     if routine is None or not routine.enabled:
         return  # disabled or deleted since it was scanned
+    # Re-validate fresh, same reasoning as the occurrence/timing checks
+    # below: Nudges could have been disabled or lost its entitlement in the
+    # gap between scan and this worker actually running.
+    if not await is_nudges_notification_eligible(db, routine.group_id):
+        return
 
     occurrence_date = date.fromisoformat(occurrence_date_iso)
     # Re-validate fresh: an edit to the schedule or reminder_timing since this was
@@ -143,10 +160,46 @@ async def deliver_routine_reminder(
         return
 
     idempotency_key = f"routine:{routine_id}:{occurrence_date_iso}:{timing}"
-    body = routine.description or f"Don't forget: {routine.title}."
+    if routine.description:
+        # A routine's own description is user-authored content, not app
+        # wording — used verbatim, never passed through the template
+        # registry (there is nothing generic to customise here).
+        body = routine.description
+    else:
+        _subject, body = await render_notification(
+            db, "routine.due", {"routine_title": routine.title}
+        )
+
+    # Dedup against Daily Nudge Summary: only a "same_day" send can ever be
+    # covered by a summary (which only ever covers *today*) — "evening_before"
+    # is about *tomorrow's* occurrence and can never collide. Only computed
+    # once per routine, not per recipient, since it depends only on the
+    # routine's own fixed send time.
+    item_scheduled_utc: datetime | None = None
+    if timing == "same_day":
+        home_tz = await home_timezone(db, routine.group_id, settings.default_timezone)
+        item_scheduled_utc = datetime.combine(
+            occurrence_date, SAME_DAY_TIME, tzinfo=home_tz
+        ).astimezone(UTC)
+
     for recipient_id in await _recipients_for(db, routine):
         if await active_membership(db, routine.group_id, recipient_id) is None:
             continue  # membership removed since this reminder was scanned
+        if item_scheduled_utc is not None and await is_covered_by_daily_nudge_summary(
+            db,
+            settings,
+            recipient_id=recipient_id,
+            item_scheduled_utc=item_scheduled_utc,
+            kind="routine",
+            item_id=routine.id,
+        ):
+            await log.ainfo(
+                "household_routine_reminder_suppressed_by_daily_nudge_summary",
+                routine_id=routine_id,
+                recipient_id=str(recipient_id),
+                occurrence_date=occurrence_date_iso,
+            )
+            continue
         await notify(
             db,
             settings=settings,

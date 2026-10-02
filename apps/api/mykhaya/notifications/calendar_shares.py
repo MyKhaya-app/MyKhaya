@@ -1,0 +1,134 @@
+"""Notifies active external `CalendarShare` recipients about activity on their shared
+calendar — the calendar-share analogue of routers.calendar's per-event-member
+notifications (`_notify_members_added` etc.). A share recipient is never a
+`CalendarEventMember` (they don't belong to the Home), so those functions never reach
+them; this is the one additional recipient-resolution path that extends `notify()` to
+cover them. Reused by both `routers.calendar` (Home-side event mutations) and
+`routers.calendar_sharing` (an external "Can add & edit" recipient's own mutations on
+their shared calendar), so a shared calendar's watchers are notified the same way no
+matter which side created/changed the event.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.config import Settings
+from mykhaya.entitlements import has_entitlement
+from mykhaya.features import is_feature_enabled
+from mykhaya.models import CalendarEvent, CalendarShare, CalendarShareStatus, FeatureKey
+from mykhaya.notifications.deep_links import target
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.visibility import event_matches_share
+
+
+async def _external_sharing_notification_eligible(db: AsyncSession, group_id: uuid.UUID) -> bool:
+    """Whether a Home is currently eligible to receive an External Sharing
+    notification (Phase 3A) — checked independently here even though every
+    caller (routers.calendar/routers.calendar_sharing) has already required
+    Calendar + External Sharing + members.external_invites.enabled moments
+    earlier for the mutation that triggered it. Four independent
+    conditions, all required: Calendar itself enabled, External Sharing's
+    platform Beta flag enabled, the Family-only members.external_invites.
+    enabled entitlement, and Notifications delivery infrastructure —
+    matching the "External Sharing notification" example in this
+    workstream's own rule."""
+    return (
+        await is_feature_enabled(db, FeatureKey.calendar, group_id)
+        and await is_feature_enabled(db, FeatureKey.external_sharing, group_id)
+        and await has_entitlement(db, group_id, "members.external_invites.enabled")
+        and await is_feature_enabled(db, FeatureKey.notifications, group_id)
+    )
+
+# Template registry key per action — "updated"/"cancelled" reuse the exact
+# same wording (and so the same PCC template) as routers.calendar's own
+# per-event-member notifications; "created" has its own wording here since a
+# share recipient seeing a brand-new event ("New event") reads differently
+# from a Home member being personally added to one ("Added to an event").
+_TEMPLATE_KEYS = {
+    "created": "calendar.event.shared_created",
+    "updated": "calendar.event.updated",
+    "cancelled": "calendar.event.cancelled",
+}
+_NOTIFICATION_TYPES = {
+    "created": "event_invitation",
+    "updated": "event_updated",
+    "cancelled": "event_cancelled",
+}
+
+
+async def active_share_recipients(db: AsyncSession, calendar_id: uuid.UUID) -> list[CalendarShare]:
+    rows = (
+        await db.scalars(
+            select(CalendarShare).where(
+                CalendarShare.calendar_id == calendar_id,
+                CalendarShare.status == CalendarShareStatus.accepted,
+                CalendarShare.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    return list(rows)
+
+
+def _format_event_when(event: CalendarEvent) -> str:
+    tz: tzinfo
+    try:
+        tz = ZoneInfo(event.timezone)
+    except ZoneInfoNotFoundError:
+        tz = UTC
+    local_start = event.start_at.astimezone(tz)
+    if event.is_all_day:
+        return local_start.strftime("%A, %d %B")
+    return local_start.strftime("%A, %d %B at %H:%M")
+
+
+async def notify_calendar_share_recipients(
+    db: AsyncSession,
+    settings: Settings,
+    event: CalendarEvent,
+    *,
+    actor_user_id: uuid.UUID,
+    actor_name: str,
+    action: str,
+    version_marker: int | None = None,
+) -> None:
+    """`action` is one of "created" / "updated" / "cancelled". Honors each
+    recipient's own `notification_preference` ("off" suppresses everything,
+    "important" suppresses only the low-signal "created" notice) — on top of
+    (not instead of) their normal event_invitation/event_updated/
+    event_cancelled category toggles, which `notify()` still applies."""
+    if not await _external_sharing_notification_eligible(db, event.group_id):
+        return
+    when = _format_event_when(event)
+    variables = {"actor_name": actor_name, "event_title": event.title, "event_when": when}
+    title, body = await render_notification(db, _TEMPLATE_KEYS[action], variables)
+    marker = f":{version_marker}" if version_marker is not None else ""
+
+    for share in await active_share_recipients(db, event.calendar_id):
+        if share.recipient_user_id is None or share.recipient_user_id == actor_user_id:
+            continue
+        if share.notification_preference == "off":
+            continue
+        if share.notification_preference == "important" and action == "created":
+            continue
+        if not event_matches_share(event, share):
+            continue
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=share.recipient_user_id,
+            notification_type=_NOTIFICATION_TYPES[action],
+            title=title,
+            body=body,
+            idempotency_key=f"calendar_share_event_{action}:{event.id}:{share.id}{marker}",
+            group_id=event.group_id,
+            related_entity_type="calendar_event",
+            related_entity_id=event.id,
+            deep_link=target("calendar_event", event.id),
+        )

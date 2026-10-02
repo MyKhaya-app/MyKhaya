@@ -1,0 +1,500 @@
+import type { User } from "@mykhaya/shared-types";
+import { ApiError, parseApiResponse } from "./errors";
+import type { NativeSessionStore } from "./native-session-store";
+
+function isFormDataBody(body: BodyInit | null | undefined): boolean {
+  // `instanceof FormData` is not reliable when a File/FormData comes from a
+  // different WebView realm. The fetch implementation still understands the
+  // standard brand and must be allowed to add the multipart boundary.
+  return Boolean(body && Object.prototype.toString.call(body) === "[object FormData]");
+}
+
+/**
+ * The native (bearer-transport, ADR 0010) counterpart to `MyKhayaClient`.
+ * Deliberately a separate class in the same package, not a mode flag on
+ * `MyKhayaClient` — the two transports must never share a request path:
+ * browser mode's relative `/api/v1` + `credentials:"include"` + CSRF-cookie
+ * behaviour is untouched by this file, and this class never reads
+ * `document.cookie`, never sends `credentials:"include"`, and never
+ * attaches a CSRF header. See docs/architecture/adr/0010-mobile-bearer-session-tokens.md.
+ *
+ * The bearer token itself only ever exists in memory here, in the
+ * `NativeSessionStore`, and as one outgoing `Authorization` header value —
+ * it is never interpolated into a thrown error's message, a log line, or a
+ * URL, and this class performs no logging of its own.
+ */
+export class NativeMyKhayaClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly store: NativeSessionStore,
+    private readonly options: {
+      fetch?: typeof fetch;
+      /** Optional ADR 0010 "session metadata" headers — display/diagnostic
+       * only on the server, never a trust input. Supplying them here means
+       * a future native shell sets them once, not per call site. */
+      clientHeaders?: { client?: string; platform?: string; appVersion?: string };
+    } = {},
+  ) {
+    if (!/^https?:\/\//.test(baseUrl)) {
+      throw new Error(
+        "NativeMyKhayaClient requires an absolute http(s) base URL (e.g. https://dev.mykhaya.app/api/v1) — see packages/api-client/src/native-config.ts.",
+      );
+    }
+  }
+
+  private get fetchImpl(): typeof fetch {
+    // Calling `this.fetchImpl(...)` gives the returned function the client
+    // instance as `this`. WKWebView's Window.fetch rejects that receiver with
+    // "Can only call Window.fetch on instances of Window". Bind both the
+    // injected test implementation and the real global implementation at the
+    // boundary; in a browser globalThis is the Window instance.
+    return (this.options.fetch ?? globalThis.fetch).bind(globalThis);
+  }
+
+  /** Metadata-only presence check used by the native startup gate. The
+   * credential value never leaves the store and is never returned. */
+  async hasStoredSession(): Promise<boolean> {
+    return (await this.store.get()) !== null;
+  }
+
+  private baseHeaders(): Headers {
+    const headers = new Headers();
+    headers.set("Accept", "application/json");
+    const { client, platform, appVersion } = this.options.clientHeaders ?? {};
+    if (client) headers.set("X-MyKhaya-Client", client);
+    if (platform) headers.set("X-MyKhaya-Platform", platform);
+    if (appVersion) headers.set("X-MyKhaya-App-Version", appVersion);
+    return headers;
+  }
+
+  private diagnostic(path: string, fields: Record<string, unknown>): void {
+    // Safe native diagnostics: never include request bodies, bearer tokens,
+    // cookies, or authorization headers. This is intentionally console-only
+    // so a TestFlight device can expose the failing stage in Xcode logs.
+    console.info("[NATIVE AUTH]", {
+      native: true,
+      platform: this.options.clientHeaders?.platform ?? "unknown",
+      requestUrl: `${this.baseUrl}${path}`,
+      requestOrigin: typeof location === "undefined" ? "unknown" : location.origin,
+      hasClientHeader: Boolean(this.options.clientHeaders?.client),
+      hasPlatformHeader: Boolean(this.options.clientHeaders?.platform),
+      hasContentType: path.includes("/login") || path.includes("/renew"),
+      ...fields,
+    });
+  }
+
+  /**
+   * DEV-only transport probe. It deliberately uses dummy credentials and
+   * returns metadata only, so the web shell can show whether WKWebView can
+   * make the request at all without exposing a request body or response body.
+   */
+  async diagnosticProbe(): Promise<string[]> {
+    const results: string[] = [];
+    const dummyBody = JSON.stringify({
+      email: "native-diagnostic-invalid@example.com",
+      password: "native-diagnostic-invalid",
+    });
+    const attempts: Array<{ label: string; init: RequestInit }> = [
+      { label: "GET base", init: { method: "GET", headers: { Accept: "application/json" } } },
+      {
+        label: "POST content-type",
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + client",
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "" },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + platform",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "",
+            "X-MyKhaya-Platform": this.options.clientHeaders?.platform ?? "",
+          },
+          body: dummyBody,
+        },
+      },
+      {
+        label: "POST + app-version",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MyKhaya-Client": this.options.clientHeaders?.client ?? "",
+            "X-MyKhaya-Platform": this.options.clientHeaders?.platform ?? "",
+            "X-MyKhaya-App-Version": this.options.clientHeaders?.appVersion ?? "diagnostic",
+          },
+          body: dummyBody,
+        },
+      },
+    ];
+    for (const { label, init } of attempts) {
+      const path = label === "GET base" ? "/" : "/auth/mobile/login";
+      const headers = new Headers(init.headers);
+      for (const [key, value] of [...headers.entries()]) {
+        if (!value) headers.delete(key);
+      }
+      try {
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+          ...init,
+          headers,
+          cache: "no-store",
+        });
+        const result = `${label}: status ${response.status}`;
+        results.push(result);
+        this.diagnostic(path, {
+          method: init.method,
+          status: response.status,
+          responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
+          probe: label,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        const result = `${label}: ${error instanceof Error ? error.name : "fetch_failed"}${message ? ` (${message})` : ""}`;
+        results.push(result);
+        this.diagnostic(path, {
+          errorCategory: "network_or_cors",
+          exceptionType: error instanceof Error ? error.name : "unknown",
+          errorMessage: message,
+          probe: label,
+        });
+      }
+    }
+    return results;
+  }
+
+  private async postUnauthenticated<T>(path: string, body: unknown): Promise<T> {
+    const headers = this.baseHeaders();
+    headers.set("Content-Type", "application/json");
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+    } catch (error) {
+      this.diagnostic(path, {
+        errorCategory: "network_or_cors",
+        exceptionType: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
+    }
+    this.diagnostic(path, {
+      method: "POST",
+      status: response.status,
+      responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
+    });
+    try {
+      return await parseApiResponse<T>(response);
+    } catch (error) {
+      this.diagnostic(path, {
+        errorCategory: error instanceof ApiError ? "http" : "response_parse",
+        ...(error instanceof ApiError ? { errorCode: error.code, errorMessage: error.message } : {}),
+      });
+      throw error;
+    }
+  }
+
+  /** Adult sign-in — native equivalent of the browser's POST /auth/login,
+   * wired to POST /auth/mobile/login instead. Stores the returned session
+   * token (and long-lived device/renewal token — see native-session-store's
+   * NativeSession.deviceToken) via the configured NativeSessionStore and
+   * returns everything the response carries *except* those tokens, so
+   * callers never need to (and cannot accidentally) handle them
+   * themselves. */
+  async login(email: string, password: string): Promise<User> {
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/login", { email, password });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  /** Managed-child sign-in — native equivalent of POST /auth/child/login,
+   * wired to POST /auth/mobile/child/login. Same session mechanism as adult
+   * login (a Session row with kind=managed_child); no separate child auth
+   * architecture exists here or on the backend — see ADR 0010. */
+  async childLogin(homeCode: string, username: string, pin: string): Promise<User> {
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/child/login", { home_code: homeCode, username, pin });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  /** Public account creation deliberately does not require a native session.
+   * This is the native equivalent of the browser's POST /auth/register; it
+   * must remain on the unauthenticated transport because a new account has no
+   * session yet. */
+  register(body: {
+    email: unknown;
+    display_name: unknown;
+    password: unknown;
+    invitation_token?: unknown;
+    legal_acceptances?: { document_key: string; document_version_id: string }[];
+    platform?: "web" | "ios" | "android";
+  }): Promise<{ message: string; verification_required: boolean }> {
+    return this.postUnauthenticated("/auth/register", body);
+  }
+
+  /** Email verification is also intentionally public: the verification link
+   * is the credential for this one-time action, not a pre-existing session. */
+  verifyEmail(token: string): Promise<{ message: string }> {
+    return this.postUnauthenticated("/auth/verify-email", { token });
+  }
+
+  /**
+   * Explicit, deliberate rotation (POST /auth/mobile/sessions/rotate) — not
+   * triggered automatically by `request()`. Per ADR 0010, the old token is
+   * revoked server-side in the same transaction that issues the new one;
+   * persisting the new token here is what "retires" the old one locally
+   * (the store holds exactly one current session, so `set()` replacing it
+   * *is* retiring the previous value — there is no separate delete step,
+   * and no window where the app could act on both simultaneously).
+   */
+  async rotate(): Promise<void> {
+    const current = await this.store.get();
+    if (!current) {
+      throw new Error("Cannot rotate: no native session is currently stored.");
+    }
+    const headers = this.baseHeaders();
+    headers.set("Authorization", `Bearer ${current.token}`);
+    const response = await this.fetchImpl(`${this.baseUrl}/auth/mobile/sessions/rotate`, {
+      method: "POST",
+      headers,
+      cache: "no-store",
+    });
+    const result = await parseApiResponse<{ session_token: string; device_token?: string }>(
+      response,
+    );
+    // Rotation never returns a new device_token (see routers.auth's
+    // rotate_mobile_session) — explicitly carry the existing one forward
+    // rather than relying on the store to merge it in, so this is correct
+    // regardless of whether a given NativeSessionStore implementation
+    // overwrites wholesale or merges (InMemoryNativeSessionStore does the
+    // former).
+    await this.store.set({
+      token: result.session_token,
+      deviceToken: result.device_token ?? current.deviceToken,
+    });
+  }
+
+  /**
+   * Silently mints a fresh session from the long-lived device/renewal
+   * credential once the session token itself has expired — the
+   * bearer-transport equivalent of the browser's silent /auth/renew (see
+   * routers.auth.renew_mobile_session). Unlike `rotate()`, this does not
+   * require a currently-valid session token at all, only a deviceToken; it
+   * is what makes "terminate the app, reopen it days later" work without a
+   * password. Throws (and leaves the store untouched) if there is no
+   * deviceToken to renew from, or if the server rejects it
+   * (revoked/expired/unknown) — callers should treat either as "this
+   * native session cannot be silently restored," the same signed-out
+   * outcome bootstrapSession() already returns for an outright-missing
+   * session.
+   *
+   * `deviceTokenOverride`, read from the store itself when omitted, exists
+   * for bootstrapSession(): a prior 401 on this same bootstrap pass may
+   * already have triggered request()'s compare-and-clear, wiping the store
+   * (deviceToken included) before renewal is even attempted — passing the
+   * token captured *before* that happened is what lets renewal still
+   * succeed in that case.
+   */
+  async renew(deviceTokenOverride?: string): Promise<User> {
+    const deviceToken = deviceTokenOverride ?? (await this.store.get())?.deviceToken;
+    if (!deviceToken) {
+      throw new ApiError(401, "No renewable native session is currently stored.");
+    }
+    const result = await this.postUnauthenticated<
+      User & { session_token: string; device_token?: string }
+    >("/auth/mobile/sessions/renew", { device_token: deviceToken });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token ?? deviceToken });
+    return user;
+  }
+
+  /**
+   * Always clears the locally stored session, whether or not the network
+   * call succeeds. Per ADR 0010: blocking local logout on a successful
+   * network round trip would trap a signed-in user in a household's data
+   * because their device happens to be offline — a worse outcome than the
+   * documented residual risk (the server-side session simply expires on its
+   * own, or can be revoked from another signed-in device via
+   * DELETE /auth/sessions/{id}).
+   */
+  async logout(): Promise<void> {
+    const current = await this.store.get();
+    if (current) {
+      try {
+        const headers = this.baseHeaders();
+        headers.set("Authorization", `Bearer ${current.token}`);
+        await this.fetchImpl(`${this.baseUrl}/auth/mobile/logout`, {
+          method: "POST",
+          headers,
+          cache: "no-store",
+        });
+      } catch {
+        // Deliberately swallowed — local logout still completes, per the
+        // documented policy above.
+      }
+    }
+    await this.store.clear();
+  }
+
+  /**
+   * The single native request path. Every native feature call should go
+   * through this rather than reimplementing bearer-header attachment or
+   * 401 handling itself.
+   */
+  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const current = await this.store.get();
+    if (!current) {
+      throw new ApiError(401, "Not signed in.");
+    }
+    const headers = this.baseHeaders();
+    if (init.headers) {
+      new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+    }
+    if (init.body && !isFormDataBody(init.body)) {
+      headers.set("Content-Type", "application/json");
+    }
+    if (path.endsWith("/avatar") && init.method === "POST") {
+      console.debug("[avatar-upload] upload-request-starting", {
+        platform: this.options.clientHeaders?.platform ?? "unknown",
+        bodyType: Object.prototype.toString.call(init.body),
+        multipartBody: isFormDataBody(init.body),
+      });
+    }
+    headers.set("Authorization", `Bearer ${current.token}`);
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+    });
+    if (path.endsWith("/avatar") && init.method === "POST") {
+      console.debug("[avatar-upload] upload-response", { status: response.status });
+    }
+    if (response.status === 401) {
+      // Compare-and-clear (ADR 0010): only clear the store if this exact
+      // token is still the one currently held. A concurrent rotate() may
+      // already have replaced it with a newer, valid token, in which case
+      // this stale failure must not touch it.
+      await this.store.clearIfMatches(current.token);
+    }
+    return parseApiResponse<T>(response);
+  }
+
+  /** Fetch protected media with the same current bearer session as API JSON.
+   * Direct <img> requests cannot attach Authorization in the native shell. */
+  async image(path: string): Promise<Blob> {
+    const current = await this.store.get();
+    if (!current) throw new ApiError(401, "Not signed in.");
+    const headers = this.baseHeaders();
+    headers.set("Authorization", `Bearer ${current.token}`);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      });
+    } catch (error) {
+      this.diagnostic(path, {
+        method: "GET",
+        errorCategory: "network_or_cors",
+        exceptionType: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
+    }
+    this.diagnostic(path, {
+      method: "GET",
+      status: response.status,
+      responseType: response.headers.get("content-type")?.split(";", 1)[0] ?? "unknown",
+    });
+    if (response.status === 401) await this.store.clearIfMatches(current.token);
+    if (!response.ok) throw new ApiError(response.status, "Could not load image.");
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
+    if (!contentType?.startsWith("image/")) {
+      throw new Error("Protected media response was not an image.");
+    }
+    return response.blob();
+  }
+
+  /**
+   * App-start native auth bootstrap (task: "read current token, determine
+   * if a session exists, validate it against the API, recognise
+   * invalid/revoked sessions, cleanly enter a signed-out state"). Returns
+   * the current user if a stored token is still valid, or `null` if there
+   * is no stored session at all, or the server has rejected it and it
+   * couldn't be silently renewed either — in the `null` case the store has
+   * already been left in a clean signed-out state (either via `request()`'s
+   * compare-and-clear, or by an explicit `clear()` if renewal was attempted
+   * and also failed), so the caller can treat `null` as "signed out"
+   * without any further cleanup step.
+   *
+   * On a 401 (the session_token has expired or been revoked), this
+   * attempts exactly one `renew()` using the stored deviceToken before
+   * giving up — this is what lets "terminate the app, reopen it days
+   * later" skip the login screen entirely, the same as a browser tab that
+   * outlives its own short session cookie via the silent /auth/renew.
+   * There is deliberately no retry loop beyond this single attempt: a
+   * renew() failure means the device credential itself was rejected
+   * (revoked/expired/unknown), which retrying cannot fix.
+   *
+   * Any other failure (network error, 5xx) is rethrown rather than treated
+   * as signed-out, since that is a transient condition, not proof the
+   * session is invalid — see Phase 12's authenticated-but-offline
+   * distinction: a network error here must never clear a valid stored
+   * session.
+   */
+  async bootstrapSession(): Promise<User | null> {
+    const current = await this.store.get();
+    if (!current) return null;
+    try {
+      return await this.request<User>("/users/me");
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    }
+    // Captured from `current` (read above, before request()'s own
+    // compare-and-clear could have wiped the store) rather than re-read
+    // here — see renew()'s docstring.
+    if (!current.deviceToken) {
+      await this.store.clear();
+      return null;
+    }
+    try {
+      return await this.renew(current.deviceToken);
+    } catch (renewError) {
+      if (renewError instanceof ApiError && renewError.status === 401) {
+        await this.store.clear();
+        return null;
+      }
+      throw renewError;
+    }
+  }
+
+  /**
+   * Passkeys are not implemented over the native transport in this phase —
+   * WebAuthn's origin/RP-ID checks and Associated Domains configuration are
+   * separate future work (see the iOS/Capacitor readiness audit). This is a
+   * capability report for UI gating, not a partial implementation: it must
+   * stay `false` until that work is actually done, not be worked around.
+   */
+  passkeysSupported(): boolean {
+    return false;
+  }
+}

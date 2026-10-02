@@ -1,6 +1,6 @@
 """Human-readable labels for notification_type/channel/status values — shared by the
 Platform Admin Communications Timeline and Diagnostics pages so "what happened" reads
-as a short story ("Morning briefing · Delivered") rather than raw enum values.
+as a short story ("Daily Briefing · Delivered") rather than raw enum values.
 """
 
 from __future__ import annotations
@@ -9,13 +9,25 @@ NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "email_verification": "Email verification",
     "password_reset": "Password reset",
     "household_invitation": "Household invitation",
+    "calendar_share_invitation": "Calendar share invitation",
+    "calendar_share_accepted": "Calendar share accepted",
+    "calendar_share_declined": "Calendar share declined",
+    "calendar_share_revoked": "Calendar share revoked",
     "event_reminder": "Calendar reminder",
     "event_invitation": "Event invitation",
     "event_updated": "Event updated",
     "event_cancelled": "Event cancelled",
     "household_routine_reminder": "Routine reminder",
     "birthday_reminder": "Birthday reminder",
-    "daily_briefing": "Morning briefing",
+    "list_item_assigned": "List item assigned",
+    "wishlist_share_created": "Wishlist shared",
+    "wishlist_share_revoked": "Wishlist access removed",
+    "meal_plan_created": "Meal plan created",
+    "meal_plan_updated": "Meal plan updated",
+    "meal_plan_removed": "Meal plan removed",
+    "home_join_request": "Home join request",
+    "daily_briefing": "Daily Briefing",
+    "daily_nudge_summary": "Daily Nudge Summary",
     "test_push": "Test push",
 }
 

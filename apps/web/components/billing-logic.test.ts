@@ -1,0 +1,305 @@
+import { describe, expect, it, vi } from "vitest";
+import type { BillingStatus } from "@mykhaya/shared-types";
+import {
+  canShowPortalAction,
+  canShowUpgradeOptions,
+  checkoutBannerKind,
+  hasFullFamilyAccess,
+  intervalName,
+  intervalSuffix,
+  periodLabel,
+  planAction,
+  pollForFamilyBillingStatus,
+  resolvePlanCardKind,
+} from "./billing-logic";
+
+describe("planAction", () => {
+  it("labels current, higher and lower tiers without reversing the hierarchy", () => {
+    expect(planAction("free", "free")).toBe("Current plan");
+    expect(planAction("free", "family")).toBe("Upgrade");
+    expect(planAction("family", "ultimate")).toBe("Upgrade");
+    expect(planAction("family", "free")).toBe("Downgrade");
+    expect(planAction("ultimate", "family")).toBe("Downgrade");
+    expect(planAction("ultimate", "free")).toBe("Downgrade");
+  });
+});
+
+describe("checkoutBannerKind", () => {
+  it("recognises a successful checkout redirect", () => {
+    expect(checkoutBannerKind("success")).toBe("success");
+  });
+
+  it("recognises a cancelled checkout redirect", () => {
+    expect(checkoutBannerKind("cancelled")).toBe("cancelled");
+  });
+
+  it("shows no banner for a missing or unrecognised param", () => {
+    expect(checkoutBannerKind(null)).toBeNull();
+    expect(checkoutBannerKind("something-else")).toBeNull();
+  });
+});
+
+describe("pollForFamilyBillingStatus", () => {
+  it("refetches until Family is effective and then stops", async () => {
+    const statuses = [billingStatus({}), billingStatus({ effective_plan: "family", provider: "stripe" })];
+    const loaded = vi.fn(async () => statuses.shift() ?? null);
+    let clock = 0;
+    const result = await pollForFamilyBillingStatus(loaded, {
+      intervalMs: 2_000,
+      timeoutMs: 30_000,
+      now: () => clock,
+      sleep: async () => {
+        clock += 2_000;
+      },
+    });
+    expect(result?.effective_plan).toBe("family");
+    expect(loaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after the bounded confirmation window", async () => {
+    const loaded = vi.fn(async () => billingStatus({}));
+    let clock = 0;
+    const result = await pollForFamilyBillingStatus(loaded, {
+      intervalMs: 2_000,
+      timeoutMs: 6_000,
+      now: () => clock,
+      sleep: async () => {
+        clock += 2_000;
+      },
+    });
+    expect(result?.effective_plan).toBe("free");
+    expect(loaded).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("periodLabel", () => {
+  it("reads 'Access ends' when cancel_at_period_end is set", () => {
+    expect(periodLabel(true)).toBe("Access ends");
+  });
+
+  it("reads 'Renews' otherwise", () => {
+    expect(periodLabel(false)).toBe("Renews");
+  });
+});
+
+describe("intervalSuffix", () => {
+  it("abbreviates month and year", () => {
+    expect(intervalSuffix("month")).toBe("mo");
+    expect(intervalSuffix("year")).toBe("yr");
+  });
+});
+
+describe("intervalName", () => {
+  it("names month and year", () => {
+    expect(intervalName("month")).toBe("Monthly");
+    expect(intervalName("year")).toBe("Annual");
+  });
+});
+
+function billingStatus(overrides: Partial<BillingStatus>): BillingStatus {
+  return {
+    stored_plan: "free",
+    provider: "free",
+    status: "active",
+    effective_plan: "free",
+    effective_status_reason: null,
+    billing_interval: null,
+    price: null,
+    current_period_end: null,
+    cancel_at_period_end: false,
+    complimentary_expires_at: null,
+    can_manage_billing: true,
+    has_stripe_customer: false,
+    stripe_billing_available: true,
+    family_access: false,
+    calendar_usage: { count: 1, limit: 1, over_limit: false },
+    category_usage: { count: 1, limit: 1, over_limit: false },
+    member_usage: { count: 1, limit: 1, over_limit: false },
+    household_routines_enabled: false,
+    shared_events_enabled: false,
+    external_invites_enabled: false,
+    meals_enabled: false,
+    lists_enabled: true,
+    list_usage: { count: 0, limit: 2, over_limit: false },
+    wishlists_enabled: false,
+    nudges_enabled: false,
+    budget_enabled: false,
+    driveway_enabled: false,
+    ...overrides,
+  };
+}
+
+describe("resolvePlanCardKind", () => {
+  it("reads a plain Free Home with no commercial history as 'free'", () => {
+    expect(resolvePlanCardKind(billingStatus({}))).toBe("free");
+  });
+
+  it("distinguishes expired complimentary access from a plain Free Home", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "complimentary",
+      effective_plan: "free",
+    });
+    expect(resolvePlanCardKind(status)).toBe("free_expired_complimentary");
+  });
+
+  it("distinguishes an ended Stripe subscription from a plain Free Home", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "stripe",
+      status: "cancelled",
+      effective_plan: "free",
+    });
+    expect(resolvePlanCardKind(status)).toBe("free_ended_stripe");
+  });
+
+  it("reads non-expiring complimentary access", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "complimentary",
+      effective_plan: "family",
+      complimentary_expires_at: null,
+    });
+    expect(resolvePlanCardKind(status)).toBe("complimentary_no_expiry");
+  });
+
+  it("reads complimentary access with a future expiry", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "complimentary",
+      effective_plan: "family",
+      complimentary_expires_at: "2026-12-31T00:00:00Z",
+    });
+    expect(resolvePlanCardKind(status)).toBe("complimentary_with_expiry");
+  });
+
+  it("reads an active Stripe subscription", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "stripe",
+      status: "active",
+      effective_plan: "family",
+    });
+    expect(resolvePlanCardKind(status)).toBe("stripe_active");
+  });
+
+  it("reads a trialing Stripe subscription as active (not a distinct state)", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "stripe",
+      status: "trialing",
+      effective_plan: "family",
+    });
+    expect(resolvePlanCardKind(status)).toBe("stripe_active");
+  });
+
+  it("reads a past_due Stripe subscription while Family is still granted", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "stripe",
+      status: "past_due",
+      effective_plan: "family",
+    });
+    expect(resolvePlanCardKind(status)).toBe("stripe_past_due");
+  });
+
+  it("reads a Stripe subscription scheduled to cancel", () => {
+    const status = billingStatus({
+      stored_plan: "family",
+      provider: "stripe",
+      status: "cancel_at_period_end",
+      effective_plan: "family",
+    });
+    expect(resolvePlanCardKind(status)).toBe("stripe_cancelling");
+  });
+});
+
+describe("canShowPortalAction", () => {
+  it("shows the Portal action only for a Stripe-backed Home with a Customer and billing_manage", () => {
+    expect(
+      canShowPortalAction({ provider: "stripe", has_stripe_customer: true, can_manage_billing: true }),
+    ).toBe(true);
+  });
+
+  it("hides the Portal action for Complimentary access even with billing_manage", () => {
+    expect(
+      canShowPortalAction({
+        provider: "complimentary",
+        has_stripe_customer: false,
+        can_manage_billing: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides the Portal action without billing_manage", () => {
+    expect(
+      canShowPortalAction({ provider: "stripe", has_stripe_customer: true, can_manage_billing: false }),
+    ).toBe(false);
+  });
+
+  it("hides the Portal action before any Stripe Customer exists", () => {
+    expect(
+      canShowPortalAction({ provider: "stripe", has_stripe_customer: false, can_manage_billing: true }),
+    ).toBe(false);
+  });
+});
+
+describe("canShowUpgradeOptions", () => {
+  it("shows upgrade options for an eligible Free Home with billing_manage", () => {
+    expect(
+      canShowUpgradeOptions({
+        effective_plan: "free",
+        can_manage_billing: true,
+        stripe_billing_available: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides upgrade options for a Family Home", () => {
+    expect(
+      canShowUpgradeOptions({
+        effective_plan: "family",
+        can_manage_billing: true,
+        stripe_billing_available: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides upgrade options without billing_manage", () => {
+    expect(
+      canShowUpgradeOptions({
+        effective_plan: "free",
+        can_manage_billing: false,
+        stripe_billing_available: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides upgrade options when Stripe billing is not configured", () => {
+    expect(
+      canShowUpgradeOptions({
+        effective_plan: "free",
+        can_manage_billing: true,
+        stripe_billing_available: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasFullFamilyAccess", () => {
+  it("shows the 'All Family features included' strip for every state with genuine, current Family access", () => {
+    expect(hasFullFamilyAccess("complimentary_no_expiry")).toBe(true);
+    expect(hasFullFamilyAccess("complimentary_with_expiry")).toBe(true);
+    expect(hasFullFamilyAccess("stripe_active")).toBe(true);
+    expect(hasFullFamilyAccess("stripe_cancelling")).toBe(true);
+  });
+
+  it("hides it for Free states and for a payment that needs attention", () => {
+    expect(hasFullFamilyAccess("free")).toBe(false);
+    expect(hasFullFamilyAccess("free_expired_complimentary")).toBe(false);
+    expect(hasFullFamilyAccess("free_ended_stripe")).toBe(false);
+    // Access is being *maintained* while payment is fixed, not a settled
+    // "you have everything" state — see hasFullFamilyAccess's docstring.
+    expect(hasFullFamilyAccess("stripe_past_due")).toBe(false);
+  });
+});

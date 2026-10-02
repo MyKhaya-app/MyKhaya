@@ -36,9 +36,9 @@ AdminFactory = Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44240)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44240)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as value:
         yield value
 
@@ -99,7 +99,7 @@ async def make_user() -> User:
 
 
 def test_notification_type_label_falls_back_to_titlecase() -> None:
-    assert notification_type_label("daily_briefing") == "Morning briefing"
+    assert notification_type_label("daily_briefing") == "Daily Briefing"
     assert notification_type_label("some_new_type") == "Some new type"
 
 

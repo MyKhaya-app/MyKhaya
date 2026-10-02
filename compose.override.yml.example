@@ -17,3 +17,35 @@ services:
   caddy:
     ports:
       - "${MYKHAYA_DEV_BIND_ADDRESS:-0.0.0.0}:${MYKHAYA_DEV_HOST_PORT:-8080}:8080"
+    # A static, known-in-advance address on each network, deliberately high
+    # (.250) so it never collides with the low addresses Docker auto-assigns
+    # to api/web/worker/scheduler/migrate. This workstation's
+    # MYKHAYA_TRUSTED_PROXY_CIDRS (.env.example) trusts exactly these two
+    # /32s — see the `networks:` block below for why the subnet itself (an
+    # earlier draft of this fix) must not be trusted instead.
+    networks:
+      edge:
+        ipv4_address: 10.77.0.250
+      app:
+        ipv4_address: 10.77.1.250
+
+# Pin the `edge`/`app` subnets compose.yml declares with no `ipam`, purely so
+# caddy above can have a static address at all — trusting the whole subnet
+# was tried and rejected: `edge` is non-internal (api/worker/scheduler need
+# it for outbound SMTP/APNs/FCM), and its gateway address — what Docker's
+# NAT makes every host-published-port request appear to come from — sits
+# inside that same subnet. A trust boundary keyed on the whole /24 would
+# treat that gateway as just another trusted hop and let a forged
+# X-Forwarded-For chain walk straight past it to an attacker's value
+# (confirmed live with a forged header before switching to this /32 form).
+# See compose.dev.yml's matching block (the persistent-dev-server workflow
+# needs the identical fix) for the full rationale.
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  app:
+    ipam:
+      config:
+        - subnet: 10.77.1.0/24

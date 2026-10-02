@@ -1,0 +1,293 @@
+"""Pydantic contracts for the personal Budget module."""
+
+import uuid
+from datetime import date
+
+from pydantic import BaseModel, Field, model_validator
+
+from mykhaya.models import BudgetActualSource, BudgetItemType, BudgetSharingLevel
+
+
+class BudgetProfileResponse(BaseModel):
+    id: uuid.UUID
+    owner_user_id: uuid.UUID
+    currency: str
+    month_start_day: int = Field(ge=1, le=28)
+    default_view: str
+    archived: bool
+
+
+class BudgetSettingsUpdate(BaseModel):
+    currency: str = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    month_start_day: int = Field(default=1, ge=1, le=28)
+    default_view: str = Field(default="personal", pattern="^personal$")
+
+
+class BudgetIncomingShareResponse(BaseModel):
+    home_id: uuid.UUID
+    owner_user_id: uuid.UUID
+    owner_display_name: str
+    level: BudgetSharingLevel
+
+
+class BudgetCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    # The selected month is explicit so creating a category can add exactly
+    # one snapshot membership without mutating historical months.
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetCategoryCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+
+class BudgetCategoryUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+
+
+class BudgetCategoryResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    sort_order: int
+    archived: bool
+
+
+class BudgetItemCreate(BaseModel):
+    category_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=160)
+    item_type: BudgetItemType
+    default_amount: float = Field(ge=0, le=100000000)
+    recurring: bool = False
+    starts_on: date
+    ends_on: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetItemCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "BudgetItemCreate":
+        if self.ends_on is not None and self.ends_on < self.starts_on:
+            raise ValueError("ends_on cannot be before starts_on")
+        return self
+
+
+class BudgetItemUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    default_amount: float = Field(ge=0, le=100000000)
+    recurring: bool
+    starts_on: date
+    ends_on: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+    year: int | None = Field(default=None, ge=2000, le=2200)
+    month: int | None = Field(default=None, ge=1, le=12)
+    planned_amount: float | None = Field(default=None, ge=0, le=100000000)
+
+    @model_validator(mode="after")
+    def selected_month_is_complete(self) -> "BudgetItemUpdate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "BudgetItemUpdate":
+        if self.ends_on is not None and self.ends_on < self.starts_on:
+            raise ValueError("ends_on cannot be before starts_on")
+        return self
+
+
+class BudgetItemResponse(BaseModel):
+    id: uuid.UUID
+    category_id: uuid.UUID
+    name: str
+    item_type: BudgetItemType
+    default_amount: float
+    recurring: bool
+    starts_on: date
+    ends_on: date | None = None
+    notes: str | None = None
+    archived: bool
+
+
+class BudgetMonthItemPaidEntry(BaseModel):
+    id: uuid.UUID
+    amount: float
+    spent_on: date
+
+
+class BudgetMonthItemResponse(BaseModel):
+    id: uuid.UUID
+    budget_item_id: uuid.UUID | None
+    category_id: uuid.UUID
+    name: str
+    item_type: BudgetItemType
+    planned_amount: float
+    note: str | None = None
+    starts_on: date | None = None
+    ends_on: date | None = None
+    payment_status: str | None = None
+    paid_entry: BudgetMonthItemPaidEntry | None = None
+
+
+class BudgetMonthCopyRequest(BaseModel):
+    copy_fixed_items: bool = True
+    copy_variable_items: bool = False
+    copy_income_sources: bool = True
+
+
+class BudgetIncomeSourceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    usual_payday_day: int = Field(default=1, ge=1, le=31)
+    recurring: bool = True
+    received_date: date | None = None
+    year: int | None = Field(default=None, ge=1)
+    month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "BudgetIncomeSourceCreate":
+        if (self.year is None) != (self.month is None):
+            raise ValueError("year and month must be supplied together")
+        return self
+
+
+class BudgetIncomeSourceResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    sort_order: int
+    usual_payday_day: int = 1
+    recurring: bool = True
+    archived: bool
+
+
+class BudgetIncomeSourceUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    usual_payday_day: int | None = Field(default=None, ge=1, le=31)
+    recurring: bool | None = None
+
+
+class BudgetMonthIncomeResponse(BaseModel):
+    id: uuid.UUID
+    source_id: uuid.UUID
+    source_name: str
+    expected_amount: float
+    received_amount: float
+    usual_payday_day: int = 1
+    recurring: bool = True
+    expected_date: date | None = None
+    received_date: date | None = None
+    budget_year: int
+    budget_month: int
+
+
+class BudgetMonthCategoryResponse(BaseModel):
+    id: uuid.UUID
+    category_id: uuid.UUID
+    category_name: str
+    planned_amount: float
+    actual_source: BudgetActualSource
+    manual_actual: float | None
+    entries_actual: float
+    fixed_actual: float | None = None
+    actual_amount: float
+    note: str | None = None
+    fixed_planned_amount: float = 0
+    variable_planned_amount: float = 0
+    items: list[BudgetMonthItemResponse] = Field(default_factory=list)
+
+
+class BudgetCategoryNoteUpdate(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class BudgetMonthResponse(BaseModel):
+    configured: bool = True
+    id: uuid.UUID | None = None
+    year: int
+    month: int
+    categories: list[BudgetMonthCategoryResponse]
+    income: list[BudgetMonthIncomeResponse] = Field(default_factory=list)
+
+
+class BudgetSpendingEntryCreate(BaseModel):
+    category_id: uuid.UUID
+    description: str = Field(min_length=1, max_length=200)
+    amount: float = Field(gt=0, le=100000000)
+    spent_on: date
+    note: str | None = Field(default=None, max_length=1000)
+    budget_month_item_id: uuid.UUID | None = None
+
+
+class BudgetSpendingEntryUpdate(BaseModel):
+    category_id: uuid.UUID
+    description: str = Field(min_length=1, max_length=200)
+    amount: float = Field(gt=0, le=100000000)
+    spent_on: date
+    note: str | None = Field(default=None, max_length=1000)
+    budget_month_item_id: uuid.UUID | None = None
+
+
+class BudgetSpendingEntryResponse(BaseModel):
+    id: uuid.UUID
+    category_id: uuid.UUID
+    description: str
+    amount: float
+    spent_on: date
+    note: str | None = None
+    budget_month_item_id: uuid.UUID | None = None
+
+
+class BudgetActualUpdate(BaseModel):
+    source: BudgetActualSource
+    manual_actual: float | None = Field(default=None, ge=0, le=100000000)
+
+    @model_validator(mode="after")
+    def manual_value_matches_source(self) -> "BudgetActualUpdate":
+        if self.source == BudgetActualSource.manual and self.manual_actual is None:
+            raise ValueError("manual_actual is required when source is manual")
+        if self.source == BudgetActualSource.entries and self.manual_actual is not None:
+            raise ValueError("manual_actual must be omitted when source is entries")
+        return self
+
+
+class BudgetPlanAmountUpdate(BaseModel):
+    planned_amount: float = Field(ge=0, le=100000000)
+
+
+class BudgetMonthIncomeUpdate(BaseModel):
+    expected_amount: float = Field(ge=0, le=100000000)
+    received_amount: float = Field(ge=0, le=100000000)
+    received_date: date | None = None
+    budget_year: int | None = Field(default=None, ge=1)
+    budget_month: int | None = Field(default=None, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_period_override(self) -> "BudgetMonthIncomeUpdate":
+        if (self.budget_year is None) != (self.budget_month is None):
+            raise ValueError("budget_year and budget_month must be supplied together")
+        return self
+
+
+class BudgetPartnerShareCreate(BaseModel):
+    partner_user_id: uuid.UUID
+    level: BudgetSharingLevel
+    category_ids: list[uuid.UUID] | None = None
+
+
+class BudgetPartnerShareResponse(BaseModel):
+    id: uuid.UUID
+    partner_user_id: uuid.UUID
+    level: BudgetSharingLevel
+    active: bool
+    category_ids: list[uuid.UUID] | None = None

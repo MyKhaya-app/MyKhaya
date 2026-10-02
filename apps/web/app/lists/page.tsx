@@ -1,0 +1,764 @@
+"use client";
+
+import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import { ArrowDown, ArrowUp, ChevronRight, ListChecks, MoreVertical, Plus, Search, Trash2 } from "lucide-react";
+import type { BillingStatus, HouseholdList, ListIcon, ListTemplate, ListTemplateScope } from "@mykhaya/shared-types";
+import { ApiError, api } from "@mykhaya/api-client";
+import { AppShellContent } from "@/components/app-shell";
+import { BottomSheet } from "@/components/bottom-sheet";
+import { FormStatus } from "@/components/form-status";
+import { ListScopeConfirmation } from "@/components/list-scope-confirmation";
+import {
+  atListLimitMessage,
+  canCreateList,
+  LIST_LIMIT_UPGRADE_TEXT,
+  listBadgeLabel,
+} from "@/components/lists-entitlement-logic";
+import { useActiveHome } from "@/components/use-active-home";
+import { LIST_ICON_OPTIONS, listIconImage } from "./list-icons";
+
+// Lists is a native MyKhaya module built on the HouseholdList/HouseholdListItem
+// primitive introduced for Meal Plans' "Add ingredients to list" — this page
+// extends that foundation rather than a second, parallel list system. See
+// docs/architecture/lists.md.
+
+function loadErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof ApiError && cause.status === 404) {
+    return "Lists isn't available for this Home yet. Please check back soon.";
+  }
+  return cause instanceof ApiError ? cause.message : fallback;
+}
+
+export default function ListsPage() {
+  const { activeHomeId } = useActiveHome();
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
+  const [moduleReleased, setModuleReleased] = useState<boolean | null>(null);
+  const [lists, setLists] = useState<HouseholdList[]>([]);
+  const [templates, setTemplates] = useState<ListTemplate[]>([]);
+  // "Templates" doesn't exist as a real feature yet (no backend concept of a
+  // list template) — this tab is a visual placeholder only, matching the
+  // approved mockup's segmented control, never a fake/hard-coded template
+  // list. See the redesign completion report for the full gap.
+  const [scope, setScope] = useState<ListTemplateScope>("personal");
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [query, setQuery] = useState("");
+  const [templateQuery, setTemplateQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [actionsFor, setActionsFor] = useState<HouseholdList | null>(null);
+  const [renaming, setRenaming] = useState<HouseholdList | null>(null);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<ListTemplate | null>(null);
+  const [moving, setMoving] = useState<HouseholdList | null>(null);
+  const [movingBusy, setMovingBusy] = useState(false);
+  const [moveError, setMoveError] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api.billingStatus(activeHomeId).then(setBilling).catch(() => setBilling(null));
+    api
+      .featureMatrix(activeHomeId)
+      .then((matrix) =>
+        setModuleReleased(matrix.features.some((row) => row.feature === "shopping" && row.enabled)),
+      )
+      .catch(() => setModuleReleased(false));
+  }, [activeHomeId]);
+
+  async function load() {
+    if (!activeHomeId) return;
+    try {
+      const result = await api.lists(activeHomeId, { q: query || undefined, scope });
+      setLists(result.items);
+    } catch (cause) {
+      setError(loadErrorMessage(cause, "Could not load your lists."));
+    }
+  }
+
+  async function loadTemplates() {
+    if (!activeHomeId) return;
+    try {
+      const result = await api.listTemplates(activeHomeId, { q: templateQuery || undefined });
+      setTemplates(result.items);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not load templates.");
+    }
+  }
+
+  useEffect(() => {
+    const timeout = setTimeout(() => void load(), 200);
+    return () => clearTimeout(timeout);
+  }, [activeHomeId, query, scope]);
+
+  useEffect(() => {
+    if (moduleReleased !== true) return;
+    const timeout = setTimeout(() => void loadTemplates(), 200);
+    return () => clearTimeout(timeout);
+  }, [activeHomeId, templateQuery, moduleReleased]);
+
+  async function removeList(list: HouseholdList) {
+    if (!activeHomeId) return;
+    if (!window.confirm(`Delete "${list.name}"? This will remove the list and its items.`)) return;
+    try {
+      await api.deleteList(activeHomeId, list.id);
+      setActionsFor(null);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not delete that list.");
+    }
+  }
+
+  async function moveList(list: HouseholdList) {
+    if (!activeHomeId) return;
+    const nextScope: ListTemplateScope = list.scope === "personal" ? "household" : "personal";
+    setMovingBusy(true);
+    setMoveError("");
+    try {
+      await api.moveListScope(activeHomeId, list.id, {
+        scope: nextScope,
+        expected_updated_at: list.updated_at,
+      });
+      setMoving(null);
+      setMovingBusy(false);
+      setLists((current) => current.filter((row) => row.id !== list.id));
+      setScope(nextScope);
+    } catch (cause) {
+      setMoveError(cause instanceof ApiError ? cause.message : "Could not change this list's scope.");
+      setMovingBusy(false);
+    }
+  }
+
+  async function archiveTemplate(template: ListTemplate) {
+    if (!activeHomeId || !window.confirm(`Archive “${template.name}”?`)) return;
+    try {
+      await api.archiveListTemplate(activeHomeId, template.id);
+      await loadTemplates();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not archive this template.");
+    }
+  }
+
+  async function duplicateTemplate(template: ListTemplate) {
+    if (!activeHomeId) return;
+    try {
+      await api.duplicateListTemplate(activeHomeId, template.id, {
+        name: `${template.name} copy`,
+        description: template.description,
+        scope: template.scope,
+        sections: template.sections.map((section) => ({
+          name: section.name,
+          items: section.items.map((item) => ({ text: item.text })),
+        })),
+      });
+      await loadTemplates();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not duplicate this template.");
+    }
+  }
+
+  if (!activeHomeId || !billing || moduleReleased === null) {
+    return (
+      <AppShellContent>
+        <main className="standard-page module-page">
+          <p role="status">Loading Lists…</p>
+        </main>
+      </AppShellContent>
+    );
+  }
+
+  if (!moduleReleased) {
+    return (
+      <AppShellContent>
+        <main className="standard-page module-page">
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">Lists</p>
+              <h1>Lists</h1>
+            </div>
+          </div>
+          <p className="empty-mini">Lists isn't available for this Home yet. Please check back soon.</p>
+        </main>
+      </AppShellContent>
+    );
+  }
+
+  return (
+    <AppShellContent>
+      <main className="standard-page module-page lists-page">
+        <div className="page-heading module-hero browser-module-header">
+          <div className="module-hero-text">
+            <p className="eyebrow">
+              <ListChecks size={14} aria-hidden="true" /> Lists
+            </p>
+            <h1>Lists</h1>
+            <p className="muted">Keep track of the things that matter, together.</p>
+          </div>
+          <img
+            className="module-hero-art"
+            src="/images/lists-hero.png"
+            alt="Small lists, big things together"
+            width={640}
+            height={410}
+          />
+        </div>
+        <FormStatus error={error} />
+
+        <div className="lists-layout">
+        <div className="lists-main">
+        {showTemplates ? (
+          <>
+            <div className="lists-toolbar">
+              <div className="module-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search templates…"
+                  value={templateQuery}
+                  onChange={(event) => setTemplateQuery(event.target.value)}
+                  aria-label="Search templates"
+                />
+              </div>
+              <button type="button" className="secondary lists-templates-button" onClick={() => setShowTemplates(false)}>
+                Lists
+              </button>
+            </div>
+            {templates.length === 0 ? (
+              <div className="meal-empty-state">
+                <p><strong>No templates yet</strong></p>
+                <p className="muted">Save a list structure for the next time you need it.</p>
+              </div>
+            ) : (
+              <div className="lists-grid">
+                {templates.map((template) => (
+                  <article className="card lists-card lists-template-card" key={template.id}>
+                    <div className="lists-card-body">
+                      <ListChecks size={22} aria-hidden="true" />
+                      <span className="lists-card-copy">
+                        <strong>{template.name}</strong>
+                        <span className="lists-card-status">
+                          {template.scope === "household" ? "Household" : "Personal"} · {template.sections.length} section{template.sections.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </div>
+                    <span className="lists-template-actions">
+                      <button type="button" className="tertiary" onClick={() => setEditingTemplate(template)}>Edit</button>
+                      <button type="button" className="tertiary" onClick={() => void duplicateTemplate(template)}>Duplicate</button>
+                      <button type="button" className="icon-button secondary" aria-label={`Archive ${template.name}`} onClick={() => void archiveTemplate(template)}>
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </span>
+                  </article>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="lists-toolbar">
+              <div className="module-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search lists…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  aria-label="Search lists"
+                />
+              </div>
+              <button type="button" className="secondary lists-templates-button" onClick={() => setShowTemplates(true)}>
+                <ListChecks size={17} aria-hidden="true" /> Templates
+              </button>
+            </div>
+
+            <div className="rr-segmented lists-scope-selector" role="tablist" aria-label="Lists scope">
+              <button type="button" role="tab" aria-selected={scope === "personal"} className={`rr-segment${scope === "personal" ? " rr-segment-active" : ""}`} onClick={() => setScope("personal")}>
+                Personal
+              </button>
+              <button type="button" role="tab" aria-selected={scope === "household"} className={`rr-segment${scope === "household" ? " rr-segment-active" : ""}`} onClick={() => setScope("household")}>
+                Household
+              </button>
+            </div>
+
+            <div className="section-heading">
+              <h2>{scope === "personal" ? "My Lists" : "Household Lists"}</h2>
+            </div>
+
+            {lists.length === 0 ? (
+              query ? (
+                <p className="empty-mini">No lists match.</p>
+              ) : (
+                <div className="meal-empty-state">
+                  <p>
+                    <strong>No lists yet</strong>
+                  </p>
+                  <p className="muted">Keep groceries, packing and household bits together.</p>
+                  <button type="button" className="secondary" onClick={() => setCreating(true)}>
+                    <Plus size={16} aria-hidden="true" /> Create your first list
+                  </button>
+                </div>
+              )
+            ) : (
+              <div className="lists-grid">
+                {lists.map((list) => {
+                  const complete = list.item_count > 0 && list.remaining_count === 0;
+                  const badge = listBadgeLabel(list);
+                  return (
+                    <article className="card lists-card" key={list.id}>
+                      <Link className="lists-card-body" href={`/lists/${list.id}`}>
+                        <img className="lists-card-icon" src={listIconImage(list.icon)} alt="" aria-hidden="true" />
+                        <span className="lists-card-copy">
+                          <strong>{list.name}</strong>
+                          <span className={complete ? "lists-card-status lists-card-complete" : "lists-card-status"}>
+                            {badge
+                              ? `${badge} — included with Family`
+                              : list.item_count === 0
+                                ? "No items yet"
+                                : complete
+                                  ? `Complete · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`
+                                  : `${list.remaining_count} remaining · ${list.item_count} item${list.item_count === 1 ? "" : "s"}`}
+                          </span>
+                        </span>
+                        <ChevronRight size={18} className="lists-card-chevron" aria-hidden="true" />
+                      </Link>
+                      <button
+                        type="button"
+                        className="icon-button secondary"
+                        aria-label={`More actions for ${list.name}`}
+                        onClick={() => setActionsFor(list)}
+                      >
+                        <MoreVertical size={16} aria-hidden="true" />
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+        </div>
+
+        <aside className="lists-support" aria-label="Lists tools">
+          <section className="card details lists-support-card lists-quick-add">
+            <h2>Quick add</h2>
+            <button type="button" className="lists-quick-add-action" onClick={() => setCreating(true)}>
+              <span className="lists-quick-add-icon" aria-hidden="true"><Plus size={17} /></span>
+              <span className="lists-quick-add-label">New list</span>
+              <ChevronRight size={16} aria-hidden="true" className="lists-quick-add-chevron" />
+            </button>
+          </section>
+
+          {lists.length > 0 && (
+            <section className="card details lists-support-card lists-recent-panel">
+              <h2>Recent lists</h2>
+              <div className="lists-recent-list">
+                {lists.slice(0, 3).map((list) => (
+                  <Link className="lists-recent-row" href={`/lists/${list.id}`} key={list.id}>
+                    <img src={listIconImage(list.icon)} alt="" aria-hidden="true" />
+                    <span>
+                      <strong>{list.name}</strong>
+                      <small>{list.item_count} item{list.item_count === 1 ? "" : "s"}</small>
+                    </span>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+        </aside>
+        </div>
+
+        {billing.list_usage && !canCreateList(billing.list_usage) && (
+          <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
+        )}
+        <button type="button" className="rr-fab" aria-label="Add" onClick={() => showTemplates ? setCreatingTemplate(true) : setCreating(true)}>
+          <Plus size={22} aria-hidden="true" />
+          <span aria-hidden="true">Add</span>
+        </button>
+
+        {actionsFor && (
+          <BottomSheet title={actionsFor.name} onDismiss={() => setActionsFor(null)}>
+            <div className="meal-actions-sheet">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setRenaming(actionsFor);
+                  setActionsFor(null);
+                }}
+              >
+                Rename list
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setActionsFor(null);
+                  setMoveError("");
+                  setMoving(actionsFor);
+                }}
+              >
+                Move to {actionsFor.scope === "personal" ? "Household" : "Personal"}
+              </button>
+              <button type="button" className="secondary" onClick={() => void removeList(actionsFor)}>
+                Delete list
+              </button>
+            </div>
+          </BottomSheet>
+        )}
+        {moving && (
+          <ListScopeConfirmation
+            currentScope={moving.scope}
+            busy={movingBusy}
+            error={moveError}
+            onCancel={() => {
+              if (!movingBusy) setMoving(null);
+            }}
+            onConfirm={() => void moveList(moving)}
+          />
+        )}
+
+        {creating && (
+          <CreateListSheet
+            homeId={activeHomeId}
+            templates={templates}
+            defaultScope={scope}
+            atLimit={Boolean(billing.list_usage && !canCreateList(billing.list_usage))}
+            limitMessage={billing.list_usage ? atListLimitMessage(billing.list_usage) : null}
+            onClose={() => setCreating(false)}
+            onCreated={async () => {
+              setCreating(false);
+              await load();
+            }}
+          />
+        )}
+        {creatingTemplate && (
+          <CreateTemplateSheet
+            homeId={activeHomeId}
+            onClose={() => setCreatingTemplate(false)}
+            onCreated={async () => {
+              setCreatingTemplate(false);
+              await loadTemplates();
+            }}
+          />
+        )}
+        {editingTemplate && (
+          <CreateTemplateSheet
+            homeId={activeHomeId}
+            template={editingTemplate}
+            onClose={() => setEditingTemplate(null)}
+            onCreated={async () => {
+              setEditingTemplate(null);
+              await loadTemplates();
+            }}
+          />
+        )}
+        {renaming && (
+          <RenameListSheet
+            homeId={activeHomeId}
+            list={renaming}
+            onClose={() => setRenaming(null)}
+            onRenamed={async () => {
+              setRenaming(null);
+              await load();
+            }}
+          />
+        )}
+      </main>
+    </AppShellContent>
+  );
+}
+
+function CreateListSheet({
+  homeId,
+  templates,
+  defaultScope,
+  atLimit,
+  limitMessage,
+  onClose,
+  onCreated,
+}: {
+  homeId: string;
+  templates: ListTemplate[];
+  defaultScope: ListTemplateScope;
+  /** Known client-side, from the same billing.list_usage the passive
+   * near-FAB banner already reads — when true, the limit is reflected here
+   * instead of the create form, and no create request is ever attempted
+   * (the backend's own plan_limit_reached check remains the authoritative
+   * enforcement either way; this only avoids a request the frontend can
+   * already see would fail). */
+  atLimit: boolean;
+  limitMessage: string | null;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [icon, setIcon] = useState<ListIcon | "">("");
+  const [templateId, setTemplateId] = useState("");
+  const [scope, setScope] = useState<ListTemplateScope>(defaultScope);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Give this list a name.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload = { name: name.trim(), icon: icon || null, scope, ...(templateId ? { template_id: templateId } : {}) };
+      await api.createList(homeId, payload);
+      await onCreated();
+    } catch (cause) {
+      // A stale client-side atLimit=false (raced by another tab/device)
+      // still reaches the real backend enforcement — mapped to the exact
+      // same wording atLimit's own view below uses, not the generic
+      // backend string, so the user never sees two different messages for
+      // the same condition. limitMessage itself is only populated when the
+      // frontend already knew it was at the limit (the common case, where
+      // this catch branch is unreachable); the race case derives the same
+      // wording from the error's own `limit` metadata instead.
+      if (cause instanceof ApiError && cause.code === "plan_limit_reached") {
+        const rawLimit = cause.metadata?.limit;
+        const count = typeof rawLimit === "number" ? rawLimit : null;
+        const fallback =
+          count === null
+            ? "You've reached the Free plan limit."
+            : `You've reached the Free plan limit of ${count} list${count === 1 ? "" : "s"}.`;
+        setError(`${limitMessage ?? fallback} ${LIST_LIMIT_UPGRADE_TEXT}`);
+      } else {
+        setError(cause instanceof ApiError ? cause.message : "Could not create this list.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (atLimit) {
+    return (
+      <BottomSheet title="New list" onDismiss={onClose}>
+        <div className="card details family-upsell">
+          <p>
+            <strong>{limitMessage ?? "You've reached the Free plan limit."}</strong>
+          </p>
+          <p className="muted">{LIST_LIMIT_UPGRADE_TEXT}</p>
+          <Link className="button secondary" href="/settings/billing">
+            View Family plan
+          </Link>
+        </div>
+      </BottomSheet>
+    );
+  }
+
+  return (
+    <BottomSheet title="New list" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          List name
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Groceries"
+            maxLength={160}
+            autoFocus
+            required
+          />
+        </label>
+        <label>
+          Icon (optional)
+          <select value={icon} onChange={(event) => setIcon(event.target.value as ListIcon | "")}>
+            <option value="">No icon</option>
+            {LIST_ICON_OPTIONS.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {templates.length > 0 && (
+          <label>
+            Start from a template (optional)
+            <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+              <option value="">Blank list</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          List scope
+          <select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}>
+            <option value="personal">Personal — only you</option>
+            <option value="household">Household</option>
+          </select>
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Creating…" : "Create list"}
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function CreateTemplateSheet({
+  homeId,
+  template,
+  onClose,
+  onCreated,
+}: {
+  homeId: string;
+  template?: ListTemplate;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const [name, setName] = useState(template?.name ?? "");
+  const [description, setDescription] = useState(template?.description ?? "");
+  const [scope, setScope] = useState<ListTemplateScope>(template?.scope ?? "personal");
+  const [sections, setSections] = useState(() => template?.sections.map((section) => ({
+    name: section.name,
+    items: section.items.map((item) => item.text),
+  })) ?? [{ name: "", items: [""] }]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) return setError("Give this template a name.");
+    const payloadSections = sections
+      .filter((section) => section.name.trim())
+      .map((section) => ({
+        name: section.name.trim(),
+        items: section.items.filter((item) => item.trim()).map((item) => ({ text: item.trim() })),
+      }));
+    setBusy(true);
+    setError("");
+    try {
+      if (template) {
+        await api.updateListTemplate(homeId, template.id, {
+          name: name.trim(), description: description.trim() || null, scope,
+          sections: payloadSections, expected_updated_at: template.updated_at,
+        });
+      } else {
+        await api.createListTemplate(homeId, { name: name.trim(), description: description.trim() || null, scope, sections: payloadSections });
+      }
+      await onCreated();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not create this template.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function moveSection(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= sections.length) return;
+    setSections((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target]!, next[index]!];
+      return next;
+    });
+  }
+
+  return (
+    <BottomSheet title={template ? "Edit template" : "New template"} onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>Template name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoFocus required /></label>
+        <label>Description (optional)<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} /></label>
+        <label>Scope<select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}><option value="personal">Personal</option><option value="household">Household</option></select></label>
+        <fieldset className="lists-template-sections">
+          <legend>Sections</legend>
+          {sections.map((section, index) => (
+            <div className="lists-template-section-editor" key={index}>
+              <div className="lists-template-section-heading">
+                <input value={section.name} placeholder={`Section ${index + 1}`} maxLength={160} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, name: event.target.value } : value))} />
+                <button type="button" className="icon-button secondary" aria-label="Move section up" disabled={index === 0} onClick={() => moveSection(index, -1)}><ArrowUp size={15} aria-hidden="true" /></button>
+                <button type="button" className="icon-button secondary" aria-label="Move section down" disabled={index === sections.length - 1} onClick={() => moveSection(index, 1)}><ArrowDown size={15} aria-hidden="true" /></button>
+              </div>
+              {section.items.map((item, itemIndex) => (
+                <input key={itemIndex} value={item} placeholder="Default item (optional)" maxLength={200} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, items: value.items.map((entry, entryIndex) => entryIndex === itemIndex ? event.target.value : entry) } : value))} />
+              ))}
+              <button type="button" className="tertiary" onClick={() => setSections((current) => current.map((value, position) => position === index ? { ...value, items: [...value.items, ""] } : value))}>Add default item</button>
+            </div>
+          ))}
+          <button type="button" className="tertiary" onClick={() => setSections((current) => [...current, { name: "", items: [""] }])}>Add section</button>
+        </fieldset>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>{busy ? "Saving…" : template ? "Save template" : "Create template"}</button>
+      </form>
+    </BottomSheet>
+  );
+}
+
+function RenameListSheet({
+  homeId,
+  list,
+  onClose,
+  onRenamed,
+}: {
+  homeId: string;
+  list: HouseholdList;
+  onClose: () => void;
+  onRenamed: () => Promise<void>;
+}) {
+  const [name, setName] = useState(list.name);
+  const [icon, setIcon] = useState<ListIcon | "">(list.icon ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Give this list a name.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.renameList(homeId, list.id, {
+        name: name.trim(),
+        icon: icon || null,
+        expected_updated_at: list.updated_at,
+      });
+      await onRenamed();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not rename this list.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <BottomSheet title="Rename list" onDismiss={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          List name
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={160}
+            autoFocus
+            required
+          />
+        </label>
+        <label>
+          Icon (optional)
+          <select value={icon} onChange={(event) => setIcon(event.target.value as ListIcon | "")}>
+            <option value="">No icon</option>
+            {LIST_ICON_OPTIONS.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <FormStatus error={error} />
+        <button className="sheet-primary" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </form>
+    </BottomSheet>
+  );
+}

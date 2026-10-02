@@ -1,0 +1,24 @@
+# Semgrep findings reviewed and confirmed safe. Entries are specific file
+# paths, not directories or extensions, and each is documented below — see
+# docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md SEC-21 for the investigation.
+# Do not add broader entries (directories, extensions, generic globs) here.
+
+# java.android.security.exported_activity.exported_activity: MainActivity is
+# the app's launcher activity (MAIN/LAUNCHER intent-filter) — Android
+# requires android:exported="true" on any activity with an intent-filter
+# since API 31; the manifest merger fails the build without it. Inline
+# `nosemgrep` comments (tried both as a preceding line and a same-line
+# trailing comment) were not honoured by Semgrep's XML/Android-manifest
+# scanner for this rule, so this path-level entry is used instead.
+#
+# Be aware this is broader than a single-finding suppression: unlike the
+# fingerprint-scoped .gitleaksignore entries elsewhere in this repo, a
+# .semgrepignore path entry excludes the WHOLE file from ALL Semgrep rules,
+# not just this one rule/line — Semgrep has no per-rule, per-line ignore
+# mechanism for XML analyzers that this repo's tooling can rely on. This
+# file is currently small and single-purpose (manifest declarations only,
+# one activity, one provider), so the practical risk is low, but if this
+# file grows to include more components in future, review it manually
+# before assuming new content here is still covered by this note — this
+# entry does not know the difference between old and new content.
+apps/android-shell/android/app/src/main/AndroidManifest.xml

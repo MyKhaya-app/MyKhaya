@@ -19,6 +19,7 @@ class Capability(StrEnum):
     household_manage = "household.manage"
     members_view = "members.view"
     members_invite = "members.invite"
+    members_approve_join_requests = "members.approve_join_requests"
     members_manage_relationships = "members.manage_relationships"
     calendar_view = "calendar.view"
     calendar_view_all = "calendar.view_all"
@@ -34,14 +35,75 @@ class Capability(StrEnum):
     household_export = "household.export"
     security_manage = "security.manage"
     household_manage_routines = "household.manage_routines"
+    household_manage_reminders = "household.manage_reminders"
+    # Starting Stripe Checkout, opening the Customer Portal, and (future)
+    # cancellation actions — home_admin only, matching household.manage and
+    # features.manage. A standard_partner belonging to the Home is not
+    # automatically trusted with payment-method management just by being a
+    # member; billing decisions stay with whoever administers the Home. See
+    # docs/security/platform-administration-security.md#billing-manage.
+    billing_manage = "billing.manage"
+    # Meal Plans (mykhaya.routers.meal_plans) — shared household structure,
+    # the same "view vs manage" split calendar categories use, not a
+    # per-person ownership model. See docs/architecture/meal-plans.md.
+    meals_view = "meals.view"
+    meals_manage = "meals.manage"
+    # Household Lists (mykhaya.routers.lists) — same shared-structure "view
+    # vs manage" split as Meal Plans, reusing FeatureKey.shopping's release
+    # slot and the pre-declared "lists.enabled" entitlement (see
+    # entitlements.PLAN_DEFINITIONS) rather than adding a new feature key.
+    lists_view = "lists.view"
+    lists_manage = "lists.manage"
+    # Wishlists (mykhaya.routers.wishlists) — "view" is the household-wide
+    # capability that lets a member see the module and other members'
+    # wishlists at all; "manage" lets them create/edit/delete wishlists —
+    # but every create/edit/delete endpoint *also* requires the caller to be
+    # that wishlist's own owner (or home_admin), since unlike Meals/Lists
+    # this is a per-person module, not shared household structure. See
+    # routers.wishlists._require_owner_or_admin.
+    wishlists_view = "wishlists.view"
+    wishlists_manage = "wishlists.manage"
+    # Driveway (mykhaya.routers.driveway) — same "view vs manage" split as
+    # Lists/Meal Plans for Household-scoped vehicles; a Personal-scoped
+    # vehicle (and the sensitive VIN/insurance fields that default to
+    # Personal visibility even on a Household-scoped vehicle) additionally
+    # requires the caller to be that vehicle's own owner (or home_admin),
+    # mirroring routers.wishlists' per-owner check.
+    driveway_view = "driveway.view"
+    driveway_manage = "driveway.manage"
 
 
 ALL_CAPABILITIES = frozenset(Capability)
+# This is intentionally an allow-list.  A capability added in the future is
+# not delegatable until its authority and data boundary have been reviewed.
+DELEGATABLE_CAPABILITIES = frozenset(
+    {
+        Capability.members_view,
+        Capability.calendar_view,
+        Capability.calendar_view_all,
+        Capability.calendar_create,
+        Capability.calendar_edit_own,
+        Capability.calendar_edit_all,
+        Capability.calendar_delete,
+        Capability.household_manage_routines,
+        Capability.household_manage_reminders,
+        Capability.meals_view,
+        Capability.meals_manage,
+        Capability.lists_view,
+        Capability.lists_manage,
+        Capability.wishlists_view,
+        Capability.wishlists_manage,
+        Capability.driveway_view,
+        Capability.driveway_manage,
+        Capability.sharing_external,
+    }
+)
 PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
     PermissionProfile.home_admin: ALL_CAPABILITIES,
     PermissionProfile.standard_partner: frozenset(
         {
             Capability.members_view,
+            Capability.members_invite,
             Capability.calendar_view,
             Capability.calendar_view_all,
             Capability.calendar_create,
@@ -49,12 +111,70 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
             Capability.calendar_edit_all,
             Capability.calendar_delete,
             Capability.household_manage_routines,
+            Capability.household_manage_reminders,
+            Capability.meals_view,
+            Capability.meals_manage,
+            Capability.lists_view,
+            Capability.lists_manage,
+            Capability.wishlists_view,
+            Capability.wishlists_manage,
+            Capability.driveway_view,
+            Capability.driveway_manage,
+            # A Partner/Adult may request an external calendar share (see
+            # routers.calendar_sharing) — sending it outright vs. requiring
+            # Home Admin approval is decided per-request there (whether the
+            # caller is home_admin or the calendar's own personal owner),
+            # not by this capability alone.
+            Capability.sharing_external,
         }
     ),
-    PermissionProfile.child_restricted: frozenset(),
+    # Read-only baseline: a Child can always see today's household meals —
+    # this is ordinary shared household information (like Routines, which
+    # has no capability gate on its read endpoint at all — see
+    # routers.household_routines.list_routines), not something that needs
+    # parent configuration the way calendar visibility does. meals_manage
+    # (create/edit/delete meals and plan entries) is deliberately NOT
+    # included here — it stays out of reach for every Child regardless of
+    # ChildProfile settings, since there is no child-facing "meals" toggle
+    # in CHILD_PERMISSION_CAPABILITIES and none is being added.
+    PermissionProfile.child_restricted: frozenset({Capability.meals_view}),
     PermissionProfile.explicit_sharing: frozenset(),
     PermissionProfile.review_required: frozenset({Capability.members_view}),
 }
+
+
+def ensure_can_assign_relationship(
+    actor: Membership, relationship: HouseholdRelationship
+) -> None:
+    """Keep Home Admin assignment under Home Admin control."""
+    if (
+        relationship == HouseholdRelationship.home_admin
+        and actor.relationship != HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only a Home Admin can assign Home Admin permissions.",
+        )
+
+
+def ensure_can_manage_relationship(
+    actor: Membership,
+    target: Membership,
+    relationship: HouseholdRelationship,
+) -> None:
+    """Prevent delegated operators from changing authority boundaries."""
+    if actor.user_id == target.user_id and relationship != target.relationship:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot change your own Home role.")
+    if (
+        actor.relationship != HouseholdRelationship.home_admin
+        and target.relationship == HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only a Home Admin can change a Home Admin's role.",
+        )
+    ensure_can_assign_relationship(actor, relationship)
+
 
 CHILD_PERMISSION_CAPABILITIES = {
     "calendar_view": Capability.calendar_view,
@@ -88,6 +208,12 @@ def default_profile(relationship: HouseholdRelationship) -> PermissionProfile:
     return {
         HouseholdRelationship.home_admin: PermissionProfile.home_admin,
         HouseholdRelationship.partner: PermissionProfile.standard_partner,
+        # Adult reuses Partner's default profile — relationship describes who
+        # someone is, not what they can do (see HouseholdRelationship.adult's
+        # docstring). They stay a distinct relationship value; only the
+        # *default* PermissionProfile is shared, and Advanced permissions
+        # (permission_overrides) still apply independently per member.
+        HouseholdRelationship.adult: PermissionProfile.standard_partner,
         HouseholdRelationship.child: PermissionProfile.child_restricted,
         HouseholdRelationship.extended_family: PermissionProfile.explicit_sharing,
         HouseholdRelationship.friend: PermissionProfile.explicit_sharing,
@@ -99,6 +225,7 @@ def legacy_role(relationship: HouseholdRelationship) -> Role:
     return {
         HouseholdRelationship.home_admin: Role.administrator,
         HouseholdRelationship.partner: Role.adult_member,
+        HouseholdRelationship.adult: Role.adult_member,
         HouseholdRelationship.child: Role.member,
         HouseholdRelationship.extended_family: Role.guest,
         HouseholdRelationship.friend: Role.guest,
@@ -107,7 +234,19 @@ def legacy_role(relationship: HouseholdRelationship) -> Role:
 
 
 async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capability]:
-    capabilities = set(PROFILE_CAPABILITIES[membership.permission_profile])
+    # Administrative authority is bound to the trusted relationship/profile
+    # state.  Do not let a stale or manually-corrupted profile value turn a
+    # non-admin membership into a Home Admin.
+    profile = membership.permission_profile
+    if (
+        profile == PermissionProfile.home_admin
+        and membership.relationship != HouseholdRelationship.home_admin
+    ):
+        profile = default_profile(membership.relationship)
+    capabilities = set(PROFILE_CAPABILITIES[profile])
+    if membership.relationship == HouseholdRelationship.partner:
+        capabilities.add(Capability.members_approve_join_requests)
+        capabilities.add(Capability.members_manage_relationships)
     if (
         membership.relationship
         in {
@@ -130,6 +269,8 @@ async def capabilities_for(db: AsyncSession, membership: Membership) -> set[Capa
         try:
             capability = Capability(raw)
         except ValueError:
+            continue
+        if capability not in DELEGATABLE_CAPABILITIES:
             continue
         if enabled:
             capabilities.add(capability)

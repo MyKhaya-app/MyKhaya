@@ -6,10 +6,13 @@ import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import { nativeVerifyEmail } from "@/components/native-auth";
+import { isNativeShell } from "@/components/native-runtime";
 export default function VerifyEmail() {
   const params = useSearchParams(),
     token = params.get("token"),
-    invitation = params.get("invitation");
+    invitation = params.get("invitation"),
+    calendarShare = params.get("calendar_share");
   const [message, setMessage] = useState(
       token
         ? "Verifying your email…"
@@ -18,8 +21,9 @@ export default function VerifyEmail() {
     [error, setError] = useState("");
   useEffect(() => {
     if (!token) return;
-    api
-      .post<{ message: string }>("/auth/verify-email", { token })
+    (isNativeShell()
+      ? nativeVerifyEmail(token)
+      : api.post<{ message: string }>("/auth/verify-email", { token }))
       .then((r) => setMessage(r.message))
       .catch((err: unknown) => {
         setMessage("");
@@ -44,7 +48,9 @@ export default function VerifyEmail() {
         href={
           invitation
             ? `/login?invitation=${encodeURIComponent(invitation)}`
-            : "/login"
+            : calendarShare
+              ? `/login?calendar_share=${encodeURIComponent(calendarShare)}`
+              : "/login"
         }
       >
         Continue to sign in

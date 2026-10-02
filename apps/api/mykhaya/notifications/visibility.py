@@ -10,38 +10,127 @@ data leakage.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.household_permissions import Capability, capabilities_for
-from mykhaya.models import CalendarEvent, CalendarEventMember, Membership
+from mykhaya.models import (
+    CalendarEvent,
+    CalendarEventMember,
+    CalendarShare,
+    CalendarShareStatus,
+    Group,
+    HomeCalendar,
+    Membership,
+)
 
 
 async def active_membership(
     db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID
 ) -> Membership | None:
+    """Slice 4.5: also requires the Home itself to be operationally active
+    (Group.is_active) — a Disabled/Archived Home must not keep generating
+    reminders/briefing content for its members even though their
+    Membership row is technically still un-removed. This is the shared
+    gate `routines.py`/`standalone_reminders.py` reuse directly, and that
+    `can_view_event`/`viewer_ids_for_event` inherit transitively."""
     membership: Membership | None = await db.scalar(
-        select(Membership).where(
+        select(Membership)
+        .join(Group, Group.id == Membership.group_id)
+        .where(
             Membership.group_id == group_id,
             Membership.user_id == user_id,
             Membership.removed_at.is_(None),
+            Group.is_active.is_(True),
         )
     )
     return membership
 
 
-async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.UUID) -> bool:
+async def active_calendar_share(
+    db: AsyncSession, calendar_id: uuid.UUID, user_id: uuid.UUID
+) -> CalendarShare | None:
+    """The one place external-sharing access is decided for calendar/event
+    visibility — reused by can_view_event/viewer_ids_for_event below so
+    reminders and the daily briefing inherit it automatically, and by
+    routers.calendar_sharing's own write-permission check. Never trust a
+    cached/stale result: revoked_at, status, and expires_at are re-checked on
+    every call, so a revocation takes effect on the very next read."""
+    share: CalendarShare | None = await db.scalar(
+        select(CalendarShare).where(
+            CalendarShare.calendar_id == calendar_id,
+            CalendarShare.recipient_user_id == user_id,
+            CalendarShare.status == CalendarShareStatus.accepted,
+            CalendarShare.revoked_at.is_(None),
+            CalendarShare.expires_at > datetime.now(UTC),
+        )
+    )
+    return share
+
+
+def event_matches_share(event: CalendarEvent, share: CalendarShare) -> bool:
+    """The category-scoped sharing filter (see CalendarShare.category_ids'
+    docstring): `None` shares the entire calendar, unchanged from before this
+    filter existed. When set, an event only matches if it carries one of the
+    selected categories — *except* an event the share's own recipient
+    created through this exact share (see routers.calendar_sharing's
+    share-scoped create endpoint, which never assigns a category — a
+    "manage" recipient must always see their own work, category filter or
+    not). This is the one place that exception is applied; every other
+    check in this module calls into it rather than re-deriving the rule."""
+    if share.category_ids is None:
+        return True
+    if event.created_by == share.recipient_user_id:
+        return True
+    return event.label_id is not None and str(event.label_id) in share.category_ids
+
+
+async def can_view_event(
+    db: AsyncSession,
+    event: CalendarEvent,
+    user_id: uuid.UUID,
+    *,
+    member_ids_override: Sequence[uuid.UUID] | None = None,
+) -> bool:
+    """`member_ids_override` mirrors viewer_ids_for_event's parameter of the
+    same name — pass one occurrence's EffectiveOccurrence.member_ids_override
+    so a member added or removed on just that occurrence is honoured by this
+    re-check, instead of only ever consulting the base event's own
+    CalendarEventMember rows."""
     membership = await active_membership(db, event.group_id, user_id)
     if membership is None:
-        return False
+        # Not a Home member — the only other legitimate way to see this
+        # event is an active external CalendarShare on its specific
+        # calendar (and, if that share is category-scoped, this event must
+        # carry one of the selected categories). This never reaches into
+        # any *other* calendar in the Home, and is fully independent of
+        # Membership/capabilities.
+        share = await active_calendar_share(db, event.calendar_id, user_id)
+        return share is not None and event_matches_share(event, share)
     capabilities = await capabilities_for(db, membership)
     if Capability.calendar_view not in capabilities:
+        return False
+    # A hard privacy boundary, checked before (and independent of)
+    # calendar_view_all — a Home admin/partner's blanket visibility must
+    # never reach into another member's Personal Calendar. See
+    # routers.calendar._personal_calendar_visibility_filter, the same rule
+    # applied at the SQL-query level for list/detail endpoints.
+    calendar = await db.get(HomeCalendar, event.calendar_id)
+    if (
+        calendar is not None
+        and calendar.owner_user_id is not None
+        and calendar.owner_user_id != user_id
+    ):
         return False
     if Capability.calendar_view_all in capabilities:
         return True
     if event.created_by == user_id:
         return True
+    if member_ids_override is not None:
+        return user_id in member_ids_override
     assigned = await db.scalar(
         select(CalendarEventMember.id).where(
             CalendarEventMember.event_id == event.id,
@@ -51,14 +140,77 @@ async def can_view_event(db: AsyncSession, event: CalendarEvent, user_id: uuid.U
     return assigned is not None
 
 
-async def viewer_ids_for_event(db: AsyncSession, event: CalendarEvent) -> set[uuid.UUID]:
-    """Members explicitly attached to the event — the natural reminder recipient set.
-    (Not the same as "everyone who *could* view it" via calendar_view_all — a household
-    admin with blanket visibility should not get reminded about an event they aren't
-    actually part of.)"""
-    rows = (
+async def viewer_ids_for_event(
+    db: AsyncSession,
+    event: CalendarEvent,
+    *,
+    member_ids_override: Sequence[uuid.UUID] | None = None,
+) -> set[uuid.UUID]:
+    """Members explicitly attached to the event, plus any active external
+    CalendarShare recipient for its calendar whose notification_preference
+    isn't "off" — the natural reminder recipient set. (Not the same as
+    "everyone who *could* view it" via calendar_view_all — a household admin
+    with blanket visibility should not get reminded about an event they
+    aren't actually part of; an external share recipient is different: the
+    whole point of sharing a calendar is to see everything on it.)
+
+    `member_ids_override` is a single occurrence's EffectiveOccurrence.
+    member_ids_override (see calendar_occurrences.py) — pass it when
+    resolving recipients for one specific occurrence of a recurring event,
+    so a member added or removed on just that occurrence changes who is
+    reminded/briefed about it, without touching the base event's own
+    CalendarEventMember rows. Omit it (the default) for the base event's own
+    membership, unchanged from before this parameter existed."""
+    if member_ids_override is not None:
+        viewer_ids = set(member_ids_override)
+    else:
+        rows = (
+            await db.scalars(
+                select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == event.id)
+            )
+        ).all()
+        viewer_ids = set(rows)
+    for share in (
         await db.scalars(
-            select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == event.id)
+            select(CalendarShare).where(
+                CalendarShare.calendar_id == event.calendar_id,
+                CalendarShare.status == CalendarShareStatus.accepted,
+                CalendarShare.revoked_at.is_(None),
+                CalendarShare.expires_at > datetime.now(UTC),
+            )
+        )
+    ).all():
+        if (
+            share.recipient_user_id is not None
+            and share.notification_preference != "off"
+            and event_matches_share(event, share)
+        ):
+            viewer_ids.add(share.recipient_user_id)
+    return viewer_ids
+
+
+async def home_viewer_ids_for_event(
+    db: AsyncSession, event: CalendarEvent
+) -> set[uuid.UUID]:
+    """Return active Home members who can currently see this event.
+
+    Calendar activity is broader than assignment: members with the
+    ``calendar_view_all`` capability can see shared-calendar events without a
+    CalendarEventMember row.  This deliberately considers Home members only;
+    accepted external CalendarShare recipients remain resolved by
+    ``calendar_shares.notify_calendar_share_recipients`` so their share-level
+    notification preference is applied exactly once.
+    """
+    member_ids = (
+        await db.scalars(
+            select(Membership.user_id).where(
+                Membership.group_id == event.group_id,
+                Membership.removed_at.is_(None),
+            )
         )
     ).all()
-    return set(rows)
+    visible: set[uuid.UUID] = set()
+    for user_id in member_ids:
+        if await can_view_event(db, event, user_id):
+            visible.add(user_id)
+    return visible

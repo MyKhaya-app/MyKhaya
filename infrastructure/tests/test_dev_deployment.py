@@ -1,7 +1,6 @@
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -12,6 +11,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             ".env.dev.example",
             "infrastructure/caddy/Caddyfile.dev",
             "infrastructure/scripts/dev-deploy.sh",
+            "infrastructure/scripts/check_dev_networks.py",
             "infrastructure/scripts/update-dev.sh",
             "docs/operations/dev-deployment.md",
         ):
@@ -23,6 +23,25 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertNotRegex(script, r"\bdown\s+-v\b|\bvolume\s+rm\b|\bprune\b")
         self.assertNotRegex(wrapper, r"\bdown\s+-v\b|\bvolume\s+rm\b|\bprune\b")
         self.assertIn("compose stop", script)
+
+    def test_network_drift_is_checked_before_build_or_container_replacement(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        marker = "check_network_drift\n  report_new_env_variables"
+        deploy_start = script.index("deploy()")
+        self.assertLess(script.index(marker), script.index("compose build"))
+        self.assertLess(
+            script.index(marker),
+            script.index("compose up -d --no-build --no-deps api", deploy_start),
+        )
+
+    def test_explicit_network_migration_preserves_data_services(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        migration = script[script.index("migrate_networks()") : script.index("deploy()")]
+        self.assertIn("compose stop caddy web api worker scheduler", migration)
+        self.assertIn("docker network rm mykhaya_edge mykhaya_app", migration)
+        self.assertNotIn("postgres", migration)
+        self.assertNotIn("redis", migration)
+        self.assertNotIn("down -v", migration)
 
     def test_preflight_keeps_required_diagnostics(self) -> None:
         script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
@@ -46,6 +65,13 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertLess(build, migration)
         self.assertLess(migration, app_start)
 
+    def test_caddy_is_recreated_after_configuration_changes(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            "compose up -d --force-recreate --no-build --no-deps caddy mailpit",
+            script,
+        )
+
     def test_dev_overlay_has_only_expected_published_services(self) -> None:
         overlay = (ROOT / "compose.dev.yml").read_text(encoding="utf-8")
         published_services = []
@@ -62,6 +88,29 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         for target in ("dev-up", "dev-down", "dev-logs", "dev-update"):
             self.assertRegex(makefile, rf"(?m)^{target}:")
+
+    def test_api_runtime_leaves_proxy_resolution_to_mykhaya(self) -> None:
+        dockerfile = (ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(
+            'CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000"]',
+            dockerfile,
+        )
+        self.assertNotIn("--proxy-headers", dockerfile)
+        self.assertNotIn("--forwarded-allow-ips", dockerfile)
+
+    def test_caddy_preserves_proxy_headers_for_api(self) -> None:
+        for relative in (
+            "infrastructure/caddy/Caddyfile.dev",
+            "infrastructure/caddy/Caddyfile.production",
+        ):
+            caddyfile = (ROOT / relative).read_text(encoding="utf-8")
+            for header in (
+                "header_up Host",
+                "header_up X-Forwarded-Host",
+                "header_up X-Forwarded-Proto",
+                "header_up X-Forwarded-For",
+            ):
+                self.assertIn(header, caddyfile, relative)
 
 
 if __name__ == "__main__":

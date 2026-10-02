@@ -1,8 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { platformApi } from "@mykhaya/api-client";
+import { ApiError, platformApi } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
+import { CcPage } from "@/components/control-centre/page-shell";
+import { CcPageHeader } from "@/components/control-centre/page-header";
+import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
+import { CcNotice, CcEmptyState, CcLoadingState } from "@/components/control-centre/status-message";
+import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
+import { CcToggle } from "@/components/control-centre/toggle";
 
 type TimelineEntry = {
   id: string;
@@ -16,19 +22,23 @@ type TimelineEntry = {
   retry_count: number;
 };
 
-function statusEmoji(status: string) {
-  if (status === "sent") return "✅";
-  if (status === "failed") return "⚠️";
-  if (status === "cancelled") return "🚫";
-  return "⏳";
+const statusTone: Record<string, CcBadgeTone> = {
+  sent: "success",
+  failed: "danger",
+  cancelled: "neutral",
+  queued: "warning",
+};
+
+function statusToneFor(status: string): CcBadgeTone {
+  return statusTone[status] ?? "warning";
 }
 
 function timeOf(value: string) {
   return new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(value));
 }
 
-function dayOf(value: string) {
-  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date(value));
+function safeError(cause: unknown, fallback: string): string {
+  return cause instanceof ApiError ? cause.message : fallback;
 }
 
 export default function TimelinePage() {
@@ -36,6 +46,10 @@ export default function TimelinePage() {
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [live, setLive] = useState(false);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = useCallback(async (targetPage: number, append: boolean) => {
     setLoading(true);
@@ -47,7 +61,7 @@ export default function TimelinePage() {
       setItems((current) => (append ? [...current, ...response.items] : response.items));
       setNextPage(response.next_page);
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(safeError(cause, "The timeline could not be loaded."));
     } finally {
       setLoading(false);
     }
@@ -57,61 +71,70 @@ export default function TimelinePage() {
     void load(1, false);
   }, [load]);
 
-  let lastDay = "";
+  useEffect(() => {
+    if (!live) return;
+    const interval = window.setInterval(() => void load(1, false), 15_000);
+    return () => window.clearInterval(interval);
+  }, [live, load]);
+
+  const filteredItems = items.filter((entry) => {
+    const haystack = `${entry.label} ${entry.notification_type} ${entry.channel} ${entry.recipient_display_name ?? ""}`.toLowerCase();
+    return (!search.trim() || haystack.includes(search.trim().toLowerCase())) &&
+      (typeFilter === "all" || entry.notification_type === typeFilter) &&
+      (statusFilter === "all" || entry.status === statusFilter);
+  });
+  const timelineColumns: CcTableColumn<TimelineEntry>[] = [
+    { key: "time", header: "Time", render: (entry) => <time dateTime={entry.occurred_at}>{timeOf(entry.occurred_at)}</time> },
+    { key: "event", header: "Event", render: (entry) => <strong>{entry.label}</strong> },
+    { key: "status", header: "Status", render: (entry) => <CcBadge tone={statusToneFor(entry.status)}>{entry.friendly_status}</CcBadge> },
+    { key: "user-home", header: "User / Home", render: (entry) => entry.recipient_display_name ?? "System" },
+    { key: "source", header: "Source / Module", render: (entry) => `${entry.channel} · ${entry.notification_type}` },
+    { key: "actions", header: "Actions", render: () => "—" },
+  ];
 
   return (
     <PlatformShell>
-      <main className="platform-page">
-        <div className="platform-heading">
-          <div>
-            <p>Communications</p>
-            <h1>Timeline</h1>
-          </div>
-          <button className="secondary" onClick={() => load(1, false)}>
-            Refresh
-          </button>
-        </div>
-        <p>What actually happened, told chronologically — for "why", see Diagnostics.</p>
-        {error && (
-          <p className="notice error" role="alert">
-            {error}
-          </p>
-        )}
-        {items.length === 0 && !loading ? (
-          <p className="quiet-state">Nothing has been sent yet.</p>
+      <CcPage wide>
+        <CcPageHeader
+          eyebrow="Communications"
+          title="Timeline"
+          description={`What actually happened, told chronologically — for "why", see Diagnostics.`}
+          secondaryActions={
+            <div className="cc-action-bar">
+              <CcToggle label={live ? "Live" : "Paused"} name="timeline-live" defaultChecked={live} onChange={(event) => setLive(event.target.checked)} />
+              <button className="secondary" onClick={() => void load(1, false)}>
+                Refresh
+              </button>
+            </div>
+          }
+        />
+        {error && <CcNotice tone="error">{error}</CcNotice>}
+        {loading && items.length === 0 ? (
+          <CcLoadingState label="Loading timeline…" />
+        ) : items.length === 0 ? (
+          <CcEmptyState>Nothing has been sent yet.</CcEmptyState>
         ) : (
-          <ol className="timeline-list">
-            {items.map((entry) => {
-              const day = dayOf(entry.occurred_at);
-              const showDay = day !== lastDay;
-              lastDay = day;
-              return (
-                <li key={entry.id} className="timeline-entry">
-                  {showDay && <div className="timeline-day">{day}</div>}
-                  <div className="timeline-row">
-                    <span className="timeline-time">{timeOf(entry.occurred_at)}</span>
-                    <span className="timeline-icon" aria-hidden="true">
-                      {statusEmoji(entry.status)}
-                    </span>
-                    <span className="timeline-copy">
-                      <strong>{entry.label}</strong>
-                      <span>
-                        {entry.friendly_status}
-                        {entry.recipient_display_name && ` · ${entry.recipient_display_name}`}
-                      </span>
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <>
+            <div className="cc-toolbar">
+              <input aria-label="Search timeline" placeholder="Search event, user or module" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <select aria-label="Timeline type filter" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+                <option value="all">All types</option>
+                {Array.from(new Set(items.map((entry) => entry.notification_type))).map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <select aria-label="Timeline status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">All statuses</option>
+                {Array.from(new Set(items.map((entry) => entry.status))).map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </div>
+            <CcTable columns={timelineColumns} rows={filteredItems} rowKey={(entry) => entry.id} emptyMessage="No timeline events match these filters." caption="Communications timeline" />
+          </>
         )}
         {nextPage && (
           <button className="secondary" onClick={() => load(nextPage, true)} disabled={loading}>
             {loading ? "Loading…" : "Load more"}
           </button>
         )}
-      </main>
+      </CcPage>
     </PlatformShell>
   );
 }

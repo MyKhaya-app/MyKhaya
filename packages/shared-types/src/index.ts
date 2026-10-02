@@ -9,6 +9,7 @@ export type MembershipRole =
 export type HouseholdRelationship =
   | "home_admin"
   | "partner"
+  | "adult"
   | "child"
   | "extended_family"
   | "friend"
@@ -31,6 +32,18 @@ export interface User {
   birth_year: number | null;
   avatar_version: string | null;
   principal_type: PrincipalType;
+}
+// The user-facing product name for this is "Biometric sign-in" — see
+// apps/web/components/passkey-client.ts. `label` is a per-device name
+// ("iPhone", "Work laptop"), not shown as the primary UX (see Security
+// settings). `authenticator_attachment` is "platform" | "cross-platform" |
+// null (older credential/unreported) — informational only.
+export interface Passkey {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  authenticator_attachment: string | null;
 }
 export interface Home {
   id: string;
@@ -55,6 +68,8 @@ export interface Member {
   shared_resources: string[];
   colour: string | null;
   avatar_version: string | null;
+  family_sponsored?: boolean;
+  family_access?: boolean;
 }
 
 export type RecurrencePattern =
@@ -71,11 +86,26 @@ export interface EventLabel {
   color: string;
   is_active: boolean;
   sort_order: number;
+  // This is the actual user-facing "event category" resource
+  // calendar.max_categories governs — see HomeCalendar.commercial_access
+  // for the equivalent on the separate, lower-level Calendar concept. Only
+  // populated by the management listing (GET /event-labels) — null when
+  // embedded on an event or returned from create/update.
+  commercial_access: CalendarCommercialAccess | null;
+}
+
+// How many events currently carry a given Calendar Tag — fetched on demand
+// for the delete-confirmation sheet (Settings -> Home settings -> Calendar
+// Tags), never bundled onto the label listing itself. Counts base
+// CalendarEvent rows, not expanded recurring occurrences.
+export interface EventLabelUsage {
+  event_count: number;
 }
 
 export interface EventOccurrence {
   occurrence_id: string;
   event_id: string;
+  calendar_id: string;
   title: string;
   start_at: string;
   end_at: string;
@@ -84,11 +114,33 @@ export interface EventOccurrence {
   description: string | null;
   location_text: string | null;
   label: EventLabel | null;
+  // This event's calendar's own colour — what it renders as when `label` is
+  // null. A category's colour always takes precedence when one is set; this
+  // is only the fallback, but always populated (never a frontend-hardcoded
+  // default). Unaffected by Personal Calendar privacy — just a colour.
+  calendar_color: string;
   member_ids: string[];
   recurrence: RecurrencePattern;
+  recurrence_end_date?: string | null;
   reminder_minutes: number | null;
   created_by: string;
   updated_at: string;
+  // The CANONICAL occurrence identity — stable across a move/override
+  // (unlike `start_at`, which reflects the *effective*, possibly moved,
+  // time). Pass this back as EventUpdatePayload.occurrence_start /
+  // deleteEvent's occurrence_start when acting on a single occurrence —
+  // never recompute it from the currently-edited start_at. Equal to
+  // `start_at` for a non-overridden occurrence.
+  occurrence_start: string;
+  is_overridden: boolean;
+  // Present only on an occurrence merged in from an externally shared
+  // calendar (see app/calendar/page.tsx's load()) — the backend's own
+  // EventOccurrence schema never sets these; they're attached client-side
+  // from the CalendarShare the occurrence came from. Absent/undefined for
+  // every one of the signed-in user's own Home events.
+  share_id?: string;
+  share_permission?: CalendarSharePermission;
+  shared_by_home_name?: string;
 }
 
 export interface EventPayload {
@@ -100,15 +152,103 @@ export interface EventPayload {
   description?: string | null;
   location_text?: string | null;
   label_id?: string | null;
+  // Omitted defaults to the Home's primary calendar — see
+  // HomeCalendar.commercial_access. Targeting a read-only-due-to-plan
+  // calendar is rejected server-side.
+  calendar_id?: string | null;
   member_ids?: string[];
   reminder_minutes?: number | null;
   recurrence?: RecurrencePattern;
   recurrence_interval?: number;
   recurrence_until?: string | null;
+  recurrence_end_date?: string | null;
   recurrence_count?: number | null;
 }
 
-export interface EventUpdatePayload extends EventPayload {
+export type CalendarCommercialAccess = "normal" | "read_only_due_to_plan";
+
+export interface HomeCalendar {
+  id: string;
+  name: string;
+  timezone: string;
+  is_primary: boolean;
+  // Set only on `CalendarListResponse.personal_calendar` — null for every
+  // shared/Home calendar in `items`. Non-null means this is that user's
+  // private Personal Calendar (see docs/architecture — never
+  // entitlement-gated, never another member's).
+  owner_user_id: string | null;
+  // Fallback colour for events on this calendar that carry no category
+  // (label_id null). For the primary/"Home calendar" this is user-editable
+  // (see api-client's updateCalendar); the calendar's `name` is not — it's
+  // a fixed product concept, not user data.
+  color: string;
+  commercial_access: CalendarCommercialAccess;
+  created_at: string;
+}
+
+export interface CalendarListResponse {
+  // Shared/Home calendars only — never includes any Personal Calendar,
+  // including the caller's own. See `personal_calendar` below.
+  items: HomeCalendar[];
+  limit: number | null;
+  // The signed-in user's own Personal Calendar within this Home. Present
+  // for adult members; null for a managed Child (see
+  // apps/api/mykhaya/calendar_provisioning.py).
+  personal_calendar: HomeCalendar | null;
+}
+
+export interface CalendarUsage {
+  count: number;
+  limit: number | null;
+  over_limit: boolean;
+}
+
+// Deliberately excludes `calendar_id` — matching the backend's EventUpdate
+// schema exactly (StrictModel, extra="forbid"). An event's calendar
+// assignment (shared Home calendar vs. a Personal Calendar) is fixed at
+// creation and never changes via edit; the backend always uses the
+// existing CalendarEvent.calendar_id row for updates. Sending `calendar_id`
+// on a PATCH is rejected with a 422 ("extra_forbidden") — see
+// EventForm.submit/`update()` in app/calendar/page.tsx, which strips it
+// before calling updateEvent.
+// Which recurring occurrences a mutation applies to — "series" (the whole
+// recurring event, or the only sensible value for a non-recurring one) is
+// the default, matching the backend's own default, so an ordinary non-
+// recurring edit/delete never needs to think about this field at all.
+export type EventMutationScope = "occurrence" | "future" | "series";
+
+export interface EventUpdatePayload extends Omit<EventPayload, "calendar_id"> {
+  expected_updated_at: string;
+  scope?: EventMutationScope;
+  // Required by the backend when scope is "occurrence"/"future" — the
+  // CANONICAL EventOccurrence.occurrence_start of the instance being acted
+  // on, never derived from the currently-edited start_at. See
+  // EventOccurrence.occurrence_start's own docstring above.
+  occurrence_start?: string;
+}
+
+// The narrower body an external "Can add & edit" recipient submits to
+// /calendar-shares/{share_id}/events — no member_ids, label_id or
+// calendar_id (StrictModel rejects them; a shared event can't be assigned
+// to Home members or a Home-owned category the recipient isn't authorised
+// to use — see mykhaya.schemas.SharedEventCreate/SharedEventUpdate).
+export interface SharedEventPayload {
+  title: string;
+  start_at: string;
+  end_at: string;
+  timezone: string;
+  is_all_day: boolean;
+  description?: string | null;
+  location_text?: string | null;
+  reminder_minutes?: number | null;
+  recurrence?: RecurrencePattern;
+  recurrence_interval?: number;
+  recurrence_until?: string | null;
+  recurrence_end_date?: string | null;
+  recurrence_count?: number | null;
+}
+
+export interface SharedEventUpdatePayload extends SharedEventPayload {
   expected_updated_at: string;
 }
 
@@ -139,6 +279,7 @@ export interface InvitationResponse {
   permission_profile: PermissionProfile;
   shared_resources: string[];
   expires_at: string;
+  family_sponsorship?: boolean;
 }
 
 export interface InvitationListItem extends InvitationResponse {
@@ -158,6 +299,91 @@ export interface InvitationPreview {
   expires_at: string;
 }
 
+// Home join codes — see apps/api/mykhaya/routers/{groups,home_join}.py. An
+// adult-facing alternative to email invitation: a Home Admin shares a short
+// code, another authenticated user looks it up and submits a request, and a
+// Home Admin must approve it (picking the relationship) before any
+// membership is created. Distinct from Invitation and from Group's own
+// child_login_code.
+export type HomeJoinRequestStatus = "pending" | "approved" | "declined" | "cancelled";
+
+export interface HomeJoinCode {
+  code: string | null;
+  generated_at: string | null;
+}
+
+export interface HomeJoinCodeLookup {
+  group_id: string;
+  group_name: string;
+}
+
+export interface HomeJoinRequestSummary {
+  id: string;
+  group_id: string;
+  status: HomeJoinRequestStatus;
+  created_at: string;
+}
+
+export interface HomeJoinRequestListItem {
+  id: string;
+  user_id: string;
+  display_name: string;
+  email: string;
+  status: HomeJoinRequestStatus;
+  method: string;
+  created_at: string;
+}
+
+// External Calendar Sharing — see apps/api/mykhaya/routers/calendar_sharing.py.
+// A CalendarShare never creates a Membership; it's a standalone per-recipient
+// access grant to exactly one calendar, resolvable from either side (source
+// Home or recipient) without either party seeing the other's unrelated data.
+export type CalendarSharePermission = "view" | "manage";
+export type CalendarShareStatus =
+  | "pending_admin_approval"
+  | "pending_recipient"
+  | "accepted"
+  | "declined"
+  | "revoked";
+
+export interface CalendarShare {
+  id: string;
+  calendar_id: string;
+  calendar_name: string;
+  calendar_color: string | null;
+  source_group_id: string;
+  source_group_name: string;
+  recipient_email: string;
+  recipient_user_id: string | null;
+  permission: CalendarSharePermission;
+  status: CalendarShareStatus;
+  expired: boolean;
+  requested_by_display_name: string;
+  expires_at: string;
+  accepted_at: string | null;
+  declined_at: string | null;
+  revoked_at: string | null;
+  notification_preference: "all" | "important" | "off";
+  include_in_briefing: boolean;
+  // null = the entire calendar is shared (the default). A list of
+  // CalendarEventLabel ids = only events carrying one of those categories
+  // are exposed through this share — a filter over the same Home calendar,
+  // never a second calendar. See routers.calendar_sharing's
+  // category_ids/event_matches_share.
+  category_ids: string[] | null;
+  created_at: string;
+}
+
+export interface CalendarSharePreview {
+  calendar_name: string;
+  source_group_name: string;
+  invited_by_display_name: string;
+  permission: CalendarSharePermission;
+  recipient_email: string;
+  expires_at: string;
+  category_names: string[] | null;
+}
+
 export interface HomeSummary {
   home_name: string;
   member_count: number;
@@ -174,7 +400,19 @@ export type FeatureKey =
   | "plans"
   | "wish_lists"
   | "notifications"
-  | "external_sharing";
+  | "external_sharing"
+  | "nudges"
+  | "driveway";
+
+export type ProductUsagePlatform = "web" | "ios" | "android";
+export type ProductUsageModule =
+  | "app" | "calendar" | "nudges" | "lists" | "meals"
+  | "notifications" | "family" | "home" | "settings";
+export type ProductUsageEventName =
+  | "app_open" | "calendar_viewed" | "calendar_event_created"
+  | "nudges_viewed" | "nudge_completed" | "lists_viewed" | "list_created"
+  | "list_item_completed" | "meal_plan_viewed" | "meal_added"
+  | "notification_opened" | "home_viewed" | "family_viewed";
 
 export interface FeatureEvaluation {
   feature: FeatureKey;
@@ -193,12 +431,19 @@ export interface HouseholdModule {
   description: string;
   category: string;
   release_state: ReleaseState;
+  // Effective: also accounts for commercial entitlement, not just platform/
+  // Home feature-flag state.
   enabled: boolean;
   toggleable: boolean;
   introduced_version: string | null;
   dependencies: string[];
   permissions: string[];
   route: string | null;
+  // Whether the Home's current plan includes this module at all.
+  entitled: boolean;
+  // Why a non-core module currently resolves unavailable — "platform"
+  // outranks "plan". null when available (whether or not toggled on).
+  blocked_by: "platform" | "plan" | null;
 }
 
 export type ChildAgeBand = "under_13" | "13_to_15" | "16_to_17";
@@ -244,14 +489,39 @@ export interface NotificationPreferences {
   event_invitations_enabled: boolean;
   event_changes_enabled: boolean;
   household_reminders_enabled: boolean;
+  list_assignments_enabled: boolean;
+  wishlist_sharing_enabled: boolean;
   daily_briefing_enabled: boolean;
   briefing_time: string;
   briefing_days: BriefingDays;
   empty_day_briefing_enabled: boolean;
+  daily_nudge_summary_enabled: boolean;
+  daily_nudge_summary_time: string;
+  nudges_evening_cleanup_enabled: boolean;
+  nudges_evening_time: string;
+  nudges_day_complete_enabled: boolean;
   lock_screen_preview_level: LockScreenPreviewLevel;
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
   quiet_hours_critical_only: boolean;
+}
+
+export interface Notification {
+  id: string;
+  notification_type: string;
+  title: string;
+  body: string;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  deep_link_path: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: Notification[];
+  unread_count: number;
+  next_page: number | null;
 }
 
 export interface PushSubscriptionSummary {
@@ -265,11 +535,17 @@ export interface PushSubscriptionSummary {
 
 export type RoutineReminderTiming = "evening_before" | "same_day" | "both";
 
+export type RoutineScope = "personal" | "household";
+export type RoutineRepeatUnit = "daily" | "weekly";
+
 export interface Routine {
   id: string;
   title: string;
   description: string | null;
+  scope: RoutineScope;
+  owner_user_id: string | null;
   interval_weeks: number;
+  repeat_unit: RoutineRepeatUnit;
   week_anchor_date: string;
   reminder_timing: RoutineReminderTiming;
   is_critical: boolean;
@@ -277,9 +553,14 @@ export interface Routine {
   enabled: boolean;
   start_date: string;
   end_date: string | null;
+  category?: TodoCategory | null;
   member_ids: string[];
   next_occurrence_date: string | null;
   completed_today: boolean;
+  home_occurrence_date?: string | null;
+  home_completed_at?: string | null;
+  home_completed_by_user_id?: string | null;
+  home_completed_by_display_name?: string | null;
   created_by: string;
   updated_at: string;
 }
@@ -287,13 +568,16 @@ export interface Routine {
 export interface RoutinePayload {
   title: string;
   description?: string | null;
+  scope: RoutineScope;
   interval_weeks: number;
+  repeat_unit: RoutineRepeatUnit;
   week_anchor_date: string;
   reminder_timing: RoutineReminderTiming;
   is_critical: boolean;
   pinned: boolean;
   start_date: string;
   end_date?: string | null;
+  category_id?: string | null;
   member_ids: string[];
 }
 
@@ -304,6 +588,496 @@ export interface RoutineUpdatePayload extends RoutinePayload {
 
 export interface RoutineListResponse {
   items: Routine[];
+}
+
+// A standalone Reminder — a lightweight thing to remember, deliberately
+// separate from a Routine (a recurring responsibility with its own
+// reminder_timing) and from a calendar event's reminder_minutes. Reuses
+// RoutineScope verbatim (personal/household mean the same thing here).
+export type ReminderRepeat = "never" | "daily" | "weekly";
+export type ReminderCadence = "once" | "hourly" | "daily" | "weekly";
+
+export interface Reminder {
+  id: string;
+  title: string;
+  description: string | null;
+  scope: RoutineScope;
+  owner_user_id: string | null;
+  due_date: string;
+  due_time: string;
+  repeat: ReminderRepeat;
+  cadence: ReminderCadence;
+  category?: TodoCategory | null;
+  enabled: boolean;
+  member_ids: string[];
+  next_occurrence_date: string | null;
+  completed_today: boolean;
+  home_occurrence_date?: string | null;
+  home_completed_at?: string | null;
+  home_completed_by_user_id?: string | null;
+  home_completed_by_display_name?: string | null;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface ReminderPayload {
+  title: string;
+  description?: string | null;
+  scope: RoutineScope;
+  due_date: string;
+  due_time: string;
+  repeat: ReminderRepeat;
+  cadence: ReminderCadence;
+  category_id?: string | null;
+  member_ids: string[];
+}
+
+export interface ReminderUpdatePayload extends ReminderPayload {
+  enabled: boolean;
+  expected_updated_at: string;
+}
+
+export interface ReminderListResponse {
+  items: Reminder[];
+}
+
+export interface TodoCategory {
+  id: string;
+  name: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Todo {
+  id: string;
+  title: string;
+  description: string | null;
+  scope: RoutineScope;
+  owner_user_id: string | null;
+  category: TodoCategory | null;
+  due_date: string;
+  completed_at: string | null;
+  completed_by: string | null;
+  member_ids: string[];
+  overdue: boolean;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface TodoPayload {
+  title: string;
+  description?: string | null;
+  scope: RoutineScope;
+  due_date: string;
+  category_id?: string | null;
+  member_ids: string[];
+}
+
+export interface TodoUpdatePayload extends TodoPayload {
+  expected_updated_at: string;
+}
+
+export interface TodoListResponse {
+  items: Todo[];
+}
+
+export interface TodoCategoryListResponse {
+  items: TodoCategory[];
+}
+
+// ---------------------------------------------------------------------------
+// Meal Plans (Family-only)
+// ---------------------------------------------------------------------------
+
+export type MealType = "breakfast" | "lunch" | "dinner" | "snack" | "dessert" | "other";
+export type MealSlot = "breakfast" | "lunch" | "dinner";
+
+export interface MealIngredient {
+  id: string;
+  position: number;
+  text: string;
+  quantity: string | null;
+  unit: string | null;
+}
+
+export interface MealIngredientInput {
+  text: string;
+  quantity?: string | null;
+  unit?: string | null;
+}
+
+export interface RecipeImportDraft {
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  instructions: string | null;
+  source_url: string;
+  ingredients: MealIngredientInput[];
+}
+
+export interface Meal {
+  id: string;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  instructions: string | null;
+  is_favourite: boolean;
+  tags: string[];
+  source_url: string | null;
+  ingredients: MealIngredient[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MealPayload {
+  name: string;
+  description?: string | null;
+  image_url?: string | null;
+  meal_type?: MealType;
+  prep_minutes?: number | null;
+  cook_minutes?: number | null;
+  servings?: number | null;
+  instructions?: string | null;
+  is_favourite?: boolean;
+  tags?: string[];
+  source_url?: string | null;
+  ingredients?: MealIngredientInput[];
+}
+
+export interface MealUpdatePayload extends MealPayload {
+  expected_updated_at: string;
+}
+
+// The Meals library list/recent views' shape — a meal card's worth of
+// data, deliberately without the ingredient list (see
+// mykhaya.schemas.MealSummaryResponse). Fetch the full Meal (via the detail
+// endpoint) only when the ingredients/instructions are actually needed.
+export interface MealSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  meal_type: MealType;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  is_favourite: boolean;
+  tags: string[];
+  ingredient_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MealListResponse {
+  items: MealSummary[];
+}
+
+export interface RecentMeal {
+  meal: MealSummary;
+  last_planned: string;
+}
+
+export interface RecentMealsResponse {
+  items: RecentMeal[];
+}
+
+export interface MealPlanEntry {
+  id: string;
+  meal_id: string | null;
+  meal_name: string | null;
+  quick_meal_name: string | null;
+  meal_image_url: string | null;
+  is_favourite: boolean;
+  date: string;
+  meal_slot: MealSlot;
+  time: string | null;
+  member_ids: string[];
+  cook_member_id: string | null;
+  makes_leftovers: boolean;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface MealPlanEntryPayload {
+  meal_id?: string | null;
+  quick_meal_name?: string | null;
+  date: string;
+  meal_slot: MealSlot;
+  time?: string | null;
+  // Omitted entirely means "Everyone" (the whole household) — an explicit
+  // empty array means nobody. See mykhaya.routers.meal_plans.
+  member_ids?: string[];
+  cook_member_id?: string | null;
+  makes_leftovers?: boolean;
+}
+
+export interface MealPlanEntryUpdatePayload extends MealPlanEntryPayload {
+  expected_updated_at: string;
+}
+
+export interface MealPlanDay {
+  date: string;
+  entries: MealPlanEntry[];
+}
+
+export interface MealPlanWeek {
+  start_date: string;
+  days: MealPlanDay[];
+}
+
+export interface CopyWeekPayload {
+  source_start_date: string;
+  target_start_date: string;
+  dry_run?: boolean;
+}
+
+export interface CopyWeekResult {
+  copied_count: number;
+  skipped_count: number;
+}
+
+export interface AddIngredientsToListPayload {
+  list_id: string;
+  ingredient_ids?: string[];
+  confirm?: boolean;
+}
+
+export interface AddIngredientsToListResult {
+  requires_confirmation: boolean;
+  added_count: number;
+  duplicate_count: number;
+  duplicate_texts: string[];
+  list_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Household Lists — MyKhaya's one shared-list primitive (groceries,
+// packing, DIY, school, party/Christmas/holiday prep, and Meal Plans' "Add
+// ingredients to list" destination). See mykhaya.routers.lists and
+// docs/architecture/lists.md.
+// ---------------------------------------------------------------------------
+
+// Presentation-only preset — mirrors mykhaya.schemas.LIST_ICONS.
+export type ListIcon =
+  | "groceries"
+  | "shopping"
+  | "packing"
+  | "home"
+  | "school"
+  | "party"
+  | "christmas"
+  | "other";
+
+export interface HouseholdListItem {
+  id: string;
+  position: number;
+  section_id: string | null;
+  text: string;
+  quantity: string | null;
+  note: string | null;
+  assigned_member_id: string | null;
+  is_checked: boolean;
+  completed_at: string | null;
+  completed_by: string | null;
+}
+
+export interface HouseholdList {
+  id: string;
+  name: string;
+  icon: ListIcon | null;
+  item_count: number;
+  remaining_count: number;
+  created_by: string;
+  scope: ListTemplateScope;
+  created_at: string;
+  updated_at: string;
+  // "normal" = usable now; "read_only_due_to_plan" = preserved but over
+  // the Home's current lists.max_lists allowance (almost always the
+  // result of a downgrade) — viewable, but create/rename/item-mutation is
+  // rejected. Same shape as HomeCalendar.commercial_access.
+  commercial_access: CalendarCommercialAccess;
+}
+
+export interface HouseholdListDetail {
+  id: string;
+  name: string;
+  icon: ListIcon | null;
+  items: HouseholdListItem[];
+  item_count: number;
+  remaining_count: number;
+  created_by: string;
+  scope: ListTemplateScope;
+  created_at: string;
+  updated_at: string;
+  commercial_access: CalendarCommercialAccess;
+  sections: ListSection[];
+  source_template_id: string | null;
+  source_template_name: string | null;
+}
+
+export type ListTemplateScope = "personal" | "household";
+
+export interface ListTemplateItem {
+  id: string;
+  text: string;
+  position: number;
+}
+
+export interface ListSection {
+  id: string;
+  name: string;
+  position: number;
+  updated_at?: string;
+  items: ListTemplateItem[];
+}
+
+export interface ListTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  scope: ListTemplateScope;
+  owner_user_id: string;
+  group_id: string;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  sections: ListSection[];
+}
+
+export interface ListTemplateListResponse {
+  items: ListTemplate[];
+}
+
+export interface HouseholdListListResponse {
+  items: HouseholdList[];
+}
+
+export interface ListCreatePayload {
+  name: string;
+  icon?: ListIcon | null;
+  template_id?: string | null;
+  scope?: ListTemplateScope;
+}
+
+export interface ListTemplateSectionInput {
+  name: string;
+  items?: { text: string }[];
+}
+
+export interface ListTemplateCreatePayload {
+  name: string;
+  description?: string | null;
+  scope: ListTemplateScope;
+  sections?: ListTemplateSectionInput[];
+}
+
+export interface ListTemplateUpdatePayload extends ListTemplateCreatePayload {
+  expected_updated_at: string;
+}
+
+// Driveway — mirrors mykhaya.driveway_schemas. Phase 2 core vehicle model
+// only (no documents/service/insurance/compliance fields yet).
+export interface Vehicle {
+  id: string;
+  group_id: string;
+  owner_user_id: string;
+  nickname: string;
+  make: string | null;
+  model: string | null;
+  colour: string | null;
+  year: number | null;
+  fuel_type: string | null;
+  engine_size: string | null;
+  country_code: string;
+  registration: string | null;
+  first_registration_date: string | null;
+  // Omitted by the backend (not just null) for a viewer who isn't the
+  // vehicle's own owner or a home_admin — see routers.driveway.
+  vin: string | null;
+  lookup_provider: string | null;
+  lookup_status: string | null;
+  last_successful_lookup: string | null;
+  tax_status: string | null;
+  tax_due_date: string | null;
+  inspection_status: string | null;
+  inspection_due_date: string | null;
+  photo_version: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VehicleListResponse {
+  items: Vehicle[];
+}
+
+export interface VehicleCreatePayload {
+  nickname: string;
+  owner_user_id: string;
+  make?: string | null;
+  model?: string | null;
+  colour?: string | null;
+  year?: number | null;
+  fuel_type?: string | null;
+  engine_size?: string | null;
+  country_code: string;
+  registration?: string | null;
+  first_registration_date?: string | null;
+  vin?: string | null;
+}
+
+export interface VehicleUpdatePayload extends VehicleCreatePayload {
+  expected_updated_at: string;
+}
+
+// A manual Driveway reminder linked to one vehicle (Phase 4). No scope/
+// category fields — a Driveway-created reminder always inherits the
+// vehicle's own scope and always uses the managed "Vehicles" category; the
+// response is an ordinary Reminder (see mykhaya.driveway_reminders), same
+// shape Nudges already uses.
+export interface VehicleReminderCreatePayload {
+  title: string;
+  description?: string | null;
+  due_date: string;
+  due_time?: string;
+  repeat?: ReminderRepeat;
+  cadence?: ReminderCadence;
+}
+
+export interface ListRenamePayload {
+  name: string;
+  icon?: ListIcon | null;
+  expected_updated_at: string;
+}
+
+export interface ListItemInputPayload {
+  text: string;
+  section_id?: string | null;
+  quantity?: string | null;
+  note?: string | null;
+  assigned_member_id?: string | null;
+}
+
+// Every field optional — only the ones present are applied server-side
+// (see mykhaya.schemas.ListItemUpdate). A plain checkbox toggle sends only
+// `is_checked`; an edit sends only the fields that changed.
+export interface ListItemUpdatePayload {
+  text?: string;
+  quantity?: string | null;
+  note?: string | null;
+  assigned_member_id?: string | null;
+  section_id?: string | null;
+  is_checked?: boolean;
 }
 
 export interface UserBirthdayPayload {
@@ -331,4 +1105,352 @@ export interface BirthdayEntry {
 
 export interface BirthdayListResponse {
   items: BirthdayEntry[];
+}
+
+export interface HolidaySource {
+  id: string;
+  country_code: string;
+  country_name: string;
+  flag_emoji: string;
+  region_code: string | null;
+  region_name: string;
+  provider: string;
+  source_url: string | null;
+  enabled: boolean;
+  sync_status: "healthy" | "warning" | "failed";
+  last_successful_sync: string | null;
+  next_scheduled_sync: string | null;
+  last_sync_error: string | null;
+  cached_holiday_count: number;
+}
+
+export interface CalendarHighlightSettings {
+  birthdays_enabled: boolean;
+  subscriptions: Array<{ id: string; source: HolidaySource; enabled: boolean }>;
+  available_sources: HolidaySource[];
+}
+
+export interface CalendarHighlight {
+  kind: "holiday" | "birthday";
+  date: string;
+  label: string;
+  names?: string[];
+  country_code?: string;
+  flag_emoji?: string;
+  source_id?: string;
+}
+
+// Commercial billing (Stripe, Phases 3–4) — mirrors mykhaya.billing_schemas.
+// See docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+
+export type BillingInterval = "month" | "year";
+export type SubscriptionPlanValue = "free" | "family" | "ultimate";
+export type SubscriptionProviderValue = "free" | "complimentary" | "stripe" | "apple" | "google";
+export type SubscriptionStatusValue =
+  | "active"
+  | "trialing"
+  | "past_due"
+  | "cancel_at_period_end"
+  | "cancelled";
+
+export interface SubscriptionPrice {
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+}
+
+export interface BillingStatus {
+  stored_plan: SubscriptionPlanValue;
+  provider: SubscriptionProviderValue;
+  status: SubscriptionStatusValue;
+  effective_plan: SubscriptionPlanValue;
+  effective_status_reason: string | null;
+  billing_interval: BillingInterval | null;
+  // The actual amount this Home's own subscription is billed — resolved
+  // live from Stripe, reflecting a grandfathered price if applicable. Never
+  // a hard-coded figure. Null unless the Home is Stripe-backed.
+  price: SubscriptionPrice | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  affected_adult_members?: string[];
+  retention_state?: "retained_free" | "restored" | "purge_pending" | "purged" | null;
+  retention_deadline?: string | null;
+  complimentary_expires_at: string | null;
+  can_manage_billing: boolean;
+  has_stripe_customer: boolean;
+  stripe_billing_available: boolean;
+  family_access: boolean;
+  calendar_usage: CalendarUsage;
+  category_usage: CalendarUsage;
+  member_usage: CalendarUsage;
+  household_routines_enabled: boolean;
+  shared_events_enabled: boolean;
+  external_invites_enabled: boolean;
+  meals_enabled: boolean;
+  // True on both Free and Family since Phase 2B — see list_usage below for
+  // the actual Free/Family differentiator (lists.max_lists).
+  lists_enabled: boolean;
+  list_usage: CalendarUsage;
+  wishlists_enabled: boolean;
+  nudges_enabled: boolean;
+  budget_enabled: boolean;
+  driveway_enabled: boolean;
+}
+
+export interface PricingOption {
+  interval: BillingInterval;
+  provider: string;
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+}
+
+export interface FamilyPricing {
+  plan: string;
+  options: PricingOption[];
+  annual_saving_formatted: string | null;
+  // True only when the current provider prices make annual mathematically
+  // cheaper than 12 monthly periods — never a hard-coded assumption.
+  annual_is_best_value: boolean;
+  // The Phase 7 billing kill switch. Pricing stays visible/informational
+  // even when false — only Checkout creation is actually blocked
+  // (server-side) — so use this to swap "Choose Family" for a "temporarily
+  // paused" notice rather than hiding the price.
+  acquisition_enabled: boolean;
+  ultimate_options?: PricingOption[] | null;
+  ultimate_annual_saving_formatted?: string | null;
+  ultimate_annual_is_best_value?: boolean;
+  ultimate_acquisition_enabled?: boolean;
+}
+
+export interface VehicleLookupPayload {
+  country_code: string;
+  registration: string;
+}
+
+export interface VehicleLookupResult {
+  found: boolean;
+  manual_entry_required: boolean;
+  provider: string | null;
+  registration: string | null;
+  make: string | null;
+  model: string | null;
+  colour: string | null;
+  year: number | null;
+  fuel_type: string | null;
+  engine_size: string | null;
+  first_registration_date: string | null;
+  tax_status: string | null;
+  tax_due_date: string | null;
+  inspection_status: string | null;
+  inspection_due_date: string | null;
+  capabilities: string[];
+  message: string | null;
+}
+
+export interface PlanComparisonRow {
+  key: string;
+  label: string;
+  free_display: string;
+  family_display: string;
+  ultimate_display: string;
+}
+
+export interface PlanComparison {
+  rows: PlanComparisonRow[];
+}
+
+// --- Wishlists (Family-only) -----------------------------------------------
+// Mirrors mykhaya.wishlist_schemas exactly, field for field. The
+// owner/viewer item-response split is deliberate and load-bearing: see that
+// module's docstring. WishlistItemOwner has NO reservation fields at all —
+// not even optional ones — so reading item.reservation_status on an owner
+// item is a compile error, matching the backend guarantee that the owner's
+// response literally cannot carry that data. See docs/product/wishlists.md.
+
+export type WishlistOccasion = "birthday" | "christmas" | "general" | "other";
+export type WishlistReservationStatus = "available" | "reserved" | "bought";
+export type WishlistShareType = "mykhaya_user" | "guest";
+
+export interface WishlistSummary {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  owner_display_name: string;
+  item_count: number;
+  is_owner: boolean;
+  home_visible: boolean;
+  share_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WishlistListResponse {
+  items: WishlistSummary[];
+}
+
+// No reservation fields at all — see module note above.
+export interface WishlistItemOwner {
+  id: string;
+  name: string;
+  url: string | null;
+  price: string | null;
+  currency: string | null;
+  note: string | null;
+  image_url: string | null;
+  quantity: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WishlistItemViewer {
+  id: string;
+  name: string;
+  url: string | null;
+  price: string | null;
+  currency: string | null;
+  note: string | null;
+  image_url: string | null;
+  quantity: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  reservation_status: WishlistReservationStatus;
+  reserved_by_display_name: string | null;
+}
+
+export interface WishlistOwnerDetail {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  home_visible: boolean;
+  share_count: number;
+  created_at: string;
+  updated_at: string;
+  items: WishlistItemOwner[];
+}
+
+export interface WishlistViewerDetail {
+  id: string;
+  home_id: string;
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date: string | null;
+  description: string | null;
+  owner_user_id: string;
+  owner_display_name: string;
+  created_at: string;
+  updated_at: string;
+  items: WishlistItemViewer[];
+}
+
+// The backend returns one shape or the other with no discriminant field
+// (response_model=None) — callers must branch on
+// `wishlist.owner_user_id === currentUserId`, never on field presence alone.
+export type WishlistDetail = WishlistOwnerDetail | WishlistViewerDetail;
+
+export interface WishlistCreatePayload {
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date?: string | null;
+  description?: string | null;
+  owner_user_id?: string | null;
+}
+
+export interface WishlistVisibilityUpdatePayload {
+  enabled: boolean;
+}
+
+export interface WishlistLinkPreview {
+  title: string | null;
+  image_url: string | null;
+  description: string | null;
+  price: string | null;
+  currency: string | null;
+}
+
+export interface WishlistUpdatePayload {
+  title: string;
+  occasion: WishlistOccasion;
+  occasion_date?: string | null;
+  description?: string | null;
+  expected_updated_at: string;
+}
+
+export interface WishlistItemCreatePayload {
+  name: string;
+  url?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  note?: string | null;
+  image_url?: string | null;
+  quantity?: number;
+}
+
+export interface WishlistItemUpdatePayload {
+  name?: string;
+  url?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  note?: string | null;
+  image_url?: string | null;
+  quantity?: number;
+}
+
+export interface ShareRecipientLookupResponse {
+  existing_user_id: string | null;
+  existing_user_display_name: string | null;
+}
+
+export interface ShareCreatePayload {
+  recipient_name: string;
+  recipient_email?: string | null;
+  share_type: WishlistShareType;
+  confirmed_user_id?: string | null;
+}
+
+export interface ShareResponse {
+  id: string;
+  recipient_name: string;
+  share_type: WishlistShareType;
+  created_at: string;
+}
+
+// The plaintext PIN/link token are returned exactly once, at creation or
+// regeneration time only — never persisted client-side beyond the one-time
+// reveal UI, and never returned again by any other endpoint.
+export interface GuestShareCreateResponse extends ShareResponse {
+  link_token: string;
+  pin: string;
+}
+
+export interface ShareListItem {
+  id: string;
+  recipient_name: string;
+  recipient_email: string | null;
+  share_type: WishlistShareType;
+  created_at: string;
+  last_accessed_at: string | null;
+  revoked: boolean;
+}
+
+export interface ShareListResponse {
+  items: ShareListItem[];
+}
+
+export interface GuestVerifyPayload {
+  pin: string;
+}
+
+export interface GuestVerifyResponse {
+  recipient_name: string;
 }

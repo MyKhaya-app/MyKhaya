@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update
+.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update prod-install prod-update prod-health prod-logs prod-config prod-backup prod-restore
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -25,6 +25,14 @@ migrate:
 test:
 	pnpm test
 	sh infrastructure/scripts/run-tests.sh
+# Tears down the disposable test stack only (compose.test.yml's own Compose
+# project, "mykhaya-test") — never the persistent dev stack. Safe to run any
+# time, e.g. if a previous `make test`/`make lint` was interrupted and left
+# postgres-test/redis-test containers behind. Structurally cannot touch the
+# "mykhaya" project's postgres_data/redis_data/caddy_data/avatar_data volumes,
+# since they live in a different Compose project entirely.
+test-clean:
+	docker compose -f compose.yml -f compose.test.yml --profile tools down -v --remove-orphans
 lint:
 	pnpm lint
 	sh infrastructure/scripts/run-tests.sh ruff check mykhaya tests
@@ -43,7 +51,22 @@ reset:
 	docker compose down -v
 	docker compose up --build -d
 prod:
-	docker compose -f compose.yml -f compose.production.yml up --build -d
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-install.sh
+prod-install:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-install.sh
+prod-update:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-deploy.sh update
+prod-health:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-health.sh
+prod-logs:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-logs.sh
+prod-config:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-deploy.sh validate
+prod-backup:
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/backup.sh
+prod-restore:
+	@test -n "$(FILE)" || (echo "Use make prod-restore FILE=/absolute/path/backup.sql.gz" && exit 1)
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/restore.sh "$(FILE)"
 backup:
 	sh infrastructure/scripts/backup.sh
 restore:
@@ -61,6 +84,8 @@ compose-check:
 	docker compose config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "local dev"
 	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "persistent dev server"
 	docker compose -f compose.yml -f compose.production.yml config --format json | python3 infrastructure/scripts/check_caddy_port_published.py "production"
+	docker compose config --format json | python3 infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py "local dev"
+	docker compose -f compose.yml -f compose.dev.yml config --format json | python3 infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py "persistent dev server"
 caddy-check:
 	docker run --rm \
 		-e MYKHAYA_DEV_PROXY_TRUSTED_CIDRS=100.64.0.0/10 \
@@ -68,7 +93,6 @@ caddy-check:
 		caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
 web-check:
 	docker build --target check -f apps/web/Dockerfile .
-	docker build --target mobile-check -f apps/web/Dockerfile .
 # The single canonical pre-release command: everything the `quality` GitHub
 # Actions workflow checks that can meaningfully run outside CI's own runner
 # (image builds/pushes and Gitleaks are the two things this deliberately

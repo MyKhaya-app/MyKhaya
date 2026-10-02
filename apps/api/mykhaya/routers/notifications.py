@@ -1,6 +1,8 @@
 import uuid
 from datetime import UTC, datetime, time
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,11 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
-from mykhaya.models import BriefingDays, LockScreenPreviewLevel, Notification, PushSubscription
+from mykhaya.models import (
+    BriefingDays,
+    LockScreenPreviewLevel,
+    NativePushDevice,
+    NativePushDisabledSource,
+    Notification,
+    PushSubscription,
+)
 from mykhaya.notifications.deep_links import resolve_path
 from mykhaya.notifications.engine import get_or_create_preferences
 from mykhaya.notifications.push import resolve_push_config
 from mykhaya.schemas import (
+    NativePushDeviceCreate,
+    NativePushDeviceResponse,
     NotificationListResponse,
     NotificationPreferencesResponse,
     NotificationPreferencesUpdate,
@@ -25,6 +36,105 @@ from mykhaya.schemas import (
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 PAGE_SIZE = 30
+MAX_PAGE_SIZE = 50
+
+
+def native_device_response(row: NativePushDevice) -> NativePushDeviceResponse:
+    return NativePushDeviceResponse(
+        id=row.id,
+        platform=row.platform,
+        device_label=row.device_label,
+        created_at=row.created_at,
+        last_seen_at=row.last_seen_at,
+        disabled_at=row.disabled_at,
+        apns_environment=row.apns_environment,
+    )
+
+
+@router.post("/native-devices", status_code=status.HTTP_201_CREATED)
+async def register_native_device(
+    body: NativePushDeviceCreate,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> NativePushDeviceResponse:
+    if body.platform == "ios" and body.apns_environment is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "iOS native registrations must include their APNs environment.",
+        )
+    row = await db.scalar(
+        select(NativePushDevice).where(
+            NativePushDevice.platform == body.platform,
+            NativePushDevice.installation_id == body.installation_id,
+            NativePushDevice.apns_environment == body.apns_environment,
+        )
+    )
+    if row is None and body.apns_environment is not None:
+        row = await db.scalar(
+            select(NativePushDevice).where(
+                NativePushDevice.platform == body.platform,
+                NativePushDevice.installation_id == body.installation_id,
+                NativePushDevice.apns_environment.is_(None),
+            )
+        )
+    now = datetime.now(UTC)
+    if row is None:
+        row = NativePushDevice(
+            user_id=auth.user.id,
+            platform=body.platform,
+            token=body.token,
+            installation_id=body.installation_id,
+            device_label=body.device_label,
+            apns_environment=body.apns_environment,
+            last_seen_at=now,
+        )
+        db.add(row)
+    else:
+        # Technical fields always refresh — even a Platform-Admin-disabled
+        # row shouldn't sit on a stale token/label while parked, in case an
+        # operator re-enables it later (see mykhaya.models.
+        # NativePushDisabledSource's own comment).
+        row.user_id = auth.user.id
+        row.token = body.token
+        row.device_label = body.device_label
+        row.apns_environment = body.apns_environment
+        row.last_seen_at = now
+        # A Platform-Admin disable is the one disable source that must never
+        # be silently undone by the app's own next natural re-registration —
+        # that's the entire point of the action (see routers.platform's
+        # disable_native_push_device). A provider rejection or a consumer
+        # logout (disabled_source None/provider/user, including every row
+        # disabled before this column existed) still reactivates exactly as
+        # before: this is existing, intended behaviour (logging back in on
+        # the same device must resume working immediately), not something
+        # this phase changes.
+        if row.disabled_source != NativePushDisabledSource.platform_admin:
+            row.disabled_at = None
+            row.disabled_reason = None
+            row.disabled_source = None
+    await db.commit()
+    await db.refresh(row)
+    return native_device_response(row)
+
+
+@router.delete("/native-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_native_device(
+    device_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    row = await db.scalar(
+        select(NativePushDevice).where(
+            NativePushDevice.id == device_id,
+            NativePushDevice.user_id == auth.user.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Native device not found.")
+    row.disabled_at = datetime.now(UTC)
+    row.disabled_reason = "Removed by account owner."
+    row.disabled_source = NativePushDisabledSource.user
+    await db.commit()
 
 
 def _time_str(value: time | None) -> str | None:
@@ -46,10 +156,17 @@ async def get_preferences(
         event_invitations_enabled=prefs.event_invitations_enabled,
         event_changes_enabled=prefs.event_changes_enabled,
         household_reminders_enabled=prefs.household_reminders_enabled,
+        list_assignments_enabled=prefs.list_assignments_enabled,
+        wishlist_sharing_enabled=prefs.wishlist_sharing_enabled,
         daily_briefing_enabled=prefs.daily_briefing_enabled,
         briefing_time=_time_str(prefs.briefing_time) or "07:30",
         briefing_days=prefs.briefing_days.value,
         empty_day_briefing_enabled=prefs.empty_day_briefing_enabled,
+        daily_nudge_summary_enabled=prefs.daily_nudge_summary_enabled,
+        daily_nudge_summary_time=_time_str(prefs.daily_nudge_summary_time) or "07:30",
+        nudges_evening_cleanup_enabled=prefs.nudges_evening_cleanup_enabled,
+        nudges_evening_time=_time_str(prefs.nudges_evening_time) or "20:30",
+        nudges_day_complete_enabled=prefs.nudges_day_complete_enabled,
         lock_screen_preview_level=prefs.lock_screen_preview_level.value,
         quiet_hours_start=_time_str(prefs.quiet_hours_start),
         quiet_hours_end=_time_str(prefs.quiet_hours_end),
@@ -71,10 +188,17 @@ async def update_preferences(
     prefs.event_invitations_enabled = body.event_invitations_enabled
     prefs.event_changes_enabled = body.event_changes_enabled
     prefs.household_reminders_enabled = body.household_reminders_enabled
+    prefs.list_assignments_enabled = body.list_assignments_enabled
+    prefs.wishlist_sharing_enabled = body.wishlist_sharing_enabled
     prefs.daily_briefing_enabled = body.daily_briefing_enabled
     prefs.briefing_time = time.fromisoformat(body.briefing_time)
     prefs.briefing_days = BriefingDays(body.briefing_days)
     prefs.empty_day_briefing_enabled = body.empty_day_briefing_enabled
+    prefs.daily_nudge_summary_enabled = body.daily_nudge_summary_enabled
+    prefs.daily_nudge_summary_time = time.fromisoformat(body.daily_nudge_summary_time)
+    prefs.nudges_evening_cleanup_enabled = body.nudges_evening_cleanup_enabled
+    prefs.nudges_evening_time = time.fromisoformat(body.nudges_evening_time)
+    prefs.nudges_day_complete_enabled = body.nudges_day_complete_enabled
     prefs.lock_screen_preview_level = LockScreenPreviewLevel(body.lock_screen_preview_level)
     prefs.quiet_hours_start = (
         time.fromisoformat(body.quiet_hours_start) if body.quiet_hours_start else None
@@ -90,26 +214,35 @@ async def update_preferences(
 @router.get("")
 async def list_notifications(
     page: int = Query(default=1, ge=1, le=1000),
+    filter: Literal["all", "unread"] = Query(default="all"),
+    limit: int = Query(default=PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationListResponse:
-    offset = (page - 1) * PAGE_SIZE
+    offset = (page - 1) * limit
+    predicates = [
+        Notification.recipient_user_id == auth.user.id,
+        Notification.cleared_at.is_(None),
+    ]
+    if filter == "unread":
+        predicates.append(Notification.read_at.is_(None))
     rows = (
         await db.scalars(
             select(Notification)
-            .where(Notification.recipient_user_id == auth.user.id)
+            .where(*predicates)
             .order_by(Notification.created_at.desc())
             .offset(offset)
-            .limit(PAGE_SIZE + 1)
+            .limit(limit + 1)
         )
     ).all()
-    has_more = len(rows) > PAGE_SIZE
-    rows = rows[:PAGE_SIZE]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     unread_count = (
         await db.scalar(
             select(func.count(Notification.id)).where(
                 Notification.recipient_user_id == auth.user.id,
                 Notification.read_at.is_(None),
+                Notification.cleared_at.is_(None),
             )
         )
         or 0
@@ -154,6 +287,44 @@ async def mark_notification_read(
     return {"message": "Marked as read."}
 
 
+@router.get("/unread-count")
+async def unread_notification_count(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    unread_count = (
+        await db.scalar(
+            select(func.count(Notification.id)).where(
+                Notification.recipient_user_id == auth.user.id,
+                Notification.read_at.is_(None),
+                Notification.cleared_at.is_(None),
+            )
+        )
+        or 0
+    )
+    return {"unread_count": unread_count}
+
+
+@router.post("/{notification_id}/clear")
+async def clear_notification(
+    notification_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    notification = await db.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.recipient_user_id == auth.user.id,
+        )
+    )
+    if notification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found.")
+    if notification.cleared_at is None:
+        notification.cleared_at = datetime.now(UTC)
+        await db.commit()
+    return {"message": "Notification cleared."}
+
+
 @router.post("/read-all")
 async def mark_all_notifications_read(
     auth: AuthContext = Depends(auth_context),
@@ -164,11 +335,29 @@ async def mark_all_notifications_read(
         .where(
             Notification.recipient_user_id == auth.user.id,
             Notification.read_at.is_(None),
+            Notification.cleared_at.is_(None),
         )
         .values(read_at=func.now())
     )
     await db.commit()
     return {"message": "All notifications marked as read."}
+
+
+@router.post("/clear-all")
+async def clear_all_notifications(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    await db.execute(
+        update(Notification)
+        .where(
+            Notification.recipient_user_id == auth.user.id,
+            Notification.cleared_at.is_(None),
+        )
+        .values(cleared_at=func.now())
+    )
+    await db.commit()
+    return {"message": "All notifications cleared."}
 
 
 @router.get("/push/public-key")

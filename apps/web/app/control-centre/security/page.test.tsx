@@ -1,0 +1,174 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import GlobalSecurityPage from "./page";
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/control-centre/security",
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+}));
+vi.mock("@mykhaya/api-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
+  return {
+    ...actual,
+    platformApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+  };
+});
+const { platformApi, ApiError } = await import("@mykhaya/api-client");
+const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
+const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
+const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
+
+const optionalPolicy = { required: false, environment_enforced: false };
+const optionalBrowserPolicy = {
+  configured: "optional",
+  effective: "optional",
+  source: "platform",
+  allowed_methods: ["totp", "email"],
+  enforcement_enabled: false,
+  email_code_lifetime_minutes: 15,
+  recent_auth_window_minutes: 15,
+};
+const events = [
+  { id: "e1", created_at: "2026-09-07T09:00:00Z", event_type: "login_failed", severity: "warning", outcome: "blocked", safe_detail: "Too many attempts" },
+];
+const providers = {
+  providers: [
+    { provider: "apple", state: "not_configured", configured: false, framework_available: true, client_identifier: null, redirect_uri: null, credential_configured: false, enabled: false, last_configuration_test: null },
+    { provider: "google", state: "not_configured", configured: false, framework_available: true, client_identifier: null, redirect_uri: null, credential_configured: false, enabled: false, last_configuration_test: null },
+  ],
+};
+
+function mockLoad(policy = optionalPolicy, eventItems = events, browserPolicy = optionalBrowserPolicy) {
+  get.mockImplementation((path: string) => {
+    if (path === "/auth/mfa/policy") return Promise.resolve(policy);
+    if (path === "/auth/mfa/browser-policy") return Promise.resolve(browserPolicy);
+    if (path.startsWith("/security")) return Promise.resolve({ items: eventItems });
+    if (path === "/auth/providers") return Promise.resolve(providers);
+    return Promise.reject(new Error(`unexpected path ${path}`));
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockLoad();
+  put.mockResolvedValue({ ...optionalPolicy, required: true });
+  post.mockResolvedValue({});
+});
+
+describe("Global Security", () => {
+  it("renders the MFA policy state and the security event log", async () => {
+    const { container } = render(<GlobalSecurityPage />);
+    expect((await screen.findAllByText("Optional")).length).toBeGreaterThanOrEqual(2);
+    expect(container.querySelector(".pcc-security-policy-grid")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-security-policy-grid > div")).toHaveLength(3);
+    expect(container.querySelector(".pcc-provider-grid")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-provider-card")).toHaveLength(2);
+    expect(screen.getByText("Login Failed")).toBeInTheDocument();
+    expect(screen.getByText("Too many attempts")).toBeInTheDocument();
+  });
+
+  it("shows an empty state when there are no security events", async () => {
+    mockLoad(optionalPolicy, []);
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText("No recent security events.")).toBeInTheDocument();
+  });
+
+  it("locks the toggle when the policy is environment-enforced", async () => {
+    mockLoad({ required: true, environment_enforced: true });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText(/permanently required for Platform Administrators in this deployment/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Require MFA|Make MFA optional/ })).not.toBeInTheDocument();
+  });
+
+  it("requires a reason and sends the exact payload with confirmed:true when changing the policy", async () => {
+    render(<GlobalSecurityPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Require MFA for all administrators" }));
+    const reasonInput = screen.getByLabelText("Reason for this change");
+    const submit = screen.getByRole("button", { name: "Require MFA" });
+    expect(submit).toBeInTheDocument();
+    await userEvent.type(reasonInput, "Tightening admin security policy");
+    await userEvent.click(submit);
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/auth/mfa/policy", {
+        required: true,
+        reason: "Tightening admin security policy",
+        confirmed: true,
+      }),
+    );
+  });
+
+  it("submits Browser MFA changes to the consumer policy endpoint", async () => {
+    put.mockResolvedValue({ ...optionalBrowserPolicy, configured: "required", effective: "required", enforcement_enabled: true });
+    render(<GlobalSecurityPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Require browser MFA" }));
+    await userEvent.type(screen.getByLabelText("Reason for this change"), "Require consumer browser MFA");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm browser MFA policy" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/auth/mfa/browser-policy", {
+      policy: "required",
+      allowed_methods: ["totp", "email"],
+      reason: "Require consumer browser MFA",
+      confirmed: true,
+    }));
+  });
+
+  it("keeps Browser MFA usable when an unrelated security endpoint fails", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/auth/mfa/policy") return Promise.reject(new ApiError(403, "Administrator policy access denied."));
+      if (path === "/auth/mfa/browser-policy") return Promise.resolve(optionalBrowserPolicy);
+      if (path.startsWith("/security")) return Promise.resolve({ items: events });
+      if (path === "/auth/providers") return Promise.resolve(providers);
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText("Consumer Browser MFA")).toBeInTheDocument();
+    expect(screen.getByText("Administrator policy access denied.")).toBeInTheDocument();
+  });
+
+  it("separates consumer policy from the deployment enforcement gate", async () => {
+    mockLoad(optionalPolicy, events, {
+      ...optionalBrowserPolicy,
+      configured: "required",
+      effective: "required",
+      enforcement_enabled: false,
+    });
+    const { container } = render(<GlobalSecurityPage />);
+    expect(await screen.findByText("Policy")).toBeInTheDocument();
+    expect(screen.getByText("Enforcement")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pcc-security-policy-columns > section")).toHaveLength(2);
+    expect(screen.getByText("Authenticator app, Email")).toBeInTheDocument();
+    expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=false")).toBeInTheDocument();
+    expect(screen.getByText(/configured as Required but is not currently being enforced/i)).toBeInTheDocument();
+  });
+
+  it("shows active enforcement when the required consumer policy gate is enabled", async () => {
+    mockLoad(optionalPolicy, events, {
+      ...optionalBrowserPolicy,
+      configured: "required",
+      effective: "required",
+      enforcement_enabled: true,
+    });
+    render(<GlobalSecurityPage />);
+    expect(await screen.findByText(/actively enforced for users/i)).toBeInTheDocument();
+    expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=true")).toBeInTheDocument();
+  });
+
+  it("opens the reauth modal on a 403 and retries the same change once verified", async () => {
+    put.mockImplementation(() => {
+      const priorAttempts = put.mock.calls.length;
+      if (priorAttempts === 1) return Promise.reject(new ApiError(403, "Recent authentication required."));
+      return Promise.resolve({ ...optionalPolicy, required: true });
+    });
+    render(<GlobalSecurityPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Require MFA for all administrators" }));
+    await userEvent.type(screen.getByLabelText("Reason for this change"), "Tightening admin security policy");
+    await userEvent.click(screen.getByRole("button", { name: "Require MFA" }));
+
+    const reauthDialog = await screen.findByRole("dialog", { name: /Confirm it.s you/i });
+    await userEvent.type(within(reauthDialog).getByLabelText("Password"), "hunter2");
+    await userEvent.click(within(reauthDialog).getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("MFA is now required for every platform administrator.")).toBeInTheDocument();
+  });
+});

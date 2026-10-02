@@ -15,6 +15,7 @@ import pytest
 from fastapi import FastAPI
 
 from mykhaya.config import Settings, resolve_app_version
+from mykhaya.main import api_documentation_urls
 
 SECRET_KEY = "a" * 40
 
@@ -95,3 +96,16 @@ def test_app_module_constructs_fastapi_with_non_empty_version() -> None:
     from mykhaya.main import app
 
     assert app.version
+
+
+def test_production_disables_all_fastapi_documentation_surfaces() -> None:
+    assert api_documentation_urls("production") == {
+        "docs_url": None,
+        "redoc_url": None,
+        "openapi_url": None,
+    }
+    assert api_documentation_urls("development") == {
+        "docs_url": "/docs",
+        "redoc_url": None,
+        "openapi_url": "/openapi.json",
+    }

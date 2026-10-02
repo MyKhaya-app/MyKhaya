@@ -2,7 +2,9 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import structlog
 from pywebpush import WebPushException
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -10,20 +12,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.mailer import resolve_smtp_config, send_email
+from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
+    NativePushDevice,
+    NativePushDisabledSource,
     NotificationDelivery,
     NotificationDeliveryStatus,
     OperationalHeartbeat,
     OutboxEvent,
+    PlatformSetting,
     PushSubscription,
     WorkerJobRecord,
 )
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
-from mykhaya.notifications.push import is_subscription_gone, resolve_push_config, send_push
+from mykhaya.notifications.deep_links import resolve_path
+from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES
+from mykhaya.notifications.lifecycle import (
+    is_home_operationally_active,
+    is_user_operationally_active,
+)
+from mykhaya.notifications.nudges import deliver_daily_nudge_summary, deliver_nudge_summary
+from mykhaya.notifications.push import (
+    ApnsPermanentError,
+    FcmPermanentError,
+    is_subscription_gone,
+    resolve_apns_config,
+    resolve_fcm_config,
+    resolve_push_config,
+    send_apns,
+    send_fcm,
+    send_push,
+)
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
+from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    SyslogDispatcher,
+    configure_structlog_forwarding,
+    syslog_config_from_platform_value,
+)
+
+log = structlog.get_logger()
 
 # Bounded retry with exponential backoff. attempts=1 -> 30s, 2 -> 60s,
 # 3 -> 120s ... capped at MAX_BACKOFF_SECONDS. After MAX_ATTEMPTS the event
@@ -39,6 +70,30 @@ def _backoff_seconds(attempts: int) -> int:
     return int(min(delay, MAX_BACKOFF_SECONDS))
 
 
+async def _lifecycle_suppression_reason(db: AsyncSession, payload: dict[str, Any]) -> str | None:
+    """Slice 4.5 delivery-time re-check: notify() already verified the
+    recipient/Home were active when this was enqueued, but push/email
+    dispatch can happen minutes or hours later — re-verify so a Home/user
+    that went inactive in the meantime is suppressed rather than delivered.
+    Returns a human-readable reason if ineligible, else None.
+
+    Mirrors notify()'s own MANDATORY_EMAIL_TYPES exemption exactly: those
+    types were deliberately enqueued regardless of recipient activity
+    (account-security / action-required messages), so this re-check must
+    not turn around and suppress them anyway. The Home check has no such
+    exemption — see notify()'s Home-check comment."""
+    if payload.get("notification_type") not in MANDATORY_EMAIL_TYPES:
+        recipient_user_id = payload.get("recipient_user_id")
+        if recipient_user_id and not await is_user_operationally_active(
+            db, uuid.UUID(recipient_user_id)
+        ):
+            return "Recipient is no longer active."
+    group_id = payload.get("group_id")
+    if group_id and not await is_home_operationally_active(db, uuid.UUID(group_id)):
+        return "Home is no longer active."
+    return None
+
+
 async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
     delivery_key = event.payload["delivery_idempotency_key"]
     delivery = await db.scalar(
@@ -47,6 +102,13 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
     subscription = await db.get(PushSubscription, uuid.UUID(event.payload["push_subscription_id"]))
     if delivery is None or subscription is None or subscription.disabled_at is not None:
         return  # already pruned or diagnostic record missing — nothing more to do
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return  # terminal, not retried — this is a policy decision, not a failure
 
     push_config = await resolve_push_config(settings, db)
     payload = {
@@ -86,13 +148,128 @@ async def _process_push(db: AsyncSession, settings: Settings, event: OutboxEvent
         delivery.sanitised_failure_reason = "This device's push registration is invalid."
 
 
+class _UnsupportedNativePlatform(Exception):
+    """A NativePushDevice row with a platform this worker has no sender for.
+
+    The notification engine's device query (engine.py) already restricts
+    itself to platforms this dispatcher knows about, so this only guards
+    against a stale/invalid row slipping through some other path — it is
+    never expected in normal operation."""
+
+
+def _send_native_push(
+    settings: Settings, device: NativePushDevice, payload: dict[str, Any]
+) -> None:
+    """The one place a native push delivery decides APNs vs FCM. Callers
+    (just `_process_native_push` below) never branch on platform themselves —
+    adding a third native platform means adding one branch here, nowhere
+    else."""
+    if device.platform == "ios":
+        send_apns(resolve_apns_config(settings), device, payload)
+    elif device.platform == "android":
+        send_fcm(resolve_fcm_config(settings), device, payload)
+    else:
+        raise _UnsupportedNativePlatform(device.platform)
+
+
+async def _process_native_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
+    delivery = await db.scalar(
+        select(NotificationDelivery).where(
+            NotificationDelivery.idempotency_key
+            == event.payload["delivery_idempotency_key"]
+        )
+    )
+    device = await db.get(NativePushDevice, uuid.UUID(event.payload["native_push_device_id"]))
+    if delivery is None or device is None or device.disabled_at is not None:
+        return
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return
+
+    payload = {
+        "title": event.payload["title"],
+        "body": event.payload["body"],
+        "deep_link": event.payload.get("deep_link"),
+        # The client's tap handler (native-push.ts) needs an already-resolved
+        # app path, not the structured {type, id} dict — mirrors what
+        # routers/notifications.py already does for the in-app list via the
+        # same resolve_path().
+        "deep_link_path": resolve_path(event.payload.get("deep_link")),
+        "notification_type": event.payload.get("notification_type"),
+    }
+    try:
+        await asyncio.to_thread(_send_native_push, settings, device, payload)
+        delivery.status = NotificationDeliveryStatus.sent
+        delivery.attempted_at = datetime.now(UTC)
+        device.last_seen_at = datetime.now(UTC)
+    except ApnsPermanentError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This native device registration is invalid."
+        device.disabled_at = datetime.now(UTC)
+        device.disabled_reason = "APNs rejected this device registration."
+        device.disabled_source = NativePushDisabledSource.provider
+    except FcmPermanentError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This native device registration is invalid."
+        device.disabled_at = datetime.now(UTC)
+        device.disabled_reason = "FCM rejected this device registration."
+        device.disabled_source = NativePushDisabledSource.provider
+    except _UnsupportedNativePlatform:
+        # Not retryable — no code path will ever know how to send to this
+        # platform. Cancel rather than fail-and-retry-forever.
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "This device's platform is not supported."
+        await log.awarning(
+            "native_push_unsupported_platform", platform=device.platform, device_id=str(device.id)
+        )
+    except RuntimeError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "Native push delivery is not configured."
+    except Exception:
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.sanitised_failure_reason = "Native push service temporarily unavailable."
+        raise
+
+
 async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
     delivery_key = event.payload["delivery_idempotency_key"]
     delivery = await db.scalar(
         select(NotificationDelivery).where(NotificationDelivery.idempotency_key == delivery_key)
     )
     if delivery is None:
+        _redact_sensitive_email_payload(event)
         return  # diagnostic record missing — nothing more to do
+
+    sensitive_until = event.payload.get("sensitive_email_expires_at")
+    if sensitive_until:
+        try:
+            expires_at = datetime.fromisoformat(str(sensitive_until))
+        except ValueError:
+            expires_at = datetime.now(UTC)
+        if expires_at <= datetime.now(UTC):
+            _redact_sensitive_email_payload(event)
+            delivery.status = NotificationDeliveryStatus.cancelled
+            delivery.attempted_at = datetime.now(UTC)
+            delivery.sanitised_failure_reason = "The verification code has expired."
+            return
+
+    suppression_reason = await _lifecycle_suppression_reason(db, event.payload)
+    if suppression_reason is not None:
+        _redact_sensitive_email_payload(event)
+        delivery.status = NotificationDeliveryStatus.skipped
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = suppression_reason
+        return
 
     smtp_config = await resolve_smtp_config(settings, db)
     try:
@@ -102,15 +279,47 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
             event.payload["recipient_email"],
             event.payload["subject"],
             event.payload["body"],
+            event.payload.get("html_body"),
         )
         delivery.status = NotificationDeliveryStatus.sent
         delivery.attempted_at = datetime.now(UTC)
+        _redact_sensitive_email_payload(event)
+    except EmailPermanentError as exc:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.sanitised_failure_reason = exc.category
+        _redact_sensitive_email_payload(event)
+        # Permanent (e.g. recipient/sender rejected) failures are never
+        # retried — retrying a 5xx recipient rejection indefinitely wastes
+        # sends and can itself hurt sender reputation. Not re-raised, so the
+        # outbox event is marked processed rather than scheduled for retry.
+    except EmailTemporaryError as exc:
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.sanitised_failure_reason = exc.category
+        raise
     except Exception:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.failed
         delivery.sanitised_failure_reason = "Email delivery temporarily unavailable."
         raise
+
+
+def _redact_sensitive_email_payload(event: OutboxEvent) -> None:
+    """Remove rendered MFA content after it is no longer needed for delivery."""
+    if event.payload.get("sensitive_email_expires_at") is None:
+        return
+    # JSON columns do not detect in-place mutations reliably; assign a new
+    # mapping so the redaction is persisted with the delivery status update.
+    event.payload = {
+        **event.payload,
+        "body": "[redacted]",
+        "html_body": None,
+        "sensitive_email_expires_at": None,
+    }
 
 
 async def process(event_id: uuid.UUID) -> None:
@@ -141,6 +350,8 @@ async def process(event_id: uuid.UUID) -> None:
                 await _process_email(db, settings, event)
             elif event.topic == "notification.push":
                 await _process_push(db, settings, event)
+            elif event.topic == "notification.native_push":
+                await _process_native_push(db, settings, event)
             elif event.topic == "notification.event_reminder":
                 await deliver_event_reminder(
                     db,
@@ -169,6 +380,31 @@ async def process(event_id: uuid.UUID) -> None:
                     event.payload["owner_id"],
                     event.payload["year"],
                 )
+            elif event.topic == "notification.standalone_reminder":
+                await deliver_standalone_reminder(
+                    db,
+                    settings,
+                    event.payload["reminder_id"],
+                    event.payload["occurrence_date"],
+                    event.payload["cadence"],
+                    event.payload["slot"],
+                )
+            elif event.topic == "notification.nudges.evening_cleanup":
+                await deliver_nudge_summary(
+                    db,
+                    settings,
+                    event.payload["user_id"],
+                    event.payload["date"],
+                    day_complete=False,
+                )
+            elif event.topic == "notification.nudges.day_complete":
+                await deliver_nudge_summary(
+                    db, settings, event.payload["user_id"], event.payload["date"], day_complete=True
+                )
+            elif event.topic == "notification.daily_nudge_summary":
+                await deliver_daily_nudge_summary(
+                    db, settings, event.payload["user_id"], event.payload["date"]
+                )
 
             job.status = "completed"
             job.finished_at = datetime.now(UTC)
@@ -185,6 +421,7 @@ async def process(event_id: uuid.UUID) -> None:
                 # leave the WorkerJobRecord as the permanent diagnostic
                 # record of the last failure.
                 event.processed_at = datetime.now(UTC)
+                _redact_sensitive_email_payload(event)
             else:
                 event.available_at = datetime.now(UTC) + timedelta(
                     seconds=_backoff_seconds(event.attempts)
@@ -196,7 +433,21 @@ async def process(event_id: uuid.UUID) -> None:
 
 
 async def run() -> None:
-    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    settings = get_settings()
+
+    async def load_syslog_config() -> SyslogConfig:
+        async with SessionFactory() as db:
+            row = await db.scalar(
+                select(PlatformSetting).where(PlatformSetting.key == "central_syslog")
+            )
+        return syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+
+    dispatcher = SyslogDispatcher(
+        settings, service="mykhaya-worker", config_loader=load_syslog_config
+    )
+    configure_structlog_forwarding(dispatcher)
+    await dispatcher.start()
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         while True:
             item = await redis.blpop("mykhaya:jobs", timeout=5)
@@ -214,9 +465,22 @@ async def run() -> None:
                 payload = json.loads(item[1])
                 try:
                     await process(uuid.UUID(payload["event_id"]))
-                except Exception:
+                except Exception as exc:
+                    # process() already recorded the failure on the OutboxEvent/
+                    # WorkerJobRecord rows and re-raised — this is the last chance
+                    # to make it visible anywhere at all, since the loop must not
+                    # die on one bad job. Previously this was a bare `except
+                    # Exception: pass`-equivalent, which is why a large backlog of
+                    # failing jobs (e.g. email delivery misconfiguration) could
+                    # build up completely silently with nothing in the logs.
+                    log.error(
+                        "worker.job_failed",
+                        event_id=str(payload.get("event_id")),
+                        error=type(exc).__name__,
+                    )
                     await asyncio.sleep(2)
     finally:
+        await dispatcher.stop()
         await redis.aclose()
 
 

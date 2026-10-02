@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -28,6 +29,7 @@ from mykhaya.models import (
     OutboxEvent,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -107,6 +109,13 @@ async def create_home_with_calendar(client: AsyncClient) -> uuid.UUID:
         db.add(
             FeatureOverride(feature_key=FeatureKey.notifications, group_id=home_id, enabled=True)
         )
+        # test_deliver_reminder_notifies_all_event_members assigns a second
+        # member to an event (events.shared.enabled); Family here so that
+        # keeps working without affecting the other, single-member tests in
+        # this file.
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 
@@ -155,6 +164,102 @@ async def test_scan_enqueues_a_due_reminder_and_is_idempotent(client: AsyncClien
         await scan_due_reminders(db, get_settings())
         rows_after = await reminder_rows_for_event(db, event_id)
         assert len(rows_after) == 1
+        rows_after[0].processed_at = datetime.now(UTC)
+        await db.commit()
+        await scan_due_reminders(db, get_settings())
+        assert len(await reminder_rows_for_event(db, event_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_respects_calendar_module_disabled(client: AsyncClient) -> None:
+    """Phase 3A: calendar event reminders are a Calendar-owned scheduled
+    notification — disabling the Calendar module (independent of
+    Notifications, which stays on) must stop them from firing. The event
+    itself is created before Calendar is disabled, matching "data preserved,
+    notified-about state re-evaluated"."""
+    await create_verified_user(client, unique_email("caloff"), "Calendar Off Owner")
+    home_id = await create_home_with_calendar(client)
+    start_at = datetime.now(UTC) + timedelta(minutes=5, seconds=30)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Should not remind",
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "reminder_minutes": 5,
+        },
+    )
+    assert created.status_code == 201
+    event_id = created.json()["event_id"]
+
+    async with SessionFactory() as db:
+        override = await db.scalar(
+            select(FeatureOverride).where(
+                FeatureOverride.group_id == home_id,
+                FeatureOverride.feature_key == FeatureKey.calendar,
+            )
+        )
+        assert override is not None
+        override.enabled = False
+        await db.commit()
+
+        await scan_due_reminders(db, get_settings())
+        assert await reminder_rows_for_event(db, event_id) == []
+        # The event itself is untouched — preserved data, not deleted.
+        assert await db.get(CalendarEvent, uuid.UUID(event_id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_reminder_still_fires_for_an_event_on_a_downgrade_restricted_calendar(
+    client: AsyncClient,
+) -> None:
+    """Phase 3A: a read_only_due_to_plan calendar (an excess shared calendar
+    preserved after a Family-to-Free downgrade — see
+    mykhaya.routers.calendar._calendar_access) still has real, existing,
+    upcoming events on it. Restriction blocks new writes, never awareness of
+    an appointment that already exists — the reminder must still fire."""
+    await create_verified_user(client, unique_email("restrictedcal"), "Restricted Cal Owner")
+    home_id = await create_home_with_calendar(client)
+    secondary = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/calendars", json={"name": "Secondary"}
+    )
+    assert secondary.status_code == 201, secondary.text
+    secondary_id = secondary.json()["id"]
+
+    start_at = datetime.now(UTC) + timedelta(minutes=5, seconds=30)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Still real",
+            "start_at": start_at.isoformat(),
+            "end_at": (start_at + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "reminder_minutes": 5,
+            "calendar_id": secondary_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["event_id"]
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+
+        listing = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+        secondary_after = next(
+            item for item in listing.json()["items"] if item["id"] == secondary_id
+        )
+        assert secondary_after["commercial_access"] == "read_only_due_to_plan"
+
+        await scan_due_reminders(db, get_settings())
+        assert len(await reminder_rows_for_event(db, event_id)) == 1
 
 
 @pytest.mark.asyncio
@@ -432,6 +537,130 @@ async def test_recurring_weekly_event_reminder_uses_future_occurrence(
         assert len(rows) == 1
         occurrence_start = datetime.fromisoformat(rows[0].payload["occurrence_start"])
         assert occurrence_start > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_occurrence_level_member_override_changes_reminder_recipients(
+    client: AsyncClient,
+) -> None:
+    """A member added to just one occurrence (scope=occurrence, member_ids)
+    must change who is reminded about *that* occurrence, without adding them
+    to any other occurrence of the same series — see
+    EffectiveOccurrence.member_ids_override and
+    notifications.visibility.viewer_ids_for_event's member_ids_override
+    parameter."""
+    creator_id = await create_verified_user(client, unique_email("recur-owner"), "Recur Owner")
+    home_id = await create_home_with_calendar(client)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as buddy_client:
+        buddy_id = await create_verified_user(buddy_client, unique_email("buddy"), "Swim Buddy")
+
+    async with SessionFactory() as db:
+        db.add(
+            Membership(
+                group_id=home_id,
+                user_id=buddy_id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+            )
+        )
+        await db.commit()
+
+    first_start = datetime.now(UTC) + timedelta(minutes=10)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Weekly swim",
+            "start_at": first_start.isoformat(),
+            "end_at": (first_start + timedelta(hours=1)).isoformat(),
+            "timezone": "UTC",
+            "reminder_minutes": 10,
+            "member_ids": [],
+            "recurrence": "weekly",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["event_id"]
+    second_start = first_start + timedelta(weeks=1)
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": first_start.isoformat(),
+            "end_at": (second_start + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    occurrences = sorted(listed.json()["items"], key=lambda item: item["start_at"])
+    assert len(occurrences) == 2
+    second_occ = occurrences[1]
+
+    patched = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event_id}",
+        json={
+            "title": second_occ["title"],
+            "start_at": second_occ["start_at"],
+            "end_at": second_occ["end_at"],
+            "timezone": second_occ["timezone"],
+            "is_all_day": second_occ["is_all_day"],
+            "member_ids": [str(buddy_id)],
+            "recurrence": second_occ["recurrence"],
+            "recurrence_interval": 1,
+            "expected_updated_at": second_occ["updated_at"],
+            "scope": "occurrence",
+            "occurrence_start": second_occ["occurrence_start"],
+        },
+    )
+    assert patched.status_code == 200, patched.text
+
+    async with SessionFactory() as db:
+        await deliver_event_reminder(db, get_settings(), event_id, first_start.isoformat(), 10)
+        await db.commit()
+
+    async with SessionFactory() as db:
+        # The unmodified first occurrence has no override — its recipient
+        # set is the base event's own membership, which (like every
+        # event/occurrence edit — see _validated_requested_members) always
+        # implicitly includes its creator. The buddy, added only to
+        # occurrence 2, must not leak into occurrence 1's reminder.
+        recipients = (
+            await db.scalars(
+                select(Notification.recipient_user_id).where(
+                    Notification.related_entity_id == uuid.UUID(event_id),
+                    Notification.notification_type == "event_reminder",
+                )
+            )
+        ).all()
+        assert buddy_id not in recipients
+        assert creator_id in recipients
+
+    async with SessionFactory() as db:
+        await deliver_event_reminder(db, get_settings(), event_id, second_start.isoformat(), 10)
+        await db.commit()
+
+    async with SessionFactory() as db:
+        recipients = (
+            await db.scalars(
+                select(Notification.recipient_user_id).where(
+                    Notification.related_entity_id == uuid.UUID(event_id),
+                    Notification.notification_type == "event_reminder",
+                )
+            )
+        ).all()
+        # Occurrence 2's override adds the buddy on top of the (always
+        # implicitly included) creator — the override changes who is
+        # reminded about *this* occurrence without erasing the standing
+        # "creator is always a participant" rule.
+        assert buddy_id in recipients
+        assert creator_id in recipients
 
 
 @pytest.mark.asyncio

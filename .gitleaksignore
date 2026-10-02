@@ -26,3 +26,54 @@
 # doing so previously made this comment itself match the same heuristic and
 # get flagged as a brand new finding in this file.)
 1df4de0e2009f2566c49543971332dc80cc8ef61:apps/api/mykhaya/routers/notifications.py:generic-api-key:221
+
+# False positive: the APNs private-key validation check asserts the loaded
+# key's elliptic curve class is `ec.SECP256R1` (from the `cryptography`
+# library's `ec` module). This is a Python class/type name describing an
+# algorithm parameter, never a credential value — no key material appears
+# in this line.
+c46ba221979acc450a8f411727d0279591a0c68d:apps/api/mykhaya/notifications/push.py:generic-api-key:128
+
+# False positive: ordinary prose in the logging standard listing what must
+# never appear in logs ("...APNs/private keys or other credentials."). The
+# phrase "APNs/private" trips the generic-api-key entropy heuristic on its
+# mixed case and slash, but no credential value is present on this line.
+08691ba55fd80196924dcbe60112cfb046b8cb72:docs/engineering/engineering-standards.md:generic-api-key:90
+
+# Synthetic Stripe test fixtures (CONFIRMED test/fixture values, not real
+# credentials — see docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md SEC-18
+# for the full investigation). All use the classic placeholder suffixes
+# "abc123"/"xyz123"/"db123", never a real Stripe key's random-looking
+# payload, and are only ever used to construct typed settings objects in
+# unit/component tests — none reaches a live Stripe call.
+944ef873acdd88000ba4e1ae32e4a5009cb345cb:apps/web/app/control-centre/payments/page.test.tsx:generic-api-key:70
+944ef873acdd88000ba4e1ae32e4a5009cb345cb:apps/api/tests/test_platform_stripe_settings.py:generic-api-key:39
+944ef873acdd88000ba4e1ae32e4a5009cb345cb:apps/api/tests/test_platform_stripe_settings.py:generic-api-key:277
+944ef873acdd88000ba4e1ae32e4a5009cb345cb:apps/api/tests/test_platform_stripe_settings.py:generic-api-key:278
+bea11e6cd595a803ffba16923d5c5f9da7c0f556:apps/api/tests/test_billing_config.py:generic-api-key:92
+bea11e6cd595a803ffba16923d5c5f9da7c0f556:apps/api/tests/test_billing_config.py:generic-api-key:119
+
+# Documentation placeholder, not a secret: the literal instructional string
+# "GENERATE_A_UNIQUE_32_PLUS_CHARACTER_SECRET" that MYKHAYA_SECRET_KEY is set
+# to in the production .env template, telling the operator what to generate.
+# Unchanged since this file's introduction.
+ce2887cfca68f4a9e8a3e2d66a105de9e077282f:.env.production.example:generic-api-key:4
+
+# CONFIRMED real secret (see docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md
+# SEC-18): a real DVLA UAT Vehicle Enquiry Service API key was committed to
+# .env.example on 2026-09-29, matching the value in the live, gitignored
+# .env file. Rotation is tracked in SEC-18 (external action, not performed by
+# this audit). The value has been removed from the current tree
+# (.env.example's MYKHAYA_DVLA_UAT_API_KEY is now blank, matching every other
+# credential field in that file).
+#
+# This fingerprint is scoped to this exact historical commit only — Gitleaks
+# fingerprints are commit:file:rule:line, so they are bound to that one
+# commit's content and do NOT suppress the same value reappearing in any
+# later commit, a different file, or a different line. If this key (rotated
+# or not) is ever recommitted anywhere, it will be reported as a brand new
+# finding requiring its own review. This entry exists purely as a durable,
+# reviewable record that this specific historical occurrence was found,
+# assessed and actioned — not as a standing exemption for DVLA keys or
+# generic-api-key findings in this file generally.
+32b102ab29fcb88c2ecb27edbb13f4e76b7cd336:.env.example:generic-api-key:70

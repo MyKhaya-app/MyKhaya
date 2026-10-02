@@ -1,0 +1,171 @@
+"use client";
+
+import { FormEvent, ReactNode, useEffect, useId, useRef } from "react";
+
+/**
+ * Base dialog primitive. Replaces the hand-rolled
+ * `.platform-modal-backdrop > .platform-modal` markup duplicated per page.
+ * Manages initial focus (first focusable element, or the dialog itself) on
+ * open and returns focus to whatever triggered it on close — the existing
+ * modals didn't manage focus at all, so this is an accessibility
+ * improvement on top of the existing Escape/backdrop-click-to-close
+ * behaviour, not a change to it.
+ */
+export function CcDialog({
+  open,
+  onClose,
+  title,
+  children,
+  labelledBy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  children: ReactNode;
+  labelledBy?: string;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  const generatedId = useId();
+  const titleId = labelledBy ?? `cc-dialog-title-${generatedId}`;
+
+  // Keep the latest onClose available to the effect below without making it
+  // a dependency — callers routinely pass an inline arrow function, and a
+  // controlled input inside the dialog re-renders (and so re-identifies
+  // onClose) on every keystroke. If onClose were a dependency, that would
+  // re-run the effect and re-apply initial focus while the dialog stays
+  // open, stealing focus from whatever the operator is typing into.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Initial focus + capture of the previously-focused element: only on the
+  // real `open: false -> true` transition, never on an onClose identity
+  // change while already open.
+  useEffect(() => {
+    if (!open) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const node = dialogRef.current;
+    const focusable = node?.querySelector<HTMLElement>(
+      "button:not([data-dialog-close]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
+    (focusable ?? node)?.focus();
+  }, [open]);
+
+  // Escape-key handling and body-scroll-lock: also gated on [open] only, and
+  // reads onClose via the ref so it always calls the latest callback without
+  // needing to be recreated when that identity changes.
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onCloseRef.current();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused.current?.focus();
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="platform-modal-backdrop cc-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="platform-modal cc-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        ref={dialogRef}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="cc-dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="secondary cc-dialog-close"
+            onClick={onClose}
+            aria-label="Close dialog"
+            data-dialog-close
+          >
+            ×
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function CcDialogActions({ children }: { children: ReactNode }) {
+  return <div className="platform-modal-actions">{children}</div>;
+}
+
+/**
+ * The recurring "confirm with a reason" pattern used across every audited
+ * Control Centre mutation (grant/revoke/reconcile, and the same shape
+ * elsewhere): a required free-text reason (>= 10 chars) plus a Cancel /
+ * Confirm pair. `variant="destructive"` visually and semantically separates
+ * high-impact/irreversible actions (e.g. removing complimentary access)
+ * from ordinary ones — it changes styling only, never what triggers the
+ * action or what payload it sends (`reason`/`confirmed` stay identical to
+ * before).
+ */
+export function CcConfirmDialog({
+  open,
+  onClose,
+  title,
+  description,
+  extraFields,
+  confirmLabel,
+  reasonLabel = "Reason for this administrative action (at least 10 characters)",
+  reasonHint,
+  variant = "default",
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  description?: ReactNode;
+  extraFields?: ReactNode;
+  confirmLabel: string;
+  reasonLabel?: string;
+  reasonHint?: string;
+  variant?: "default" | "destructive";
+  onConfirm: (formData: FormData) => void | Promise<void>;
+}) {
+  return (
+    <CcDialog open={open} onClose={onClose} title={title}>
+      <form
+        className="cc-dialog-form"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          void onConfirm(new FormData(event.currentTarget));
+        }}
+      >
+        <div className="cc-dialog-scroll">
+          {description && <p>{description}</p>}
+          {extraFields}
+          <label>
+            {reasonLabel}
+            <input name="audit_reason" type="text" required minLength={10} maxLength={500} />
+            {reasonHint && <small>{reasonHint}</small>}
+          </label>
+        </div>
+        <CcDialogActions>
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className={variant === "destructive" ? "danger" : undefined}>
+            {confirmLabel}
+          </button>
+        </CcDialogActions>
+      </form>
+    </CcDialog>
+  );
+}

@@ -18,6 +18,10 @@
 - outbox_events
 - worker_job_records where required
 
+`household_routines.repeat_unit` is `weekly` for legacy anchor-plus-interval schedules
+or `daily` for one occurrence per date. `interval_weeks` remains the weekly interval
+field so existing routine rows and APIs stay compatible.
+
 A user may belong to multiple Homes. Every Home-owned entity must be queried through an authorised Home context. Managed Child profiles do not receive adult login accounts by default.
 
 ## Household relationship and authority

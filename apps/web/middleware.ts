@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applicationHostKind } from "./components/application-host";
 export function middleware(request: NextRequest) {
-  const host = (
-    (request.headers.get("host") ?? "").split(":")[0] ?? ""
-  ).toLowerCase();
-  const adminHost =
-    host === "admin.mykhaya.app" ||
-    host === "admin.dev.mykhaya.app" ||
-    host === "admin.localhost";
-  const statusHost =
-    host === "status.mykhaya.app" ||
-    host === "status.dev.mykhaya.app" ||
-    host === "status.localhost";
+  const host = request.headers.get("host") ?? "";
+  const hostKind = applicationHostKind(host);
+  const adminHost = hostKind === "admin";
+  const statusHost = hostKind === "status";
+  if (hostKind === "unknown") return new NextResponse("Misdirected Request", { status: 421 });
+  if (adminHost && ["/manifest.webmanifest", "/sw.js"].includes(request.nextUrl.pathname)) {
+    return new NextResponse("Not found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
   const internalAdminPath =
     request.nextUrl.pathname.startsWith("/control-centre");
   const internalStatusPath =
@@ -24,7 +25,7 @@ export function middleware(request: NextRequest) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${production ? "" : " 'unsafe-eval'"}`,
     adminHost ? "style-src 'self'" : "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",
@@ -64,5 +65,10 @@ export function middleware(request: NextRequest) {
   return response;
 }
 export const config = {
-  matcher: [{ source: "/((?!_next/static|_next/image|favicon.ico).*)" }],
+  matcher: [
+    {
+      source:
+        "/((?!_next/static|_next/image|favicon.ico|mykhaya-email-logo.png).*)",
+    },
+  ],
 };

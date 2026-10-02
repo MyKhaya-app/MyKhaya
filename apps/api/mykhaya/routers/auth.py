@@ -1,50 +1,126 @@
+import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select, update
+from fastapi.responses import RedirectResponse
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.apple_auth import (
+    AppleAuthenticationError,
+    AppleFlowState,
+    authorization_url,
+    consume_flow_state,
+    exchange_code,
+    require_apple_configuration,
+    store_flow_state,
+    verify_identity_token,
+)
 from mykhaya.audit import audit
+from mykhaya.auth_providers import external_auth_provider_statuses
+from mykhaya.browser_preauth import (
+    consume_browser_pre_auth,
+    create_browser_pre_auth,
+    load_browser_pre_auth,
+)
 from mykhaya.config import Settings, get_settings
+from mykhaya.consumer_mfa import (
+    EMAIL_CHALLENGE_TTL_SECONDS,
+    EMAIL_MAX_ATTEMPTS,
+    claim_totp_step,
+    generate_totp_secret,
+    hash_email_code,
+    hash_transaction,
+    matched_totp_step,
+    new_email_code,
+    totp_provisioning_uri,
+)
+from mykhaya.consumer_mfa_policy import (
+    ConsumerMfaPolicyError,
+    EffectiveConsumerMfaPolicy,
+    resolve_consumer_mfa_policy,
+)
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
     ChildProfile,
+    ExternalIdentity,
+    ExternalIdentityProvider,
     Group,
     HouseholdRelationship,
     Invitation,
+    LegalAcceptance,
+    LegalAcceptanceContext,
+    LegalActionVerb,
+    LegalRecordType,
     Membership,
+    MfaEmailChallenge,
     Session,
     SessionKind,
     TokenPurpose,
+    TrustedDevice,
     User,
+    UserMfaMethod,
+    UserMfaMethodRecord,
+    UserPasskey,
 )
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.templates import render_notification_email
+from mykhaya.platform_mfa import (
+    build_family_authentication_options,
+    build_family_registration_options,
+    pop_webauthn_challenge,
+    pop_webauthn_token_challenge,
+    store_webauthn_challenge,
+    store_webauthn_token_challenge,
+    verify_family_authentication,
+    verify_family_registration,
+)
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    AuthContinuationResponse,
     ChildLoginRequest,
+    ConsumerMfaStatusResponse,
     ForgotRequest,
     LoginRequest,
     MessageResponse,
+    MfaOptionsResponse,
+    MfaPreferenceRequest,
+    MfaStartRequest,
+    MfaStartResponse,
+    MfaTotpVerifyRequest,
+    MfaVerifyRequest,
+    MobileDeviceRenewRequest,
     MobileSessionResponse,
+    PasskeyAuthenticationVerifyRequest,
+    PasskeyOptionsResponse,
+    PasskeyRegistrationVerifyRequest,
+    PasskeyRenameRequest,
+    PasskeyResponse,
+    ReauthenticateRequest,
     RegisterRequest,
     RegistrationResponse,
     ResetRequest,
     SessionResponse,
     TokenRequest,
+    TrustedDeviceResponse,
     UserResponse,
 )
+from mykhaya.secrets_crypto import decrypt_user_mfa_totp, encrypt_user_mfa_totp
 from mykhaya.security import (
     DUMMY_HASH,
     clear_auth_cookies,
     consume_action_token,
     create_action_token,
+    current_user,
     decode_derived_token,
     derived_token,
     hash_secret,
@@ -53,13 +129,918 @@ from mykhaya.security import (
     normalise_email,
     normalise_home_code,
     password_hash,
+    require_device_csrf,
     require_secure_transport,
+    resolve_client_ip,
     set_auth_cookies,
     verify_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
+auth_diag_log = structlog.get_logger("auth_diag")
+PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
+PASSKEY_CHALLENGE_TTL_SECONDS = 300
+FRESH_AUTH_WINDOW = timedelta(minutes=10)
+APPLE_LOGIN_ERROR = "apple=error"
+
+
+async def complete_browser_authentication(
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    *,
+    method: str,
+    kind: SessionKind = SessionKind.adult,
+    destination: str | None = None,
+    onboarding: bool = False,
+) -> UserResponse | AuthContinuationResponse:
+    """Shared final browser-auth seam; native callers do not use this path."""
+    policy = (
+        await _resolve_browser_mfa_policy(db, user.id, settings)
+        if kind == SessionKind.adult
+        else None
+    )
+    if policy is not None and policy.enforcement_enabled and policy.required:
+        transaction_id = await create_browser_pre_auth(
+            settings,
+            user_id=str(user.id),
+            method=method,
+            destination=destination,
+            onboarding=onboarding,
+        )
+        audit(db, request, "browser.pre_auth.created", user.id, target_type="browser_pre_auth")
+        return AuthContinuationResponse(
+            authentication_state="additional_auth_required",
+            transaction_id=transaction_id,
+            destination=destination,
+            onboarding=onboarding,
+        )
+    session = await issue_family_session(
+        db, response, request, user, settings, kind, fresh_auth_at=datetime.now(UTC)
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    return user_response(user, session)
+
+
+async def _resolve_browser_mfa_policy(
+    db: AsyncSession, user_id: uuid.UUID, settings: Settings
+) -> EffectiveConsumerMfaPolicy:
+    try:
+        return await resolve_consumer_mfa_policy(db, user_id, settings)
+    except ConsumerMfaPolicyError:
+        auth_diag_log.error("consumer_mfa_policy_invalid", user_id=str(user_id))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't complete secure sign-in. Please contact support.",
+        ) from None
+
+
+async def _mfa_preauth_user(
+    transaction_id: str, db: AsyncSession, settings: Settings
+) -> tuple[object, User]:
+    state = await load_browser_pre_auth(settings, transaction_id)
+    if state is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    try:
+        user_id = uuid.UUID(state.user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid."
+        ) from exc
+    user = await db.get(User, user_id)
+    if user is None or not user.is_active or user.email_verified_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
+    return state, user
+
+
+async def _active_mfa_methods(db: AsyncSession, user_id: uuid.UUID) -> set[UserMfaMethod]:
+    rows = (
+        await db.scalars(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user_id,
+                UserMfaMethodRecord.enabled.is_(True),
+                UserMfaMethodRecord.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    return {row.method for row in rows}
+
+
+def _masked_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    if len(local) <= 2:
+        masked = "*" * len(local)
+    else:
+        masked = local[0] + "*" * min(6, len(local) - 2) + local[-1]
+    return f"{masked}@{domain}"
+
+
+def _usable_browser_mfa_methods(
+    allowed: set[UserMfaMethod],
+    active: set[UserMfaMethod],
+    email_verified: bool,
+    *,
+    allow_totp_enrolment: bool = False,
+) -> list[str]:
+    """Return methods the consumer can use now, in stable UI order.
+
+    A required TOTP-only policy keeps the enrollment method visible even when
+    no factor is active yet; the existing start/verify flow completes setup.
+    """
+    usable = active & allowed
+    if email_verified and UserMfaMethod.email in allowed:
+        usable.add(UserMfaMethod.email)
+    methods = [
+        method.value
+        for method in (UserMfaMethod.totp, UserMfaMethod.email)
+        if method in usable
+    ]
+    if allow_totp_enrolment and not methods and allowed == {UserMfaMethod.totp}:
+        return [UserMfaMethod.totp.value]
+    return methods
+
+
+def _preferred_browser_mfa_method(user: User, methods: list[str]) -> str | None:
+    preferred = user.preferred_mfa_method
+    return preferred if preferred in methods else (methods[0] if methods else None)
+
+
+@router.get("/mfa/options", response_model=MfaOptionsResponse)
+async def browser_mfa_options(
+    transaction_id: str,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaOptionsResponse:
+    _state, user = await _mfa_preauth_user(transaction_id, db, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    methods = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
+    )
+    return MfaOptionsResponse(
+        methods=methods,
+        destination=_masked_email(user.email),
+        onboarding=_state.onboarding,
+        policy="required" if policy.required else "optional",
+        policy_source=policy.source,
+        enrolment_required=not bool(active & allowed),
+        preferred_method=_preferred_browser_mfa_method(user, methods),
+    )
+
+
+@router.post("/mfa/start", response_model=MfaStartResponse)
+async def browser_mfa_start(
+    body: MfaStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaStartResponse:
+    state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    usable = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
+    )
+    if body.method not in usable:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-send:{user.id}", 3, 900)
+        now = datetime.now(UTC)
+        reference_hash = hash_transaction(settings, body.transaction_id)
+        await db.execute(
+            update(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash == reference_hash,
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .values(superseded_at=now)
+        )
+        code = new_email_code()
+        challenge = MfaEmailChallenge(
+            user_id=user.id,
+            transaction_reference_hash=reference_hash,
+            code_hash=hash_email_code(settings, code),
+            expires_at=now + timedelta(seconds=EMAIL_CHALLENGE_TTL_SECONDS),
+        )
+        db.add(challenge)
+        await db.flush()
+        subject, message, html = await render_notification_email(
+            db, settings, "mfa_email_code", {"code": code}
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="mfa_email_code",
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=f"mfa-email:{challenge.id}",
+            is_critical=True,
+            sensitive_email_expires_at=challenge.expires_at,
+        )
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_CREATED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+        await db.commit()
+        enrolling = UserMfaMethod.email not in await _active_mfa_methods(db, user.id)
+        return MfaStartResponse(
+            method="email", destination=_masked_email(user.email), enrolling=enrolling
+        )
+
+    await enforce_rate_limit(request, settings, f"mfa-totp-start:{user.id}", 5, 300)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    enrolling = factor is None or not factor.enabled or factor.revoked_at is not None
+    if enrolling:
+        secret = generate_totp_secret()
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.totp)
+            db.add(factor)
+        factor.encrypted_secret = encrypt_user_mfa_totp(settings, secret)
+        factor.enabled = False
+        factor.revoked_at = None
+        await db.flush()
+        audit(db, request, "MFA_TOTP_ENROLMENT_STARTED", user.id, target_type="mfa_method")
+        await db.commit()
+        return MfaStartResponse(
+            method="totp",
+            provisioning_uri=totp_provisioning_uri(secret, user.email),
+            manual_key=secret,
+            enrolling=True,
+        )
+    audit(db, request, "MFA_TOTP_VERIFICATION_STARTED", user.id, target_type="mfa_method")
+    await db.commit()
+    return MfaStartResponse(method="totp", enrolling=False)
+
+
+@router.post("/mfa/verify", response_model=UserResponse)
+async def browser_mfa_verify(
+    body: MfaVerifyRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    state, user = await _mfa_preauth_user(body.transaction_id, db, settings)
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if body.method not in policy.allowed_methods:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    now = datetime.now(UTC)
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-verify:{user.id}", 10, 900)
+        challenge = await db.scalar(
+            select(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash
+                == hash_transaction(settings, body.transaction_id),
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .order_by(MfaEmailChallenge.created_at.desc())
+            .with_for_update()
+        )
+        if (
+            challenge is None
+            or challenge.expires_at <= now
+            or challenge.attempts >= EMAIL_MAX_ATTEMPTS
+        ):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
+            )
+        challenge.attempts += 1
+        if not secrets.compare_digest(challenge.code_hash, hash_email_code(settings, body.code)):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
+            )
+        challenge.consumed_at = now
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.email,
+            )
+        )
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.email)
+            db.add(factor)
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_SUCCEEDED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+    else:
+        await enforce_rate_limit(request, settings, f"mfa-totp-verify:{user.id}", 10, 300)
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.totp,
+                UserMfaMethodRecord.revoked_at.is_(None),
+            )
+        )
+        if factor is None or not factor.encrypted_secret:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+        was_enabled = factor.enabled
+        step = matched_totp_step(
+            decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
+        )
+        if step is None or not await claim_totp_step(settings, user.id, step):
+            audit(db, request, "MFA_TOTP_VERIFICATION_FAILED", user.id, target_type="mfa_method")
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(db, request, "MFA_TOTP_VERIFICATION_SUCCEEDED", user.id, target_type="mfa_method")
+        if not was_enabled:
+            audit(db, request, "MFA_TOTP_ENROLLED", user.id, target_type="mfa_method")
+
+    consumed = await consume_browser_pre_auth(settings, body.transaction_id)
+    if consumed is None or consumed.user_id != str(user.id):
+        await db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    session = await issue_family_session(
+        db, response, request, user, settings, SessionKind.adult, fresh_auth_at=now
+    )
+    user.last_login_at = now
+    user.last_activity_at = now
+    audit(db, request, "MFA_LOGIN_SUCCEEDED", user.id, target_type="session")
+    await db.commit()
+    return user_response(user, session)
+
+
+@router.post("/mfa/totp/setup", response_model=MfaStartResponse)
+async def authenticated_totp_setup(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaStartResponse:
+    require_fresh_adult_auth(auth)
+    secret = generate_totp_secret()
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None:
+        factor = UserMfaMethodRecord(user_id=auth.user.id, method=UserMfaMethod.totp)
+        db.add(factor)
+    elif factor.enabled:
+        audit(db, request, "MFA_TOTP_RESET", auth.user.id, target_type="mfa_method")
+    factor.encrypted_secret = encrypt_user_mfa_totp(settings, secret)
+    factor.enabled = False
+    factor.revoked_at = None
+    await db.commit()
+    audit(db, request, "MFA_TOTP_ENROLMENT_STARTED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return MfaStartResponse(
+        method="totp",
+        provisioning_uri=totp_provisioning_uri(secret, auth.user.email),
+        manual_key=secret,
+        enrolling=True,
+    )
+
+
+@router.get("/mfa/status", response_model=ConsumerMfaStatusResponse)
+async def authenticated_mfa_status(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    if auth.session.kind != SessionKind.adult:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This action is not available to a Child.")
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    active = await _active_mfa_methods(db, auth.user.id)
+    email_available = (
+        auth.user.email_verified_at is not None and "email" in policy.allowed_methods
+    )
+    totp_enabled = UserMfaMethod.totp in active
+    usable_methods = _usable_browser_mfa_methods(
+        {UserMfaMethod(method) for method in policy.allowed_methods},
+        active,
+        auth.user.email_verified_at is not None,
+    )
+    return ConsumerMfaStatusResponse(
+        required=policy.required,
+        allowed_methods=sorted(policy.allowed_methods),
+        email_available=email_available,
+        email_destination=_masked_email(auth.user.email) if email_available else None,
+        totp_enabled=totp_enabled,
+        can_disable_totp=totp_enabled and (not policy.required or email_available),
+        usable_methods=usable_methods,
+        preferred_method=_preferred_browser_mfa_method(auth.user, usable_methods),
+    )
+
+
+@router.patch("/mfa/preference", response_model=ConsumerMfaStatusResponse)
+async def update_mfa_preference(
+    body: MfaPreferenceRequest,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    require_fresh_adult_auth(auth)
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    active = await _active_mfa_methods(db, auth.user.id)
+    usable = _usable_browser_mfa_methods(
+        {UserMfaMethod(method) for method in policy.allowed_methods},
+        active,
+        auth.user.email_verified_at is not None,
+    )
+    if body.method is not None and body.method not in usable:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose an available MFA method.")
+    auth.user.preferred_mfa_method = body.method
+    await db.commit()
+    return await authenticated_mfa_status(auth, db, settings)
+
+
+@router.post("/reauthenticate", response_model=MessageResponse)
+async def reauthenticate_consumer(
+    body: ReauthenticateRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_adult_session(auth)
+    await enforce_rate_limit(request, settings, f"consumer-reauth:{auth.user.id}", 8, 300)
+    identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == auth.user.id))
+    if not verify_password(body.password, identity.password_hash if identity else DUMMY_HASH):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The password is not correct.")
+    auth.session.fresh_auth_at = datetime.now(UTC)
+    await db.commit()
+    return MessageResponse(message="Identity verified.")
+
+
+@router.delete("/mfa/totp")
+async def remove_authenticated_totp(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None or not factor.enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Authenticator app is not enabled.")
+    factor.enabled = False
+    factor.revoked_at = datetime.now(UTC)
+    factor.encrypted_secret = None
+    audit(db, request, "MFA_TOTP_REMOVED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return {"message": "Authenticator app removed."}
+
+
+@router.post("/mfa/totp/verify", response_model=ConsumerMfaStatusResponse)
+async def verify_authenticated_totp(
+    body: MfaTotpVerifyRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaStatusResponse:
+    require_fresh_adult_auth(auth)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == auth.user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    if factor is None or not factor.encrypted_secret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+    step = matched_totp_step(
+        decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
+    )
+    if step is None or not await claim_totp_step(settings, auth.user.id, step):
+        audit(db, request, "MFA_TOTP_ENROLMENT_FAILED", auth.user.id, target_type="mfa_method")
+        await db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That authenticator code isn't correct.")
+    now = datetime.now(UTC)
+    factor.enabled = True
+    factor.enrolled_at = factor.enrolled_at or now
+    factor.last_used_at = now
+    audit(db, request, "MFA_TOTP_ENROLLED", auth.user.id, target_type="mfa_method")
+    await db.commit()
+    return await authenticated_mfa_status(auth=auth, db=db, settings=settings)
+
+
+def _safe_return_path(value: str | None) -> str | None:
+    if value and value.startswith("/") and not value.startswith("//"):
+        return value[:500]
+    return None
+
+
+def _apple_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _apple_audit_failure(
+    db: AsyncSession, request: Request, user_id: uuid.UUID | None = None
+) -> None:
+    audit(db, request, "APPLE_LOGIN_FAILED", user_id, target_type="external_identity")
+
+
+def _apple_name(raw: str | None) -> str:
+    if not raw:
+        return "Apple user"
+    try:
+        parsed = json.loads(raw)
+        name = parsed.get("name") if isinstance(parsed, dict) else None
+        if isinstance(name, dict):
+            value = " ".join(
+                str(name.get(part, "")).strip()
+                for part in ("firstName", "lastName")
+                if name.get(part)
+            )
+            if value:
+                return value[:100]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return "Apple user"
+
+
+@router.get("/apple/start")
+async def apple_login_start(
+    request: Request,
+    next_path: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    try:
+        require_apple_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        await store_flow_state(
+            settings,
+            state,
+            AppleFlowState(
+                nonce=nonce,
+                intent="login",
+                user_id=None,
+                return_path=_safe_return_path(next_path),
+            ),
+        )
+        audit(db, request, "APPLE_LOGIN_STARTED", target_type="external_identity")
+        await db.commit()
+        return RedirectResponse(
+            authorization_url(settings, state, nonce), status_code=status.HTTP_303_SEE_OTHER
+        )
+    except AppleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.post("/apple/link/start")
+async def apple_link_start(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        require_apple_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        await store_flow_state(
+            settings,
+            state,
+            AppleFlowState(nonce=nonce, intent="link", user_id=str(auth.user.id), return_path=None),
+        )
+        audit(db, request, "APPLE_LOGIN_STARTED", auth.user.id, target_type="external_identity")
+        await db.commit()
+        return {"authorization_url": authorization_url(settings, state, nonce, "email name")}
+    except AppleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.delete("/apple/link")
+async def unlink_apple_identity(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    identity = await db.scalar(
+        select(ExternalIdentity)
+        .where(
+            ExternalIdentity.user_id == auth.user.id,
+            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+        )
+        .with_for_update()
+    )
+    if identity is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.")
+    password_identity = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
+    )
+    other_external_identity = await db.scalar(
+        select(ExternalIdentity.id).where(
+            ExternalIdentity.user_id == auth.user.id,
+            ExternalIdentity.id != identity.id,
+        )
+    )
+    if password_identity is None and other_external_identity is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Add another sign-in method before unlinking Apple.",
+        )
+    await db.delete(identity)
+    audit(db, request, "APPLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
+    await db.commit()
+    return {"message": "Apple sign-in has been unlinked."}
+
+
+@router.get("/apple/callback")
+async def apple_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    user: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    flow: AppleFlowState | None = None
+    try:
+        if not state or len(state) > 512:
+            raise AppleAuthenticationError("Invalid Apple sign-in state.")
+        flow = await consume_flow_state(settings, state)
+        if error:
+            raise AppleAuthenticationError("Apple sign-in was cancelled.")
+        if not code:
+            raise AppleAuthenticationError("Apple sign-in did not return an authorization code.")
+        identity_token = await exchange_code(settings, code)
+        claims = await verify_identity_token(settings, identity_token, flow.nonce)
+        subject = str(claims["sub"])
+        provider_email = claims.get("email")
+        provider_email = (
+            provider_email.strip().casefold() if isinstance(provider_email, str) else None
+        )
+        email_verified = claims.get("email_verified") in (True, "true", "1")
+
+        identity = await db.scalar(
+            select(ExternalIdentity)
+            .where(
+                ExternalIdentity.provider == ExternalIdentityProvider.apple,
+                ExternalIdentity.provider_subject == subject,
+            )
+            .with_for_update()
+        )
+
+        if flow.intent == "link":
+            linked_user, _session = await current_user(request, db, settings)
+            if flow.user_id != str(linked_user.id):
+                raise AppleAuthenticationError("This Apple linking attempt is invalid.")
+            if identity is not None:
+                if identity.user_id != linked_user.id:
+                    audit(
+                        db,
+                        request,
+                        "APPLE_IDENTITY_LINK_FAILED",
+                        linked_user.id,
+                        target_type="external_identity",
+                    )
+                    await db.commit()
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT, "This Apple identity is already linked."
+                    )
+                identity.last_used_at = datetime.now(UTC)
+            else:
+                identity = ExternalIdentity(
+                    user_id=linked_user.id,
+                    provider=ExternalIdentityProvider.apple,
+                    provider_subject=subject,
+                    provider_email=provider_email,
+                    provider_email_verified=email_verified,
+                    last_used_at=datetime.now(UTC),
+                )
+                db.add(identity)
+            audit(
+                db,
+                request,
+                "APPLE_IDENTITY_LINKED",
+                linked_user.id,
+                target_type="external_identity",
+            )
+            await db.commit()
+            return _apple_redirect(settings, "apple=linked")
+
+        if identity is not None:
+            candidate = await db.get(User, identity.user_id, with_for_update=True)
+            if candidate is None or not candidate.is_active:
+                raise AppleAuthenticationError("Apple sign-in could not be completed.")
+            linked_user = candidate
+            identity.provider_email = provider_email or identity.provider_email
+            identity.provider_email_verified = email_verified or identity.provider_email_verified
+            identity.last_used_at = datetime.now(UTC)
+        else:
+            # An email match is never an implicit identity link. The user must
+            # first sign in to the canonical account and then start the
+            # authenticated link ceremony above.
+            existing = (
+                await db.scalar(select(User).where(User.email == provider_email))
+                if provider_email
+                else None
+            )
+            if existing is not None:
+                _apple_audit_failure(db, request, existing.id)
+                await db.commit()
+                return _apple_redirect(settings, "apple=link_required")
+            if not provider_email:
+                raise AppleAuthenticationError("Apple did not provide an email for this account.")
+            linked_user = User(
+                email=provider_email,
+                display_name=_apple_name(user),
+                email_verified_at=datetime.now(UTC) if email_verified else None,
+            )
+            db.add(linked_user)
+            await db.flush()
+            db.add(
+                ExternalIdentity(
+                    user_id=linked_user.id,
+                    provider=ExternalIdentityProvider.apple,
+                    provider_subject=subject,
+                    provider_email=provider_email,
+                    provider_email_verified=email_verified,
+                    last_used_at=datetime.now(UTC),
+                )
+            )
+            audit(
+                db,
+                request,
+                "APPLE_IDENTITY_LINKED",
+                linked_user.id,
+                target_type="external_identity",
+            )
+
+        has_home = await db.scalar(
+            select(Membership.id).where(Membership.user_id == linked_user.id)
+        )
+        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        session_response = RedirectResponse(
+            f"{settings.public_web_url.rstrip('/')}{destination}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        result = await complete_browser_authentication(
+            db,
+            session_response,
+            request,
+            linked_user,
+            settings,
+            method="apple",
+            destination=destination,
+            onboarding=has_home is None,
+        )
+        if isinstance(result, AuthContinuationResponse):
+            session_response = _apple_redirect(
+                settings,
+                f"auth=additional&transaction={result.transaction_id}",
+            )
+        audit(db, request, "APPLE_LOGIN_SUCCESS", linked_user.id, target_type="external_identity")
+        await db.commit()
+        return session_response
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        try:
+            user_id = uuid.UUID(flow.user_id) if flow and flow.user_id else None
+        except ValueError:
+            user_id = None
+        action = (
+            "APPLE_IDENTITY_LINK_FAILED"
+            if flow is not None and flow.intent == "link"
+            else "APPLE_LOGIN_FAILED"
+        )
+        audit(db, request, action, user_id, target_type="external_identity")
+        await db.commit()
+        if isinstance(exc, AppleAuthenticationError):
+            return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+        return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+
+
+@router.get("/providers")
+async def authentication_provider_status(
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Return safe provider configuration state for future auth surfaces.
+
+    This endpoint reports status only; it never authenticates a provider,
+    creates a session, or returns credentials.
+    """
+    return {"providers": [item.public_dict() for item in external_auth_provider_statuses(settings)]}
+
+
+def _auth_diag(request: Request, event: str, **fields: object) -> None:
+    auth_diag_log.info(
+        "auth_diag",
+        auth_event=event,
+        request_id=getattr(request.state, "request_id", None),
+        route=request.url.path,
+        session_cookie=bool(request.cookies.get("mk_session")),
+        device_cookie=bool(request.cookies.get("mk_device")),
+        device_csrf_cookie=bool(request.cookies.get("mk_device_csrf")),
+        csrf_header=bool(request.headers.get("x-csrf-token")),
+        **fields,
+    )
+
+
+def require_fresh_adult_auth(auth: AuthContext) -> None:
+    if auth.session.kind != SessionKind.adult:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This action is not available to a Child.")
+    if (
+        auth.session.fresh_auth_at is None
+        or datetime.now(UTC) - auth.session.fresh_auth_at > FRESH_AUTH_WINDOW
+    ):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Please sign in again before changing your passkey settings.",
+        )
+
+
+def passkey_response(row: UserPasskey) -> PasskeyResponse:
+    return PasskeyResponse(
+        id=row.id,
+        label=row.label,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+        authenticator_attachment=row.authenticator_attachment,
+    )
+
+
+def parse_authenticator_attachment(credential_json: str) -> str | None:
+    """The browser reports this directly on the registration response
+    (RegistrationResponseJSON.authenticatorAttachment) — "platform" or
+    "cross-platform". Older browsers, or a client that didn't send it, omit
+    the field entirely; treated the same as an unrecognised value: unknown,
+    not a security signal either way (see UserPasskey.authenticator_attachment)."""
+    try:
+        parsed = json.loads(credential_json)
+        value = parsed.get("authenticatorAttachment")
+        return value if value in ("platform", "cross-platform") else None
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+def parse_passkey_credential_id(credential_json: str) -> str | None:
+    try:
+        parsed = json.loads(credential_json)
+        raw_id = parsed.get("rawId") or parsed.get("id")
+        if not isinstance(raw_id, str):
+            return None
+        return bytes_to_base64url(base64url_to_bytes(raw_id))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 def user_response(user: User, session: Session | None = None) -> UserResponse:
@@ -87,19 +1068,25 @@ async def issue_session(
     user: User,
     settings: Settings,
     kind: SessionKind = SessionKind.adult,
+    trusted_device_id: uuid.UUID | None = None,
+    device_token: str | None = None,
+    device_csrf: str | None = None,
+    fresh_auth_at: datetime | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
     session = Session(
         user_id=user.id,
+        trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        fresh_auth_at=fresh_auth_at,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         kind=kind,
     )
     db.add(session)
     await db.flush()
-    set_auth_cookies(response, raw, csrf, settings)
+    set_auth_cookies(response, raw, csrf, settings, device_token, device_csrf)
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
     return session
 
@@ -117,28 +1104,123 @@ def mobile_client_descriptor(request: Request) -> str:
     return request.headers.get("user-agent", "Unknown device")[:300]
 
 
+def device_platform(request: Request) -> str:
+    return request.headers.get("x-mykhaya-platform", "Web/PWA")[:80]
+
+
+async def issue_trusted_device(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind,
+) -> tuple[TrustedDevice, str, str]:
+    raw = new_session_token()
+    csrf = secrets.token_urlsafe(32)
+    now = datetime.now(UTC)
+    device = TrustedDevice(
+        user_id=user.id,
+        token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
+        last_used_at=now,
+        expires_at=now + timedelta(days=settings.trusted_device_days),
+        device_name=request.headers.get("x-mykhaya-device-name", "MyKhaya device")[:120],
+        platform=device_platform(request),
+        user_agent=request.headers.get("user-agent", "Unknown device")[:300],
+        ip_created=resolve_client_ip(request, settings),
+        ip_last_seen=resolve_client_ip(request, settings),
+        kind=kind,
+    )
+    db.add(device)
+    await db.flush()
+    audit(
+        db,
+        request,
+        "trusted_device.created",
+        user.id,
+        target_type="trusted_device",
+        target_id=device.id,
+    )
+    return device, raw, csrf
+
+
+async def issue_family_session(
+    db: AsyncSession,
+    response: Response,
+    request: Request,
+    user: User,
+    settings: Settings,
+    kind: SessionKind,
+    fresh_auth_at: datetime | None = None,
+) -> Session:
+    device, device_token, device_csrf = await issue_trusted_device(
+        db, request, user, settings, kind
+    )
+    return await issue_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        kind=kind,
+        trusted_device_id=device.id,
+        device_token=device_token,
+        device_csrf=device_csrf,
+        fresh_auth_at=fresh_auth_at,
+    )
+
+
 async def issue_mobile_session(
     db: AsyncSession,
     request: Request,
     user: User,
     settings: Settings,
     kind: SessionKind = SessionKind.adult,
-) -> tuple[str, Session]:
+    fresh_auth_at: datetime | None = None,
+    existing_device_id: uuid.UUID | None = None,
+) -> tuple[str, Session, str | None]:
     """Bearer-transport equivalent of issue_session: same Session model, same
-    token scheme, no cookies. Returns the raw token - callers must put it in
-    the response body only, never a cookie, never a log line."""
+    token scheme, no cookies. Returns the raw session token - callers must
+    put it in the response body only, never a cookie, never a log line.
+
+    At login time (existing_device_id=None) also issues a TrustedDevice (the
+    same row/table the browser's "remember this device" cookie uses — see
+    issue_family_session) linked via Session.trusted_device_id, and returns
+    its own raw renewal token alongside the session token. This is what
+    gives a native app a genuinely long-lived (settings.trusted_device_days,
+    e.g. 90 days) path back in after its short-lived bearer session
+    (settings.session_minutes) has expired, via
+    POST /auth/mobile/sessions/renew, without ever asking for a password
+    again — the exact bearer-transport equivalent of the browser's silent
+    /auth/renew. Before this, a native session that outlived
+    session_minutes without ever calling the (session-still-valid-only)
+    /mobile/sessions/rotate endpoint had no way back in at all.
+
+    When rotating an *already*-valid session (existing_device_id set — see
+    rotate_mobile_session), the existing device is reused unchanged rather
+    than minting a new TrustedDevice on every rotation; the returned device
+    token is None in that case since nothing about the device credential
+    changed and there is nothing new to persist."""
     raw = new_session_token()
+    device_raw: str | None = None
+    device_id = existing_device_id
+    if device_id is None:
+        device, device_raw, _device_csrf = await issue_trusted_device(
+            db, request, user, settings, kind
+        )
+        device_id = device.id
     session = Session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
+        trusted_device_id=device_id,
         kind=kind,
     )
     db.add(session)
     await db.flush()
     audit(db, request, "session.created", user.id, target_type="session", target_id=session.id)
-    return raw, session
+    return raw, session, device_raw
 
 
 async def authenticate_credentials(
@@ -207,6 +1289,14 @@ async def register(
                 "This invitation is invalid for the supplied email address.",
             )
 
+    # Validated before the existing-email lookup, unconditionally, so a
+    # re-used email and a genuinely new one are rejected identically by
+    # this check — it must never become a second account-discovery signal
+    # alongside the dummy-hash password-timing equalisation below.
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+    )
+
     existing = await db.scalar(select(User).where(User.email == email))
     if existing is None:
         user = User(
@@ -217,6 +1307,23 @@ async def register(
         db.add(user)
         await db.flush()
         db.add(AuthIdentity(user_id=user.id, password_hash=password_hash.hash(body.password)))
+        for resolved in resolved_legal_acceptances:
+            record_type = (
+                LegalRecordType.user_acceptance
+                if resolved.document.action_verb == LegalActionVerb.accept
+                else LegalRecordType.user_acknowledgement
+            )
+            db.add(
+                LegalAcceptance(
+                    record_type=record_type,
+                    document_version_id=resolved.version.id,
+                    user_id=user.id,
+                    context=LegalAcceptanceContext.signup,
+                    platform=body.platform,
+                    ip_address=resolve_client_ip(request, settings),
+                    user_agent=request.headers.get("user-agent", "")[:300] or None,
+                )
+            )
         if settings.email_verification_enabled:
             token = await create_action_token(
                 db, user.id, TokenPurpose.verify_email, settings, 60 * 24
@@ -224,8 +1331,9 @@ async def register(
             raw = derived_token(
                 token.id, token.purpose.value, settings.secret_key.get_secret_value()
             )
-            subject, message = await render_notification(
+            subject, message, html = await render_notification_email(
                 db,
+                settings,
                 "email_verification",
                 {"link": f"{settings.public_web_url}/verify-email?token={raw}"},
             )
@@ -237,6 +1345,7 @@ async def register(
                 title=subject,
                 body=message,
                 idempotency_key=f"email_verification:{token.id}",
+                html_body=html,
             )
         audit(db, request, "user.registered", user.id, target_type="user", target_id=user.id)
         await db.commit()
@@ -270,43 +1379,288 @@ async def verify_email(
     return MessageResponse(message="Your email is verified. You can sign in now.")
 
 
-@router.post("/login", response_model=UserResponse)
+@router.post("/login", response_model=UserResponse | AuthContinuationResponse)
 async def login(
     body: LoginRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> UserResponse:
+) -> UserResponse | AuthContinuationResponse:
     user = await authenticate_credentials(db, request, settings, body, "login")
-    session = await issue_session(db, response, request, user, settings)
-    user.last_login_at = datetime.now(UTC)
-    user.last_activity_at = datetime.now(UTC)
+    result = await complete_browser_authentication(
+        db, response, request, user, settings, method="password", destination="/home"
+    )
     await db.commit()
-    return user_response(user, session)
+    return result
 
 
-CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
+@router.post("/passkeys/register/options", response_model=PasskeyOptionsResponse)
+async def passkey_register_options(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PasskeyOptionsResponse:
+    require_fresh_adult_auth(auth)
+    await enforce_rate_limit(request, settings, "family-passkey-register", 10, 300)
+    existing = list(
+        await db.scalars(
+            select(UserPasskey.credential_id).where(
+                UserPasskey.user_id == auth.user.id,
+                UserPasskey.revoked_at.is_(None),
+            )
+        )
+    )
+    options_json, challenge = build_family_registration_options(
+        settings,
+        auth.user.id,
+        auth.user.email,
+        auth.user.display_name,
+        existing,
+    )
+    await store_webauthn_challenge(settings, "family-register", auth.session.id, challenge)
+    return PasskeyOptionsResponse(options_json=options_json)
 
 
-@router.post("/child/login", response_model=UserResponse)
-async def child_login(
-    body: ChildLoginRequest,
+@router.post("/passkeys/register/verify", response_model=PasskeyResponse)
+async def passkey_register_verify(
+    body: PasskeyRegistrationVerifyRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PasskeyResponse:
+    require_fresh_adult_auth(auth)
+    await enforce_rate_limit(request, settings, "family-passkey-register", 10, 300)
+    challenge = await pop_webauthn_challenge(settings, "family-register", auth.session.id)
+    if challenge is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This passkey setup attempt has expired.")
+    result = verify_family_registration(settings, body.credential_json, challenge)
+    if result is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This passkey could not be registered.")
+    duplicate = await db.scalar(
+        select(UserPasskey).where(UserPasskey.credential_id == result.credential_id)
+    )
+    if duplicate is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That passkey is already registered.")
+    count = await db.scalar(
+        select(func.count()).select_from(UserPasskey).where(UserPasskey.user_id == auth.user.id)
+    )
+    label = " ".join((body.label or f"Passkey {(count or 0) + 1}").split())[:100]
+    row = UserPasskey(
+        user_id=auth.user.id,
+        credential_id=result.credential_id,
+        public_key=result.public_key,
+        sign_count=result.sign_count,
+        label=label,
+        authenticator_attachment=parse_authenticator_attachment(body.credential_json),
+    )
+    db.add(row)
+    audit(
+        db,
+        request,
+        "user.passkey_registered",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    return passkey_response(row)
+
+
+@router.post("/passkeys/login/options", response_model=PasskeyOptionsResponse)
+async def passkey_login_options(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+) -> PasskeyOptionsResponse:
+    require_secure_transport(request, settings)
+    await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
+    token = secrets.token_urlsafe(32)
+    options_json, challenge = build_family_authentication_options(settings)
+    await store_webauthn_token_challenge(settings, "family-login", token, challenge)
+    response.set_cookie(
+        PASSKEY_LOGIN_COOKIE,
+        token,
+        max_age=PASSKEY_CHALLENGE_TTL_SECONDS,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+        domain=settings.cookie_domain,
+    )
+    return PasskeyOptionsResponse(options_json=options_json)
+
+
+@router.post("/passkeys/login/verify", response_model=UserResponse)
+async def passkey_login_verify(
+    body: PasskeyAuthenticationVerifyRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
-    """Managed Child sign-in — deliberately separate from /login: no email, no
-    password, no verification/reset flow. A Home code + Child username + PIN,
-    all rate limited, all failures returning the identical generic message so
-    neither the Home, the username nor the PIN can be distinguished as the
-    wrong element (no enumeration of Homes or Child usernames).
-    """
-    # Per-IP (matches adult login's own bucket) *and* per sign-in-identity — a
-    # slow, distributed attempt against one specific Child is limited even if it
-    # never trips the per-IP bucket, and vice versa.
-    await enforce_rate_limit(request, settings, "child-login", settings.rate_limit_login, 60)
+    require_secure_transport(request, settings)
+    await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
+    token = request.cookies.get(PASSKEY_LOGIN_COOKIE)
+    challenge = (
+        await pop_webauthn_token_challenge(settings, "family-login", token)
+        if token
+        else None
+    )
+    if challenge is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This passkey sign-in attempt has expired."
+        )
+    credential_id = parse_passkey_credential_id(body.credential_json)
+    row = (
+        await db.scalar(
+            select(UserPasskey).where(
+                UserPasskey.credential_id == credential_id,
+                UserPasskey.revoked_at.is_(None),
+            )
+        )
+        if credential_id
+        else None
+    )
+    user = (
+        await db.scalar(
+            select(User)
+            .join(AuthIdentity, AuthIdentity.user_id == User.id)
+            .where(User.id == row.user_id, User.is_active.is_(True))
+        )
+        if row is not None
+        else None
+    )
+    if row is None or user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "We couldn't verify this passkey.")
+    new_sign_count = verify_family_authentication(
+        settings, body.credential_json, challenge, row.public_key, row.sign_count
+    )
+    if new_sign_count is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "We couldn't verify this passkey.")
+    now = datetime.now(UTC)
+    row.sign_count = new_sign_count
+    row.last_used_at = now
+    session = await issue_family_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        SessionKind.adult,
+        fresh_auth_at=now,
+    )
+    user.last_login_at = now
+    user.last_activity_at = now
+    audit(
+        db,
+        request,
+        "user.passkey_authenticated",
+        user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    response.delete_cookie(
+        PASSKEY_LOGIN_COOKIE,
+        path="/",
+        domain=settings.cookie_domain,
+    )
+    return user_response(user, session)
+
+
+@router.get("/passkeys", response_model=list[PasskeyResponse])
+async def list_passkeys(
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
+) -> list[PasskeyResponse]:
+    require_adult_session(auth)
+    rows = await db.scalars(
+        select(UserPasskey)
+        .where(UserPasskey.user_id == auth.user.id, UserPasskey.revoked_at.is_(None))
+        .order_by(UserPasskey.created_at)
+    )
+    return [passkey_response(row) for row in rows]
+
+
+@router.patch("/passkeys/{passkey_id}", response_model=PasskeyResponse)
+async def rename_passkey(
+    passkey_id: uuid.UUID,
+    body: PasskeyRenameRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> PasskeyResponse:
+    require_fresh_adult_auth(auth)
+    row = await db.scalar(
+        select(UserPasskey).where(
+            UserPasskey.id == passkey_id,
+            UserPasskey.user_id == auth.user.id,
+            UserPasskey.revoked_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That passkey could not be found.")
+    row.label = " ".join(body.label.split())[:100]
+    audit(
+        db,
+        request,
+        "user.passkey_renamed",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+    return passkey_response(row)
+
+
+@router.delete("/passkeys/{passkey_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_passkey(
+    passkey_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_fresh_adult_auth(auth)
+    row = await db.scalar(
+        select(UserPasskey).where(
+            UserPasskey.id == passkey_id,
+            UserPasskey.user_id == auth.user.id,
+            UserPasskey.revoked_at.is_(None),
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That passkey could not be found.")
+    row.revoked_at = datetime.now(UTC)
+    audit(
+        db,
+        request,
+        "user.passkey_revoked",
+        auth.user.id,
+        target_type="user_passkey",
+        target_id=row.id,
+    )
+    await db.commit()
+
+
+CHILD_LOGIN_GENERIC_MESSAGE = "Incorrect sign-in details."
+
+
+async def authenticate_child_credentials(
+    db: AsyncSession, request: Request, settings: Settings, body: ChildLoginRequest, bucket: str
+) -> User:
+    """Shared by /child/login and /auth/mobile/child/login — same rationale as
+    authenticate_credentials for the adult path: the security-sensitive check
+    (rate limiting, PIN verification, active/login-enabled checks) is never
+    duplicated between transports. `bucket` lets the two callers use separate
+    per-IP rate-limit buckets without changing the shared identity-bucket
+    logic below, which must stay keyed on the child identity regardless of
+    which endpoint is used."""
+    # Per-IP *and* per-sign-in-identity — a slow, distributed attempt against
+    # one specific Child is limited even if it never trips the per-IP bucket,
+    # and vice versa.
+    await enforce_rate_limit(request, settings, bucket, settings.rate_limit_login, 60)
     identity_bucket = "child-login-identity:" + hash_secret(
         f"{normalise_home_code(body.home_code)}:{normalise_child_username(body.username)}",
         settings.secret_key.get_secret_value(),
@@ -346,13 +1700,198 @@ async def child_login(
     user = await db.get(User, membership.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, CHILD_LOGIN_GENERIC_MESSAGE)
+    return user
 
-    session = await issue_session(
-        db, response, request, user, settings, kind=SessionKind.managed_child
+
+@router.post("/child/login", response_model=UserResponse)
+async def child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Managed Child sign-in — deliberately separate from /login: no email, no
+    password, no verification/reset flow. A Home code + Child username + PIN,
+    all rate limited, all failures returning the identical generic message so
+    neither the Home, the username nor the PIN can be distinguished as the
+    wrong element (no enumeration of Homes or Child usernames).
+    """
+    user = await authenticate_child_credentials(db, request, settings, body, "child-login")
+    session = await issue_family_session(
+        db, response, request, user, settings, SessionKind.managed_child
     )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
+    return user_response(user, session)
+
+
+@router.post("/mobile/child/login", response_model=MobileSessionResponse)
+async def mobile_child_login(
+    body: ChildLoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Native-client equivalent of /child/login — same relationship as
+    /mobile/login has to /login (see ADR 0010): identical credential check,
+    opaque Session token, but returned in the body instead of a cookie. A
+    managed Child is a normal Session row with kind=managed_child regardless
+    of transport — this does not introduce a second child-auth mechanism,
+    just a second way to carry the same session."""
+    require_secure_transport(request, settings)
+    user = await authenticate_child_credentials(
+        db, request, settings, body, "child-login-mobile"
+    )
+    raw, session, device_raw = await issue_mobile_session(
+        db, request, user, settings, kind=SessionKind.managed_child
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
+
+
+@router.post("/renew", response_model=UserResponse)
+async def renew(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse:
+    """Silently replace an expired application session using the rotating
+    family-device credential. The device credential is never returned in JSON.
+    """
+    try:
+        require_device_csrf(request, settings)
+    except HTTPException as exc:
+        _auth_diag(
+            request,
+            "RENEW_CSRF_FAILED",
+            status_code=exc.status_code,
+            csrf_reason=(
+                "CSRF_COOKIE_MISSING"
+                if not request.cookies.get("mk_device_csrf")
+                else "CSRF_HEADER_MISSING"
+                if not request.headers.get("x-csrf-token")
+                else "CSRF_INVALID"
+            ),
+        )
+        raise
+    raw = request.cookies.get("mk_device")
+    if not raw:
+        _auth_diag(request, "RENEW_FAILED", result="NO_TRUSTED_COOKIE", status_code=401)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    now = datetime.now(UTC)
+    device_result = await db.execute(
+        select(User, TrustedDevice)
+        .join(TrustedDevice, TrustedDevice.user_id == User.id)
+        .where(
+            TrustedDevice.token_hash == hash_secret(raw, settings.secret_key.get_secret_value()),
+            TrustedDevice.revoked_at.is_(None),
+            TrustedDevice.expires_at > now,
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    pair = device_result.one_or_none()
+    if pair is None:
+        known_device_result = await db.execute(
+            select(User, TrustedDevice)
+            .join(TrustedDevice, TrustedDevice.user_id == User.id)
+            .where(
+                TrustedDevice.token_hash
+                == hash_secret(raw, settings.secret_key.get_secret_value())
+            )
+        )
+        known_pair = known_device_result.one_or_none()
+        if known_pair is None:
+            result = "TOKEN_MISMATCH"
+            device_id = None
+            user_id = None
+        else:
+            known_user, known_device = known_pair
+            device_id = str(known_device.id)
+            user_id = str(known_user.id)
+            result = (
+                "USER_INVALID"
+                if not known_user.is_active
+                else "DEVICE_REVOKED"
+                if known_device.revoked_at is not None
+                else "DEVICE_EXPIRED"
+                if known_device.expires_at <= now
+                else "TRUSTED_DEVICE_NOT_FOUND"
+            )
+        _auth_diag(
+            request,
+            "RENEW_FAILED",
+            result=result,
+            user_id=user_id,
+            device_id=device_id,
+            status_code=401,
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    user, device = pair
+
+    if device.kind == SessionKind.managed_child:
+        child_active = await db.scalar(
+            select(ChildProfile.id)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                Membership.user_id == user.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+            )
+        )
+        if child_active is None:
+            device.revoked_at = now
+            await db.commit()
+            _auth_diag(
+                request,
+                "RENEW_FAILED",
+                result="CHILD_ACCOUNT_INVALID",
+                user_id=str(user.id),
+                device_id=str(device.id),
+                status_code=401,
+            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+
+    rotated_token = new_session_token()
+    device_csrf = secrets.token_urlsafe(32)
+    device.token_hash = hash_secret(rotated_token, settings.secret_key.get_secret_value())
+    device.last_used_at = now
+    device.expires_at = now + timedelta(days=settings.trusted_device_days)
+    device.ip_last_seen = resolve_client_ip(request, settings)
+    session = await issue_session(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        kind=device.kind,
+        trusted_device_id=device.id,
+        device_token=rotated_token,
+        device_csrf=device_csrf,
+    )
+    await db.commit()
+    _auth_diag(
+        request,
+        "RENEW_SUCCESS",
+        result="SUCCESS",
+        user_id=str(user.id),
+        device_id=str(device.id),
+        session_id=str(session.id),
+        rotation_performed=True,
+        new_cookies_emitted=True,
+        status_code=200,
+    )
     return user_response(user, session)
 
 
@@ -370,13 +1909,17 @@ async def mobile_login(
     token - only the caller who receives this response ever sees it."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
-    raw, session = await issue_mobile_session(db, request, user, settings)
+    raw, session, device_raw = await issue_mobile_session(
+        db, request, user, settings, fresh_auth_at=datetime.now(UTC)
+    )
     user.last_login_at = datetime.now(UTC)
     user.last_activity_at = datetime.now(UTC)
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return MobileSessionResponse(**user_response(user, session).model_dump(), session_token=raw)
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
 
 
 @router.post(
@@ -388,6 +1931,10 @@ async def forgot(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
+    # Password-recovery requests are deliberately generic, but still need an
+    # abuse limit so an attacker cannot repeatedly trigger reset-email delivery
+    # for a known address (or consume mail/worker capacity with arbitrary ones).
+    await enforce_rate_limit(request, settings, "forgot-password", 5, 300)
     user = await db.scalar(
         select(User).where(User.email == normalise_email(str(body.email)), User.is_active.is_(True))
     )
@@ -403,8 +1950,9 @@ async def forgot(
         )
         token = await create_action_token(db, user.id, TokenPurpose.reset_password, settings, 30)
         raw = derived_token(token.id, token.purpose.value, settings.secret_key.get_secret_value())
-        subject, message = await render_notification(
+        subject, message, html = await render_notification_email(
             db,
+            settings,
             "password_reset",
             {"link": f"{settings.public_web_url}/reset-password?token={raw}"},
         )
@@ -416,6 +1964,7 @@ async def forgot(
             title=subject,
             body=message,
             idempotency_key=f"password_reset:{token.id}",
+            html_body=html,
         )
         audit(
             db, request, "password.reset_requested", user.id, target_type="user", target_id=user.id
@@ -446,6 +1995,11 @@ async def reset(
         .where(Session.user_id == token.user_id, Session.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == token.user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
     audit(db, request, "password.reset", token.user_id, target_type="user", target_id=token.user_id)
     await db.commit()
     return MessageResponse(
@@ -462,6 +2016,12 @@ async def logout(
     settings: Settings = Depends(get_settings),
 ) -> None:
     auth.session.revoked_at = datetime.now(UTC)
+    if auth.session.trusted_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(TrustedDevice.id == auth.session.trusted_device_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
     audit(
         db,
         request,
@@ -487,12 +2047,20 @@ async def mobile_logout(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Revokes the session; does not touch cookies (there are none for a
-    bearer session) and is not subject to CSRF (bearer transport). The
-    mobile client must still clear its SecureStore token locally even if
-    this call fails - see ADR 0010."""
+    """Revokes the session and its linked TrustedDevice (the renewable
+    credential — see issue_mobile_session); does not touch cookies (there
+    are none for a bearer session) and is not subject to CSRF (bearer
+    transport). Mirrors the browser /auth/logout's identical
+    session-plus-device revocation. The mobile client must still clear its
+    SecureStore token locally even if this call fails - see ADR 0010."""
     require_bearer_transport(auth)
     auth.session.revoked_at = datetime.now(UTC)
+    if auth.session.trusted_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(TrustedDevice.id == auth.session.trusted_device_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
     audit(
         db,
         request,
@@ -552,6 +2120,104 @@ async def revoke_session(
     await db.commit()
 
 
+@router.get("/devices", response_model=list[TrustedDeviceResponse])
+async def devices(
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
+) -> list[TrustedDeviceResponse]:
+    rows = (
+        await db.scalars(
+            select(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == auth.user.id,
+                TrustedDevice.revoked_at.is_(None),
+                TrustedDevice.expires_at > datetime.now(UTC),
+            )
+            .order_by(TrustedDevice.last_used_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return [
+        TrustedDeviceResponse(
+            id=row.id,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            expires_at=row.expires_at,
+            device_name=row.device_name,
+            platform=row.platform,
+            user_agent=row.user_agent,
+            current=row.id == auth.session.trusted_device_id,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_device(
+    device_id: uuid.UUID,
+    response: Response,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    target = await db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.id == device_id,
+            TrustedDevice.user_id == auth.user.id,
+            TrustedDevice.revoked_at.is_(None),
+        )
+    )
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That device could not be found.")
+    target.revoked_at = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.trusted_device_id == target.id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    audit(
+        db,
+        request,
+        "trusted_device.revoked",
+        auth.user.id,
+        target_type="trusted_device",
+        target_id=target.id,
+    )
+    await db.commit()
+    if target.id == auth.session.trusted_device_id:
+        clear_auth_cookies(response, settings)
+
+
+@router.post("/devices/revoke-others", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_other_devices(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    current_device_id = auth.session.trusted_device_id
+    if current_device_id is not None:
+        await db.execute(
+            update(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == auth.user.id,
+                TrustedDevice.id != current_device_id,
+                TrustedDevice.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+        await db.execute(
+            update(Session)
+            .where(
+                Session.user_id == auth.user.id,
+                Session.trusted_device_id != current_device_id,
+                Session.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    audit(db, request, "trusted_device.others_revoked", auth.user.id)
+    await db.commit()
+
+
 @router.post("/sessions/rotate", response_model=UserResponse)
 async def rotate_session(
     response: Response,
@@ -567,7 +2233,13 @@ async def rotate_session(
     # underlying User row, defeating require_adult_session and every other
     # kind-based check from that point on.
     new_session = await issue_session(
-        db, response, request, auth.user, settings, kind=auth.session.kind
+        db,
+        response,
+        request,
+        auth.user,
+        settings,
+        kind=auth.session.kind,
+        fresh_auth_at=auth.session.fresh_auth_at,
     )
     audit(
         db,
@@ -599,9 +2271,19 @@ async def rotate_mobile_session(
     auth.session.revoked_at = datetime.now(UTC)
     # See the identical comment in rotate_session: kind must carry over from the
     # session being rotated, not silently reset to issue_mobile_session's adult
-    # default.
-    raw, new_session = await issue_mobile_session(
-        db, request, auth.user, settings, kind=auth.session.kind
+    # default. existing_device_id reuses the session's current TrustedDevice
+    # rather than minting a new one on every rotation — see
+    # issue_mobile_session's docstring.
+    # existing_device_id set => issue_mobile_session never mints a new device
+    # and always returns None for the device token here — see its docstring.
+    raw, new_session, device_raw = await issue_mobile_session(
+        db,
+        request,
+        auth.user,
+        settings,
+        kind=auth.session.kind,
+        fresh_auth_at=auth.session.fresh_auth_at,
+        existing_device_id=auth.session.trusted_device_id,
     )
     audit(
         db,
@@ -615,5 +2297,86 @@ async def rotate_mobile_session(
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
     return MobileSessionResponse(
-        **user_response(auth.user, new_session).model_dump(), session_token=raw
+        **user_response(auth.user, new_session).model_dump(),
+        session_token=raw,
+        device_token=device_raw,
+    )
+
+
+@router.post("/mobile/sessions/renew", response_model=MobileSessionResponse)
+async def renew_mobile_session(
+    body: MobileDeviceRenewRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Bearer-transport equivalent of /auth/renew: silently mints a fresh
+    session from the long-lived TrustedDevice credential once the previous
+    bearer session_token has already expired — deliberately takes no
+    AuthContext dependency, the same way /auth/renew reads mk_device instead
+    of requiring a currently-valid mk_session. No CSRF check: bearer
+    transport is CSRF-exempt throughout (ADR 0010), matching every other
+    /mobile/* endpoint.
+
+    The device credential is rotated here too (old token revoked, this
+    response's device_token is the only copy of the new one) — the native
+    client must persist it before this call is considered complete, exactly
+    as it already must for session_token; if the app is killed first, the
+    next renewal attempt correctly fails as an unrecognised/already-rotated
+    device token, and the user simply signs in again. This is the identical
+    single-use-credential trade-off /auth/renew already accepts for the
+    browser's mk_device cookie."""
+    require_secure_transport(request, settings)
+    now = datetime.now(UTC)
+    pair = (
+        await db.execute(
+            select(User, TrustedDevice)
+            .join(TrustedDevice, TrustedDevice.user_id == User.id)
+            .where(
+                TrustedDevice.token_hash
+                == hash_secret(body.device_token, settings.secret_key.get_secret_value()),
+                TrustedDevice.revoked_at.is_(None),
+                TrustedDevice.expires_at > now,
+                User.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+    ).one_or_none()
+    if pair is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+    user, device = pair
+
+    if device.kind == SessionKind.managed_child:
+        child_active = await db.scalar(
+            select(ChildProfile.id)
+            .join(Membership, Membership.id == ChildProfile.membership_id)
+            .where(
+                Membership.user_id == user.id,
+                Membership.relationship == HouseholdRelationship.child,
+                Membership.removed_at.is_(None),
+                ChildProfile.login_enabled.is_(True),
+            )
+        )
+        if child_active is None:
+            device.revoked_at = now
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+
+    rotated_device_token = new_session_token()
+    device.token_hash = hash_secret(rotated_device_token, settings.secret_key.get_secret_value())
+    device.last_used_at = now
+    device.expires_at = now + timedelta(days=settings.trusted_device_days)
+    device.ip_last_seen = resolve_client_ip(request, settings)
+    raw, session, _device_raw = await issue_mobile_session(
+        db, request, user, settings, kind=device.kind, existing_device_id=device.id
+    )
+    audit(db, request, "session.renewed", user.id, target_type="session", target_id=session.id)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(),
+        session_token=raw,
+        device_token=rotated_device_token,
     )

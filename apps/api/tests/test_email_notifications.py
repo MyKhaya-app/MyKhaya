@@ -5,15 +5,19 @@ delivered by exactly one worker handler (notification.email), never a module cal
 mykhaya.mailer.send_email directly. See docs/architecture/notification-engine.md.
 """
 
+import hashlib
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
@@ -23,6 +27,7 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
+    SubscriptionPlan,
     TokenPurpose,
     User,
     WorkerJobRecord,
@@ -48,9 +53,9 @@ async def client() -> AsyncIterator[AsyncClient]:
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44210)),
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44210)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as value:
         yield value
 
@@ -108,7 +113,13 @@ def test_mandatory_email_types_are_registered() -> None:
         "email_verification",
         "password_reset",
         "household_invitation",
+        "calendar_share_invitation",
         "platform_administrator_invitation",
+        "mfa_email_code",
+        "support.ticket.received",
+        "support.ticket.reply",
+        "support.ticket.resolved",
+        "support.ticket.follow_up",
     } == (MANDATORY_EMAIL_TYPES)
 
 
@@ -197,6 +208,32 @@ async def test_forgot_password_enqueues_reset_email(client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
+async def test_forgot_password_is_rate_limited_by_client_ip() -> None:
+    peer = "127.0.0.1"
+    identity = hashlib.sha256(peer.encode()).hexdigest()[:24]
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        await redis.delete(f"rate:forgot-password:{identity}")
+    finally:
+        await redis.aclose()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=(peer, 44210)),
+        base_url=ORIGIN,
+        headers={"Origin": ORIGIN},
+    ) as client:
+        responses = [
+            await client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": unique_email("recovery-limit")},
+            )
+            for _ in range(6)
+        ]
+    assert [response.status_code for response in responses[:5]] == [202] * 5
+    assert responses[5].status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_invitation_email_sent_with_no_account(client: AsyncClient) -> None:
     """A household invitation goes to a raw email address with no User row yet —
     notify() must support this without requiring an account to attach an in-app
@@ -227,6 +264,14 @@ async def test_invitation_email_sent_with_no_account(client: AsyncClient) -> Non
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Invite Test Home"})
     assert group.status_code == 201
     home_id = group.json()["id"]
+    # home.max_members restricts Free to a single person — upgrade to Family
+    # to invite at all; this test is about email delivery, not commercial
+    # gating.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     invitee_email = unique_email("invitee")
     invited = await unsafe(
@@ -239,7 +284,7 @@ async def test_invitation_email_sent_with_no_account(client: AsyncClient) -> Non
 
     rows = await email_outbox_rows(invitee_email)
     assert len(rows) == 1
-    assert rows[0].payload["subject"] == "You are invited to a MyKhaya Home"
+    assert rows[0].payload["subject"] == "You're invited to join a MyKhaya Home"
     assert "/register?invitation=" in rows[0].payload["body"]
     assert "Home Owner invited you to join Invite Test Home" in rows[0].payload["body"]
 
@@ -374,6 +419,8 @@ async def test_worker_delivers_queued_email(client: AsyncClient) -> None:
     rows = await email_outbox_rows(email)
     assert len(rows) == 1
     event_id = rows[0].id
+    assert rows[0].payload["html_body"]
+    assert "<html" in rows[0].payload["html_body"]
 
     # SMTP is unconfigured in the test environment, so delivery fails — this still
     # proves the single notification.email handler is reached and the diagnostic

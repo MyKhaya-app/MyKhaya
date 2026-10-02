@@ -25,9 +25,10 @@ from webauthn import (
     verify_authentication_response,
     verify_registration_response,
 )
-from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     PublicKeyCredentialRequestOptions,
@@ -168,6 +169,14 @@ async def pop_webauthn_challenge(
 
 # ---------------------------------------------------------------------------
 # WebAuthn registration (adding a new passkey)
+#
+# AdminWebAuthnCredential.credential_id is stored as a base64url *string*
+# (bytes_to_base64url of the raw credential ID). Every PublicKeyCredentialDescriptor
+# built from a stored credential_id must decode it back with base64url_to_bytes —
+# `.encode("utf-8")` on the string is a different, meaningless byte sequence that no
+# authenticator will ever match, and previously made passkey sign-in silently
+# unusable (the browser reports "no passkeys found" because the allowCredentials/
+# excludeCredentials list it was given doesn't correspond to any real credential).
 # ---------------------------------------------------------------------------
 
 
@@ -186,7 +195,7 @@ def build_registration_options(
         user_name=email,
         user_display_name=display_name,
         exclude_credentials=[
-            PublicKeyCredentialDescriptor(id=credential_id.encode("utf-8"))
+            PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
             for credential_id in existing_credential_ids
         ],
         authenticator_selection=AuthenticatorSelectionCriteria(
@@ -240,7 +249,7 @@ def build_authentication_options(
     options: PublicKeyCredentialRequestOptions = generate_authentication_options(
         rp_id=settings.admin_webauthn_rp_id,
         allow_credentials=[
-            PublicKeyCredentialDescriptor(id=credential_id.encode("utf-8"))
+            PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
             for credential_id in allowed_credential_ids
         ],
         user_verification=UserVerificationRequirement.PREFERRED,
@@ -273,3 +282,138 @@ def verify_authentication(
     except WebAuthnException:
         return None
     return verified.new_sign_count
+
+
+# ---------------------------------------------------------------------------
+# Family-user passkeys
+#
+# These helpers deliberately use the same standards-based library and challenge
+# storage as PCC, but take the family RP/origin and require user verification.
+# The caller remains responsible for the separate family credential table and
+# adult-session policy.
+# ---------------------------------------------------------------------------
+
+
+def build_family_registration_options(
+    settings: Settings,
+    user_id: uuid.UUID,
+    email: str,
+    display_name: str,
+    existing_credential_ids: list[str],
+) -> tuple[str, bytes]:
+    """The family "Biometric sign-in" product surface is specifically this
+    device's built-in Face ID/Touch ID/Windows Hello/fingerprint — not a
+    portable, roaming credential. `authenticator_attachment=PLATFORM` is the
+    standards-based way to ask the browser for the built-in authenticator
+    only (excludes USB/NFC/BLE security keys entirely); `resident_key=
+    REQUIRED` asks for a discoverable credential so a later sign-in never
+    needs the user to type their email first (see build_family_
+    authentication_options' empty allow_credentials).
+
+    Neither flag can force *which* app on the device fulfils a "platform"
+    request. Since iOS 17, Apple's Credential Provider Extension framework
+    lets a third-party password manager the user has enabled and set as
+    their preferred AutoFill Passwords provider (e.g. Bitwarden) register
+    itself as eligible for platform-attachment WebAuthn requests too — that
+    substitution happens entirely in OS-owned UI, outside the web content
+    process, and no WebAuthn option MyKhaya sends can see or override the
+    user's own OS-level choice. See docs/architecture and the biometric
+    sign-in report this accompanies for the full investigation.
+    """
+    options = generate_registration_options(
+        rp_id=settings.family_webauthn_rp_id,
+        rp_name=TOTP_ISSUER,
+        user_id=str(user_id).encode("utf-8"),
+        user_name=email,
+        user_display_name=display_name,
+        exclude_credentials=[
+            PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
+            for credential_id in existing_credential_ids
+        ],
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
+        ),
+    )
+    return options_to_json(options), options.challenge
+
+
+def build_family_authentication_options(settings: Settings) -> tuple[str, bytes]:
+    options: PublicKeyCredentialRequestOptions = generate_authentication_options(
+        rp_id=settings.family_webauthn_rp_id,
+        allow_credentials=[],
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+    return options_to_json(options), options.challenge
+
+
+def verify_family_registration(
+    settings: Settings, credential_json: str, expected_challenge: bytes
+) -> WebAuthnRegistrationResult | None:
+    try:
+        verified = verify_registration_response(
+            credential=credential_json,
+            expected_challenge=expected_challenge,
+            expected_origin=settings.family_webauthn_origin,
+            expected_rp_id=settings.family_webauthn_rp_id,
+        )
+    except WebAuthnException:
+        return None
+    return WebAuthnRegistrationResult(
+        credential_id=bytes_to_base64url(verified.credential_id),
+        public_key=bytes_to_base64url(verified.credential_public_key),
+        sign_count=verified.sign_count,
+    )
+
+
+def verify_family_authentication(
+    settings: Settings,
+    credential_json: str,
+    expected_challenge: bytes,
+    stored_public_key: str,
+    stored_sign_count: int,
+) -> int | None:
+    try:
+        verified = verify_authentication_response(
+            credential=credential_json,
+            expected_challenge=expected_challenge,
+            expected_rp_id=settings.family_webauthn_rp_id,
+            expected_origin=settings.family_webauthn_origin,
+            credential_public_key=base64.urlsafe_b64decode(stored_public_key + "=="),
+            credential_current_sign_count=stored_sign_count,
+        )
+    except WebAuthnException:
+        return None
+    return verified.new_sign_count
+
+
+def _token_challenge_key(purpose: str, token: str, key: str) -> str:
+    return f"webauthn-challenge:{purpose}:token:{hash_secret(token, key)}"
+
+
+async def store_webauthn_token_challenge(
+    settings: Settings, purpose: str, token: str, challenge: bytes
+) -> None:
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        await redis.set(
+            _token_challenge_key(purpose, token, settings.secret_key.get_secret_value()),
+            base64.urlsafe_b64encode(challenge).decode("ascii"),
+            ex=_CHALLENGE_TTL_SECONDS,
+        )
+    finally:
+        await redis.aclose()
+
+
+async def pop_webauthn_token_challenge(
+    settings: Settings, purpose: str, token: str
+) -> bytes | None:
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        raw = await redis.getdel(
+            _token_challenge_key(purpose, token, settings.secret_key.get_secret_value())
+        )
+        return base64.urlsafe_b64decode(raw) if raw is not None else None
+    finally:
+        await redis.aclose()

@@ -14,6 +14,46 @@ export type PlatformActor = {
   role: string;
   mfa_enrolled: boolean;
   session_status: PlatformSessionStatus;
+  // Only populated at session_status "pending_mfa" — the fallback methods
+  // that genuinely exist for this account, so the login page never offers a
+  // method that isn't actually set up. Optional here only because existing
+  // callers construct PlatformActor values for other session statuses,
+  // where the backend always sends an empty array.
+  available_factors?: ("passkey" | "totp" | "recovery_code")[];
+  // Only populated once, atomically with the response that completes this
+  // administrator's first MFA factor — never retrievable again afterwards.
+  recovery_codes?: string[] | null;
+};
+
+export type ManagedDemoType = "apple_review" | "demo" | "qa_test" | "free_demo";
+export type ManagedDemoStatus = "enabled" | "disabled" | "expired";
+export type ManagedDemoHome = {
+  id: string;
+  fixture_key: string;
+  display_name: string;
+  fixture_type: ManagedDemoType;
+  home_id: string;
+  owner_user_id: string;
+  status: ManagedDemoStatus;
+  template_version: string;
+  expires_at: string | null;
+  refreshed_at: string | null;
+  created_at: string;
+  created_by: string | null;
+  disabled_at: string | null;
+  account_email: string;
+  email_verified: boolean;
+  access: "family" | "free";
+};
+
+export type ManagedDemoHomeCreateRequest = {
+  fixture_key: string;
+  display_name: string;
+  fixture_type: ManagedDemoType;
+  email: string;
+  password: string;
+  expires_at: string | null;
+  enabled: boolean;
 };
 
 export type WebAuthnCredential = {
@@ -66,6 +106,16 @@ export type MfaPolicy = {
   environment_enforced: boolean;
 };
 
+export type ConsumerMfaPolicy = {
+  configured: "optional" | "required" | "inherit";
+  effective: "optional" | "required";
+  source: string;
+  allowed_methods: ("totp" | "email")[];
+  enforcement_enabled: boolean;
+  email_code_lifetime_minutes: number;
+  recent_auth_window_minutes: number;
+};
+
 export type InvitationState = "pending" | "accepted" | "expired" | "revoked";
 
 export type AdministratorInvitation = {
@@ -89,6 +139,251 @@ export type AdministratorInvitationPreview = {
   expires_at: string;
 };
 
+// Phase 2 commercial entitlements (Platform Control Centre "Subscriptions"
+// area). Mirrors mykhaya.platform_schemas' HomeSubscriptionResponse /
+// SubscriptionSummaryResponse / SubscriptionListItem / SubscriptionDetailResponse
+// — see docs/architecture/commercial-entitlements.md.
+
+export type HomeSubscription = {
+  plan: string;
+  provider: string;
+  status: string;
+  billing_owner_user_id: string | null;
+  external_customer_id: string | null;
+  external_subscription_id: string | null;
+  external_price_id: string | null;
+  billing_interval: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  complimentary_reason: string | null;
+  complimentary_note: string | null;
+  complimentary_granted_by: string | null;
+  complimentary_granted_by_display_name: string | null;
+  complimentary_granted_at: string | null;
+  complimentary_expires_at: string | null;
+  effective_plan: string;
+  effective_status_reason: string | null;
+};
+
+export type SubscriptionSummary = {
+  total_homes: number;
+  free: number;
+  family: number;
+  complimentary: number;
+  complimentary_expired: number;
+  past_due: number;
+  cancelled: number;
+  stripe_total: number;
+  stripe_active_family: number;
+  stripe_monthly: number;
+  stripe_annual: number;
+  stripe_cancelling: number;
+};
+
+export type SubscriptionListItem = {
+  id: string;
+  name: string;
+  stored_plan: string;
+  provider: string;
+  status: string;
+  effective_plan: string;
+  effective_status_reason: string | null;
+  complimentary_expires_at: string | null;
+  member_count: number;
+  last_commercial_change: string | null;
+};
+
+export type SubscriptionListResponse = {
+  items: SubscriptionListItem[];
+  page: number;
+  page_size: number;
+  total: number;
+};
+
+export type Entitlements = {
+  plan: string;
+  booleans: Record<string, boolean>;
+  limits: Record<string, number | null>;
+};
+
+export type SubscriptionEvent = {
+  id: string;
+  created_at: string;
+  event_type: string;
+  from_plan: string | null;
+  to_plan: string | null;
+  from_provider: string | null;
+  to_provider: string | null;
+  from_status: string | null;
+  to_status: string | null;
+  actor_administrator_id: string | null;
+  actor_display_name: string | null;
+  reason: string | null;
+};
+
+export type HomeAdministratorSummary = {
+  user_id: string;
+  display_name: string;
+  email: string;
+};
+
+export type StripePriceInfo = {
+  currency: string;
+  unit_amount: number;
+  formatted_amount: string;
+};
+
+export type CalendarUsage = {
+  count: number;
+  limit: number | null;
+  over_limit: boolean;
+};
+
+export type WebhookEventSummary = {
+  id: string;
+  stripe_event_id: string;
+  event_type: string;
+  received_at: string;
+  outcome: string;
+};
+
+export type WebhookFailureSummary = {
+  id: string;
+  stripe_event_id: string | null;
+  event_type: string | null;
+  error_message: string;
+  occurred_at: string;
+};
+
+export type StripeWebhookHealth = {
+  configured: boolean;
+  state: string;
+  reason: string | null;
+  last_event_at: string | null;
+  recent_failure_count: number;
+  recent_events: WebhookEventSummary[];
+  recent_failures: WebhookFailureSummary[];
+  mode: string;
+  source: string;
+  paid_homes: number;
+};
+
+// Platform Control Centre "Payments" area — mirrors
+// mykhaya.platform_schemas' StripeConfigurationResponse /
+// StripeModeSettingsResponse / StripeTestConnectionResponse. See
+// docs/architecture/platform-control-centre.md#stripe-configuration-precedence.
+
+export type StripeModeSettings = {
+  publishable_key: string | null;
+  secret_key_configured: boolean;
+  secret_key_last4: string | null;
+  webhook_secret_configured: boolean;
+  webhook_secret_last4: string | null;
+  family_monthly_price_id: string | null;
+  family_annual_price_id: string | null;
+  ultimate_monthly_price_id?: string | null;
+  ultimate_annual_price_id?: string | null;
+};
+
+export type StripeWebhookSummary = {
+  configured: boolean;
+  state: string;
+  reason: string | null;
+  last_event_at: string | null;
+  recent_failure_count: number;
+  endpoint_url: string | null;
+};
+
+export type StripeConfiguration = {
+  configured: boolean;
+  enabled: boolean;
+  acquisition_enabled: boolean;
+  family_signups_enabled?: boolean;
+  ultimate_signups_enabled?: boolean;
+  mode: "test" | "live";
+  source: "database" | "environment" | "unconfigured";
+  incomplete_reason: string | null;
+  editable: boolean;
+  updated_at: string | null;
+  test: StripeModeSettings;
+  live: StripeModeSettings;
+  webhook: StripeWebhookSummary;
+  diagnostics: StripeBillingDiagnostics;
+};
+
+export type StripeBillingDiagnostic = {
+  id: string;
+  created_at: string;
+  source: string;
+  stripe_mode: string | null;
+  stage: string;
+  result: string;
+  stripe_event_id: string | null;
+  checkout_session_id: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  group_id: string | null;
+  stripe_subscription_status: string | null;
+  stored_subscription_status: string | null;
+  stored_plan: string | null;
+  effective_plan: string | null;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+};
+
+export type StripeBillingDiagnostics = {
+  latest: StripeBillingDiagnostic | null;
+  latest_checkout: StripeBillingDiagnostic | null;
+  latest_webhook: StripeBillingDiagnostic | null;
+  latest_reconciliation: StripeBillingDiagnostic | null;
+  recent: StripeBillingDiagnostic[];
+};
+
+export type StripeCheckoutInspection = {
+  session_exists: boolean;
+  status: string | null;
+  payment_status: string | null;
+  mode: string | null;
+  home_reference: string;
+  customer_id: string | null;
+  subscription_id: string | null;
+  price_id: string | null;
+  configured_price_matched: boolean;
+  subscription_status: string | null;
+};
+
+export type StripeTestConnectionResult =
+  | "connected"
+  | "authentication_failed"
+  | "stripe_unavailable"
+  | "configuration_incomplete"
+  | "network_failure";
+
+export type StripeTestConnectionResponse = {
+  result: StripeTestConnectionResult;
+  detail: string;
+  mode: "test" | "live";
+};
+
+export type SubscriptionDetail = {
+  id: string;
+  name: string;
+  created_at: string;
+  member_count: number;
+  administrators: HomeAdministratorSummary[];
+  subscription: HomeSubscription;
+  entitlements: Entitlements;
+  calendar_usage: CalendarUsage;
+  member_usage: CalendarUsage;
+  personal_routines_total: number;
+  recent_webhook_events: WebhookEventSummary[];
+  billing_diagnostics: StripeBillingDiagnostic[];
+  history: SubscriptionEvent[];
+  stripe_price: StripePriceInfo | null;
+  stripe_dashboard_customer_url: string | null;
+  stripe_dashboard_subscription_url: string | null;
+};
+
 export const PLATFORM_ROLES: { value: string; label: string }[] = [
   { value: "platform_owner", label: "Owner" },
   { value: "platform_administrator", label: "Administrator" },
@@ -96,3 +391,78 @@ export const PLATFORM_ROLES: { value: string; label: string }[] = [
   { value: "support_operator", label: "Support" },
   { value: "read_only_operator", label: "Read-only" },
 ];
+
+// Status & Incidents (Platform Control Centre's /incidents pages) — shared
+// between the list+create page and the detail+update page, mirroring
+// mykhaya.routers.platform's /platform/incidents* response shapes.
+
+export type ServiceState =
+  | "operational"
+  | "degraded_performance"
+  | "partial_outage"
+  | "major_outage"
+  | "maintenance";
+
+export type IncidentLifecycleState = "investigating" | "identified" | "monitoring" | "resolved";
+
+export type PublicServiceKey =
+  | "web_application"
+  | "authentication"
+  | "api"
+  | "email_delivery"
+  | "notifications"
+  | "background_processing"
+  | "billing";
+
+export const PUBLIC_SERVICE_OPTIONS: { key: PublicServiceKey; name: string }[] = [
+  { key: "web_application", name: "MyKhaya Web Application" },
+  { key: "authentication", name: "Authentication" },
+  { key: "api", name: "API" },
+  { key: "email_delivery", name: "Email Delivery" },
+  { key: "notifications", name: "Notifications" },
+  { key: "background_processing", name: "Background Processing" },
+  { key: "billing", name: "Billing & Subscriptions" },
+];
+
+export type IncidentServiceImpact = { service: string; impact: ServiceState };
+
+export type StatusServiceState = { key: string; name: string; state: ServiceState };
+
+export type StatusIncidentSummary = {
+  id: string;
+  title: string;
+  lifecycle_state: IncidentLifecycleState;
+  services: IncidentServiceImpact[];
+  starts_at: string;
+  resolved_at: string | null;
+  latest_update_message: string;
+  latest_update_at: string;
+};
+
+export type IncidentsListResponse = {
+  overall: ServiceState;
+  overall_message: string;
+  services: StatusServiceState[];
+  incidents: StatusIncidentSummary[];
+};
+
+export type StatusIncidentUpdateEntry = {
+  id: string;
+  lifecycle_state: IncidentLifecycleState;
+  message: string;
+  occurred_at: string;
+  created_by_display_name: string | null;
+  created_at: string;
+};
+
+export type StatusIncidentDetail = {
+  id: string;
+  title: string;
+  lifecycle_state: IncidentLifecycleState;
+  services: IncidentServiceImpact[];
+  starts_at: string;
+  resolved_at: string | null;
+  internal_notes: string | null;
+  created_at: string;
+  updates: StatusIncidentUpdateEntry[];
+};

@@ -26,6 +26,16 @@ class ModuleDefinition:
     dependencies: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     route: str | None = None
+    # False for a module that is real, released infrastructure but is not a
+    # Home-Admin-toggleable "module" in product terms — Notifications
+    # (platform delivery infrastructure, never user-disableable) and External
+    # sharing (a Calendar capability, not a standalone Home module). Their
+    # FeatureFlag/FeatureOverride rows and is_feature_enabled() evaluation are
+    # completely unaffected by this flag — it only controls whether the Home
+    # Admin Module Management screen offers them as a toggle. Platform
+    # Control Centre's global module/feature-flag controls are unaffected
+    # (mykhaya.module_registry.feature_modules() is not filtered by this).
+    home_admin_manageable: bool = True
 
     @property
     def household_toggleable(self) -> bool:
@@ -99,24 +109,27 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ),
     ModuleDefinition(
         FeatureKey.shopping.value,
-        "Shopping lists",
-        "Collaborative household shopping lists.",
+        "Lists",
+        "Shared household lists — groceries, packing, to-dos and more.",
         "Family",
-        ReleaseState.hidden,
+        ReleaseState.released,
         False,
-        None,
+        "0.2.0",
         dependencies=("household_members",),
-        route="/shopping",
+        permissions=("lists.view", "lists.manage"),
+        route="/lists",
     ),
     ModuleDefinition(
         FeatureKey.meals.value,
-        "Meals",
-        "Meal planning for the household.",
-        "Home",
-        ReleaseState.hidden,
+        "Meal Plans",
+        "Plan meals together, save family favourites and turn ingredients into shopping lists.",
+        "Family",
+        ReleaseState.released,
         False,
-        None,
-        route="/meals",
+        "0.1.0",
+        dependencies=("household_members",),
+        permissions=("meals.view", "meals.manage"),
+        route="/meal-plans",
     ),
     ModuleDefinition(
         FeatureKey.plans.value,
@@ -130,14 +143,51 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ),
     ModuleDefinition(
         FeatureKey.wish_lists.value,
-        "Wish lists",
-        "Gift ideas shared with selected people.",
+        "Wishlists",
+        "Gift ideas for birthdays and Christmas, shared with selected people without spoiling the surprise.",
         "Family",
-        ReleaseState.hidden,
+        ReleaseState.released,
         False,
-        None,
+        "0.3.0",
         dependencies=("household_members",),
+        permissions=("wishlists.view", "wishlists.manage"),
         route="/wish-lists",
+    ),
+    ModuleDefinition(
+        FeatureKey.nudges.value,
+        "Nudges",
+        "Routines, reminders and things to do for the household.",
+        "Family",
+        ReleaseState.released,
+        True,
+        "0.5.0",
+        dependencies=("household_members",),
+        route="/settings/routines-reminders",
+    ),
+    ModuleDefinition(
+        FeatureKey.budget.value,
+        "Budget",
+        "Plan personal spending, income and optional partner sharing.",
+        "Personal",
+        ReleaseState.released,
+        False,
+        "0.9.0",
+        dependencies=(),
+        permissions=(),
+        route="/budget",
+    ),
+    ModuleDefinition(
+        FeatureKey.driveway.value,
+        "Driveway",
+        "Vehicle management — tax/registration renewal, MOT/inspection, "
+        "service history, insurance and documents.",
+        "Family",
+        ReleaseState.released,
+        False,
+        "0.10.0",
+        dependencies=(),
+        permissions=(),
+        route="/driveway",
     ),
     ModuleDefinition(
         FeatureKey.notifications.value,
@@ -145,21 +195,51 @@ MODULES: tuple[ModuleDefinition, ...] = (
         "Push, email and in-app reminders — event reminders, daily briefings and "
         "household routines.",
         "Communication",
-        ReleaseState.beta,
-        False,
+        ReleaseState.released,
+        True,
         "0.1.0",
         route="/notifications",
+        # Core platform delivery infrastructure, not a user-disableable
+        # module — see docs/architecture/feature-flags.md. Home Admins
+        # manage notification preferences at /settings/notifications
+        # instead of toggling this off wholesale.
+        home_admin_manageable=False,
     ),
     ModuleDefinition(
         FeatureKey.external_sharing.value,
         "External sharing",
-        "Share selected resources outside the Home.",
+        "Share a calendar with people outside the Home — grandparents, "
+        "friends, other families — without adding them as a Home member.",
         "Experimental",
-        ReleaseState.hidden,
+        ReleaseState.beta,
         False,
-        None,
-        dependencies=("household_members",),
+        "0.4.0",
+        dependencies=("household_members", "calendar"),
         permissions=("sharing.external",),
+        route="/calendar/calendars",
+        # A Calendar capability, not a standalone Home module — reached via
+        # Home calendars (/calendar/calendars), not a Module Management
+        # toggle. Platform Control Centre's Beta rollout control is
+        # unaffected (feature_modules() below).
+        home_admin_manageable=False,
+    ),
+    ModuleDefinition(
+        FeatureKey.support.value,
+        "Support",
+        "Report a bug, request support, or share feedback — MyKhaya's own "
+        "lightweight support-ticket capability.",
+        "Communication",
+        ReleaseState.beta,
+        False,
+        "1.0.0",
+        route="/help-support",
+        # A per-user capability, not a Home module — a ticket belongs to its
+        # requester, not a Home (Phase 2A decision 5), so there is nothing
+        # for a Home Admin to toggle per-Home. Gated globally only, via
+        # features.platform_feature_enabled(db, FeatureKey.support) — see
+        # routers.support — rather than the per-Home
+        # is_feature_enabled/require_feature path every other module uses.
+        home_admin_manageable=False,
     ),
 )
 
@@ -175,4 +255,26 @@ def household_modules() -> tuple[ModuleDefinition, ...]:
 
 
 def feature_modules() -> tuple[ModuleDefinition, ...]:
-    return tuple(module for module in MODULES if module.id in {key.value for key in FeatureKey})
+    """Every FeatureKey-backed module Platform Control Centre's *global*
+    catalogue may operate on — Notifications and External sharing are
+    deliberately included here even though `home_admin_manageable=False`
+    keeps them off the Home Admin screen (see that flag's own docstring):
+    PCC's global rollout controls are a different, higher-authority surface
+    than a Home Admin's per-Home module toggle.
+
+    Hidden modules (Tasks, Plans — retired/not-yet-built, see ReleaseState)
+    are deliberately EXCLUDED (Phase 3A): a hidden module already fails
+    closed everywhere a customer could reach it (`is_feature_enabled`
+    checks `release_state == hidden` first, before even consulting the
+    platform FeatureFlag), so exposing it here as an ordinary editable
+    catalogue entry could never actually enable it for a customer — it
+    would only invite an operator to mistake a no-op toggle for a real
+    release control. See `routers.platform.update_module`'s matching
+    write-side guard, and household_modules()'s identical hidden exclusion
+    for the Home Admin/consumer side of the registry."""
+    return tuple(
+        module
+        for module in MODULES
+        if module.id in {key.value for key in FeatureKey}
+        and module.release_state != ReleaseState.hidden
+    )
