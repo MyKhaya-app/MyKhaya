@@ -73,7 +73,9 @@ describe("Account & Home cleanup — loading and tabs", () => {
     render(<CleanupPage />);
     expect(await screen.findByText("Test Home Active")).toBeInTheDocument();
     expect(screen.getByText("Test Home Archived")).toBeInTheDocument();
-    expect(screen.getByText("How this works")).toBeInTheDocument();
+    expect(
+      screen.getByText(/This tool never permanently deletes anything/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Total Homes")).toBeInTheDocument();
     expect(screen.getByText("Total Members")).toBeInTheDocument();
     expect(within(screen.getByLabelText("Home summary")).getAllByText("2", { selector: "strong" })).toHaveLength(2);

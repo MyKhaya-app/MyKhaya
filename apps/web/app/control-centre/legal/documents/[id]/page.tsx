@@ -32,7 +32,7 @@ import { LegalMarkdown } from "@/components/legal-markdown";
 
 const LegalMarkdownEditor = dynamic(
   () => import("@/components/legal-markdown-editor").then((mod) => mod.LegalMarkdownEditor),
-  { ssr: false, loading: () => <div className="cc-legal-editor-loading">Loading editorâ€¦</div> },
+  { ssr: false, loading: () => <div className="cc-legal-editor-loading">Loading editor…</div> },
 );
 import {
   type LegalDocument,

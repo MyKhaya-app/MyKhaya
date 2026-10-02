@@ -942,7 +942,13 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
-    fireEvent.click(await screen.findByText("Football"));
+    // MonthSwipeView intentionally renders the previous/current/next month
+    // in three panels at once for the swipe-preview animation; the adjacent
+    // panels are marked aria-hidden="true" but an event landing in their
+    // padding days still matches a plain text query across all three.
+    // getByRole respects aria-hidden (unlike getByText), so scope on role +
+    // accessible name instead of matching on visible text alone.
+    fireEvent.click(await screen.findByRole("button", { name: /Football/ }));
     const daySheet = await screen.findByRole("dialog");
     fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
     return screen.findByRole("dialog", { name: "Football" });
@@ -1160,7 +1166,7 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
   it("the event chip's colour comes from its Calendar Tag, not the calendar it lives on", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
     render(<CalendarPage />);
-    await screen.findByText("Football");
+    await screen.findByRole("button", { name: /Football/ });
 
     const chip = document.querySelector(".month-event") as HTMLElement;
     expect(chip).not.toBeNull();
@@ -1358,7 +1364,13 @@ describe("Calendar — Add/Edit Event: plan-restricted calendars are not offered
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [restrictedEvent] });
     render(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
-    fireEvent.click(await screen.findByText("Football"));
+    // MonthSwipeView intentionally renders the previous/current/next month
+    // in three panels at once for the swipe-preview animation; the adjacent
+    // panels are marked aria-hidden="true" but an event landing in their
+    // padding days still matches a plain text query across all three.
+    // getByRole respects aria-hidden (unlike getByText), so scope on role +
+    // accessible name instead of matching on visible text alone.
+    fireEvent.click(await screen.findByRole("button", { name: /Football/ }));
     const daySheet = await screen.findByRole("dialog");
     fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
     const viewDialog = await screen.findByRole("dialog", { name: "Football" });

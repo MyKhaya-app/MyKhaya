@@ -151,6 +151,10 @@ describe("Welcome (public marketing homepage)", () => {
         "/login",
         "/register",
         "/help-support",
+        "/legal/terms",
+        "/legal/privacy",
+        "/legal/children",
+        "/legal/cookies",
         "https://status.dev.mykhaya.app/",
         "/",
       ]).toContain(link.getAttribute("href"));

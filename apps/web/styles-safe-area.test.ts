@@ -12,6 +12,14 @@ import { describe, expect, it } from "vitest";
 // leftover JS-toggled double mechanism.
 
 const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8");
+// .platform-login is PCC-owned CSS (see pcc-css-boundary.test.ts — the
+// control-centre layout imports pcc.css, and consumer global styles.css must
+// never declare a top-level `.platform-login {` rule). Its safe-area
+// handling is checked against pcc.css here, not styles.css, for that reason.
+const pccCss = readFileSync(
+  join(process.cwd(), "app", "control-centre", "pcc.css"),
+  "utf8",
+);
 
 function rootBlock(): string {
   const match = css.match(/:root\s*\{([\s\S]*?)\n\}/);
@@ -34,7 +42,7 @@ describe("styles.css — shared safe-area strategy", () => {
   });
 
   it("every top-level pre-auth/public container reads the shared vars, not a one-off literal", () => {
-    for (const selector of [".standard-page", ".platform-login", ".auth-page", ".mk-header"]) {
+    for (const selector of [".standard-page", ".auth-page", ".mk-header"]) {
       const pattern = new RegExp(
         `${selector.replace(".", "\\.")}\\s*\\{[\\s\\S]*?var\\(--safe-top\\)`,
       );
@@ -42,6 +50,14 @@ describe("styles.css — shared safe-area strategy", () => {
         pattern,
       );
     }
+  });
+
+  it("PCC's .platform-login (owned by pcc.css, not this file) also reads the shared vars", () => {
+    // The rule that actually wins the cascade in the browser is the
+    // higher-specificity `.pcc-root .platform-login` — that's the one that
+    // must be safe-area-correct for real rendered behaviour.
+    expect(pccCss).toMatch(/\.pcc-root \.platform-login\s*\{[\s\S]*?var\(--safe-top\)/);
+    expect(pccCss).toMatch(/\.pcc-root \.platform-login\s*\{[\s\S]*?var\(--safe-bottom\)/);
   });
 
   it("the authenticated app shell's header/scroll-region/bottom-nav still reference the shared vars (unaffected by the public-shell fix)", () => {

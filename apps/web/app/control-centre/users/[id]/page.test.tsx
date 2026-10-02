@@ -66,13 +66,13 @@ beforeEach(() => {
 describe("User detail", () => {
   it("renders account metadata and an Active status", async () => {
     render(<DetailPage />);
-    expect(await screen.findByText("Jane Smith")).toBeInTheDocument();
-    expect(screen.getByText("jane@example.com")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Jane Smith/ })).toBeInTheDocument();
+    expect(screen.getAllByText("jane@example.com").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Verified").length).toBeGreaterThan(0);
-    expect(screen.getByText("Last active")).toBeInTheDocument();
+    expect(screen.getAllByText("Last active").length).toBeGreaterThan(0);
     expect(document.querySelector(".cc-user-detail")).toBeInTheDocument();
-    expect(document.querySelector(".cc-user-security-section")).toBeInTheDocument();
+    expect(document.querySelector("#authentication")).toBeInTheDocument();
     expect(document.querySelector(".cc-user-actions-section")).toBeInTheDocument();
     expect(document.querySelector(".cc-danger-zone")).toBeInTheDocument();
   });
@@ -80,14 +80,14 @@ describe("User detail", () => {
   it("shows Disabled status when the user is suspended", async () => {
     get.mockResolvedValue(suspendedUser);
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.getAllByText("Disabled").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Reactivate user" })).toBeInTheDocument();
   });
 
   it("only shows Resend verification when the user is unverified", async () => {
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.queryByRole("button", { name: "Resend verification email" })).not.toBeInTheDocument();
 
     get.mockResolvedValue(unverifiedUser);
@@ -97,16 +97,19 @@ describe("User detail", () => {
 
   it("renders homes, sessions and notes, and empty states when there are none", async () => {
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.getByText("The Smiths")).toBeInTheDocument();
-    expect(screen.getByText("Chrome on macOS")).toBeInTheDocument();
+    // The redesigned Recent Activity card combines the timestamp and device
+    // into one line ("<date> · <user agent>") rather than a standalone
+    // device title, so match on substring rather than an exact string.
+    expect(screen.getByText((text) => text.includes("Chrome on macOS"))).toBeInTheDocument();
     expect(screen.getByText("Called about billing.")).toBeInTheDocument();
 
     get.mockResolvedValue(emptyUser);
     render(<DetailPage />);
     await screen.findAllByText("Jane Smith");
     expect(screen.getByText("Not a member of any Home.")).toBeInTheDocument();
-    expect(screen.getByText("No active sessions.")).toBeInTheDocument();
+    expect(screen.getByText("No recent activity available.")).toBeInTheDocument();
     expect(screen.getByText("No administrative notes yet.")).toBeInTheDocument();
   });
 
@@ -175,9 +178,12 @@ describe("User detail", () => {
 
   it("adds a note without requiring a reason and reloads", async () => {
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
-    await userEvent.type(screen.getByLabelText("New internal note"), "A fresh note");
-    await userEvent.click(screen.getByRole("button", { name: "Add administrative note" }));
+    await screen.findByRole("heading", { name: /Jane Smith/ });
+    await userEvent.type(
+      screen.getByPlaceholderText("Add an internal note about this user…"),
+      "A fresh note",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add note" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/users/user-1/notes", { body: "A fresh note" }));
     await waitFor(() =>
       expect(get.mock.calls.filter((call) => call[0] === "/users/user-1")).toHaveLength(2),
@@ -222,7 +228,7 @@ describe("User detail", () => {
 describe("User detail — Archive lifecycle", () => {
   it("offers both Suspend and Archive for an active user", async () => {
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.getByRole("button", { name: "Suspend user" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive user" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore user" })).not.toBeInTheDocument();
@@ -231,7 +237,7 @@ describe("User detail — Archive lifecycle", () => {
   it("offers Reactivate and Archive for a disabled user", async () => {
     get.mockResolvedValue(suspendedUser);
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.getByRole("button", { name: "Reactivate user" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive user" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Suspend user" })).not.toBeInTheDocument();
@@ -240,7 +246,7 @@ describe("User detail — Archive lifecycle", () => {
   it("shows Archived status and only a Restore action for an archived user — no Suspend/Reactivate/Archive", async () => {
     get.mockResolvedValue(archivedUser);
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.getAllByText("Archived").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Restore user" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Suspend user" })).not.toBeInTheDocument();
@@ -334,7 +340,7 @@ describe("User detail — Move member", () => {
   it("is not shown when the user has no active Home memberships", async () => {
     get.mockResolvedValue(emptyUser);
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.queryByRole("button", { name: "Move member" })).not.toBeInTheDocument();
   });
 
@@ -432,7 +438,7 @@ describe("User detail — Anonymise", () => {
 
   it("only offers Anonymise user for an archived user, not active/disabled", async () => {
     render(<DetailPage />);
-    await screen.findByText("Jane Smith");
+    await screen.findByRole("heading", { name: /Jane Smith/ });
     expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();
 
     get.mockResolvedValue(suspendedUser);
@@ -480,7 +486,7 @@ describe("User detail — Anonymise", () => {
   it("shows an Anonymised status with no Restore action once anonymised", async () => {
     get.mockResolvedValue(anonymisedUser);
     render(<DetailPage />);
-    await screen.findByText("Deleted user");
+    await screen.findByRole("heading", { name: /Deleted user/ });
     expect(screen.getAllByText("Anonymised").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Restore user" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();

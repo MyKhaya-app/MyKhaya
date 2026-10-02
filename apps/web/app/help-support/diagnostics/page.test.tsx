@@ -68,7 +68,10 @@ describe("Run diagnostics", () => {
     expect(screen.getByRole("button", { name: /run again/i })).toBeDisabled();
 
     resolveHealth({ ok: true } as Response);
-    await waitFor(() => expect(screen.getByText("Passed")).toBeInTheDocument());
+    // Several checks legitimately resolve to "Passed" at once now (the
+    // diagnostic set has grown since this test was written) — wait for at
+    // least one rather than requiring exactly one match.
+    await waitFor(() => expect(screen.getAllByText("Passed").length).toBeGreaterThan(0));
     expect(screen.getByText("MyKhaya service")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Share diagnostics with support" })).toBeInTheDocument();
   });

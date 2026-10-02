@@ -210,7 +210,7 @@ export function LegalGate() {
                 Cancel
               </button>
               <button type="button" className="danger" onClick={() => void signOut()} disabled={signingOut}>
-                {signingOut ? "Signing outâ€¦" : "Reject and sign out"}
+                {signingOut ? "Signing out…" : "Reject and sign out"}
               </button>
             </div>
           </BottomSheet>
@@ -271,7 +271,7 @@ export function LegalGate() {
               Cancel
             </button>
             <button type="button" className="danger" onClick={() => void signOut()} disabled={signingOut}>
-              {signingOut ? "Signing outâ€¦" : "Reject and sign out"}
+              {signingOut ? "Signing out…" : "Reject and sign out"}
             </button>
           </div>
         </BottomSheet>

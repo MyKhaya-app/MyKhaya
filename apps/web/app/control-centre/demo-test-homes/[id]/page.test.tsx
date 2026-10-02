@@ -37,7 +37,7 @@ beforeEach(() => {
 describe("managed Demo/Test Home detail", () => {
   it("renders home details metadata and a Disabled status card, with Enable available", async () => {
     render(<DetailPage />);
-    expect(await screen.findByText("Apple Review Home")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Apple Review Home/ })).toBeInTheDocument();
     expect(screen.getByText("apple-review@mykhaya.app")).toBeInTheDocument();
     expect(screen.getByText("Verified")).toBeInTheDocument();
     expect(screen.getAllByText("Family").length).toBeGreaterThan(0);
@@ -49,7 +49,7 @@ describe("managed Demo/Test Home detail", () => {
   it("shows an Enabled status card with Disable available when the home is enabled", async () => {
     get.mockResolvedValue([enabledHome]);
     render(<DetailPage />);
-    expect(await screen.findByText("Apple Review Home")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Apple Review Home/ })).toBeInTheDocument();
     expect(screen.getAllByText("Enabled").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^Enable$/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Disable$/ })).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe("managed Demo/Test Home detail", () => {
   it("shows an Expired status card without implying active access", async () => {
     get.mockResolvedValue([expiredHome]);
     render(<DetailPage />);
-    expect(await screen.findByText("Apple Review Home")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Apple Review Home/ })).toBeInTheDocument();
     expect(screen.getAllByText(/Expired/).length).toBeGreaterThan(0);
     // Expired homes are not enabled — Enable stays available, Disable is not shown.
     expect(screen.getByRole("button", { name: /^Enable$/ })).toBeEnabled();
@@ -146,7 +146,7 @@ describe("managed Demo/Test Home detail", () => {
 
   it("sets and removes the expiry without implicitly changing enabled state", async () => {
     render(<DetailPage />);
-    await screen.findByText("Apple Review Home");
+    await screen.findByRole("heading", { name: /Apple Review Home/ });
     const expiryInput = screen.getByLabelText("Set or change expiry");
     await userEvent.type(expiryInput, "2026-12-01T10:00");
     await userEvent.click(screen.getByRole("button", { name: /^Save expiry$/ }));

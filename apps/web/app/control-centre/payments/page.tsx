@@ -336,7 +336,7 @@ export default function PaymentsPage() {
               icon={CreditCard}
               actions={
                 <button type="button" className="secondary" onClick={() => setTestDialogOpen(true)} disabled={testing}>
-                  <Link2 size={15} aria-hidden="true" /> {testing ? "Testingâ€¦" : "Test connection"}
+                  <Link2 size={15} aria-hidden="true" /> {testing ? "Testing…" : "Test connection"}
                 </button>
               }
             >

@@ -228,7 +228,7 @@ export function PublicPricing() {
           </div>
           {!pricing || !ultimate ? (
             <p role="status" className="mk-plan-loading">
-              {pricingError ? "Ultimate pricing is temporarily unavailable." : "Loading pricingâ€¦"}
+              {pricingError ? "Ultimate pricing is temporarily unavailable." : "Loading pricing…"}
             </p>
           ) : (
             <>
@@ -238,7 +238,7 @@ export function PublicPricing() {
               <p className="mk-plan-hint">
                 {billingInterval === "month" ? "Billed monthly" : "Billed annually"}
                 {pricing.ultimate_annual_saving_formatted && billingInterval === "year"
-                  ? ` â€” Save ${pricing.ultimate_annual_saving_formatted} per year`
+                  ? ` — Save ${pricing.ultimate_annual_saving_formatted} per year`
                   : ""}
               </p>
             </>
@@ -258,7 +258,7 @@ export function PublicPricing() {
               disabled={busy !== null || !ultimate}
               onClick={() => choosePlan({ plan: "ultimate", interval: billingInterval })}
             >
-              {busy === "ultimate" ? "One momentâ€¦" : "Start Ultimate"}
+              {busy === "ultimate" ? "One moment…" : "Start Ultimate"}
             </button>
           )}
         </article>

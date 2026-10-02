@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PublicPricing } from "./public-pricing";
 
@@ -132,7 +132,12 @@ describe("PublicPricing — Free, Family and Ultimate", () => {
 
   it("shows Ultimate features including Budget, Driveway and future premium modules", async () => {
     (api.familyPricing as ReturnType<typeof vi.fn>).mockResolvedValue(
-      pricingResponse(),
+      // Ultimate has its own independent acquisition kill switch
+      // (ultimate_acquisition_enabled), separate from Family's
+      // acquisition_enabled — must be set explicitly or the CTA correctly,
+      // fail-safe-closed, renders a "temporarily paused" notice instead of
+      // the button this test checks for.
+      pricingResponse({ ultimate_acquisition_enabled: true }),
     );
     render(<PublicPricing />);
 
@@ -140,8 +145,8 @@ describe("PublicPricing — Free, Family and Ultimate", () => {
     expect(screen.getByText("Driveway")).toBeInTheDocument();
     expect(screen.getByText("Future premium modules")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^start ultimate/i }),
-    ).toBeDisabled();
+      await screen.findByRole("button", { name: /^start ultimate/i }),
+    ).toBeInTheDocument();
   });
 
   it("never advertises Chores or Family Plans — neither is a real, released capability", async () => {
@@ -180,11 +185,14 @@ describe("PublicPricing — Family price always comes from the live pricing API"
     );
     render(<PublicPricing />);
 
-    expect(screen.getByText(/loading pricing/i)).toBeInTheDocument();
+    // Scoped to the Family plan card: Ultimate has its own independent
+    // "Loading pricing…" state that would otherwise also match.
+    const familyCard = document.querySelector(".mk-plan-family") as HTMLElement;
+    expect(within(familyCard).getByText(/loading pricing/i)).toBeInTheDocument();
     expect(screen.queryByText("£12.34")).not.toBeInTheDocument();
 
     await screen.findByText("£12.34");
-    expect(screen.queryByText(/loading pricing/i)).not.toBeInTheDocument();
+    expect(within(familyCard).queryByText(/loading pricing/i)).not.toBeInTheDocument();
   });
 
   it("switches to the annual price and shows the API's saving hint", async () => {
@@ -235,7 +243,11 @@ describe("PublicPricing — Family price always comes from the live pricing API"
     render(<PublicPricing />);
 
     await screen.findByText("£9.99");
-    expect(screen.getByText(/temporarily paused/i)).toBeInTheDocument();
+    // Scoped to the Family plan card: Ultimate's own independent kill
+    // switch defaults to disabled in this fixture too, so it shows its own
+    // "temporarily paused" notice that would otherwise also match.
+    const familyCard = document.querySelector(".mk-plan-family") as HTMLElement;
+    expect(within(familyCard).getByText(/temporarily paused/i)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /^start family/i }),
     ).not.toBeInTheDocument();

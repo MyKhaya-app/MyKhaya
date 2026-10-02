@@ -987,14 +987,6 @@ textarea {
     gap: 0.85rem;
   }
 }
-/* Baseline safe-area clearance for the PCC login shell (app/control-centre/pcc.css's
-   `.pcc-root .platform-login` rule sets the actual visible layout and padding — this
-   rule exists so the shared var(--safe-top)/var(--safe-bottom) contract this file
-   defines for every top-level pre-auth container also covers this one, per
-   styles-safe-area.test.ts). Do not remove without updating the pcc.css rule too. */
-.platform-login {
-  padding: var(--safe-top) 0 var(--safe-bottom);
-}
 .auth-page {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);

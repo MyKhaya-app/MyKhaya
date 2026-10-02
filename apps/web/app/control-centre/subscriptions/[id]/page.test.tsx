@@ -126,7 +126,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  // clearAllMocks (not restoreAllMocks) deliberately preserves each
+  // mock's implementation across tests -- PlatformShell/AppShell's own
+  // unawaited background auth-refresh effect can still be in flight when
+  // this fires, and restoring to a bare no-op vi.fn() made it crash with
+  // "Cannot read properties of undefined (reading 'then')" on whichever
+  // test happened to be running when it finally settled.
+  vi.clearAllMocks();
 });
 
 describe("SubscriptionDetailPage", () => {
@@ -146,8 +152,8 @@ describe("SubscriptionDetailPage", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(freeDetail()),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Grant complimentary Family access" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Grant complimentary access" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Remove complimentary access" }),
     ).not.toBeInTheDocument();
@@ -158,7 +164,7 @@ describe("SubscriptionDetailPage", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(complimentaryDetail()),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     expect(screen.getByText("Beta tester")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend / update" })).toBeInTheDocument();
     const revokeButton = screen.getByRole("button", { name: "Remove complimentary access" });
@@ -172,7 +178,7 @@ describe("SubscriptionDetailPage", () => {
     del.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Remove complimentary access" }));
     const dialog = await screen.findByRole("dialog");
@@ -200,7 +206,7 @@ describe("SubscriptionDetailPage", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detail),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     expect(screen.getByText("Complimentary access expired")).toBeInTheDocument();
   });
 
@@ -211,15 +217,15 @@ describe("SubscriptionDetailPage", () => {
     put.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Grant complimentary Family access" }));
-    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Grant complimentary access" }));
+    const dialog = await screen.findByRole("dialog");
     await user.type(
       screen.getByLabelText(/Reason for this administrative action/i),
       "Approved beta tester per support ticket #42",
     );
-    await user.click(screen.getByRole("button", { name: "Grant complimentary access" }));
+    await user.click(within(dialog).getByRole("button", { name: "Grant complimentary access" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
     expect(put).toHaveBeenCalledWith(
@@ -386,7 +392,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Lists");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).getByText("Up to 2")).toBeInTheDocument();
@@ -406,7 +412,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
           ),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Gift Wishlists");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).getByText("Included")).toBeInTheDocument();
@@ -417,7 +423,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Meal Plans");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
@@ -428,7 +434,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Nudges (Routines, Reminders, To-dos)");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
@@ -439,7 +445,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Shared family events");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
@@ -450,7 +456,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Invite external members");
     expect(within(row).queryByText("Planned")).not.toBeInTheDocument();
     expect(within(row).queryByText("Contract only")).not.toBeInTheDocument();
@@ -461,7 +467,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Notes");
     expect(within(row).getByText("Contract only")).toBeInTheDocument();
   });
@@ -471,7 +477,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Chores");
     expect(within(row).getByText("Contract only")).toBeInTheDocument();
   });
@@ -481,7 +487,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Family Plans");
     expect(within(row).getByText("Contract only")).toBeInTheDocument();
   });
@@ -491,7 +497,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Priority Support");
     expect(within(row).getByText("Contract only")).toBeInTheDocument();
   });
@@ -501,7 +507,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
       path === "/auth/me" ? Promise.resolve(actor) : Promise.resolve(detailWithEntitlements({})),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Personal routines (within Nudges)");
     expect(within(row).getByText("Not included")).toBeInTheDocument();
   });
@@ -524,7 +530,7 @@ describe("SubscriptionDetailPage — plan capability labels", () => {
           ),
     );
     renderPage();
-    await waitFor(() => expect(screen.getByText("Hales Home")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Hales Home/ })).toBeInTheDocument());
     const row = capabilityRow("Personal routines (within Nudges)");
     expect(within(row).getByText("Unlimited")).toBeInTheDocument();
   });

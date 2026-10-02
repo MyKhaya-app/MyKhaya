@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { CcAuthShell } from "./auth-shell";
 
 describe("CcAuthShell", () => {
@@ -10,8 +10,11 @@ describe("CcAuthShell", () => {
       </CcAuthShell>,
     );
     expect(screen.getByRole("main")).toHaveClass("pcc-root");
-    expect(screen.getByText("MyKhaya")).toBeInTheDocument();
-    expect(screen.getByText("Platform Control Centre")).toBeInTheDocument();
+    const brandPanel = screen.getByRole("complementary", {
+      name: "MyKhaya Platform Control Centre",
+    });
+    expect(within(brandPanel).getByText("MyKhaya")).toBeInTheDocument();
+    expect(within(brandPanel).getByText("Platform Control Centre")).toBeInTheDocument();
     expect(screen.getByText("Restricted management plane")).toBeInTheDocument();
     expect(screen.getByText("Test heading")).toBeInTheDocument();
   });

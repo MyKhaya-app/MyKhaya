@@ -668,10 +668,13 @@ describe("Home — Coming up", () => {
       next_event: null,
     });
 
-    const { container } = render(<HomePage />);
+    render(<HomePage />);
 
     expect(await screen.findByText("Test whole day")).toBeInTheDocument();
-    expect(container.querySelector(".home-event-time")?.textContent).toBe("All day");
+    // The Today section renders the time as a bare string (unlike "Coming
+    // up"'s EventRow, which wraps it in .home-event-time) — check the
+    // rendered text directly rather than a selector that doesn't apply here.
+    expect(screen.getByText("All day")).toBeInTheDocument();
   });
 
   it("shows a compact 24-hour start/end range for a same-day timed event", async () => {

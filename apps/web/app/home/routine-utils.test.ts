@@ -107,6 +107,15 @@ describe("dueCountdownSuffix — countdown appended to an existing due-date line
 
 describe("localIsoDate — local-timezone date boundary", () => {
   const originalTz = process.env.TZ;
+  // Node/V8 caches the resolved default timezone the first time it's used
+  // and only re-resolves it on an explicit, concrete process.env.TZ value —
+  // setting TZ back to `undefined` (or deleting it) does NOT bust that
+  // cache, so it silently keeps using whatever zone this test last set.
+  // Restoring to this resolved name (instead of the original, possibly-
+  // unset, value) guarantees every subsequent Date/Intl call in this
+  // worker process — including in unrelated test files Vitest batches
+  // into the same worker — sees the real original zone again.
+  const originalResolvedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -114,7 +123,7 @@ describe("localIsoDate — local-timezone date boundary", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    process.env.TZ = originalTz;
+    process.env.TZ = originalTz ?? originalResolvedTz;
   });
 
   it("uses the local calendar date, not the UTC date, near a local midnight boundary", () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PlatformLogin from "./page";
 
@@ -38,8 +38,11 @@ beforeEach(() => {
 describe("PlatformLogin", () => {
   it("renders operator email/password fields and PCC branding", () => {
     render(<PlatformLogin />);
-    expect(screen.getByText("MyKhaya")).toBeInTheDocument();
-    expect(screen.getByText("Platform Control Centre")).toBeInTheDocument();
+    const brandPanel = screen.getByRole("complementary", {
+      name: "MyKhaya Platform Control Centre",
+    });
+    expect(within(brandPanel).getByText("MyKhaya")).toBeInTheDocument();
+    expect(within(brandPanel).getByText("Platform Control Centre")).toBeInTheDocument();
     expect(screen.getByLabelText("Operator email")).toBeRequired();
     expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
     expect(screen.getByText(/Household accounts cannot sign in here/)).toBeInTheDocument();

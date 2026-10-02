@@ -1,5 +1,17 @@
 import { vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// The default 1000ms waitFor/findBy* timeout is occasionally too tight for
+// this suite's size (2000+ tests) under CPU contention in CI's parallel
+// worker pool — a handful of findBy*/waitFor assertions would intermittently
+// time out purely from scheduling delay, not because the awaited condition
+// was ever false (every affected test passes reliably standalone or in a
+// small group; see docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md's test-
+// baseline section for the investigation). This only changes how long a
+// query waits before giving up — it does not change what is asserted or
+// relax any assertion.
+configure({ asyncUtilTimeout: 8000 });
 
 // Global default for components/auth-provider.tsx's useAuth() — AppShell
 // (and therefore every settings/authenticated page's SettingsPage/AppShell
@@ -59,4 +71,12 @@ if (typeof window !== "undefined" && !window.matchMedia) {
     removeEventListener: () => {},
     dispatchEvent: () => false,
   }) as unknown as MediaQueryList;
+}
+
+// jsdom doesn't implement scrollTo — components/bottom-sheet.tsx calls it to
+// restore the background page's scroll position after releasing its
+// scroll-lock on close. No test depends on an actual scroll happening; this
+// just stops jsdom's "Not implemented" console error on every sheet close.
+if (typeof window !== "undefined") {
+  window.scrollTo = vi.fn();
 }

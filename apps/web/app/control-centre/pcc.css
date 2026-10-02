@@ -3358,7 +3358,6 @@
 }
 
 /* PCC user-detail profile layout: TailAdmin-style desktop composition. */
-.pcc-root .cc-user-legacy-content { display: none; }
 .pcc-root .cc-user-profile-page { max-width: none; padding: 28px 24px 48px; }
 .pcc-root .cc-user-profile-breadcrumb { align-items: center; color: #667085; display: flex; font-size: 14px; gap: 7px; margin-bottom: 16px; }
 .pcc-root .cc-user-profile-breadcrumb a { align-items: center; color: #344054; display: inline-flex; gap: 7px; text-decoration: none; }

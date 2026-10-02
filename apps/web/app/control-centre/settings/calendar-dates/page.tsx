@@ -30,7 +30,10 @@ type Source = {
 
 function formatSyncDate(value: string | null) {
   if (!value) return "Not synced";
-  return `Last synced ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
+  // Explicit locale, not the ambient ICU default — see
+  // components/platform-format.ts's readableDate for the shared pattern
+  // the rest of the app's date formatting uses.
+  return `Last synced ${new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
 }
 
 export default function CalendarDatesPage() {

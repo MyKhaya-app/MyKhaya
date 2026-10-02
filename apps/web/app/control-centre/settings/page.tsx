@@ -105,7 +105,11 @@ function formatSyslogTimestamp(value: string | null): string {
   if (!value) return "No successful delivery recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unavailable";
-  return new Intl.DateTimeFormat(undefined, {
+  // Explicit locale, not the ambient ICU default — the container running
+  // this (and every end user's own device locale) can't be relied on to
+  // match the rest of the app's en-GB date formatting (see
+  // components/platform-format.ts's readableDate for the shared pattern).
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -118,7 +122,7 @@ function formatTimestamp(value: string | null | undefined, fallback: string): st
   if (!value) return fallback;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unavailable";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",

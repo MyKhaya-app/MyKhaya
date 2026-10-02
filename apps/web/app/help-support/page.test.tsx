@@ -118,13 +118,14 @@ describe("Help & Support — quick actions", () => {
     render(<HelpSupport />);
     await screen.findByRole("heading", { name: "Help & Support" });
 
-    // Exact match: the quick action's accessible name is just its label
-    // (icon is aria-hidden), while the card below shares the same words but
-    // also includes its description text — exact matching disambiguates
-    // the two.
-    const reportBug = screen.getByRole("link", { name: "Report a bug" });
+    // Anchored prefix match: the quick action's accessible name now also
+    // includes its own short subtitle (e.g. "Report a bug Report an
+    // issue"), while the card below shares the same leading words but
+    // differs further in — anchoring to the start disambiguates the two
+    // without depending on the exact trailing subtitle text.
+    const reportBug = screen.getByRole("link", { name: /^Report a bug/ });
     const contactSupport = screen.getByRole("link", { name: "Contact support" });
-    const runDiagnostics = screen.getByRole("link", { name: "Run diagnostics" });
+    const runDiagnostics = screen.getByRole("link", { name: /^Run diagnostics/ });
 
     expect(reportBug).toHaveAttribute("href", "/help-support/report-bug");
     expect(contactSupport).toHaveAttribute("href", "/help-support/contact-support");
@@ -142,13 +143,13 @@ describe("Help & Support — quick actions", () => {
     });
     // The quick action degrades to a non-navigable, clearly-labelled
     // disabled state, not a link to a route that can't do anything.
-    expect(screen.queryByRole("link", { name: "Report a bug" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^Report a bug/ })).toBeNull();
     expect(screen.getByText("Report a bug")).toBeInTheDocument();
   });
 
   it("does not show the explanatory Report a bug card once support is enabled", async () => {
     render(<HelpSupport />);
-    await screen.findByRole("link", { name: "Report a bug" });
+    await screen.findByRole("link", { name: /^Report a bug/ });
     expect(screen.queryByText("Temporarily unavailable")).toBeNull();
   });
 });
@@ -174,7 +175,9 @@ describe("Help & Support — My support requests", () => {
     render(<HelpSupport />);
     await screen.findByRole("link", { name: /view all/i });
     expect(await screen.findByText("A")).toBeInTheDocument();
-    expect(screen.getByText("MK-1002")).toBeInTheDocument();
+    // The preview row now combines the reference and relative time into one
+    // text node ("MK-1002 · <time>"), so match on substring.
+    expect(screen.getByText((text) => text.includes("MK-1002"))).toBeInTheDocument();
   });
 
   it("shows no count badge when there are no open requests", async () => {
@@ -202,7 +205,7 @@ describe("Help & Support — compact contact card", () => {
   it("offers a second Contact support action without changing the existing route", async () => {
     render(<HelpSupport />);
     await screen.findByRole("heading", { name: "Need more help?" });
-    expect(screen.getAllByRole("link", { name: "Contact support" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: /^Contact support/ })).toHaveLength(2);
     expect(screen.getByText(/urgent issue or need personalised support/i)).toBeInTheDocument();
   });
 });
@@ -261,7 +264,12 @@ describe("Help & Support — Service Status", () => {
       },
     });
     render(<HelpSupport />);
-    await screen.findByText("Scheduled maintenance in progress");
+    // The backend's message now legitimately renders in two places (a
+    // status-line summary and a fuller description) — wait for at least
+    // one rather than requiring exactly one match.
+    await waitFor(() =>
+      expect(screen.getAllByText("Scheduled maintenance in progress").length).toBeGreaterThan(0),
+    );
     expect(screen.queryByText("Service disruption")).toBeNull();
     expect(screen.queryByText("Some services are experiencing problems")).toBeNull();
   });
@@ -363,11 +371,11 @@ describe("Help & Support — Service Status", () => {
       "href",
       "/help-support/contact-support",
     );
-    expect(screen.getByRole("link", { name: "Run diagnostics" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /^Run diagnostics/ })).toHaveAttribute(
       "href",
       "/help-support/diagnostics",
     );
-    expect(screen.getByRole("link", { name: "Run diagnostics" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /^Run diagnostics/ })).toHaveAttribute(
       "href",
       "/help-support/diagnostics",
     );

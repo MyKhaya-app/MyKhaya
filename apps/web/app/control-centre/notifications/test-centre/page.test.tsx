@@ -57,7 +57,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  // clearAllMocks (not restoreAllMocks) deliberately preserves each
+  // mock's implementation across tests -- PlatformShell/AppShell's own
+  // unawaited background auth-refresh effect can still be in flight when
+  // this fires, and restoring to a bare no-op vi.fn() made it crash with
+  // "Cannot read properties of undefined (reading 'then')" on whichever
+  // test happened to be running when it finally settled.
+  vi.clearAllMocks();
 });
 
 async function fillOutForm(user: ReturnType<typeof userEvent.setup>) {

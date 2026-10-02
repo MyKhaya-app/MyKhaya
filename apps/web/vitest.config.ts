@@ -15,5 +15,9 @@ export default defineConfig({
     // Lets @testing-library/react auto-register its afterEach(cleanup) hook,
     // which otherwise requires a global `afterEach` to detect.
     globals: true,
+    // Default (5000ms) is occasionally too tight for this suite's size
+    // (2000+ tests) under CPU contention in a parallel worker pool — see
+    // vitest.setup.ts's asyncUtilTimeout comment for the same reasoning.
+    testTimeout: 10000,
   },
 });

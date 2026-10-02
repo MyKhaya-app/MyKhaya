@@ -56,6 +56,6 @@ describe("PlatformShell navigation groups", () => {
     );
 
     expect(await screen.findByRole("button", { name: "People" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("link", { name: "Users" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Users" })).toHaveClass("menu-item-active");
   });
 });

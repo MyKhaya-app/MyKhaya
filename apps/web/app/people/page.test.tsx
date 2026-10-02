@@ -246,9 +246,13 @@ describe("Family — chat placeholder", () => {
     // one, `api.<thatMethod>` would be undefined and calling it would throw
     // during render, which findByText above would have already surfaced.
     expect(calledEndpoints).toBeDefined();
-    expect(Object.keys(api)).not.toEqual(
-      expect.arrayContaining([expect.stringMatching(/chat|message/i)]),
+    // Match a genuine chat/messaging API, not the unrelated Support Ticket
+    // messaging methods (addSupportTicketMessage etc.) that legitimately
+    // exist on the shared client for a different feature.
+    const chatLikeMethods = Object.keys(api).filter(
+      (name) => /chat/i.test(name) || (/message/i.test(name) && !/support/i.test(name)),
     );
+    expect(chatLikeMethods).toEqual([]);
   });
 });
 
