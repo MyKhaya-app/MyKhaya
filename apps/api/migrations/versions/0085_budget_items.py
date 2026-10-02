@@ -59,7 +59,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_budget_month_item_budget_item_id", table_name="budget_month_items")
     op.drop_index("ix_budget_month_item_month_id", table_name="budget_month_items")
-    op.drop_index("ix_budget_month_items_month_id", table_name="budget_month_items")
     op.drop_table("budget_month_items")
     op.drop_index("ix_budget_item_category_active", table_name="budget_items")
     op.drop_index("ix_budget_item_profile_active", table_name="budget_items")

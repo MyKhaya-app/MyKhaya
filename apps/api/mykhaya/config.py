@@ -259,6 +259,20 @@ class Settings(BaseSettings):
             return resolve_app_version()
         return value
 
+    @field_validator("dvla_environment", mode="before")
+    @classmethod
+    def resolve_blank_dvla_environment(cls, value: object) -> object:
+        """Same present-but-empty-env-var trap as resolve_blank_version above:
+        .env.example ships MYKHAYA_DVLA_ENVIRONMENT= (blank) to mean "Not
+        configured" (see the field's own docstring), but pydantic-settings
+        treats a present, empty env var as the explicit value "" — which
+        isn't a valid Literal["uat", "production"] member — rather than as
+        unset. Blank must resolve to this field's real unset state, None.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator(
         "cors_origins",
         "trusted_hosts",
