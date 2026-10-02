@@ -23,7 +23,16 @@ jobs:
           echo "MYKHAYA_BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
           echo "MYKHAYA_BUILD_CHANNEL=development" >> "$GITHUB_ENV"
       - name: Prepare test configuration
-        run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env
+        # MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS is deliberately absent from
+        # .env.example (compose.production.yml's `:?` makes it a hard
+        # required-in-production value, never a template default — an
+        # operator must set the real NetBird/Cloudflare CIDRs themselves).
+        # CI only needs the production Compose *structure* to validate, so
+        # append the RFC 5737 TEST-NET-1 documentation block (192.0.2.0/24 —
+        # reserved for examples, never a routable/real network) purely to
+        # satisfy that syntax check. This does not relax, default or remove
+        # the production requirement itself.
+        run: cp .env.example .env && sed -i 's/replace-with-at-least-32-cryptographically-random-characters/ci-only-secret-with-more-than-thirty-two-characters/' .env && sed -i 's/replace-with-a-random-admin-password/ci-admin-password/' .env && sed -i 's/replace-with-a-random-migration-password/ci-migration-password/' .env && sed -i 's/replace-with-a-different-random-runtime-password/ci-runtime-password/' .env && echo "MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS=192.0.2.0/24" >> .env
       - name: Compose validation
         # Exercises the exact three environments documented in
         # docs/operations/local-development.md / dev-deployment.md / deployment.md.
