@@ -120,7 +120,7 @@ beforeEach(() => {
 describe("Home detail", () => {
   it("renders home metadata and an Active status", async () => {
     render(<DetailPage />);
-    expect(await screen.findByText("The Smiths")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /The Smiths/ })).toBeInTheDocument();
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
     expect(screen.getByText("home-1")).toBeInTheDocument();
   });
@@ -128,14 +128,14 @@ describe("Home detail", () => {
   it("shows a Disabled status and a Reactivate action when the home is suspended", async () => {
     get.mockResolvedValue(suspendedHome);
     render(<DetailPage />);
-    expect(await screen.findByText("The Smiths")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /The Smiths/ })).toBeInTheDocument();
     expect(screen.getAllByText("Disabled").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Reactivate Home" })).toBeInTheDocument();
   });
 
   it("renders memberships, invitations and notes", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.getByText("Jane Smith")).toBeInTheDocument();
     expect(screen.getByText(/jane@example.com/)).toBeInTheDocument();
     expect(screen.getByText("invitee@example.com")).toBeInTheDocument();
@@ -145,7 +145,7 @@ describe("Home detail", () => {
   it("shows empty states when there are no members, invitations or notes", async () => {
     get.mockResolvedValue(emptyHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.getByText("No members yet.")).toBeInTheDocument();
     expect(screen.getByText("No pending invitations.")).toBeInTheDocument();
     expect(screen.getByText("No administrative notes yet.")).toBeInTheDocument();
@@ -188,7 +188,7 @@ describe("Home detail", () => {
 
   it("requires confirmation and a reason to toggle a feature flag, and sends it to the exact endpoint", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     // Calendar is effectively enabled in the fixture, so its action is "Disable".
     const calendarRow = screen.getByText("Calendar").closest("article")!;
     await userEvent.click(within(calendarRow).getByRole("button", { name: "Disable" }));
@@ -210,7 +210,7 @@ describe("Home detail", () => {
   // routers.features.module_state.
   it("shows a platform-blocked module's reason distinctly", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Meal Plans").closest("article")!;
     expect(within(row).getByText("Effective: Blocked by platform")).toBeInTheDocument();
     expect(within(row).getByText("Platform: Disabled")).toBeInTheDocument();
@@ -218,7 +218,7 @@ describe("Home detail", () => {
 
   it("shows a plan-blocked module's reason distinctly", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Nudges").closest("article")!;
     expect(within(row).getByText("Effective: Not included in plan")).toBeInTheDocument();
     expect(within(row).getByText("Plan: Not included")).toBeInTheDocument();
@@ -226,7 +226,7 @@ describe("Home detail", () => {
 
   it("shows a Home-disabled module distinctly from platform/plan blocked", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Wishlists").closest("article")!;
     expect(within(row).getByText("Effective: Disabled by Home")).toBeInTheDocument();
     expect(within(row).getByText("Platform: Enabled")).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe("Home detail", () => {
 
   it("shows an enabled/inherited module truthfully", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Calendar").closest("article")!;
     expect(within(row).getByText("Effective: Enabled")).toBeInTheDocument();
     expect(within(row).getByText("Home: Enabled")).toBeInTheDocument();
@@ -247,7 +247,7 @@ describe("Home detail", () => {
     // Home override can never bypass a platform-wide OFF (see
     // mykhaya.features.is_feature_enabled).
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Meal Plans").closest("article")!;
     expect(within(row).queryByText("Effective: Enabled")).not.toBeInTheDocument();
   });
@@ -255,7 +255,7 @@ describe("Home detail", () => {
   it("shows Nudges/Meal Plans/Wishlists as plan-blocked on a Free Home, and Calendar/Lists as included", async () => {
     get.mockResolvedValue(freeHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     for (const name of ["Nudges", "Meal Plans", "Wishlists"]) {
       const row = screen.getByText(name).closest("article")!;
       expect(within(row).getByText("Effective: Not included in plan")).toBeInTheDocument();
@@ -270,7 +270,7 @@ describe("Home detail", () => {
   it("shows every optional module as entitled and enabled on a Family Home", async () => {
     get.mockResolvedValue(familyHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     for (const name of ["Calendar", "Lists", "Nudges", "Meal Plans", "Wishlists"]) {
       const row = screen.getByText(name).closest("article")!;
       expect(within(row).getByText("Effective: Enabled")).toBeInTheDocument();
@@ -285,7 +285,7 @@ describe("Home detail", () => {
   // there would let an operator attempt a meaningless override.
   it("disables the Home control for a platform-blocked module", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Meal Plans").closest("article")!;
     expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
     expect(within(row).getByText("Controlled by platform")).toBeInTheDocument();
@@ -293,7 +293,7 @@ describe("Home detail", () => {
 
   it("disables the Home control for a plan-blocked module", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Nudges").closest("article")!;
     expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
     expect(within(row).getByText("Not included in this Home's plan")).toBeInTheDocument();
@@ -301,7 +301,7 @@ describe("Home detail", () => {
 
   it("keeps the Home control actionable for a Home-disabled module, so it can still be enabled", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Wishlists").closest("article")!;
     const button = within(row).getByRole("button", { name: "Enable" });
     expect(button).not.toBeDisabled();
@@ -309,7 +309,7 @@ describe("Home detail", () => {
 
   it("keeps the Home control actionable for an enabled module, so it can still be disabled", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Calendar").closest("article")!;
     const button = within(row).getByRole("button", { name: "Disable" });
     expect(button).not.toBeDisabled();
@@ -318,7 +318,7 @@ describe("Home detail", () => {
   it("keeps Calendar/Lists actionable on a Free Home, since they're included", async () => {
     get.mockResolvedValue(freeHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     for (const name of ["Calendar", "Lists"]) {
       const row = screen.getByText(name).closest("article")!;
       expect(within(row).getByRole("button", { name: "Disable" })).not.toBeDisabled();
@@ -328,7 +328,7 @@ describe("Home detail", () => {
   it("disables Nudges/Meal Plans/Wishlists on a Free Home, since none are included in plan", async () => {
     get.mockResolvedValue(freeHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     for (const name of ["Nudges", "Meal Plans", "Wishlists"]) {
       const row = screen.getByText(name).closest("article")!;
       expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
@@ -338,7 +338,7 @@ describe("Home detail", () => {
   it("keeps every entitled module actionable on a Family Home", async () => {
     get.mockResolvedValue(familyHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     for (const name of ["Calendar", "Lists", "Nudges", "Meal Plans", "Wishlists"]) {
       const row = screen.getByText(name).closest("article")!;
       expect(within(row).getByRole("button", { name: "Disable" })).not.toBeDisabled();
@@ -356,7 +356,7 @@ describe("Home detail", () => {
     };
     get.mockResolvedValue(platformBlockedFamilyHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const row = screen.getByText("Meal Plans").closest("article")!;
     expect(within(row).getByRole("button", { name: "Enable" })).toBeDisabled();
     expect(within(row).getByText("Effective: Blocked by platform")).toBeInTheDocument();
@@ -364,7 +364,7 @@ describe("Home detail", () => {
 
   it("never shows Notifications, External sharing, Tasks or Plans as ordinary Home modules", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     // Scoped to the module-availability section specifically — PlatformShell's
     // own sidebar legitimately has an unrelated "Notifications" nav link.
     const section = screen.getByRole("heading", { name: "Module availability" }).closest("section")!;
@@ -375,7 +375,7 @@ describe("Home detail", () => {
 
   it("adds a note without requiring a reason and reloads", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     await userEvent.type(screen.getByLabelText("New internal note"), "A fresh note");
     await userEvent.click(screen.getByRole("button", { name: "Add administrative note" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/homes/home-1/notes", { body: "A fresh note" }));
@@ -422,7 +422,7 @@ describe("Home detail", () => {
 describe("Home detail — Archive lifecycle", () => {
   it("offers both Suspend and Archive for an active Home", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.getByRole("button", { name: "Suspend Home" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore Home" })).not.toBeInTheDocument();
@@ -431,7 +431,7 @@ describe("Home detail — Archive lifecycle", () => {
   it("offers Reactivate and Archive for a disabled Home", async () => {
     get.mockResolvedValue(suspendedHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.getByRole("button", { name: "Reactivate Home" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Suspend Home" })).not.toBeInTheDocument();
@@ -440,7 +440,7 @@ describe("Home detail — Archive lifecycle", () => {
   it("shows Archived status and only a Restore action for an archived Home", async () => {
     get.mockResolvedValue(archivedHome);
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.getAllByText("Archived").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Restore Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Suspend Home" })).not.toBeInTheDocument();
@@ -514,7 +514,7 @@ describe("Home detail — Move member", () => {
 
   it("opens the Move member dialog from a member row, fixed to this Home as the source", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const memberRow = screen.getByText("Jane Smith").closest("article")!;
     await userEvent.click(within(memberRow).getByRole("button", { name: "Move" }));
 
@@ -535,7 +535,7 @@ describe("Home detail — Move member", () => {
       return Promise.resolve({ message: "ok" });
     });
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     const memberRow = screen.getByText("Jane Smith").closest("article")!;
     await userEvent.click(within(memberRow).getByRole("button", { name: "Move" }));
 
@@ -576,7 +576,7 @@ describe("Home detail — Permanent delete", () => {
 
   it("only offers Permanently delete Home for an archived Home, not active/disabled", async () => {
     render(<DetailPage />);
-    await screen.findByText("The Smiths");
+    await screen.findByRole("heading", { name: /The Smiths/ });
     expect(screen.queryByRole("button", { name: "Permanently delete Home" })).not.toBeInTheDocument();
 
     get.mockResolvedValue(suspendedHome);

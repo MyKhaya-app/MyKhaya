@@ -11,6 +11,8 @@ Restore testing is mandatory:
 
 A Docker volume, filesystem snapshot without database consistency, or an untested dump is not a backup claim.
 
+`backups/` is gitignored and must never be committed; it is a working directory for `make backup`/`make restore`, not long-term storage. Dumps left here contain real user data and must be moved to an approved backup destination and deleted locally. In particular, do not run `make backup` inside a checkout that lives under a personal cloud-sync folder (Dropbox, OneDrive, Nextcloud, iCloud Drive, etc.) without first confirming that folder's sync scope excludes `backups/` — git ignoring a path only keeps it out of version control, it does not stop a filesystem-level sync client from uploading it.
+
 ## Encrypted platform secrets (SMTP, push, Stripe)
 
 Platform-Admin-managed secrets (SMTP password, push VAPID private key, Stripe Test/Live

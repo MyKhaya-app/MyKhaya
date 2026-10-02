@@ -987,6 +987,14 @@ textarea {
     gap: 0.85rem;
   }
 }
+/* Baseline safe-area clearance for the PCC login shell (app/control-centre/pcc.css's
+   `.pcc-root .platform-login` rule sets the actual visible layout and padding — this
+   rule exists so the shared var(--safe-top)/var(--safe-bottom) contract this file
+   defines for every top-level pre-auth container also covers this one, per
+   styles-safe-area.test.ts). Do not remove without updating the pcc.css rule too. */
+.platform-login {
+  padding: var(--safe-top) 0 var(--safe-bottom);
+}
 .auth-page {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);
@@ -3857,27 +3865,6 @@ html.native-shell .home-section-overlap {
   max-width: 100%;
   overflow-x: hidden;
 }
-.coming {
-  text-align: center;
-  margin: 15vh auto;
-  max-width: 550px;
-  padding: 2rem;
-}
-.coming > div {
-  color: var(--colour-sage);
-  font-size: 5rem;
-}
-.coming h1 {
-  font-size: 2.3rem;
-}
-.coming > p:not(.eyebrow) {
-  color: var(--colour-muted);
-  line-height: 1.6;
-}
-.coming .button {
-  margin-top: 1rem;
-}
-
 .calendar-actions {
   display: flex;
   flex-wrap: wrap;
@@ -6465,7 +6452,7 @@ button.danger,
   background: var(--colour-forest);
   color: var(--colour-white);
 }
-.budget-delete-confirm { padding: 0 0 env(safe-area-inset-bottom); }
+.budget-delete-confirm { padding: 0 0 var(--safe-bottom); }
 .budget-delete-actions { display: flex; gap: .65rem; justify-content: flex-end; margin-top: 1rem; }
 .budget-delete-actions .danger { background: var(--colour-danger, #b42318); color: var(--colour-white); }
 

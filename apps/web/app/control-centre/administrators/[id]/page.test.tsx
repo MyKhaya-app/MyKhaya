@@ -72,7 +72,7 @@ beforeEach(() => {
 describe("Administrator detail — overview", () => {
   it("renders account metadata, role and status/MFA badges", async () => {
     render(<AdministratorDetailPage />);
-    expect(await screen.findByText("Target Admin")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Target Admin/ })).toBeInTheDocument();
     expect(screen.getAllByText("target@example.com").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Administrator").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
@@ -81,14 +81,14 @@ describe("Administrator detail — overview", () => {
 
   it("shows Change role only for an owner viewing another administrator", async () => {
     render(<AdministratorDetailPage />);
-    await screen.findByText("Target Admin");
+    await screen.findByRole("heading", { name: /Target Admin/ });
     expect(screen.getByRole("button", { name: "Change role" })).toBeInTheDocument();
   });
 
   it("hides Change role for a non-owner viewer", async () => {
     mockLoad(otherAdmin);
     render(<AdministratorDetailPage />);
-    await screen.findByText("Target Admin");
+    await screen.findByRole("heading", { name: /Target Admin/ });
     expect(screen.queryByRole("button", { name: "Change role" })).not.toBeInTheDocument();
   });
 
@@ -139,7 +139,7 @@ describe("Administrator detail — overview", () => {
       return Promise.reject(new Error("unexpected"));
     });
     render(<AdministratorDetailPage />);
-    await screen.findByText("Target Admin");
+    await screen.findByRole("heading", { name: /Target Admin/ });
     expect(screen.queryByRole("button", { name: /deactivate administrator/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /reactivate administrator/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change role" })).not.toBeInTheDocument();
@@ -179,7 +179,7 @@ describe("Administrator detail — overview", () => {
 describe("Administrator detail — security (viewing another administrator)", () => {
   it("requires confirmation and a reason before resetting MFA", async () => {
     render(<AdministratorDetailPage />);
-    await screen.findByText("Target Admin");
+    await screen.findByRole("heading", { name: /Target Admin/ });
     await userEvent.click(await screen.findByRole("button", { name: "Security" }));
     await userEvent.click(await screen.findByRole("button", { name: /reset mfa for this administrator/i }));
     const dialog = await screen.findByRole("dialog", { name: "Reset MFA" });

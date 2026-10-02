@@ -3321,7 +3321,7 @@
 .pcc-root input, .pcc-root select, .pcc-root textarea { border-color: #d0d5dd; border-radius: 8px; font-size: 14px; min-height: 44px; }
 .pcc-root .table-scroll th { background: #f9fafb; color: #667085; font-size: 12px; font-weight: 500; }
 .pcc-root .table-scroll th, .pcc-root .table-scroll td { border-bottom-color: var(--cc-border); padding: 14px 16px; }
-.pcc-root .platform-login { background: #f9fafb; min-height: 100vh; padding: 0; }
+.pcc-root .platform-login { background: #f9fafb; min-height: 100vh; padding: var(--safe-top) 0 var(--safe-bottom); }
 .pcc-root .tailadmin-auth-layout { align-items: stretch; display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr); min-height: 100vh; }
 .pcc-root .tailadmin-auth-art { align-items: flex-start; background: linear-gradient(145deg, #101828 0%, #1d2939 52%, #344054 100%); color: #fff; display: flex; flex-direction: column; justify-content: center; padding: 64px clamp(32px, 8vw, 120px); }
 .pcc-root .tailadmin-auth-mark { align-items: center; background: var(--cc-primary); border-radius: 12px; display: flex; font-size: 24px; font-weight: 700; height: 64px; justify-content: center; margin-bottom: 24px; width: 64px; }
@@ -3580,6 +3580,83 @@
 .pcc-root .cc-notice { font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
 @media (max-width: 1024px) { .pcc-root .cc-columns-2-1, .pcc-root .cc-columns-1-1 { grid-template-columns: 1fr; } .pcc-root .cc-metadata-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .pcc-root .cc-page-header { flex-direction: column; } .pcc-root .cc-page-header-actions, .pcc-root .cc-page-header-secondary { justify-content: flex-start; width: 100%; } .pcc-root .cc-section, .pcc-root .cc-card, .pcc-root .cc-danger-zone { padding: 16px; } .pcc-root .cc-section-heading { flex-direction: column; } }
+
+/* Payments: Stripe administration workspace aligned with the newer PCC card patterns. */
+.pcc-root .pcc-payments-page > .cc-page-header { align-items: flex-start; margin-bottom: 1.35rem; }
+.pcc-root .pcc-payments-page > .cc-page-header .cc-page-header-actions { align-items: flex-start; }
+.pcc-root .pcc-payments-page .pcc-payments-how-it-works { align-items: center; background: #eef1ff; border: 1px solid #d7ddff; border-radius: 8px; display: flex; gap: 0.85rem; max-width: 27rem; padding: 0.8rem 1rem; }
+.pcc-root .pcc-payments-page .pcc-payments-how-icon { align-items: center; background: #e0e5ff; border-radius: 50%; color: var(--cc-primary); display: inline-flex; flex: 0 0 2.65rem; height: 2.65rem; justify-content: center; width: 2.65rem; }
+.pcc-root .pcc-payments-page .pcc-payments-how-it-works strong { color: var(--cc-text); display: block; font-size: 0.86rem; }
+.pcc-root .pcc-payments-page .pcc-payments-how-it-works p { color: var(--cc-text-muted); font-size: 0.76rem; line-height: 1.45; margin: 0.2rem 0 0; }
+.pcc-root .pcc-payments-page .pcc-payments-warning { align-items: flex-start; background: #fffaeb; border: 1px solid #fedf89; border-radius: 8px; color: #b54708; display: flex; gap: 0.75rem; margin: 0 0 1rem; padding: 0.75rem 1rem; }
+.pcc-root .pcc-payments-page .pcc-payments-warning strong { color: #7a2e0b; display: block; font-size: 0.84rem; }
+.pcc-root .pcc-payments-page .pcc-payments-warning span { color: #8a4b13; display: block; font-size: 0.78rem; margin-top: 0.15rem; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-grid { display: grid; gap: 0.8rem; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 1rem; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-card { align-items: center; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: 8px; box-shadow: var(--cc-shadow-sm); display: flex; gap: 0.7rem; min-width: 0; padding: 0.78rem 0.85rem; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon { align-items: center; border-radius: 50%; display: inline-flex; flex: 0 0 2.55rem; height: 2.55rem; justify-content: center; width: 2.55rem; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon-success { background: #ecfdf3; color: #027a48; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon-warning { background: #fffaeb; color: #b54708; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon-danger { background: #fef3f2; color: #b42318; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon-info { background: #eff8ff; color: #175cd3; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-icon-neutral { background: #f2f4f7; color: #344054; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-card > span:last-child { display: grid; gap: 0.25rem; min-width: 0; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-card small { color: var(--cc-text-muted); font-size: 0.72rem; white-space: nowrap; }
+.pcc-root .pcc-payments-page .pcc-payments-summary-card .cc-badge { justify-self: start; }
+.pcc-root .pcc-payments-page .pcc-payment-card { margin-bottom: 1rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-card .cc-card-actions button { align-items: center; display: inline-flex; gap: 0.4rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid > div { align-items: center; border-bottom: 1px solid var(--cc-border); display: flex; justify-content: space-between; min-width: 0; padding: 0.6rem 0.35rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid > div:nth-child(odd) { border-right: 1px solid var(--cc-border); padding-right: 1.4rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid > div:nth-child(even) { padding-left: 1.4rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid dt { color: var(--cc-text-muted); font-size: 0.78rem; }
+.pcc-root .pcc-payments-page .pcc-payment-status-grid dd { color: var(--cc-text); font-size: 0.8rem; font-weight: 600; margin: 0; text-align: right; }
+.pcc-root .pcc-payments-page .pcc-payment-environment-note { margin: 1rem 0 0; }
+.pcc-root .pcc-payments-page .pcc-payment-controls-grid { display: grid; gap: 2rem; grid-template-columns: minmax(0, 1fr) minmax(22rem, 1fr); }
+.pcc-root .pcc-payments-page .pcc-payment-toggle-list { min-width: 0; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle { align-items: center; border-bottom: 1px solid var(--cc-border); display: flex; gap: 1rem; justify-content: space-between; padding: 0.6rem 0.1rem; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle > span:first-child { display: grid; gap: 0.15rem; min-width: 0; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle strong, .pcc-root .pcc-payments-page .pcc-payment-subheading strong { color: var(--cc-text); font-size: 0.82rem; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle small, .pcc-root .pcc-payments-page .pcc-payment-subheading small, .pcc-root .pcc-payments-page .pcc-payment-radio-card small { color: var(--cc-text-muted); font-size: 0.74rem; line-height: 1.4; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle input { block-size: 1px; inline-size: 1px; opacity: 0; position: absolute; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle-track { background: #d0d5dd; border-radius: 999px; display: inline-flex; flex: 0 0 2.7rem; height: 1.45rem; padding: 0.18rem; transition: background 160ms ease; width: 2.7rem; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle-track span { background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgb(16 24 40 / 20%); display: block; height: 1.09rem; transition: transform 160ms ease; width: 1.09rem; }
+.pcc-root .pcc-payments-page .pcc-payment-toggle input:checked + .pcc-payment-toggle-track { background: var(--cc-primary); }
+.pcc-root .pcc-payments-page .pcc-payment-toggle input:checked + .pcc-payment-toggle-track span { transform: translateX(1.25rem); }
+.pcc-root .pcc-payments-page .pcc-payment-toggle input:focus-visible + .pcc-payment-toggle-track, .pcc-root .pcc-payments-page .pcc-payment-radio-card input:focus-visible + .pcc-payment-radio-mark { outline: 2px solid var(--cc-primary); outline-offset: 3px; }
+.pcc-root .pcc-payments-page .pcc-payment-info-note { align-items: center; background: #eff4ff; border-radius: 6px; color: #526581; display: flex; font-size: 0.74rem; gap: 0.45rem; line-height: 1.4; margin: 0.75rem 0 0; padding: 0.5rem 0.6rem; }
+.pcc-root .pcc-payments-page .pcc-payment-info-note svg { color: var(--cc-primary); flex: 0 0 auto; }
+.pcc-root .pcc-payments-page .pcc-payment-mode-selector { border-left: 1px solid var(--cc-border); display: grid; gap: 0.65rem; padding-left: 2rem; }
+.pcc-root .pcc-payments-page .pcc-payment-subheading { display: grid; gap: 0.2rem; margin-bottom: 0.1rem; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card { align-items: flex-start; border: 1px solid var(--cc-border); border-radius: 8px; cursor: pointer; display: grid; gap: 0.7rem; grid-template-columns: 1.35rem minmax(0, 1fr); padding: 0.85rem 1rem; position: relative; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card.is-selected { background: #eff8ff; border-color: #84adff; box-shadow: 0 0 0 1px #84adff; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card input { block-size: 1px; inline-size: 1px; opacity: 0; position: absolute; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-mark { border: 1.5px solid #98a2b3; border-radius: 50%; display: inline-flex; height: 1.35rem; justify-content: center; padding: 0.22rem; width: 1.35rem; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card.is-selected .pcc-payment-radio-mark { border-color: #1570ef; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-mark span { background: #1570ef; border-radius: 50%; display: block; opacity: 0; width: 100%; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card.is-selected .pcc-payment-radio-mark span { opacity: 1; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card > span:last-child { display: grid; gap: 0.2rem; }
+.pcc-root .pcc-payments-page .pcc-payment-radio-card strong { color: var(--cc-text); font-size: 0.82rem; }
+.pcc-root .pcc-payments-page .pcc-payment-fields-grid { display: grid; gap: 1rem 1.25rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcc-root .pcc-payments-page .pcc-payment-fields-grid label { color: var(--cc-text); display: grid; font-size: 0.78rem; font-weight: 600; gap: 0.35rem; }
+.pcc-root .pcc-payments-page .pcc-payment-fields-grid input { width: 100%; }
+.pcc-root .pcc-payments-page .pcc-payment-fields-grid > p { align-items: center; color: var(--cc-text-muted); display: flex; font-size: 0.74rem; gap: 0.5rem; margin: -0.5rem 0 0; }
+.pcc-root .pcc-payments-page .pcc-payment-live-card { border-color: #fecdca; }
+.pcc-root .pcc-payments-page > form > fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
+.pcc-root .pcc-payments-page > form > fieldset > label { color: var(--cc-text); display: grid; font-size: 0.78rem; font-weight: 600; gap: 0.35rem; margin-bottom: 1rem; max-width: 32rem; }
+@media (max-width: 1200px) {
+  .pcc-root .pcc-payments-page .pcc-payments-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .pcc-root .pcc-payments-page > .cc-page-header { flex-direction: column; }
+  .pcc-root .pcc-payments-page > .cc-page-header-actions, .pcc-root .pcc-payments-page .pcc-payments-how-it-works { width: 100%; }
+  .pcc-root .pcc-payments-page .pcc-payments-how-it-works { max-width: none; }
+  .pcc-root .pcc-payments-page .pcc-payment-controls-grid { grid-template-columns: 1fr; }
+  .pcc-root .pcc-payments-page .pcc-payment-mode-selector { border-left: 0; border-top: 1px solid var(--cc-border); padding-left: 0; padding-top: 1.25rem; }
+}
+@media (max-width: 640px) {
+  .pcc-root .pcc-payments-page .pcc-payments-summary-grid, .pcc-root .pcc-payments-page .pcc-payment-fields-grid, .pcc-root .pcc-payments-page .pcc-payment-status-grid { grid-template-columns: 1fr; }
+  .pcc-root .pcc-payments-page .pcc-payment-status-grid > div:nth-child(odd), .pcc-root .pcc-payments-page .pcc-payment-status-grid > div:nth-child(even) { border-right: 0; padding-left: 0; padding-right: 0; }
+}
 
 /* Full-width PCC frame: the sidebar owns the outer boundary; page content
    uses gutters but is not trapped in a narrow centred column. */
@@ -3981,14 +4058,10 @@
   .pcc-root .pcc-calendar-dates-page .calendar-dates-summary { grid-template-columns: 1fr; }
 }
 
-/* Account & Home cleanup: operational admin workspace styling. */
-.pcc-root .pcc-cleanup-page .cc-cleanup-intro-row { align-items: stretch; display: grid; gap: 1.5rem; grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.72fr); margin-bottom: 1rem; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-meta { align-self: center; margin: 0; max-width: 58rem; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-how-it-works { align-items: center; background: #eef1ff; border: 1px solid #d1d7ff; border-radius: var(--cc-radius-md); display: flex; gap: 1rem; padding: 1rem 1.15rem; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-info-icon { align-items: center; background: #e0e5ff; border-radius: 50%; color: var(--cc-primary); display: flex; flex: 0 0 3rem; height: 3rem; justify-content: center; width: 3rem; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-how-it-works strong { display: block; font-size: 1rem; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-how-it-works p { color: var(--cc-text-muted); font-size: 0.84rem; line-height: 1.45; margin: 0.25rem 0 0; }
-.pcc-root .pcc-cleanup-page .cc-cleanup-summary { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(12rem, 1fr)); margin: 0 0 1rem auto; max-width: 32rem; }
+/* Account & Home cleanup: compact operational admin workspace styling. */
+.pcc-root .pcc-cleanup-page > .cc-page-header { align-items: flex-start; margin-bottom: 1.25rem; }
+.pcc-root .pcc-cleanup-page > .cc-page-header .cc-page-header-actions { align-items: flex-start; }
+.pcc-root .pcc-cleanup-page .cc-cleanup-summary { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(12rem, 1fr)); margin: 0; max-width: 32rem; }
 .pcc-root .pcc-cleanup-page .cc-cleanup-summary-card { align-items: center; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-sm); display: flex; gap: 0.8rem; padding: 0.8rem 1rem; }
 .pcc-root .pcc-cleanup-page .cc-cleanup-summary-icon { align-items: center; background: #eef1f7; border-radius: 50%; color: var(--cc-primary); display: flex; flex: 0 0 2.8rem; height: 2.8rem; justify-content: center; width: 2.8rem; }
 .pcc-root .pcc-cleanup-page .cc-cleanup-summary-card > span:last-child { display: grid; gap: 0.12rem; }
@@ -4015,8 +4088,10 @@
 .pcc-root .pcc-cleanup-page .cc-cleanup-id { display: block; max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcc-root .pcc-cleanup-page .cc-table-scroll table { min-width: 980px; }
 @media (max-width: 1100px) {
-  .pcc-root .pcc-cleanup-page .cc-cleanup-intro-row { grid-template-columns: 1fr; }
-  .pcc-root .pcc-cleanup-page .cc-cleanup-how-it-works { max-width: 42rem; }
+  .pcc-root .pcc-cleanup-page > .cc-page-header { flex-direction: column; }
+  .pcc-root .pcc-cleanup-page > .cc-page-header .cc-page-header-actions,
+  .pcc-root .pcc-cleanup-page .cc-cleanup-summary { width: 100%; }
+  .pcc-root .pcc-cleanup-page .cc-cleanup-summary { max-width: 42rem; }
 }
 @media (max-width: 760px) {
   .pcc-root .pcc-cleanup-page .cc-cleanup-summary { grid-template-columns: 1fr; max-width: none; }

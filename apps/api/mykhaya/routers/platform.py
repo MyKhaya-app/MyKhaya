@@ -7135,7 +7135,7 @@ async def stripe_configuration(
         mode=row.mode.value if row else config.mode,
         source=config.source,
         incomplete_reason=config.incomplete_reason,
-        editable=True,
+        editable=config.source != "environment",
         updated_at=row.updated_at if row else None,
         test=_stripe_mode_settings_response(row, settings, "test"),
         live=_stripe_mode_settings_response(row, settings, "live"),

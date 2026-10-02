@@ -254,7 +254,16 @@ async def test_enabling_incomplete_mode_is_rejected(
 ) -> None:
     operator = await admin_factory(PlatformRole.owner)
     await admin_login(admin_client, operator)
-    response = await _save_settings(admin_client, {"test_family_annual_price_id": None})
+    # Price-ID completeness is only validated when a signup-acquisition toggle
+    # is being turned on (migration 0095_plan_signup_controls split "Stripe
+    # enabled" from "new-signup acquisition enabled" — enabled alone, e.g. for
+    # webhook/reconciliation of existing subscriptions, has nothing to
+    # validate price IDs against). family_signups_enabled must be set here to
+    # actually exercise the rejection path this test is named for.
+    response = await _save_settings(
+        admin_client,
+        {"family_signups_enabled": True, "test_family_annual_price_id": None},
+    )
     assert response.status_code == 422
 
 

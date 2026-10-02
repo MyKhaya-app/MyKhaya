@@ -11,7 +11,7 @@ import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
 import { CcNotice } from "@/components/control-centre/status-message";
 import { CcDialog, CcDialogActions } from "@/components/control-centre/dialog";
-import { Archive, Home, PowerOff, Search, Trash2, UserRound, Users } from "lucide-react";
+import { Archive, Home, PowerOff, Search, UserRound, Users } from "lucide-react";
 
 type Lifecycle = "active" | "disabled" | "archived";
 type LifecycleFilter = Lifecycle | "all";
@@ -319,31 +319,19 @@ export default function CleanupPage() {
           eyebrow="Administration"
           title="Account & Home cleanup"
           description="Bulk Disable or Archive test/retired Homes and Users. This tool never permanently deletes anything — every action can be reversed on the individual record's detail page."
-        />
-
-        <div className="cc-cleanup-intro-row">
-          <p className="cc-page-meta cc-cleanup-meta">
-            Review test or retired records, then disable or archive them in a reversible way.
-          </p>
-          <aside className="cc-cleanup-how-it-works">
-            <span className="cc-cleanup-info-icon"><Trash2 size={22} aria-hidden="true" /></span>
-            <div>
-              <strong>How this works</strong>
-              <p>You can bulk disable or archive Homes and Users. Disabled Homes can be re-enabled and archived items can be restored from the individual record&apos;s detail page.</p>
+          primaryAction={
+            <div className="cc-cleanup-summary" aria-label={`${tab === "homes" ? "Home" : "User"} summary`}>
+              <div className="cc-cleanup-summary-card">
+                <span className="cc-cleanup-summary-icon"><Home size={22} aria-hidden="true" /></span>
+                <span><small>{tab === "homes" ? "Total Homes" : "Total Users"}</small><strong>{summaryPrimary}</strong><em>Showing current results</em></span>
+              </div>
+              <div className="cc-cleanup-summary-card">
+                <span className="cc-cleanup-summary-icon"><Users size={22} aria-hidden="true" /></span>
+                <span><small>{tab === "homes" ? "Total Members" : "Home memberships"}</small><strong>{summarySecondary}</strong><em>Across shown {tab === "homes" ? "Homes" : "Users"}</em></span>
+              </div>
             </div>
-          </aside>
-        </div>
-
-        <div className="cc-cleanup-summary" aria-label={`${tab === "homes" ? "Home" : "User"} summary`}>
-          <div className="cc-cleanup-summary-card">
-            <span className="cc-cleanup-summary-icon"><Home size={22} aria-hidden="true" /></span>
-            <span><small>{tab === "homes" ? "Total Homes" : "Total Users"}</small><strong>{summaryPrimary}</strong><em>Showing current results</em></span>
-          </div>
-          <div className="cc-cleanup-summary-card">
-            <span className="cc-cleanup-summary-icon"><Users size={22} aria-hidden="true" /></span>
-            <span><small>{tab === "homes" ? "Total Members" : "Home memberships"}</small><strong>{summarySecondary}</strong><em>Across shown {tab === "homes" ? "Homes" : "Users"}</em></span>
-          </div>
-        </div>
+          }
+        />
 
         <div className="cc-cleanup-tabs" role="tablist" aria-label="Cleanup type">
           <button

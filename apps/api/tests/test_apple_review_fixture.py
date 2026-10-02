@@ -65,7 +65,7 @@ def test_managed_demo_service_has_scoped_security_guards():
     refresh_source = source[
         source.index("async def refresh_template") : source.index("async def register")
     ]
-    assert "Refusing to adopt an existing customer account" in create_source
+    assert "already in use by another customer account" in create_source
     assert "Refusing to delete an owner account used outside this fixture" in delete_source
     assert "row.owner_user_id" in reset_source
     assert "row.home_id" in refresh_source

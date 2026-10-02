@@ -10,13 +10,18 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- This is the app's launcher activity (MAIN/LAUNCHER intent-filter below).
+             Android requires android:exported="true" on any activity with an
+             intent-filter since API 31 — the manifest merger fails the build
+             without it. Not a privileged/data-handling export; it is the
+             standard, unavoidable entry point every Android app declares. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
-            android:exported="true">
+            android:exported="true"> <!-- nosemgrep: java.android.security.exported_activity.exported_activity -->
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

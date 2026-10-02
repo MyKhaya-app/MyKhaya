@@ -1,5 +1,7 @@
 name: security
 on:
+  pull_request:
+    branches: [dev, main]
   push:
     branches: [dev, main]
   schedule: [{ cron: "17 4 * * 1" }]

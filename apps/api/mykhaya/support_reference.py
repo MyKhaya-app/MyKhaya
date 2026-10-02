@@ -12,12 +12,18 @@ is an internal implementation detail; callers only ever see the formatted
 
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 SUPPORT_REFERENCE_SEQUENCE = "support_ticket_reference_seq"
 
 
 async def next_support_reference(db: AsyncSession) -> str:
-    value = await db.scalar(text(f"SELECT nextval('{SUPPORT_REFERENCE_SEQUENCE}')"))
+    # func.nextval() passes the sequence name as a bound parameter rather
+    # than interpolating it into raw SQL text — Postgres accepts a regclass-
+    # castable string there, so this avoids sqlalchemy.text() entirely
+    # (flagged by Semgrep's avoid-sqlalchemy-text rule) without changing
+    # behaviour. SUPPORT_REFERENCE_SEQUENCE is a fixed module constant, never
+    # derived from request/config input.
+    value = await db.scalar(select(func.nextval(SUPPORT_REFERENCE_SEQUENCE)))
     return f"MK-{value}"

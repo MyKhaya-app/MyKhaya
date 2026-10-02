@@ -13,10 +13,22 @@ import type {
 import { CcPage } from "@/components/control-centre/page-shell";
 import { CcPageHeader } from "@/components/control-centre/page-header";
 import { CcNotice } from "@/components/control-centre/status-message";
-import { CcBadge, toneFromStateClass } from "@/components/control-centre/badge";
-import { CcColumns, CcSection } from "@/components/control-centre/section";
-import { CcStatusCard } from "@/components/control-centre/status-card";
+import { CcBadge, toneFromStateClass, type CcBadgeTone } from "@/components/control-centre/badge";
+import { CcCard, CcSection } from "@/components/control-centre/section";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
+import {
+  AlertTriangle,
+  BookOpen,
+  CreditCard,
+  Database,
+  FileKey2,
+  Info,
+  Link2,
+  Settings2,
+  ShieldCheck,
+  UsersRound,
+  Wrench,
+} from "lucide-react";
 
 type SecretField = "test_secret_key" | "test_webhook_secret" | "live_secret_key" | "live_webhook_secret";
 
@@ -162,16 +174,17 @@ export default function PaymentsPage() {
 
   function modeFields(mode: "test" | "live", settings: StripeModeSettings, danger: boolean) {
     return (
-      <CcSection
+      <CcCard
+        className={`pcc-payment-card pcc-payment-configuration-card ${danger ? "pcc-payment-live-card" : ""}`}
         title={mode === "test" ? "Test configuration" : "Live configuration"}
-        tone={danger ? "danger" : "default"}
+        icon={Wrench}
         description={
           mode === "live"
             ? "These are production Stripe credentials — changes here affect real billing."
             : "Sandbox Stripe credentials, safe to experiment with."
         }
       >
-        <CcColumns ratio="1-1">
+        <div className="pcc-payment-fields-grid">
         <label>
           Publishable key
           <input name={`${mode}_publishable_key`} defaultValue={settings.publishable_key ?? ""} maxLength={200} />
@@ -252,18 +265,27 @@ export default function PaymentsPage() {
             maxLength={200}
           />
         </label>
-        </CcColumns>
-      </CcSection>
+        </div>
+      </CcCard>
     );
   }
 
   return (
     <PlatformShell>
-      <CcPage wide>
+      <CcPage wide className="pcc-payments-page">
         <CcPageHeader
-          eyebrow="Payments"
-          title="Stripe"
-          description="Configure and test the Stripe integration used for Family billing. Secret values are never shown after they are stored — only whether one is configured and its last few characters."
+          eyebrow="Billing & payments"
+          title="Payments"
+          description="Manage your Stripe billing integration, subscriptions and credentials. Enable payments for new subscriptions and securely process payments through Stripe."
+          primaryAction={
+            <aside className="pcc-payments-how-it-works">
+              <span className="pcc-payments-how-icon"><BookOpen size={21} aria-hidden="true" /></span>
+              <div>
+                <strong>How this works</strong>
+                <p>Connect your Stripe account to enable payments, manage subscription sign-ups, and configure test or live credentials.</p>
+              </div>
+            </aside>
+          }
           secondaryActions={
             <button className="secondary" onClick={() => void load()}>
               Refresh
@@ -282,19 +304,43 @@ export default function PaymentsPage() {
           <p role="status">Loading Stripe configuration…</p>
         ) : (
           <>
-            <CcStatusCard
-              tone={data.enabled ? "success" : "warning"}
-              status={data.enabled ? "Stripe enabled" : "Stripe disabled"}
-              description="Current billing integration state"
-              items={[
-                { label: "Mode", value: <CcBadge tone={data.mode === "live" ? "danger" : "info"}>{data.mode === "live" ? "Live" : "Test"}</CcBadge> },
-                { label: "New subscriptions", value: data.acquisition_enabled ? "Allowed" : "Paused" },
-                { label: "Configuration source", value: titleCase(data.source) },
-                { label: "Credentials", value: data.configured ? "Configured" : "Incomplete" },
-              ]}
-            />
-            <CcSection title="Status">
-              <dl>
+            {!data.enabled && (
+              <div className="pcc-payments-warning" role="status">
+                <AlertTriangle size={22} aria-hidden="true" />
+                <div>
+                  <strong>Stripe is disabled</strong>
+                  <span>The Stripe billing integration is currently disabled. Enable it to allow new subscriptions and process payments.</span>
+                </div>
+              </div>
+            )}
+
+            <div className="pcc-payments-summary-grid" aria-label="Payment summary">
+              {[
+                { label: "Integration", value: data.enabled ? "Enabled" : "Disabled", tone: data.enabled ? "success" : "danger", icon: Link2 },
+                { label: "Active mode", value: data.mode === "live" ? "Live" : "Test", tone: data.mode === "live" ? "danger" : "info", icon: Database },
+                { label: "New subscriptions", value: data.acquisition_enabled ? "Allowed" : "Paused", tone: data.acquisition_enabled ? "success" : "warning", icon: UsersRound },
+                { label: "Configuration source", value: titleCase(data.source), tone: data.source === "unconfigured" ? "neutral" : "info", icon: FileKey2 },
+                { label: "Credentials", value: data.configured ? "Configured" : "Incomplete", tone: data.configured ? "success" : "danger", icon: ShieldCheck },
+              ].map(({ label, value, tone, icon: Icon }) => (
+                <div className="pcc-payments-summary-card" key={label}>
+                  <span className={`pcc-payments-summary-icon pcc-payments-summary-icon-${tone}`}><Icon size={20} aria-hidden="true" /></span>
+                  <span><small>{label}</small><CcBadge tone={tone as CcBadgeTone}>{value}</CcBadge></span>
+                </div>
+              ))}
+            </div>
+
+            <CcCard
+              className="pcc-payment-card pcc-payment-status-card"
+              title="Stripe status"
+              description="Current state of your Stripe billing integration and configuration."
+              icon={CreditCard}
+              actions={
+                <button type="button" className="secondary" onClick={() => setTestDialogOpen(true)} disabled={testing}>
+                  <Link2 size={15} aria-hidden="true" /> {testing ? "Testingâ€¦" : "Test connection"}
+                </button>
+              }
+            >
+              <dl className="pcc-payment-status-grid">
                 <div>
                   <dt>Integration</dt>
                   <dd>
@@ -313,7 +359,7 @@ export default function PaymentsPage() {
                 </div>
                 <div>
                   <dt>Configuration source</dt>
-                  <dd>{titleCase(data.source)}</dd>
+                  <dd><CcBadge tone={data.source === "unconfigured" ? "neutral" : "info"}>{titleCase(data.source)}</CcBadge></dd>
                 </div>
                 <div>
                   <dt>Configured</dt>
@@ -339,61 +385,57 @@ export default function PaymentsPage() {
                 )}
               </dl>
               {!data.editable && (
-                <p className="notice">
+                <p className="notice pcc-payment-environment-note">
                   Managed by the deployment environment (MYKHAYA_STRIPE_BILLING_CONFIGURED). These fields
                   cannot be changed here — edit the server&apos;s .env and redeploy.
                 </p>
               )}
-            </CcSection>
+            </CcCard>
 
             <form onSubmit={saveSettings}>
               <fieldset disabled={!data.editable}>
-                <CcSection title="Mode">
-                  <label className="check-row">
-                    <input type="checkbox" name="enabled" defaultChecked={data.enabled} /> Integration enabled
-                  </label>
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      name="family_signups_enabled"
-                      defaultChecked={data.family_signups_enabled ?? data.acquisition_enabled}
-                    /> Allow new Family subscriptions
-                  </label>
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      name="ultimate_signups_enabled"
-                      defaultChecked={data.ultimate_signups_enabled}
-                    /> Allow new Ultimate subscriptions
-                  </label>
-                  <p><small>Pause new paid sign-ups without disabling renewals, webhooks, cancellations, or the customer portal.</small></p>
-                  <label className="check-row">
-                    <input
-                      type="radio"
-                      name="mode"
-                      value="test"
-                      checked={selectedMode === "test"}
-                      onChange={() => setSelectedMode("test")}
-                    />{" "}
-                    Test
-                  </label>
-                  <label className="check-row">
-                    <input
-                      type="radio"
-                      name="mode"
-                      value="live"
-                      checked={selectedMode === "live"}
-                      onChange={() => setSelectedMode("live")}
-                    />{" "}
-                    Live
-                  </label>
-                  {selectedMode === "live" && (
-                    <CcNotice tone="warning">
-                      Selecting Live mode makes real Stripe billing active once saved. Existing Homes,
-                      webhooks, renewals and cancellations are never affected by this switch by themselves.
-                    </CcNotice>
-                  )}
-                </CcSection>
+                <CcCard
+                  className="pcc-payment-card pcc-payment-controls-card"
+                  title="Mode and subscription controls"
+                  description="Configure how Stripe integration behaves and control new subscription sign-ups."
+                  icon={Settings2}
+                >
+                  <div className="pcc-payment-controls-grid">
+                    <div className="pcc-payment-toggle-list">
+                      {[
+                        ["enabled", "Integration enabled", "Connect and enable the Stripe billing integration.", data.enabled],
+                        ["family_signups_enabled", "Allow new Family subscriptions", "Allow new Family plan sign-ups through Stripe.", data.family_signups_enabled ?? data.acquisition_enabled],
+                        ["ultimate_signups_enabled", "Allow new Ultimate subscriptions", "Allow new Ultimate plan sign-ups through Stripe.", data.ultimate_signups_enabled],
+                      ].map(([name, label, description, checked]) => (
+                        <label className="pcc-payment-toggle" key={name as string}>
+                          <span><strong>{label as string}</strong><small>{description as string}</small></span>
+                          <input type="checkbox" name={name as string} defaultChecked={checked as boolean} />
+                          <span className="pcc-payment-toggle-track" aria-hidden="true"><span /></span>
+                        </label>
+                      ))}
+                      <p className="pcc-payment-info-note"><Info size={16} aria-hidden="true" /> Pausing new paid sign-ups does not disable existing renewals, webhooks, cancellations, or the customer portal.</p>
+                    </div>
+                    <div className="pcc-payment-mode-selector">
+                      <div className="pcc-payment-subheading"><strong>Stripe mode</strong><small>Choose which Stripe environment to use for processing payments.</small></div>
+                      <label className={`pcc-payment-radio-card ${selectedMode === "test" ? "is-selected" : ""}`}>
+                        <input type="radio" name="mode" value="test" checked={selectedMode === "test"} onChange={() => setSelectedMode("test")} />
+                        <span className="pcc-payment-radio-mark" aria-hidden="true"><span /></span>
+                        <span><strong>Test mode</strong><small>Use Stripe&apos;s test environment for sandbox payments.</small></span>
+                      </label>
+                      <label className={`pcc-payment-radio-card ${selectedMode === "live" ? "is-selected" : ""}`}>
+                        <input type="radio" name="mode" value="live" checked={selectedMode === "live"} onChange={() => setSelectedMode("live")} />
+                        <span className="pcc-payment-radio-mark" aria-hidden="true"><span /></span>
+                        <span><strong>Live mode</strong><small>Use Stripe&apos;s live environment for real payments.</small></span>
+                      </label>
+                      {selectedMode === "live" && (
+                        <CcNotice tone="warning">
+                          Selecting Live mode makes real Stripe billing active once saved. Existing Homes,
+                          webhooks, renewals and cancellations are never affected by this switch by themselves.
+                        </CcNotice>
+                      )}
+                    </div>
+                  </div>
+                </CcCard>
 
                 {modeFields("test", data.test, false)}
                 {modeFields("live", data.live, true)}
