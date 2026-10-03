@@ -37,8 +37,8 @@ from mykhaya.routers import (
     meal_plans,
     notifications,
     platform,
-    platform_legal,
     platform_compliance,
+    platform_legal,
     platform_support,
     public_config,
     reminders,
@@ -124,6 +124,8 @@ async def start_syslog_forwarder() -> None:
 @app.on_event("shutdown")
 async def stop_syslog_forwarder() -> None:
     await syslog_dispatcher.stop()
+
+
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 app.add_middleware(
     CORSMiddleware,
@@ -180,9 +182,7 @@ def _is_support_attachment_upload(request: Request) -> bool:
 def _is_vehicle_photo_upload(request: Request) -> bool:
     path = request.url.path
     return (
-        request.method == "POST"
-        and path.startswith("/api/v1/homes/")
-        and path.endswith("/photo")
+        request.method == "POST" and path.startswith("/api/v1/homes/") and path.endswith("/photo")
     )
 
 
@@ -220,8 +220,7 @@ async def security_and_limits(
             )
         elif _is_vehicle_photo_upload(request):
             body_limit = (
-                settings.vehicle_photo_max_upload_bytes
-                + VEHICLE_PHOTO_MULTIPART_OVERHEAD_BYTES
+                settings.vehicle_photo_max_upload_bytes + VEHICLE_PHOTO_MULTIPART_OVERHEAD_BYTES
             )
         elif _is_meal_image_upload(request):
             body_limit = settings.meal_image_max_upload_bytes + MEAL_IMAGE_MULTIPART_OVERHEAD_BYTES

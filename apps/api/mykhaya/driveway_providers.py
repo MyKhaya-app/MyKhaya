@@ -45,7 +45,9 @@ def normalize_registration(value: str) -> str:
 class UKDVLAProvider:
     name = "uk_dvla"
 
-    def __init__(self, api_key: SecretStr, url: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self, api_key: SecretStr, url: str, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self._api_key = api_key.get_secret_value()
         self._url = url
         self._transport = transport

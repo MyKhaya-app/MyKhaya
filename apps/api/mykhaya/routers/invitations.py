@@ -449,9 +449,7 @@ async def accept(
     # that ever changes.
     if row.relationship != HouseholdRelationship.child:
         await ensure_personal_calendar(db, row.group_id, auth.user.id)
-    if row.family_sponsorship and await has_entitlement(
-        db, row.group_id, "family_plans.enabled"
-    ):
+    if row.family_sponsorship and await has_entitlement(db, row.group_id, "family_plans.enabled"):
         await grant_home_family_sponsorship(db, row.group_id, auth.user.id, row.invited_by)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)

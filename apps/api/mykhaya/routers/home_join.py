@@ -95,9 +95,7 @@ async def create_home_join_request(
         )
     )
     if existing_membership is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "You are already a member of this Home."
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, "You are already a member of this Home.")
 
     existing_pending = await db.scalar(
         select(HomeJoinRequest).where(
@@ -121,14 +119,18 @@ async def create_home_join_request(
     # roles' own pending-requests list either way (see routers.groups'
     # list_join_requests). Never blocks/fails the request itself.
     admins = (
-        await db.execute(
-            select(Membership.user_id).where(
-                Membership.group_id == group.id,
-                Membership.relationship == HouseholdRelationship.home_admin,
-                Membership.removed_at.is_(None),
+        (
+            await db.execute(
+                select(Membership.user_id).where(
+                    Membership.group_id == group.id,
+                    Membership.relationship == HouseholdRelationship.home_admin,
+                    Membership.removed_at.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     notification_title, notification_body = await render_notification(
         db,
         "home_join_request",

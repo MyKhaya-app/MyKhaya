@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     apple_private_key: SecretStr | None = None
     apple_redirect_uri: str | None = None
     apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
-    apple_token_url: str = "https://appleid.apple.com/auth/token"
+    apple_token_url: str = "https://appleid.apple.com/auth/token"  # noqa: S105 — a URL
     apple_jwks_url: str = "https://appleid.apple.com/auth/keys"
     google_sign_in_enabled: bool = False
     google_client_id: str | None = None
@@ -185,7 +185,9 @@ class Settings(BaseSettings):
     dvla_environment: Literal["uat", "production"] | None = None
     dvla_uat_endpoint: str | None = None
     dvla_uat_api_key: SecretStr | None = None
-    dvla_production_endpoint: str = "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    dvla_production_endpoint: str = (
+        "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    )
     dvla_production_api_key: SecretStr | None = None
     driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
     vehicle_photo_storage_dir: str = "/data/vehicle-photos"
@@ -200,9 +202,7 @@ class Settings(BaseSettings):
     # setting from avatar_max_upload_bytes since these are different upload
     # surfaces with different size expectations (a bug-report screenshot vs
     # a profile photo).
-    support_attachment_max_upload_bytes: int = Field(
-        default=10_485_760, ge=1024, le=52_428_800
-    )
+    support_attachment_max_upload_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
     meal_image_storage_dir: str = "/data/meal-images"
     meal_image_max_upload_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
@@ -402,8 +402,14 @@ class Settings(BaseSettings):
             missing.extend(
                 name
                 for name, value in (
-                    ("MYKHAYA_STRIPE_ULTIMATE_MONTHLY_PRICE_ID", self.stripe_ultimate_monthly_price_id),
-                    ("MYKHAYA_STRIPE_ULTIMATE_ANNUAL_PRICE_ID", self.stripe_ultimate_annual_price_id),
+                    (
+                        "MYKHAYA_STRIPE_ULTIMATE_MONTHLY_PRICE_ID",
+                        self.stripe_ultimate_monthly_price_id,
+                    ),
+                    (
+                        "MYKHAYA_STRIPE_ULTIMATE_ANNUAL_PRICE_ID",
+                        self.stripe_ultimate_annual_price_id,
+                    ),
                 )
                 if not value
             )

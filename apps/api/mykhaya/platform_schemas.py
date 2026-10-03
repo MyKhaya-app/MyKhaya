@@ -298,6 +298,13 @@ class SettingUpdate(StrictModel):
     confirmed: Literal[True]
 
 
+SyslogCategory = Literal["application", "http", "security", "audit", "worker", "integration"]
+
+
+def _default_syslog_categories() -> list[SyslogCategory]:
+    return ["application", "http", "security", "audit", "worker", "integration"]
+
+
 class SyslogSettingsUpdate(SensitiveActionRequest):
     enabled: bool = False
     host: str = Field(default="", max_length=255)
@@ -307,11 +314,7 @@ class SyslogSettingsUpdate(SensitiveActionRequest):
     environment: str = Field(min_length=1, max_length=80)
     tls_verify: bool = True
     minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    categories: list[
-        Literal["application", "http", "security", "audit", "worker", "integration"]
-    ] = Field(default_factory=lambda: [
-        "application", "http", "security", "audit", "worker", "integration"
-    ])
+    categories: list[SyslogCategory] = Field(default_factory=_default_syslog_categories)
     timeout_seconds: float = Field(default=2.0, ge=0.1, le=10)
 
 

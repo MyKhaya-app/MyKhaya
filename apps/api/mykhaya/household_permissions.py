@@ -143,9 +143,7 @@ PROFILE_CAPABILITIES: dict[PermissionProfile, frozenset[Capability]] = {
 }
 
 
-def ensure_can_assign_relationship(
-    actor: Membership, relationship: HouseholdRelationship
-) -> None:
+def ensure_can_assign_relationship(actor: Membership, relationship: HouseholdRelationship) -> None:
     """Keep Home Admin assignment under Home Admin control."""
     if (
         relationship == HouseholdRelationship.home_admin

@@ -22,9 +22,9 @@ class UsageEventRequest(BaseModel):
     module: ProductUsageModule | None = None
     home_id: uuid.UUID | None = None
     app_version: Annotated[str | None, Field(max_length=80)] = None
-    usage_session_id: Annotated[
-        str | None, Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-    ] = None
+    usage_session_id: Annotated[str | None, Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")] = (
+        None
+    )
     event_key: Annotated[str | None, Field(max_length=120, pattern=r"^[A-Za-z0-9:_-]+$")] = None
 
 

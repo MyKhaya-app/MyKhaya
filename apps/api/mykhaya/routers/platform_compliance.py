@@ -96,7 +96,7 @@ async def update_legal_test_mode(
         "platform_setting",
         row.id,
         reason=body.reason,
-        previous=before,
+        previous=dict(before),
         new={"enabled": body.enabled, "test_user_count": len(body.test_user_ids)},
     )
     await db.commit()
@@ -377,7 +377,7 @@ async def privacy_requests(
         if rows
         else {}
     )
-    return [_privacy_response(row, users.get(row.user_id)) for row in rows]
+    return [_privacy_response(row, users.get(row.user_id) if row.user_id else None) for row in rows]
 
 
 @router.post("/privacy-requests", response_model=PrivacyRequestResponse, status_code=201)

@@ -24,7 +24,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.models import Reminder, ReminderCadence, ReminderRepeat, RoutineScope, TodoCategory, Vehicle
+from mykhaya.models import (
+    Reminder,
+    ReminderCadence,
+    ReminderRepeat,
+    RoutineScope,
+    TodoCategory,
+    Vehicle,
+)
 
 # The only source_type Phase 4 writes. Kept as a plain constant (not a
 # Postgres enum) because source_type is polymorphic — a future module could

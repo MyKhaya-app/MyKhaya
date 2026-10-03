@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,12 @@ from mykhaya.models import PlatformSetting
 SETTING_KEY = "legal_test_mode"
 
 
-async def configuration(db: AsyncSession, settings: Settings) -> dict[str, object]:
+class LegalTestModeConfiguration(TypedDict):
+    enabled: bool
+    test_user_ids: list[str]
+
+
+async def configuration(db: AsyncSession, settings: Settings) -> LegalTestModeConfiguration:
     row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == SETTING_KEY))
     value = row.value if row and isinstance(row.value, dict) else {}
     enabled = bool(value.get("enabled"))

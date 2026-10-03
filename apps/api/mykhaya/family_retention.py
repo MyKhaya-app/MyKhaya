@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,9 +215,11 @@ async def restore_family_retention(
     return True
 
 
-async def _delete_ids(db: AsyncSession, model: object, column: object, ids: list[uuid.UUID]) -> None:
+async def _delete_ids(
+    db: AsyncSession, model: type[Any], column: Any, ids: list[uuid.UUID]
+) -> None:
     if ids:
-        await db.execute(delete(model).where(column.in_(ids)))  # type: ignore[attr-defined]
+        await db.execute(delete(model).where(column.in_(ids)))
 
 
 async def purge_family_home(
@@ -269,9 +272,15 @@ async def purge_family_home(
             )
         ).all()
     )
-    purge_calendar_ids = [calendar_id for calendar_id in secondary_ids if calendar_id not in shared_ids]
+    purge_calendar_ids = [
+        calendar_id for calendar_id in secondary_ids if calendar_id not in shared_ids
+    ]
     event_ids = list(
-        (await db.scalars(select(CalendarEvent.id).where(CalendarEvent.calendar_id.in_(purge_calendar_ids)))).all()
+        (
+            await db.scalars(
+                select(CalendarEvent.id).where(CalendarEvent.calendar_id.in_(purge_calendar_ids))
+            )
+        ).all()
     )
     await _delete_ids(db, CalendarEventActivity, CalendarEventActivity.event_id, event_ids)
     await _delete_ids(db, CalendarEventException, CalendarEventException.event_id, event_ids)
@@ -279,57 +288,106 @@ async def purge_family_home(
     await _delete_ids(db, CalendarEvent, CalendarEvent.id, event_ids)
     await _delete_ids(db, HomeCalendar, HomeCalendar.id, purge_calendar_ids)
 
-    routine_ids = list((await db.scalars(select(HouseholdRoutine.id).where(
-        HouseholdRoutine.group_id == home_id, HouseholdRoutine.scope == "household"
-    ))).all())
+    routine_ids = list(
+        (
+            await db.scalars(
+                select(HouseholdRoutine.id).where(
+                    HouseholdRoutine.group_id == home_id, HouseholdRoutine.scope == "household"
+                )
+            )
+        ).all()
+    )
     await _delete_ids(db, HouseholdRoutineMember, HouseholdRoutineMember.routine_id, routine_ids)
-    await _delete_ids(db, HouseholdRoutineCompletion, HouseholdRoutineCompletion.routine_id, routine_ids)
+    await _delete_ids(
+        db, HouseholdRoutineCompletion, HouseholdRoutineCompletion.routine_id, routine_ids
+    )
     await _delete_ids(db, HouseholdRoutine, HouseholdRoutine.id, routine_ids)
 
-    reminder_ids = list((await db.scalars(select(Reminder.id).where(
-        Reminder.group_id == home_id, Reminder.scope == "household"
-    ))).all())
+    reminder_ids = list(
+        (
+            await db.scalars(
+                select(Reminder.id).where(
+                    Reminder.group_id == home_id, Reminder.scope == "household"
+                )
+            )
+        ).all()
+    )
     await _delete_ids(db, ReminderMember, ReminderMember.reminder_id, reminder_ids)
     await _delete_ids(db, ReminderCompletion, ReminderCompletion.reminder_id, reminder_ids)
     await _delete_ids(db, Reminder, Reminder.id, reminder_ids)
 
-    todo_ids = list((await db.scalars(select(Todo.id).where(
-        Todo.group_id == home_id, Todo.scope == "household"
-    ))).all())
+    todo_ids = list(
+        (
+            await db.scalars(
+                select(Todo.id).where(Todo.group_id == home_id, Todo.scope == "household")
+            )
+        ).all()
+    )
     await _delete_ids(db, TodoMember, TodoMember.todo_id, todo_ids)
     await _delete_ids(db, Todo, Todo.id, todo_ids)
 
-    entry_ids = list((await db.scalars(select(MealPlanEntry.id).where(MealPlanEntry.group_id == home_id))).all())
+    entry_ids = list(
+        (await db.scalars(select(MealPlanEntry.id).where(MealPlanEntry.group_id == home_id))).all()
+    )
     await _delete_ids(db, MealPlanParticipant, MealPlanParticipant.meal_plan_entry_id, entry_ids)
     await _delete_ids(db, MealPlanEntry, MealPlanEntry.id, entry_ids)
     meal_ids = list((await db.scalars(select(Meal.id).where(Meal.group_id == home_id))).all())
     await _delete_ids(db, MealIngredient, MealIngredient.meal_id, meal_ids)
     await _delete_ids(db, Meal, Meal.id, meal_ids)
 
-    list_ids = list((await db.scalars(select(HouseholdList.id).where(HouseholdList.group_id == home_id))).all())
+    list_ids = list(
+        (await db.scalars(select(HouseholdList.id).where(HouseholdList.group_id == home_id))).all()
+    )
     await _delete_ids(db, HouseholdListItem, HouseholdListItem.list_id, list_ids)
     await _delete_ids(db, HouseholdList, HouseholdList.id, list_ids)
 
-    wishlist_ids = list((await db.scalars(select(Wishlist.id).where(
-        Wishlist.home_id == home_id, Wishlist.home_visible.is_(True)
-    ))).all())
-    wishlist_item_ids = list((await db.scalars(
-        select(WishlistItem.id).where(WishlistItem.wishlist_id.in_(wishlist_ids))
-    )).all())
-    wishlist_share_ids = list((await db.scalars(
-        select(WishlistShare.id).where(WishlistShare.wishlist_id.in_(wishlist_ids))
-    )).all())
-    await _delete_ids(db, WishlistItemReservation, WishlistItemReservation.wishlist_item_id, wishlist_item_ids)
+    wishlist_ids = list(
+        (
+            await db.scalars(
+                select(Wishlist.id).where(
+                    Wishlist.home_id == home_id, Wishlist.home_visible.is_(True)
+                )
+            )
+        ).all()
+    )
+    wishlist_item_ids = list(
+        (
+            await db.scalars(
+                select(WishlistItem.id).where(WishlistItem.wishlist_id.in_(wishlist_ids))
+            )
+        ).all()
+    )
+    wishlist_share_ids = list(
+        (
+            await db.scalars(
+                select(WishlistShare.id).where(WishlistShare.wishlist_id.in_(wishlist_ids))
+            )
+        ).all()
+    )
+    await _delete_ids(
+        db, WishlistItemReservation, WishlistItemReservation.wishlist_item_id, wishlist_item_ids
+    )
     await _delete_ids(db, WishlistGuestSession, WishlistGuestSession.share_id, wishlist_share_ids)
     await _delete_ids(db, WishlistShare, WishlistShare.id, wishlist_share_ids)
     await _delete_ids(db, WishlistItem, WishlistItem.id, wishlist_item_ids)
     await _delete_ids(db, Wishlist, Wishlist.id, wishlist_ids)
 
-    child_profile_ids = list((await db.scalars(select(ChildProfile.id).where(ChildProfile.group_id == home_id))).all())
-    child_membership_ids = list((await db.scalars(select(Membership.id).where(
-        Membership.group_id == home_id, Membership.relationship == HouseholdRelationship.child
-    ))).all())
-    await _delete_ids(db, GuardianAssignment, GuardianAssignment.child_profile_id, child_profile_ids)
+    child_profile_ids = list(
+        (await db.scalars(select(ChildProfile.id).where(ChildProfile.group_id == home_id))).all()
+    )
+    child_membership_ids = list(
+        (
+            await db.scalars(
+                select(Membership.id).where(
+                    Membership.group_id == home_id,
+                    Membership.relationship == HouseholdRelationship.child,
+                )
+            )
+        ).all()
+    )
+    await _delete_ids(
+        db, GuardianAssignment, GuardianAssignment.child_profile_id, child_profile_ids
+    )
     await _delete_ids(db, ChildProfile, ChildProfile.id, child_profile_ids)
     await _delete_ids(db, Membership, Membership.id, child_membership_ids)
 
@@ -357,12 +415,16 @@ async def scan_family_retention(db: AsyncSession, *, now: datetime | None = None
     effective_now = now or datetime.now(UTC)
     subscriptions = (
         await db.scalars(
-            select(HomeSubscription.group_id).where(
+            select(HomeSubscription.group_id)
+            .where(
                 HomeSubscription.provider == SubscriptionProvider.stripe,
-                HomeSubscription.status.in_((SubscriptionStatus.cancel_at_period_end, SubscriptionStatus.cancelled)),
+                HomeSubscription.status.in_(
+                    (SubscriptionStatus.cancel_at_period_end, SubscriptionStatus.cancelled)
+                ),
                 HomeSubscription.current_period_end.is_not(None),
                 HomeSubscription.current_period_end <= effective_now,
-            ).limit(100)
+            )
+            .limit(100)
         )
     ).all()
     processed = 0
@@ -373,10 +435,12 @@ async def scan_family_retention(db: AsyncSession, *, now: datetime | None = None
 
     due = (
         await db.scalars(
-            select(HomeRetentionLifecycle.home_id).where(
+            select(HomeRetentionLifecycle.home_id)
+            .where(
                 HomeRetentionLifecycle.state == HomeRetentionState.retained_free,
                 HomeRetentionLifecycle.retention_deadline <= effective_now,
-            ).limit(100)
+            )
+            .limit(100)
         )
     ).all()
     for home_id in due:

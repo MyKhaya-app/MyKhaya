@@ -92,9 +92,7 @@ class ManagedDemoService:
         """Create the managed identity and Home; callers then seed a template."""
         email = normalise_email(email)
         if await ManagedDemoService.get(db, fixture_key):
-            raise ManagedDemoError(
-                "A managed demo/test Home with that fixture key already exists."
-            )
+            raise ManagedDemoError("A managed demo/test Home with that fixture key already exists.")
         if await db.scalar(select(User).where(User.email == email)):
             raise ManagedDemoError(
                 "The account email is already in use by another customer account."

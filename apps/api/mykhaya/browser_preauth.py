@@ -1,4 +1,5 @@
 """Short-lived, single-use browser authentication handoff state."""
+
 from __future__ import annotations
 
 import json

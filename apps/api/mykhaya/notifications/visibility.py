@@ -189,9 +189,7 @@ async def viewer_ids_for_event(
     return viewer_ids
 
 
-async def home_viewer_ids_for_event(
-    db: AsyncSession, event: CalendarEvent
-) -> set[uuid.UUID]:
+async def home_viewer_ids_for_event(db: AsyncSession, event: CalendarEvent) -> set[uuid.UUID]:
     """Return active Home members who can currently see this event.
 
     Calendar activity is broader than assignment: members with the

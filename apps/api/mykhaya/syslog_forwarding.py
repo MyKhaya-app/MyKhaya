@@ -18,7 +18,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import structlog
 
@@ -27,9 +27,7 @@ from mykhaya.config import Settings
 SyslogProtocol = Literal["udp", "tcp", "tls"]
 SyslogMinimumLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 SyslogCategory = Literal["application", "http", "security", "audit", "worker", "integration"]
-SYSLOG_CATEGORIES = (
-    "application", "http", "security", "audit", "worker", "integration"
-)
+SYSLOG_CATEGORIES = ("application", "http", "security", "audit", "worker", "integration")
 MINIMUM_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 LEVEL_ALIASES = {
     "DEBUG": "DEBUG",
@@ -46,14 +44,46 @@ LEVEL_ALIASES = {
 LEVEL_PRI = {"DEBUG": 7, "INFO": 6, "WARNING": 4, "ERROR": 3, "CRITICAL": 2}
 REDACTED = "[REDACTED]"
 SENSITIVE_NAMES = {
-    "password", "password_hash", "passwd", "secret", "token", "access_token",
-    "refresh_token", "session_token", "device_token", "jwt", "cookie", "authorization",
-    "api_key", "apikey", "private_key", "client_secret", "webhook_secret", "otp",
-    "totp", "totp_secret", "csrf", "csrf_token", "database_url", "encryption_key",
+    "password",
+    "password_hash",
+    "passwd",
+    "secret",
+    "token",
+    "access_token",
+    "refresh_token",
+    "session_token",
+    "device_token",
+    "jwt",
+    "cookie",
+    "authorization",
+    "api_key",
+    "apikey",
+    "private_key",
+    "client_secret",
+    "webhook_secret",
+    "otp",
+    "totp",
+    "totp_secret",
+    "csrf",
+    "csrf_token",
+    "database_url",
+    "encryption_key",
 }
 PRIVATE_NAMES = {
-    "email", "display_name", "name", "nickname", "note", "notes", "description",
-    "body", "content", "subject", "title", "filename", "registration", "vehicle_notes",
+    "email",
+    "display_name",
+    "name",
+    "nickname",
+    "note",
+    "notes",
+    "description",
+    "body",
+    "content",
+    "subject",
+    "title",
+    "filename",
+    "registration",
+    "vehicle_notes",
     "support_message",
 }
 _SECRET_TEXT_PATTERNS = (
@@ -115,11 +145,15 @@ class SyslogConfig:
         protocol = value.get("protocol", "tls")
         if protocol not in {"udp", "tcp", "tls"}:
             raise ValueError("Syslog protocol must be udp, tcp or tls.")
-        minimum_level = str(value.get("minimum_level", "INFO")).upper()
-        if minimum_level not in MINIMUM_LEVEL_RANK:
+        minimum_level_raw = str(value.get("minimum_level", "INFO")).upper()
+        if minimum_level_raw not in MINIMUM_LEVEL_RANK:
             raise ValueError(
                 "Syslog minimum level must be DEBUG, INFO, WARNING, ERROR or CRITICAL."
             )
+        # The `in` check above already validated minimum_level_raw against the exact
+        # same five keys SyslogMinimumLevel allows; cast narrows for the type
+        # checker only, it doesn't skip or weaken that runtime validation.
+        minimum_level = cast(SyslogMinimumLevel, minimum_level_raw)
         raw_categories = value.get("categories")
         if raw_categories is None:
             categories = frozenset(SYSLOG_CATEGORIES)
@@ -144,12 +178,16 @@ class SyslogConfig:
         if value.get("enabled") and not host:
             raise ValueError("A syslog host is required when remote syslog is enabled.")
         return cls(
-            enabled=bool(value.get("enabled", False)), host=host, port=port,
+            enabled=bool(value.get("enabled", False)),
+            host=host,
+            port=port,
             protocol=protocol,
             facility=facility,
             environment=str(value.get("environment") or environment)[:80],
             tls_verify=bool(value.get("tls_verify", True)),
-            minimum_level=minimum_level, categories=categories, timeout_seconds=timeout,
+            minimum_level=minimum_level,
+            categories=categories,
+            timeout_seconds=timeout,
         )
 
     def public_dict(
@@ -160,9 +198,14 @@ class SyslogConfig:
         dropped_count: int = 0,
     ) -> dict[str, Any]:
         return {
-            "enabled": self.enabled, "configured": bool(self.host), "host": self.host,
-            "port": self.port, "protocol": self.protocol, "facility": self.facility,
-            "environment": self.environment, "tls_verify": self.tls_verify,
+            "enabled": self.enabled,
+            "configured": bool(self.host),
+            "host": self.host,
+            "port": self.port,
+            "protocol": self.protocol,
+            "facility": self.facility,
+            "environment": self.environment,
+            "tls_verify": self.tls_verify,
             "minimum_level": self.minimum_level,
             "categories": [
                 category for category in SYSLOG_CATEGORIES if category in self.categories
@@ -205,29 +248,25 @@ def categorize_event(event: Mapping[str, Any]) -> SyslogCategory:
         return "http"
     if event_name in {"audit_event", "administrative_audit_event"}:
         return "audit"
-    if (
-        event_name.startswith(
-            (
-                "stripe_",
-                "dvla_",
-                "dvla.",
-                "driveway.dvla.",
-                "driveway_dvla_",
-                "wishlist_link_preview.",
-                "apns_",
-                "fcm_",
-                "support.ticket_",
-                "support.notification_",
-                "integration_",
-            )
+    if event_name.startswith(
+        (
+            "stripe_",
+            "dvla_",
+            "dvla.",
+            "driveway.dvla.",
+            "driveway_dvla_",
+            "wishlist_link_preview.",
+            "apns_",
+            "fcm_",
+            "support.ticket_",
+            "support.notification_",
+            "integration_",
         )
-        or event_name
-        in {
-            "platform_test_email_failed",
-            "platform_test_push_device_failed",
-            "native_push_unsupported_platform",
-        }
-    ):
+    ) or event_name in {
+        "platform_test_email_failed",
+        "platform_test_push_device_failed",
+        "native_push_unsupported_platform",
+    }:
         return "integration"
     if event_name == "auth_diag" or any(
         marker in event_name for marker in ("authentication", "auth_", "mfa", "session", "security")
@@ -263,22 +302,22 @@ def format_rfc5424(config: SyslogConfig, event: Mapping[str, Any], *, service: s
         "category": category,
         **clean,
     }
+
     def structured_field(key: str, value: Any) -> str:
-        rendered = value if not isinstance(value, (dict, list)) else json.dumps(
-            value, separators=(",", ":"), default=str
+        rendered = (
+            value
+            if not isinstance(value, (dict, list))
+            else json.dumps(value, separators=(",", ":"), default=str)
         )
         return f'{_sd_name(key)}="{_escape(str(rendered))}"'
 
     structured = " ".join(
-        structured_field(key, value)
-        for key, value in sorted(fields.items())
-        if value is not None
+        structured_field(key, value) for key, value in sorted(fields.items()) if value is not None
     )
-    sd = f'[mykhaya@32473 {structured}]' if structured else "-"
+    sd = f"[mykhaya@32473 {structured}]" if structured else "-"
     safe_message = message.replace(chr(10), " ").replace(chr(13), " ")
     payload = (
-        f"<{config.facility * 8 + severity}>1 {timestamp} - {service} - "
-        f"{sd} {safe_message}\n"
+        f"<{config.facility * 8 + severity}>1 {timestamp} - {service} - {sd} {safe_message}\n"
     ).encode()
     if len(payload) <= MAX_SYSLOG_PAYLOAD_BYTES:
         return payload
@@ -288,9 +327,7 @@ def format_rfc5424(config: SyslogConfig, event: Mapping[str, Any], *, service: s
         f'event_type="{_escape(event_type)}" truncated="true"]'
     )
     prefix = f"<{config.facility * 8 + severity}>1 {timestamp} - {service} - {fallback_sd} "
-    available = max(
-        0, MAX_SYSLOG_PAYLOAD_BYTES - len(prefix.encode()) - len(b" [truncated]\n")
-    )
+    available = max(0, MAX_SYSLOG_PAYLOAD_BYTES - len(prefix.encode()) - len(b" [truncated]\n"))
     shortened = safe_message.encode()[:available].decode("utf-8", "ignore")
     return f"{prefix}{shortened} [truncated]\n".encode()
 
@@ -315,7 +352,8 @@ async def send_syslog(
             transport, _ = await asyncio.wait_for(
                 asyncio.get_running_loop().create_datagram_endpoint(
                     asyncio.DatagramProtocol, remote_addr=(config.host, config.port)
-                ), config.timeout_seconds,
+                ),
+                config.timeout_seconds,
             )
             try:
                 stage = "udp_write"
@@ -445,15 +483,15 @@ class SyslogDispatcher:
         completion: asyncio.Future[bool] | None = None,
         bypass_filters: bool = False,
     ) -> bool:
-        event = redact(dict(event))
-        event["category"] = categorize_event(event)
+        redacted_event: dict[str, Any] = redact(dict(event))
+        redacted_event["category"] = categorize_event(redacted_event)
         # A process with a persisted-config loader must let the consumer
         # refresh that source before filtering.  Standalone dispatchers with
         # no loader can reject synchronously without risking stale state.
         if (
             not bypass_filters
             and self.config_loader is None
-            and event["category"] not in self.config.categories
+            and redacted_event["category"] not in self.config.categories
         ):
             self.events_category_filtered += 1
             if completion and not completion.done():
@@ -472,17 +510,15 @@ class SyslogDispatcher:
         # direct path.
         if loop is None:
             if running_loop is not None:
-                return self._enqueue_now(event, completion, bypass_filters)
+                return self._enqueue_now(redacted_event, completion, bypass_filters)
             else:
                 self._drop(completion)
                 return False
         if running_loop is loop:
-            return self._enqueue_now(event, completion, bypass_filters)
-        self._debug(
-            f"event loop available=true scheduling event thread={threading.get_ident()}"
-        )
+            return self._enqueue_now(redacted_event, completion, bypass_filters)
+        self._debug(f"event loop available=true scheduling event thread={threading.get_ident()}")
         try:
-            loop.call_soon_threadsafe(self._enqueue_now, event, completion, bypass_filters)
+            loop.call_soon_threadsafe(self._enqueue_now, redacted_event, completion, bypass_filters)
             return True
         except RuntimeError:
             self._drop(completion)
@@ -550,14 +586,9 @@ class SyslogDispatcher:
             try:
                 self._debug("dispatcher consumed event")
                 await self._refresh_config()
-                if (
-                    not event.bypass_filters
-                    and event["category"] not in self.config.categories
-                ):
+                if not event.bypass_filters and event["category"] not in self.config.categories:
                     self.events_category_filtered += 1
-                    self._debug(
-                        f"event category filtered category={event['category']}"
-                    )
+                    self._debug(f"event category filtered category={event['category']}")
                     if event.completion and not event.completion.done():
                         event.completion.set_result(False)
                 elif not event.bypass_filters and not self._event_is_allowed(event):
@@ -641,9 +672,7 @@ def configure_structlog_forwarding(dispatcher: SyslogDispatcher) -> None:
     ]
     processors.insert(0, _forward_to_syslog)
     structlog.configure(processors=processors)
-    dispatcher._debug(
-        f"forwarding processor installed=true before_renderer=true pid={os.getpid()}"
-    )
+    dispatcher._debug(f"forwarding processor installed=true before_renderer=true pid={os.getpid()}")
 
 
 def current_dispatcher() -> SyslogDispatcher | None:

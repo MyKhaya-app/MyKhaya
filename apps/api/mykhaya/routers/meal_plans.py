@@ -105,7 +105,7 @@ def _meal_image_key(home_id: uuid.UUID, value: str | None) -> str | None:
     prefixes = (_meal_image_path(home_id, ""), f"/api/v1{_meal_image_path(home_id, '')}")
     for prefix in prefixes:
         if value.startswith(prefix):
-            key = value[len(prefix):]
+            key = value[len(prefix) :]
             if fullmatch(MEAL_IMAGE_KEY, key):
                 return key
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That meal photo is invalid.")
@@ -113,6 +113,7 @@ def _meal_image_key(home_id: uuid.UUID, value: str | None) -> str | None:
 
 def _meal_image_url(home_id: uuid.UUID, meal: Meal) -> str | None:
     return _meal_image_path(home_id, meal.image_key) if meal.image_key else meal.image_url
+
 
 # Meal Plans has its own dedicated FeatureKey/module_registry entry (unlike
 # household_routines, which currently piggy-backs on the notifications
@@ -245,9 +246,7 @@ def _meal_response(
 
 async def _get_active_meal(db: AsyncSession, home_id: uuid.UUID, meal_id: uuid.UUID) -> Meal:
     meal = await db.scalar(
-        select(Meal).where(
-            Meal.id == meal_id, Meal.group_id == home_id, Meal.deleted_at.is_(None)
-        )
+        select(Meal).where(Meal.id == meal_id, Meal.group_id == home_id, Meal.deleted_at.is_(None))
     )
     if meal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That meal could not be found")
@@ -487,9 +486,13 @@ async def create_meal(
         audit(db, request, "meals.meal.image_added", auth.user.id, home_id, "meal", meal.id)
     await db.commit()
     await record_usage_event(
-        db, event_name=ProductUsageEventName.meal_added,
-        platform=platform_from_request(request), module=ProductUsageModule.meals,
-        user_id=auth.user.id, group_id=home_id, event_key=f"meal-added:{meal.id}",
+        db,
+        event_name=ProductUsageEventName.meal_added,
+        platform=platform_from_request(request),
+        module=ProductUsageModule.meals,
+        user_id=auth.user.id,
+        group_id=home_id,
+        event_key=f"meal-added:{meal.id}",
     )
     return _meal_response(home_id, meal, await _meal_ingredients(db, meal.id))
 
@@ -514,9 +517,7 @@ async def list_meals(
         # into it isn't a "straightforward" text search, so it's left out
         # rather than reached for with a bespoke JSON-text cast.
         filters.append(or_(Meal.name.ilike(needle), Meal.description.ilike(needle)))
-    meals = (
-        await db.scalars(select(Meal).where(*filters).order_by(Meal.name))
-    ).all()
+    meals = (await db.scalars(select(Meal).where(*filters).order_by(Meal.name))).all()
     counts = await _ingredient_counts(db, [meal.id for meal in meals])
     return MealListResponse(
         items=[_meal_summary(home_id, meal, counts.get(meal.id, 0)) for meal in meals]
@@ -550,7 +551,7 @@ async def recent_meals(
             .limit(limit)
         )
     ).all()
-    meal_ids = [meal_id for meal_id, _ in last_planned_rows]
+    meal_ids = [meal_id for meal_id, _ in last_planned_rows if meal_id is not None]
     meals = await _meals_by_id(db, home_id, set(meal_ids))
     counts = await _ingredient_counts(db, meal_ids)
     items = [
@@ -1131,11 +1132,14 @@ async def add_ingredients_to_list(
     # gets the user past the warning ("2 already on Groceries. Add the
     # remaining 4?"); the 4 it then adds are exactly `new_texts`.
     to_add = new_texts
-    next_position = await db.scalar(
-        select(func.count()).select_from(HouseholdListItem).where(
-            HouseholdListItem.list_id == target_list.id
+    next_position = (
+        await db.scalar(
+            select(func.count())
+            .select_from(HouseholdListItem)
+            .where(HouseholdListItem.list_id == target_list.id)
         )
-    ) or 0
+        or 0
+    )
     for offset, text in enumerate(to_add):
         db.add(
             HouseholdListItem(

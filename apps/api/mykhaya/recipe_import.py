@@ -130,7 +130,8 @@ def _servings(value: Any) -> int | None:
 
 def _instruction_text(value: Any) -> list[str]:
     if isinstance(value, str):
-        return [_text(value, 2000)] if _text(value, 2000) else []
+        text = _text(value, 2000)
+        return [text] if text else []
     if isinstance(value, list):
         result: list[str] = []
         for item in value:

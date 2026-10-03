@@ -36,7 +36,9 @@ def _last_weekday(year: int, month: int, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-def built_in_holidays(source: PlatformHolidaySource, year: int) -> list[tuple[str, date, str, bool]]:
+def built_in_holidays(
+    source: PlatformHolidaySource, year: int
+) -> list[tuple[str, date, str, bool]]:
     """Provider-neutral fallback provider used for the initial supported catalogue.
 
     The cache boundary is deliberate: consumer requests never call a remote feed.
@@ -55,7 +57,14 @@ def built_in_holidays(source: PlatformHolidaySource, year: int) -> list[tuple[st
             ("boxing-day", date(year, 12, 26), "Boxing Day", False),
         ]
         if source.region_code in {"scotland", "northern_ireland"}:
-            rows.append(("st-andrews", date(year, 11, 30), "St Andrew's Day" if source.region_code == "scotland" else "St Patrick's Day", False))
+            rows.append(
+                (
+                    "st-andrews",
+                    date(year, 11, 30),
+                    "St Andrew's Day" if source.region_code == "scotland" else "St Patrick's Day",
+                    False,
+                )
+            )
             if source.region_code == "northern_ireland":
                 rows[-1] = ("st-patricks", date(year, 3, 17), "St Patrick's Day", False)
         return rows
@@ -87,9 +96,15 @@ def built_in_holidays(source: PlatformHolidaySource, year: int) -> list[tuple[st
     ]
 
 
-async def sync_holiday_source(db: AsyncSession, source: PlatformHolidaySource, now: datetime | None = None) -> int:
+async def sync_holiday_source(
+    db: AsyncSession, source: PlatformHolidaySource, now: datetime | None = None
+) -> int:
     now = now or datetime.now(UTC)
-    rows = [item for year in range(now.year - 1, now.year + 3) for item in built_in_holidays(source, year)]
+    rows = [
+        item
+        for year in range(now.year - 1, now.year + 3)
+        for item in built_in_holidays(source, year)
+    ]
     if not rows:
         source.sync_status = HolidaySyncStatus.warning.value
         source.last_sync_error = "Provider returned no holidays; cached data retained."
@@ -101,20 +116,42 @@ async def sync_holiday_source(db: AsyncSession, source: PlatformHolidaySource, n
     source.last_sync_metadata = {"count": len(rows), "provider_mode": "cached_builtin_provider"}
     existing = {
         row.source_holiday_id: row
-        for row in (await db.scalars(select(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id))).all()
+        for row in (
+            await db.scalars(
+                select(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id)
+            )
+        ).all()
     }
     for key, holiday_date, name, observed in rows:
         row = existing.get(f"{key}:{holiday_date.isoformat()}")
         if row is None:
-            db.add(PlatformHolidayDate(source_id=source.id, source_holiday_id=f"{key}:{holiday_date.isoformat()}", holiday_date=holiday_date, name=name, observed=observed, source_synced_at=now))
+            db.add(
+                PlatformHolidayDate(
+                    source_id=source.id,
+                    source_holiday_id=f"{key}:{holiday_date.isoformat()}",
+                    holiday_date=holiday_date,
+                    name=name,
+                    observed=observed,
+                    source_synced_at=now,
+                )
+            )
         else:
-            row.holiday_date, row.name, row.observed, row.source_synced_at = holiday_date, name, observed, now
+            row.holiday_date, row.name, row.observed, row.source_synced_at = (
+                holiday_date,
+                name,
+                observed,
+                now,
+            )
     return len(rows)
 
 
 async def sync_due_holiday_sources(db: AsyncSession) -> int:
     now = datetime.now(UTC)
-    sources = (await db.scalars(select(PlatformHolidaySource).where(PlatformHolidaySource.enabled.is_(True)))).all()
+    sources = (
+        await db.scalars(
+            select(PlatformHolidaySource).where(PlatformHolidaySource.enabled.is_(True))
+        )
+    ).all()
     count = 0
     for source in sources:
         if source.next_scheduled_sync is None or source.next_scheduled_sync <= now:

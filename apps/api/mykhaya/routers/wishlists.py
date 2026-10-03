@@ -110,7 +110,7 @@ from mykhaya.wishlist_schemas import (
 
 WishlistDetailResponse = WishlistOwnerDetailResponse | WishlistViewerDetailResponse
 
-_SHARE_TOKEN_PURPOSE = "wishlist_share"
+_SHARE_TOKEN_PURPOSE = "wishlist_share"  # noqa: S105 — a label, not a secret
 # Guest PIN brute force is constrained by rate limiting, not hash strength
 # (see WishlistShare.pin_hash's docstring) — 10 attempts per 5 minutes per
 # IP is generous enough for someone fat-fingering a 6-digit PIN a couple of
@@ -176,7 +176,9 @@ async def _get_active_wishlist_any_home(
     return row
 
 
-async def _require_owner_or_admin(wishlist: Wishlist, auth: AuthContext, membership: Membership) -> None:
+async def _require_owner_or_admin(
+    wishlist: Wishlist, auth: AuthContext, membership: Membership
+) -> None:
     if wishlist.owner_user_id == auth.user.id:
         return
     if membership.permission_profile == PermissionProfile.home_admin:
@@ -247,7 +249,9 @@ async def _share_counts(db: AsyncSession, wishlist_ids: list[uuid.UUID]) -> dict
                 )
                 .group_by(WishlistShare.wishlist_id)
             )
-        ).tuples().all()
+        )
+        .tuples()
+        .all()
     )
 
 
@@ -313,7 +317,9 @@ async def _reservations_by_item(
     return {row.wishlist_item_id: row for row in rows}
 
 
-async def _owner_detail_response(db: AsyncSession, wishlist: Wishlist) -> WishlistOwnerDetailResponse:
+async def _owner_detail_response(
+    db: AsyncSession, wishlist: Wishlist
+) -> WishlistOwnerDetailResponse:
     # Deliberately never queries WishlistItemReservation at all on this path
     # — see module docstring. There is nothing here for a future edit to
     # accidentally leak because the reservation table is simply absent from
@@ -465,7 +471,8 @@ async def create_wishlist(
         # docstring.
         if membership.permission_profile != PermissionProfile.home_admin:
             raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "Only a Home Admin can create a wishlist for someone else."
+                status.HTTP_403_FORBIDDEN,
+                "Only a Home Admin can create a wishlist for someone else.",
             )
         target = await db.scalar(
             select(Membership.user_id).where(
@@ -531,7 +538,9 @@ async def list_wishlists(
                 )
                 .group_by(WishlistItem.wishlist_id)
             )
-        ).tuples().all()
+        )
+        .tuples()
+        .all()
     )
     share_counts = await _share_counts(db, [row.id for row in rows])
     owner_names: dict[uuid.UUID, str] = dict(
@@ -541,7 +550,9 @@ async def list_wishlists(
                     User.id.in_({row.owner_user_id for row in rows})
                 )
             )
-            ).tuples().all()
+        )
+        .tuples()
+        .all()
     )
     return WishlistListResponse(
         items=[
@@ -731,7 +742,11 @@ async def wishlist_link_preview(
     await require_capability(home_id, Capability.wishlists_manage, auth, db)
     await require_entitlement(db, home_id, "wishlists.enabled")
     await enforce_rate_limit(
-        request, settings, "wishlist_link_preview", _LINK_PREVIEW_RATE_LIMIT, _LINK_PREVIEW_RATE_WINDOW
+        request,
+        settings,
+        "wishlist_link_preview",
+        _LINK_PREVIEW_RATE_LIMIT,
+        _LINK_PREVIEW_RATE_WINDOW,
     )
     result = await fetch_link_preview(body.url, settings)
     return LinkPreviewResponse(
@@ -927,7 +942,11 @@ async def create_share(
     row = await _get_active_wishlist(db, home_id, wishlist_id)
     await _require_owner_or_admin(row, auth, membership)
     await enforce_rate_limit(
-        request, settings, "wishlist_share_create", _SHARE_CREATE_RATE_LIMIT, _SHARE_CREATE_RATE_WINDOW
+        request,
+        settings,
+        "wishlist_share_create",
+        _SHARE_CREATE_RATE_LIMIT,
+        _SHARE_CREATE_RATE_WINDOW,
     )
 
     if body.share_type == "mykhaya_user":
@@ -947,7 +966,9 @@ async def create_share(
             )
         )
         if recipient is None:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That account could not be confirmed.")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "That account could not be confirmed."
+            )
         share = WishlistShare(
             wishlist_id=row.id,
             recipient_name=body.recipient_name.strip(),
@@ -968,12 +989,23 @@ async def create_share(
             },
         )
         await notify_wishlist_share(
-            db, settings=settings, wishlist=row, share=share, actor=auth.user,
-            notification_type="wishlist_share_created", title=title,
+            db,
+            settings=settings,
+            wishlist=row,
+            share=share,
+            actor=auth.user,
+            notification_type="wishlist_share_created",
+            title=title,
             body=notification_body,
         )
         audit(
-            db, request, "wishlists.share.created", auth.user.id, home_id, "wishlist_share", share.id
+            db,
+            request,
+            "wishlists.share.created",
+            auth.user.id,
+            home_id,
+            "wishlist_share",
+            share.id,
         )
         await db.commit()
         return ShareResponse(
@@ -988,14 +1020,18 @@ async def create_share(
     share = WishlistShare(
         wishlist_id=row.id,
         recipient_name=body.recipient_name.strip(),
-        recipient_email=(normalise_email(str(body.recipient_email)) if body.recipient_email else None),
+        recipient_email=(
+            normalise_email(str(body.recipient_email)) if body.recipient_email else None
+        ),
         share_type=WishlistShareType.guest,
         pin_hash=password_hash.hash(pin),
         created_by=auth.user.id,
     )
     db.add(share)
     await db.flush()
-    link_token = derived_token(share.id, _SHARE_TOKEN_PURPOSE, settings.secret_key.get_secret_value())
+    link_token = derived_token(
+        share.id, _SHARE_TOKEN_PURPOSE, settings.secret_key.get_secret_value()
+    )
     audit(db, request, "wishlists.share.created", auth.user.id, home_id, "wishlist_share", share.id)
     await db.commit()
     return GuestShareCreateResponse(
@@ -1077,8 +1113,13 @@ async def revoke_share(
         },
     )
     await notify_wishlist_share(
-        db, settings=settings, wishlist=row, share=share, actor=auth.user,
-        notification_type="wishlist_share_revoked", title=title,
+        db,
+        settings=settings,
+        wishlist=row,
+        share=share,
+        actor=auth.user,
+        notification_type="wishlist_share_revoked",
+        title=title,
         body=notification_body,
     )
     audit(db, request, "wishlists.share.revoked", auth.user.id, home_id, "wishlist_share", share.id)
@@ -1135,7 +1176,13 @@ async def regenerate_guest_share(
         new_share.id, _SHARE_TOKEN_PURPOSE, settings.secret_key.get_secret_value()
     )
     audit(
-        db, request, "wishlists.share.regenerated", auth.user.id, home_id, "wishlist_share", new_share.id
+        db,
+        request,
+        "wishlists.share.regenerated",
+        auth.user.id,
+        home_id,
+        "wishlist_share",
+        new_share.id,
     )
     await db.commit()
     return GuestShareCreateResponse(
@@ -1187,7 +1234,9 @@ async def shared_with_me(
                 )
                 .group_by(WishlistItem.wishlist_id)
             )
-            ).tuples().all()
+        )
+        .tuples()
+        .all()
     )
     owner_names: dict[uuid.UUID, str] = dict(
         (
@@ -1196,7 +1245,9 @@ async def shared_with_me(
                     User.id.in_({row.owner_user_id for row in rows})
                 )
             )
-            ).tuples().all()
+        )
+        .tuples()
+        .all()
     )
     return WishlistListResponse(
         items=[
@@ -1227,7 +1278,9 @@ async def get_wishlist_top_level(
     return await _viewer_detail_response(db, row)
 
 
-async def _get_active_item(db: AsyncSession, wishlist_id: uuid.UUID, item_id: uuid.UUID) -> WishlistItem:
+async def _get_active_item(
+    db: AsyncSession, wishlist_id: uuid.UUID, item_id: uuid.UUID
+) -> WishlistItem:
     item = await db.scalar(
         select(WishlistItem).where(
             WishlistItem.id == item_id,
@@ -1326,14 +1379,20 @@ async def reserve_item(
     item = await _get_active_item(db, row.id, item_id)
     name = body.buyer_display_name or auth.user.display_name
     reservation = await _do_reserve(
-        db, item, WishlistReservationStatus.reserved, WishlistReservationActorType.member,
-        auth.user.id, None, name,
+        db,
+        item,
+        WishlistReservationStatus.reserved,
+        WishlistReservationActorType.member,
+        auth.user.id,
+        None,
+        name,
     )
     return _viewer_item_response(item, reservation)
 
 
 @shared_router.post(
-    "/wishlists/{wishlist_id}/items/{item_id}/mark-bought", response_model=WishlistItemViewerResponse
+    "/wishlists/{wishlist_id}/items/{item_id}/mark-bought",
+    response_model=WishlistItemViewerResponse,
 )
 async def mark_item_bought(
     wishlist_id: uuid.UUID,
@@ -1352,8 +1411,13 @@ async def mark_item_bought(
     item = await _get_active_item(db, row.id, item_id)
     name = body.buyer_display_name or auth.user.display_name
     reservation = await _do_reserve(
-        db, item, WishlistReservationStatus.bought, WishlistReservationActorType.member,
-        auth.user.id, None, name,
+        db,
+        item,
+        WishlistReservationStatus.bought,
+        WishlistReservationActorType.member,
+        auth.user.id,
+        None,
+        name,
     )
     return _viewer_item_response(item, reservation)
 
@@ -1396,7 +1460,9 @@ async def verify_guest_share(
     await enforce_rate_limit(
         request, settings, "wishlist_guest_pin", _GUEST_PIN_RATE_LIMIT, _GUEST_PIN_RATE_WINDOW
     )
-    share_id = decode_derived_token(token, _SHARE_TOKEN_PURPOSE, settings.secret_key.get_secret_value())
+    share_id = decode_derived_token(
+        token, _SHARE_TOKEN_PURPOSE, settings.secret_key.get_secret_value()
+    )
     share = None
     if share_id is not None:
         share = await db.scalar(
@@ -1439,7 +1505,9 @@ async def guest_logout(
     raw = request.cookies.get(GUEST_COOKIE_NAME)
     if raw:
         digest = hash_secret(raw, settings.secret_key.get_secret_value())
-        await db.execute(delete(WishlistGuestSession).where(WishlistGuestSession.token_hash == digest))
+        await db.execute(
+            delete(WishlistGuestSession).where(WishlistGuestSession.token_hash == digest)
+        )
         await db.commit()
     clear_guest_cookies(response, settings)
 
@@ -1471,8 +1539,13 @@ async def guest_reserve_item(
     item = await _get_active_item(db, row.id, item_id)
     name = body.buyer_display_name or guest.share.recipient_name
     reservation = await _do_reserve(
-        db, item, WishlistReservationStatus.reserved, WishlistReservationActorType.guest,
-        None, guest.share.id, name,
+        db,
+        item,
+        WishlistReservationStatus.reserved,
+        WishlistReservationActorType.guest,
+        None,
+        guest.share.id,
+        name,
     )
     return _viewer_item_response(item, reservation)
 
@@ -1494,8 +1567,13 @@ async def guest_mark_item_bought(
     item = await _get_active_item(db, row.id, item_id)
     name = body.buyer_display_name or guest.share.recipient_name
     reservation = await _do_reserve(
-        db, item, WishlistReservationStatus.bought, WishlistReservationActorType.guest,
-        None, guest.share.id, name,
+        db,
+        item,
+        WishlistReservationStatus.bought,
+        WishlistReservationActorType.guest,
+        None,
+        guest.share.id,
+        name,
     )
     return _viewer_item_response(item, reservation)
 

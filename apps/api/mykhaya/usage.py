@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import structlog
 from fastapi import Request
 from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,9 +66,13 @@ async def record_usage_event(
         return row
     except IntegrityError:
         await db.rollback()
-        return await db.scalar(
-            select(ProductUsageEvent).where(ProductUsageEvent.event_key == event_key)
-        ) if event_key else None
+        return (
+            await db.scalar(
+                select(ProductUsageEvent).where(ProductUsageEvent.event_key == event_key)
+            )
+            if event_key
+            else None
+        )
     except Exception:  # noqa: BLE001 - analytics must not break product flows
         await db.rollback()
         log.warning("usage_event_record_failed", event_name=event_name.value)
@@ -79,6 +84,10 @@ async def purge_expired_usage_events(db: AsyncSession, *, now: datetime | None =
     result = await db.execute(
         delete(ProductUsageEvent).where(ProductUsageEvent.occurred_at < cutoff)
     )
+    # A DELETE always executes through the DBAPI cursor, so this is really a
+    # CursorResult at runtime — AsyncSession.execute()'s own return type is
+    # just the generic Result base, which doesn't expose .rowcount.
+    assert isinstance(result, CursorResult)
     return int(result.rowcount or 0)
 
 
@@ -96,7 +105,8 @@ async def aggregate_usage_day(db: AsyncSession, reporting_date: date) -> int:
     managed_home_ids = set(await db.scalars(select(ManagedDemoHome.home_id)))
     managed_owner_ids = set(await db.scalars(select(ManagedDemoHome.owner_user_id)))
     rows = [
-        row for row in rows
+        row
+        for row in rows
         if row.group_id not in managed_home_ids and row.user_id not in managed_owner_ids
     ]
     await db.execute(
@@ -123,11 +133,16 @@ async def aggregate_usage_day(db: AsyncSession, reporting_date: date) -> int:
                 ("active_users", module, None, len({r.user_id for r in module_rows if r.user_id}))
             )
             dimensions.append(("event_count", module, None, len(module_rows)))
-    for metric, module, platform, value in dimensions:
-        db.add(ProductUsageDailyAggregate(
-            reporting_date=reporting_date, metric=metric, module=module,
-            platform=platform, value=value,
-        ))
+    for metric, dimension_module, dimension_platform, value in dimensions:
+        db.add(
+            ProductUsageDailyAggregate(
+                reporting_date=reporting_date,
+                metric=metric,
+                module=dimension_module,
+                platform=dimension_platform,
+                value=value,
+            )
+        )
     await db.commit()
     return len(dimensions)
 

@@ -56,9 +56,7 @@ async def _require_member(home_id: uuid.UUID, auth: AuthContext, db: AsyncSessio
 
 async def _member_ids(db: AsyncSession, todo_id: uuid.UUID) -> list[uuid.UUID]:
     return sorted(
-        (
-            await db.scalars(select(TodoMember.user_id).where(TodoMember.todo_id == todo_id))
-        ).all()
+        (await db.scalars(select(TodoMember.user_id).where(TodoMember.todo_id == todo_id))).all()
     )
 
 
@@ -311,9 +309,7 @@ async def update_todo(
     await _require_member(home_id, auth, db)
     await require_capability(home_id, Capability.household_manage_reminders, auth, db)
     todo = await db.scalar(
-        select(Todo)
-        .where(Todo.id == todo_id, Todo.group_id == home_id)
-        .with_for_update()
+        select(Todo).where(Todo.id == todo_id, Todo.group_id == home_id).with_for_update()
     )
     if todo is None or not _visible(todo, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That To-do could not be found")

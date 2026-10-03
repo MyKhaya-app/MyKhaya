@@ -255,25 +255,29 @@ async def members(
             if membership.relationship != HouseholdRelationship.child
             else None
         )
-        result.append(MemberResponse(
-            membership_id=membership.id,
-            user_id=user.id,
-            display_name=user.display_name,
-            email=None if membership.relationship == HouseholdRelationship.child else user.email,
-            role=membership.role,
-            relationship=membership.relationship,
-            permission_profile=membership.permission_profile,
-            permission_overrides=membership.permission_overrides,
-            shared_resources=membership.shared_resources,
-            colour=membership.colour,
-            avatar_version=user.avatar_key,
-            family_sponsored=(
-                user.id != home_owner_id
-                and membership.relationship != HouseholdRelationship.home_admin
-                and user.id in sponsored_ids
-            ),
-            family_access=decision is not None,
-        ))
+        result.append(
+            MemberResponse(
+                membership_id=membership.id,
+                user_id=user.id,
+                display_name=user.display_name,
+                email=None
+                if membership.relationship == HouseholdRelationship.child
+                else user.email,
+                role=membership.role,
+                relationship=membership.relationship,
+                permission_profile=membership.permission_profile,
+                permission_overrides=membership.permission_overrides,
+                shared_resources=membership.shared_resources,
+                colour=membership.colour,
+                avatar_version=user.avatar_key,
+                family_sponsored=(
+                    user.id != home_owner_id
+                    and membership.relationship != HouseholdRelationship.home_admin
+                    and user.id in sponsored_ids
+                ),
+                family_access=decision is not None,
+            )
+        )
     return result
 
 
@@ -291,9 +295,8 @@ async def _member_response_for_user(
     if membership is None or user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That person could not be found.")
     home = await db.get(Group, group_id)
-    home_derived_access = (
-        home is not None
-        and (user.id == home.created_by or membership.relationship == HouseholdRelationship.home_admin)
+    home_derived_access = home is not None and (
+        user.id == home.created_by or membership.relationship == HouseholdRelationship.home_admin
     )
     sponsored = await db.scalar(
         select(HomeEntitlementGrant.id).where(
@@ -340,8 +343,14 @@ async def grant_family_sponsorship(
     await require_capability(group_id, Capability.members_manage_relationships, auth, db)
     grant = await grant_home_family_sponsorship(db, group_id, user_id, auth.user.id)
     audit(
-        db, request, "membership.family_sponsorship_granted", auth.user.id,
-        group_id, "user", user_id, {"reason": body.reason, "grant_id": str(grant.id)},
+        db,
+        request,
+        "membership.family_sponsorship_granted",
+        auth.user.id,
+        group_id,
+        "user",
+        user_id,
+        {"reason": body.reason, "grant_id": str(grant.id)},
     )
     await db.commit()
     return await _member_response_for_user(db, group_id, user_id)
@@ -364,8 +373,14 @@ async def revoke_family_sponsorship(
     if not changed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Family sponsorship was not found.")
     audit(
-        db, request, "membership.family_sponsorship_revoked", auth.user.id,
-        group_id, "user", user_id, {"reason": body.reason},
+        db,
+        request,
+        "membership.family_sponsorship_revoked",
+        auth.user.id,
+        group_id,
+        "user",
+        user_id,
+        {"reason": body.reason},
     )
     await db.commit()
     return await _member_response_for_user(db, group_id, user_id)
@@ -397,9 +412,11 @@ async def upload_child_member_avatar(
             Membership.removed_at.is_(None),
         )
     )
-    if target is None or await db.scalar(
-        select(ChildProfile.id).where(ChildProfile.membership_id == target.id)
-    ) is None:
+    if (
+        target is None
+        or await db.scalar(select(ChildProfile.id).where(ChildProfile.membership_id == target.id))
+        is None
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That managed child could not be found.")
     user = await db.get(User, user_id)
     assert user is not None
@@ -480,9 +497,11 @@ async def remove_child_member_avatar(
             Membership.removed_at.is_(None),
         )
     )
-    if target is None or await db.scalar(
-        select(ChildProfile.id).where(ChildProfile.membership_id == target.id)
-    ) is None:
+    if (
+        target is None
+        or await db.scalar(select(ChildProfile.id).where(ChildProfile.membership_id == target.id))
+        is None
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That managed child could not be found.")
     user = await db.get(User, user_id)
     assert user is not None
@@ -492,8 +511,14 @@ async def remove_child_member_avatar(
         user.avatar_updated_at = None
         db.add(user)
         audit(
-            db, request, "child.avatar_removed", auth.user.id, group_id,
-            "membership", target.id, {"target_user_id": str(user_id)},
+            db,
+            request,
+            "child.avatar_removed",
+            auth.user.id,
+            group_id,
+            "membership",
+            target.id,
+            {"target_user_id": str(user_id)},
         )
         await db.commit()
         try:
@@ -837,7 +862,9 @@ async def approve_join_request(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> MemberResponse:
-    approver = await require_capability(group_id, Capability.members_approve_join_requests, auth, db)
+    approver = await require_capability(
+        group_id, Capability.members_approve_join_requests, auth, db
+    )
     ensure_can_assign_relationship(approver, body.relationship)
     if body.relationship not in _ALLOWED_JOIN_APPROVAL_RELATIONSHIPS:
         raise HTTPException(
@@ -911,12 +938,8 @@ async def approve_join_request(
             status.HTTP_409_CONFLICT,
             "The Home Admin receives Family access from this Home's subscription, not sponsorship.",
         )
-    if body.family_sponsorship and await has_entitlement(
-        db, group_id, "family_plans.enabled"
-    ):
-        await grant_home_family_sponsorship(
-            db, group_id, join_request.user_id, auth.user.id
-        )
+    if body.family_sponsorship and await has_entitlement(db, group_id, "family_plans.enabled"):
+        await grant_home_family_sponsorship(db, group_id, join_request.user_id, auth.user.id)
     join_request.status = HomeJoinRequestStatus.approved
     join_request.relationship = body.relationship
     join_request.decided_by = auth.user.id

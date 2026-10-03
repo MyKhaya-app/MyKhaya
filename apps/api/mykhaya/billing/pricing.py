@@ -132,10 +132,7 @@ async def get_family_pricing(
     )
     ultimate_options: tuple[PriceOption, PriceOption] | None = None
     ultimate_saving: int | None = None
-    if (
-        config.ultimate_monthly_price_id
-        and config.ultimate_annual_price_id
-    ):
+    if config.ultimate_monthly_price_id and config.ultimate_annual_price_id:
         ultimate_monthly = await _fetch_and_validate_price(
             config.secret_key, config.ultimate_monthly_price_id, BillingInterval.month
         )

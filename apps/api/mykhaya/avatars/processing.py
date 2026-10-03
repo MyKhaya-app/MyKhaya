@@ -14,7 +14,7 @@ from PIL import Image, ImageOps
 try:
     import pillow_heif
 
-    pillow_heif.register_heif_opener()  # type: ignore[attr-defined]
+    pillow_heif.register_heif_opener()
     HEIC_SUPPORTED = True
 except ImportError:  # pragma: no cover - depends on platform wheel availability
     HEIC_SUPPORTED = False
@@ -51,7 +51,7 @@ def _heif_mimetype_hint(raw: bytes) -> str:
     if not HEIC_SUPPORTED:
         return ""
     try:
-        return pillow_heif.get_file_mimetype(io.BytesIO(raw)) or ""  # type: ignore[attr-defined]
+        return pillow_heif.get_file_mimetype(io.BytesIO(raw)) or ""
     except Exception:  # pragma: no cover - diagnostics must never break processing
         return ""
 

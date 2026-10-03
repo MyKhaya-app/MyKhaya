@@ -46,6 +46,7 @@ async def _external_sharing_notification_eligible(db: AsyncSession, group_id: uu
         and await is_feature_enabled(db, FeatureKey.notifications, group_id)
     )
 
+
 # Template registry key per action — "updated"/"cancelled" reuse the exact
 # same wording (and so the same PCC template) as routers.calendar's own
 # per-event-member notifications; "created" has its own wording here since a

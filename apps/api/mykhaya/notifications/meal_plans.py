@@ -185,12 +185,23 @@ async def notify_created(
     actor_id: uuid.UUID,
 ) -> None:
     title, body = await _render_meal_plan(
-        db, entry, meal, "meal_plan_created",
+        db,
+        entry,
+        meal,
+        "meal_plan_created",
         {"meal_slot": _slot(entry), "meal_date": _date_label(entry.date)},
     )
     await _notify_recipients(
-        db, settings, entry, meal, recipients(entry, await participant_ids(db, entry.id)), actor_id,
-        "meal_plan_created", title, body, str(entry.updated_at)
+        db,
+        settings,
+        entry,
+        meal,
+        recipients(entry, await participant_ids(db, entry.id)),
+        actor_id,
+        "meal_plan_created",
+        title,
+        body,
+        str(entry.updated_at),
     )
 
 
@@ -213,36 +224,84 @@ async def notify_updated(
     # behaviour exactly.
     changed_title_lower = updated_copy(entry, meal)[0].lower()
     title, body = await _render_meal_plan(
-        db, entry, meal, "meal_plan_updated",
+        db,
+        entry,
+        meal,
+        "meal_plan_updated",
         {"meal_day": _date_label(entry.date).capitalize(), "meal_slot_lower": _slot(entry).lower()},
     )
     version_key = str(entry.updated_at)
     if material_change:
-        await _notify_recipients(db, settings, entry, meal, after - before, actor_id,
-                                 "meal_plan_updated", title, body, version_key)
-        await _notify_recipients(db, settings, entry, meal, after & before, actor_id,
-                                 "meal_plan_updated", title, body, version_key)
+        await _notify_recipients(
+            db,
+            settings,
+            entry,
+            meal,
+            after - before,
+            actor_id,
+            "meal_plan_updated",
+            title,
+            body,
+            version_key,
+        )
+        await _notify_recipients(
+            db,
+            settings,
+            entry,
+            meal,
+            after & before,
+            actor_id,
+            "meal_plan_updated",
+            title,
+            body,
+            version_key,
+        )
     removed = before - after
     removed_title, removed_body = await _render_meal_plan(
-        db, entry, meal, "meal_plan_removed",
+        db,
+        entry,
+        meal,
+        "meal_plan_removed",
         {"removal_reason": f"You're no longer included in {changed_title_lower}"},
     )
-    await _notify_recipients(db, settings, entry, meal, removed, actor_id,
-                             "meal_plan_removed", removed_title, removed_body, version_key)
+    await _notify_recipients(
+        db,
+        settings,
+        entry,
+        meal,
+        removed,
+        actor_id,
+        "meal_plan_removed",
+        removed_title,
+        removed_body,
+        version_key,
+    )
 
 
 async def notify_removed(
-    db: AsyncSession, settings: Settings, entry: MealPlanEntry, meal: Meal | None,
-    actor_id: uuid.UUID, prior_participants: set[uuid.UUID], prior_cook: uuid.UUID | None,
+    db: AsyncSession,
+    settings: Settings,
+    entry: MealPlanEntry,
+    meal: Meal | None,
+    actor_id: uuid.UUID,
+    prior_participants: set[uuid.UUID],
+    prior_cook: uuid.UUID | None,
 ) -> None:
     removal_reason = f"{_date_label(entry.date).capitalize()}'s {_slot(entry).lower()} was removed"
     title, body = await _render_meal_plan(
         db, entry, meal, "meal_plan_removed", {"removal_reason": removal_reason}
     )
     await _notify_recipients(
-        db, settings, entry, meal,
-        prior_participants | ({prior_cook} if prior_cook else set()), actor_id,
-        "meal_plan_removed", title, body, str(entry.id)
+        db,
+        settings,
+        entry,
+        meal,
+        prior_participants | ({prior_cook} if prior_cook else set()),
+        actor_id,
+        "meal_plan_removed",
+        title,
+        body,
+        str(entry.id),
     )
 
 
@@ -306,10 +365,14 @@ async def briefing_items_for_user(
         )
     ).all()
     cook_ids = {entry.cook_member_id for entry, _meal in rows if entry.cook_member_id}
-    cooks = {
-        user.id: user.display_name
-        for user in (await db.scalars(select(User).where(User.id.in_(cook_ids)))).all()
-    } if cook_ids else {}
+    cooks = (
+        {
+            user.id: user.display_name
+            for user in (await db.scalars(select(User).where(User.id.in_(cook_ids)))).all()
+        }
+        if cook_ids
+        else {}
+    )
     return [
         MealBriefingItem(
             entry_id=entry.id,
@@ -317,7 +380,11 @@ async def briefing_items_for_user(
             name=meal_name(entry, meal),
             meal_time=entry.time,
             is_cooking=entry.cook_member_id == user_id,
-            cook_name=cooks.get(entry.cook_member_id) if entry.cook_member_id != user_id else None,
+            cook_name=(
+                cooks.get(entry.cook_member_id)
+                if entry.cook_member_id is not None and entry.cook_member_id != user_id
+                else None
+            ),
         )
         for entry, meal in rows
     ]

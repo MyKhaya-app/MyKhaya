@@ -450,7 +450,12 @@ async def reply_to_ticket(
     requester = await db.get(User, ticket.requester_user_id)
     if requester is not None:
         await ticket_reply(
-            db, settings, ticket, requester, message.message, message.id,
+            db,
+            settings,
+            ticket,
+            requester,
+            message.message,
+            message.id,
             visibility=message.visibility,
         )
     platform_audit(db, request, context, "support.ticket.replied", "support_ticket", ticket.id)
@@ -511,8 +516,13 @@ async def get_attachment(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That attachment could not be found.")
 
     platform_audit(
-        db, request, context, "support.attachment.viewed", "support_ticket_attachment",
-        attachment.id, new={"ticket_id": str(ticket_id)},
+        db,
+        request,
+        context,
+        "support.attachment.viewed",
+        "support_ticket_attachment",
+        attachment.id,
+        new={"ticket_id": str(ticket_id)},
     )
     await db.commit()
 

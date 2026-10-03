@@ -21,8 +21,8 @@ from mykhaya.models import (
     BillingInterval,
     Group,
     HomeSubscription,
-    SubscriptionProvider,
     SubscriptionPlan,
+    SubscriptionProvider,
     SubscriptionStatus,
 )
 
@@ -100,9 +100,17 @@ async def create_checkout_session(
         raise DuplicateSubscriptionError("This Home already has an active Stripe subscription.")
 
     if plan == SubscriptionPlan.family:
-        price_id = config.family_monthly_price_id if interval == BillingInterval.month else config.family_annual_price_id
+        price_id = (
+            config.family_monthly_price_id
+            if interval == BillingInterval.month
+            else config.family_annual_price_id
+        )
     elif plan == SubscriptionPlan.ultimate:
-        price_id = config.ultimate_monthly_price_id if interval == BillingInterval.month else config.ultimate_annual_price_id
+        price_id = (
+            config.ultimate_monthly_price_id
+            if interval == BillingInterval.month
+            else config.ultimate_annual_price_id
+        )
     else:
         raise ValueError("Free is not a paid checkout plan.")
     if not price_id:
@@ -119,7 +127,9 @@ async def create_checkout_session(
     # earlier one) is not permanently blocked. This is defense-in-depth
     # beneath the _LIVE_STRIPE_STATUSES guard above and the per-Home advisory
     # lock the caller (mykhaya.routers.billing) holds around this call.
-    idempotency_key = f"mykhaya-checkout:{home.id}:{plan.value}:{interval.value}:{int(time.time() // 300)}"
+    idempotency_key = (
+        f"mykhaya-checkout:{home.id}:{plan.value}:{interval.value}:{int(time.time() // 300)}"
+    )
 
     session = await call_stripe(
         lambda: stripe.checkout.Session.create(
@@ -132,7 +142,9 @@ async def create_checkout_session(
             ),
             cancel_url=f"{settings.public_web_url}/settings/billing?checkout=cancelled",
             client_reference_id=str(home.id),
-            subscription_data={"metadata": {"mykhaya_group_id": str(home.id), "mykhaya_plan": plan.value}},
+            subscription_data={
+                "metadata": {"mykhaya_group_id": str(home.id), "mykhaya_plan": plan.value}
+            },
             metadata={"mykhaya_group_id": str(home.id), "mykhaya_plan": plan.value},
             api_key=config.secret_key,
             idempotency_key=idempotency_key,

@@ -278,10 +278,7 @@ async def _session_for_token(
             Session.expires_at > now,
             or_(
                 Session.trusted_device_id.is_(None),
-                (
-                    TrustedDevice.revoked_at.is_(None)
-                    & (TrustedDevice.expires_at > now)
-                ),
+                (TrustedDevice.revoked_at.is_(None) & (TrustedDevice.expires_at > now)),
             ),
             User.is_active.is_(True),
         )

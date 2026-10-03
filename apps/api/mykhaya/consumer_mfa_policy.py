@@ -6,6 +6,7 @@ authentication never calls this service.
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,7 +124,7 @@ def policy_value(value: str) -> str:
     return value
 
 
-def methods_value(value: list[str]) -> list[str]:
+def methods_value(value: Sequence[str]) -> list[str]:
     normalised = sorted(set(value))
     if not normalised or any(item not in MFA_METHODS for item in normalised):
         raise ValueError("At least one supported MFA method is required")

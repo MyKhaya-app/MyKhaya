@@ -408,9 +408,7 @@ def next_occurrence_on_or_after(
     return None
 
 
-def canonical_occurrences_up_to(
-    event: CalendarEvent, occurrence_start: datetime
-) -> list[datetime]:
+def canonical_occurrences_up_to(event: CalendarEvent, occurrence_start: datetime) -> list[datetime]:
     """Every CANONICAL (generated, pre-exception) occurrence start of
     `event`'s series from its beginning up to and including
     `occurrence_start`, in order, as UTC instants — never range-bounded

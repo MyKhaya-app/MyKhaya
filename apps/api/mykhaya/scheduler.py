@@ -39,6 +39,7 @@ _last_usage_maintenance_date: date | None = None
 async def run() -> None:
     global _last_usage_maintenance_date
     settings = get_settings()
+
     async def load_syslog_config() -> SyslogConfig:
         async with SessionFactory() as db:
             row = await db.scalar(

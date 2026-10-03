@@ -112,9 +112,7 @@ def normalise_calendar_colour(value: str) -> str:
         return PALETTE_HEX[ColourToken(value)]
     if HEX_COLOUR_PATTERN.match(value):
         return value.upper()
-    raise ValueError(
-        "Colour must be a preset name or a 6-digit hex value, e.g. #E27658"
-    )
+    raise ValueError("Colour must be a preset name or a 6-digit hex value, e.g. #E27658")
 
 
 # Calendar/category colour field type — a real hex string, not a palette

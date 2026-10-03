@@ -96,7 +96,7 @@ from mykhaya.schemas import (
 )
 from mykhaya.security import decode_derived_token, derived_token, hash_secret, normalise_email
 
-_SHARE_TOKEN_PURPOSE = "calendar_share"
+_SHARE_TOKEN_PURPOSE = "calendar_share"  # noqa: S105 — a label, not a secret
 _SHARE_CREATE_RATE_LIMIT = 20
 _SHARE_CREATE_RATE_WINDOW = 300
 

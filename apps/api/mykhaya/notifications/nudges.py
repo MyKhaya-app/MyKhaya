@@ -131,9 +131,7 @@ async def relevant_todos(
         if row.scope == "personal" and row.owner_user_id != user_id:
             continue
         assigned = set(
-            (
-                await db.scalars(select(TodoMember.user_id).where(TodoMember.todo_id == row.id))
-            ).all()
+            (await db.scalars(select(TodoMember.user_id).where(TodoMember.todo_id == row.id))).all()
         )
         if row.scope == "household" and assigned and user_id not in assigned:
             continue
@@ -149,9 +147,7 @@ async def _relevant_routines(
             select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
-    group_ids = await _nudges_eligible_group_ids(
-        db, [row.group_id for row in memberships]
-    )
+    group_ids = await _nudges_eligible_group_ids(db, [row.group_id for row in memberships])
     if not group_ids:
         return []
     rows = (
@@ -202,9 +198,7 @@ async def _relevant_reminders(
             select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
         )
     ).all()
-    group_ids = await _nudges_eligible_group_ids(
-        db, [row.group_id for row in memberships]
-    )
+    group_ids = await _nudges_eligible_group_ids(db, [row.group_id for row in memberships])
     if not group_ids:
         return []
     rows = (

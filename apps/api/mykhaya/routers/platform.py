@@ -26,8 +26,8 @@ from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
-from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.calendar_highlights import sync_holiday_source
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.consumer_mfa_policy import (
     CONSUMER_MFA_POLICY_SETTING_KEY,
@@ -74,6 +74,7 @@ from mykhaya.models import (
     CalendarEventLabel,
     CalendarShare,
     ChildProfile,
+    ConsumerMfaPolicy,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -101,18 +102,18 @@ from mykhaya.models import (
     NotificationTemplateRevision,
     OperationalHeartbeat,
     OutboxEvent,
-    ProductUsageEvent,
     PlatformAdministrator,
     PlatformAdministratorInvitation,
+    PlatformHolidayDate,
+    PlatformHolidaySource,
     PlatformPushSettings,
     PlatformRole,
     PlatformSession,
     PlatformSessionStatus,
     PlatformSetting,
-    PlatformHolidayDate,
-    PlatformHolidaySource,
     PlatformSmtpSettings,
     PlatformStripeSettings,
+    ProductUsageEvent,
     PublicIncident,
     PushSubscription,
     Reminder,
@@ -166,11 +167,6 @@ from mykhaya.notifications.templates import (
     validate_required_variables,
 )
 from mykhaya.platform_audit import platform_audit
-from mykhaya.syslog_forwarding import (
-    SyslogConfig,
-    current_dispatcher,
-    syslog_config_from_platform_value,
-)
 from mykhaya.platform_health import current_platform_health
 from mykhaya.platform_mfa import (
     build_authentication_options,
@@ -200,9 +196,13 @@ from mykhaya.platform_schemas import (
     BulkLifecycleFailure,
     BulkLifecycleRequest,
     BulkLifecycleResponse,
+    ConsumerMfaPolicyResponse,
+    ConsumerMfaPolicyUpdate,
+    DrivewayDvlaTestRequest,
     EntitlementsResponse,
     FeatureFlagUpdate,
     GrantComplimentaryRequest,
+    HolidaySourceUpdate,
     HomeAdministratorSummary,
     HomeDeleteEligibilityResponse,
     HomeSubscriptionResponse,
@@ -217,9 +217,6 @@ from mykhaya.platform_schemas import (
     ManagedDemoPasswordReset,
     MfaPolicyResponse,
     MfaPolicyUpdate,
-    ConsumerMfaPolicyResponse,
-    ConsumerMfaPolicyUpdate,
-    DrivewayDvlaTestRequest,
     ModuleUpdate,
     MoveMemberRequest,
     NoteRequest,
@@ -243,9 +240,7 @@ from mykhaya.platform_schemas import (
     RecoveryCodeVerifyRequest,
     RevokeComplimentaryRequest,
     SensitiveActionRequest,
-    HolidaySourceUpdate,
     SettingUpdate,
-    SyslogSettingsUpdate,
     SmtpSettingsUpdate,
     StripeBillingDiagnosticResponse,
     StripeBillingDiagnosticsResponse,
@@ -265,6 +260,7 @@ from mykhaya.platform_schemas import (
     SubscriptionListItem,
     SubscriptionListResponse,
     SubscriptionSummaryResponse,
+    SyslogSettingsUpdate,
     TestEmailRequest,
     TotpCodeRequest,
     TotpDisableRequest,
@@ -323,6 +319,11 @@ from mykhaya.status_aggregation import (
     is_incident_active,
     overall_message,
     service_states_from_impacts,
+)
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    current_dispatcher,
+    syslog_config_from_platform_value,
 )
 
 router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
@@ -408,8 +409,15 @@ async def create_managed_demo_home(
             status.HTTP_409_CONFLICT,
             "A managed demo/test Home with that fixture key or account email already exists.",
         ) from exc
-    platform_audit(db, request, context, "managed_demo.created", "managed_demo_home", row.id,
-                   new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value})
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.created",
+        "managed_demo_home",
+        row.id,
+        new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value},
+    )
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
@@ -437,16 +445,25 @@ async def disable_managed_demo_home(
 
 
 async def _set_managed_demo_enabled(
-    fixture_id: uuid.UUID, enabled: bool, request: Request,
-    context: PlatformContext, db: AsyncSession,
+    fixture_id: uuid.UUID,
+    enabled: bool,
+    request: Request,
+    context: PlatformContext,
+    db: AsyncSession,
 ) -> ManagedDemoHomeResponse:
     require_recent_auth(context, get_settings())
     row = await db.get(ManagedDemoHome, fixture_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
     await ManagedDemoService.set_enabled(db, row, enabled)
-    platform_audit(db, request, context, f"managed_demo.{ 'enabled' if enabled else 'disabled' }",
-                   "managed_demo_home", row.id)
+    platform_audit(
+        db,
+        request,
+        context,
+        f"managed_demo.{'enabled' if enabled else 'disabled'}",
+        "managed_demo_home",
+        row.id,
+    )
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
@@ -483,8 +500,15 @@ async def refresh_managed_demo_home(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
     await ManagedDemoService.refresh_template(db, row)
-    platform_audit(db, request, context, "managed_demo.refreshed", "managed_demo_home", row.id,
-                   reason=body.reason)
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.refreshed",
+        "managed_demo_home",
+        row.id,
+        reason=body.reason,
+    )
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
@@ -504,8 +528,15 @@ async def update_managed_demo_expiry(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
     await ManagedDemoService.set_expiry(db, row, body.expires_at)
-    platform_audit(db, request, context, "managed_demo.expiry_changed", "managed_demo_home", row.id,
-                   new={"expires_at": body.expires_at.isoformat() if body.expires_at else None})
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.expiry_changed",
+        "managed_demo_home",
+        row.id,
+        new={"expires_at": body.expires_at.isoformat() if body.expires_at else None},
+    )
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
@@ -528,9 +559,18 @@ async def delete_managed_demo_home(
         await ManagedDemoService.delete(db, row)
     except ManagedDemoError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    platform_audit(db, request, context, "managed_demo.deleted", "managed_demo_home", fixture_id,
-                   reason=body.reason)
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.deleted",
+        "managed_demo_home",
+        fixture_id,
+        reason=body.reason,
+    )
     await db.commit()
+
+
 SECURITY = (PlatformRole.owner, PlatformRole.security)
 SETTINGS = (PlatformRole.owner,)
 # Arbitrary fixed key for the transaction-scoped advisory lock guarding the
@@ -1436,7 +1476,9 @@ async def _consumer_platform_values(db: AsyncSession) -> tuple[str, set[str]]:
         select(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY)
     )
     value = row.value if row else {}
-    return str(value.get("policy", "optional")), set(value.get("allowed_methods", ["totp", "email"]))
+    return str(value.get("policy", "optional")), set(
+        value.get("allowed_methods", ["totp", "email"])
+    )
 
 
 async def _validate_consumer_policy_users(
@@ -1492,21 +1534,35 @@ async def update_consumer_mfa_platform_policy(
     row.value = {"policy": configured, "allowed_methods": methods}
     row.updated_by = context.administrator.id
     await db.flush()
-    user_ids = list(
-        await db.scalars(select(User.id).where(User.is_active.is_(True)))
-    )
+    user_ids = list(await db.scalars(select(User.id).where(User.is_active.is_(True))))
     try:
         await _validate_consumer_policy_users(db, settings, user_ids)
     except HTTPException:
         await db.rollback()
         raise
-    platform_audit(db, request, context, "MFA_PLATFORM_POLICY_CHANGED", "platform_setting", None, reason=body.reason, previous=previous, new=row.value)
+    platform_audit(
+        db,
+        request,
+        context,
+        "MFA_PLATFORM_POLICY_CHANGED",
+        "platform_setting",
+        None,
+        reason=body.reason,
+        previous=previous,
+        new=row.value,
+    )
     if configured == "required":
         platform_audit(db, request, context, "MFA_ENFORCEMENT_ENABLED", "platform_setting", None)
     elif previous.get("policy") == "required":
         platform_audit(db, request, context, "MFA_ENFORCEMENT_DISABLED", "platform_setting", None)
     await db.commit()
-    return _consumer_policy_response(configured=configured, effective=configured, source="platform", methods=set(methods), settings=settings)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=configured,
+        source="platform",
+        methods=set(methods),
+        settings=settings,
+    )
 
 
 @router.get("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
@@ -1521,11 +1577,19 @@ async def consumer_mfa_home_policy(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
     platform_policy, methods = await _consumer_platform_values(db)
     configured = group.mfa_policy.value
-    effective = "required" if configured == "required" or platform_policy == "required" else "optional"
+    effective = (
+        "required" if configured == "required" or platform_policy == "required" else "optional"
+    )
     source = "home" if configured == "required" else "platform"
     if group.mfa_allowed_methods is not None:
         methods &= set(group.mfa_allowed_methods)
-    return _consumer_policy_response(configured=configured, effective=effective, source=source, methods=methods, settings=settings)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=effective,
+        source=source,
+        methods=methods,
+        settings=settings,
+    )
 
 
 @router.put("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
@@ -1545,11 +1609,15 @@ async def update_consumer_mfa_home_policy(
     methods = methods_value(body.allowed_methods)
     platform_policy, platform_methods = await _consumer_platform_values(db)
     if configured == "optional" and platform_policy == "required":
-        raise HTTPException(status.HTTP_409_CONFLICT, "A Home cannot weaken the platform MFA requirement.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A Home cannot weaken the platform MFA requirement."
+        )
     if not (set(methods) & platform_methods):
-        raise HTTPException(status.HTTP_409_CONFLICT, "The Home must retain a method allowed by the platform.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The Home must retain a method allowed by the platform."
+        )
     previous = {"policy": group.mfa_policy.value, "allowed_methods": group.mfa_allowed_methods}
-    group.mfa_policy = configured
+    group.mfa_policy = ConsumerMfaPolicy(configured)
     group.mfa_allowed_methods = None if set(methods) == platform_methods else methods
     await db.flush()
     member_ids = list(
@@ -1565,10 +1633,28 @@ async def update_consumer_mfa_home_policy(
     except HTTPException:
         await db.rollback()
         raise
-    platform_audit(db, request, context, "MFA_HOME_POLICY_CHANGED", "home", group.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": group.mfa_allowed_methods})
+    platform_audit(
+        db,
+        request,
+        context,
+        "MFA_HOME_POLICY_CHANGED",
+        "home",
+        group.id,
+        reason=body.reason,
+        previous=previous,
+        new={"policy": configured, "allowed_methods": group.mfa_allowed_methods},
+    )
     await db.commit()
-    effective = "required" if configured == "required" or platform_policy == "required" else "optional"
-    return _consumer_policy_response(configured=configured, effective=effective, source="home" if configured == "required" else "platform", methods=set(methods) & platform_methods, settings=settings)
+    effective = (
+        "required" if configured == "required" or platform_policy == "required" else "optional"
+    )
+    return _consumer_policy_response(
+        configured=configured,
+        effective=effective,
+        source="home" if configured == "required" else "platform",
+        methods=set(methods) & platform_methods,
+        settings=settings,
+    )
 
 
 @router.get("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
@@ -1582,7 +1668,13 @@ async def consumer_mfa_user_policy(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
     policy = await resolve_consumer_mfa_policy(db, user_id, settings)
-    return _consumer_policy_response(configured=user.mfa_policy.value, effective=policy.effective, source=policy.source, methods=set(policy.allowed_methods), settings=settings)
+    return _consumer_policy_response(
+        configured=user.mfa_policy.value,
+        effective=policy.effective,
+        source=policy.source,
+        methods=set(policy.allowed_methods),
+        settings=settings,
+    )
 
 
 @router.put("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
@@ -1602,12 +1694,16 @@ async def update_consumer_mfa_user_policy(
     methods = methods_value(body.allowed_methods)
     current = await resolve_consumer_mfa_policy(db, user_id, settings)
     if configured == "optional" and current.required and current.source != "user":
-        raise HTTPException(status.HTTP_409_CONFLICT, "A User cannot weaken an inherited MFA requirement.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A User cannot weaken an inherited MFA requirement."
+        )
     _, platform_methods = await _consumer_platform_values(db)
     if not (set(methods) & platform_methods):
-        raise HTTPException(status.HTTP_409_CONFLICT, "The User must retain a method allowed by the platform.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The User must retain a method allowed by the platform."
+        )
     previous = {"policy": user.mfa_policy.value, "allowed_methods": user.mfa_allowed_methods}
-    user.mfa_policy = configured
+    user.mfa_policy = ConsumerMfaPolicy(configured)
     user.mfa_allowed_methods = methods
     await db.flush()
     try:
@@ -1615,11 +1711,33 @@ async def update_consumer_mfa_user_policy(
     except HTTPException:
         await db.rollback()
         raise
-    event = "MFA_USER_FORCED" if configured == "required" else "MFA_USER_FORCE_REMOVED" if previous["policy"] == "required" else "MFA_USER_POLICY_CHANGED"
-    platform_audit(db, request, context, event, "user", user.id, reason=body.reason, previous=previous, new={"policy": configured, "allowed_methods": methods})
+    event = (
+        "MFA_USER_FORCED"
+        if configured == "required"
+        else "MFA_USER_FORCE_REMOVED"
+        if previous["policy"] == "required"
+        else "MFA_USER_POLICY_CHANGED"
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        event,
+        "user",
+        user.id,
+        reason=body.reason,
+        previous=previous,
+        new={"policy": configured, "allowed_methods": methods},
+    )
     await db.commit()
     resolved = await resolve_consumer_mfa_policy(db, user_id, settings)
-    return _consumer_policy_response(configured=configured, effective=resolved.effective, source=resolved.source, methods=set(resolved.allowed_methods), settings=settings)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=resolved.effective,
+        source=resolved.source,
+        methods=set(resolved.allowed_methods),
+        settings=settings,
+    )
 
 
 @router.get("/administrators/{administrator_id}/security")
@@ -2608,7 +2726,9 @@ async def users(
     verified: bool | None = None,
     active: bool | None = None,
     lifecycle: LifecycleState | None = Query(default=None),
-    sort: Literal["created_at", "email", "display_name", "last_login_at", "last_activity_at"] = "created_at",
+    sort: Literal[
+        "created_at", "email", "display_name", "last_login_at", "last_activity_at"
+    ] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -2736,8 +2856,9 @@ async def user_detail(
     consumer_policy = await resolve_consumer_mfa_policy(db, user_id, settings)
     mfa_methods = (
         await db.execute(
-            select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled)
-            .where(UserMfaMethodRecord.user_id == user_id)
+            select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled).where(
+                UserMfaMethodRecord.user_id == user_id
+            )
         )
     ).all()
     return {
@@ -2780,8 +2901,7 @@ async def user_detail(
             "source": consumer_policy.source,
             "allowed_methods": sorted(consumer_policy.allowed_methods),
             "methods": [
-                {"method": method.value, "enabled": enabled}
-                for method, enabled in mfa_methods
+                {"method": method.value, "enabled": enabled} for method, enabled in mfa_methods
             ],
         },
     }
@@ -2957,9 +3077,7 @@ async def _user_anonymise_blockers(db: AsyncSession, user: User) -> list[str]:
 
     active_memberships = (
         await db.scalars(
-            select(Membership).where(
-                Membership.user_id == user.id, Membership.removed_at.is_(None)
-            )
+            select(Membership).where(Membership.user_id == user.id, Membership.removed_at.is_(None))
         )
     ).all()
     for membership in active_memberships:
@@ -3003,9 +3121,7 @@ async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int,
     # anonymised user must not remain an active member of anything.
     active_memberships = (
         await db.scalars(
-            select(Membership).where(
-                Membership.user_id == user.id, Membership.removed_at.is_(None)
-            )
+            select(Membership).where(Membership.user_id == user.id, Membership.removed_at.is_(None))
         )
     ).all()
     for membership in active_memberships:
@@ -3102,8 +3218,8 @@ async def anonymise_user(
             ),
         )
 
-    previous_lifecycle, removed_membership_count, previous_avatar_key = (
-        await _apply_user_anonymise(db, user)
+    previous_lifecycle, removed_membership_count, previous_avatar_key = await _apply_user_anonymise(
+        db, user
     )
     platform_audit(
         db,
@@ -3786,7 +3902,9 @@ async def home_detail(
     subscription = await get_home_subscription(db, group_id)
     platform_policy, platform_methods = await _consumer_platform_values(db)
     home_policy = group.mfa_policy.value
-    home_effective = "required" if home_policy == "required" or platform_policy == "required" else "optional"
+    home_effective = (
+        "required" if home_policy == "required" or platform_policy == "required" else "optional"
+    )
     return {
         "id": group.id,
         "name": group.name,
@@ -3801,7 +3919,11 @@ async def home_detail(
             "source": "home" if home_policy == "required" else "platform",
             "allowed_methods": sorted(
                 platform_methods
-                & (set(group.mfa_allowed_methods) if group.mfa_allowed_methods is not None else platform_methods)
+                & (
+                    set(group.mfa_allowed_methods)
+                    if group.mfa_allowed_methods is not None
+                    else platform_methods
+                )
             ),
         },
         "members": [
@@ -4092,6 +4214,7 @@ async def subscriptions_summary(
             .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
         )
     ).one()
+    counts: tuple[int, int, int, int, int, int, int, int, int, int, int, int] = tuple(row)
     (
         total,
         free,
@@ -4105,7 +4228,7 @@ async def subscriptions_summary(
         stripe_monthly,
         stripe_annual,
         stripe_cancelling,
-    ) = row
+    ) = counts
     return SubscriptionSummaryResponse(
         total_homes=total,
         free=free,
@@ -4614,17 +4737,13 @@ async def _home_delete_blockers(db: AsyncSession, group: Group) -> list[str]:
     # row) — a second row, active or historical, means a real second
     # person was genuinely a member at some point.
     total_membership_count = (
-        await db.scalar(
-            select(func.count(Membership.id)).where(Membership.group_id == group.id)
-        )
+        await db.scalar(select(func.count(Membership.id)).where(Membership.group_id == group.id))
         or 0
     )
     if total_membership_count > 1:
         blockers.append("has_membership_history")
 
-    if await db.scalar(
-        select(CalendarEvent.id).where(CalendarEvent.group_id == group.id).limit(1)
-    ):
+    if await db.scalar(select(CalendarEvent.id).where(CalendarEvent.group_id == group.id).limit(1)):
         blockers.append("has_calendar_events")
     # is_system=True labels are the 7 seeded on every Home creation — only
     # an operator/household-created label indicates real use.
@@ -4650,9 +4769,7 @@ async def _home_delete_blockers(db: AsyncSession, group: Group) -> list[str]:
         select(MealPlanEntry.id).where(MealPlanEntry.group_id == group.id).limit(1)
     ):
         blockers.append("has_meals")
-    if await db.scalar(
-        select(HouseholdList.id).where(HouseholdList.group_id == group.id).limit(1)
-    ):
+    if await db.scalar(select(HouseholdList.id).where(HouseholdList.group_id == group.id).limit(1)):
         blockers.append("has_lists")
     if await db.scalar(select(Wishlist.id).where(Wishlist.home_id == group.id).limit(1)):
         blockers.append("has_wishlists")
@@ -5771,12 +5888,23 @@ async def update_syslog_settings(
     row = await _syslog_row(db)
     previous = row.value.get("value") if row else {"enabled": False}
     if row is None:
-        row = PlatformSetting(key="central_syslog", value={"value": value}, updated_by=context.administrator.id)
+        row = PlatformSetting(
+            key="central_syslog", value={"value": value}, updated_by=context.administrator.id
+        )
         db.add(row)
     else:
         row.value = {"value": value}
         row.updated_by = context.administrator.id
-    platform_audit(db, request, context, "central_logging.syslog_settings_changed", "platform_setting", reason=body.reason, previous=previous, new=config.public_dict())
+    platform_audit(
+        db,
+        request,
+        context,
+        "central_logging.syslog_settings_changed",
+        "platform_setting",
+        reason=body.reason,
+        previous=previous,
+        new=config.public_dict(),
+    )
     await db.commit()
     return config.public_dict()
 
@@ -5793,7 +5921,9 @@ async def test_syslog_settings(
     row = await _syslog_row(db)
     config = syslog_config_from_platform_value(row.value if row else {}, settings.environment)
     if not config.enabled or not config.host:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Remote syslog is not enabled and configured.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Remote syslog is not enabled and configured."
+        )
     dispatcher = current_dispatcher()
     if dispatcher is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Central logging is not running.")
@@ -5806,25 +5936,63 @@ async def test_syslog_settings(
     try:
         delivered = await dispatcher.enqueue_and_wait(event, bypass_filters=True)
     except TimeoutError as exc:
-        platform_audit(db, request, context, "central_logging.syslog_test_failed", "platform_setting", reason=body.reason, outcome="failure", failure_category=type(exc).__name__)
+        platform_audit(
+            db,
+            request,
+            context,
+            "central_logging.syslog_test_failed",
+            "platform_setting",
+            reason=body.reason,
+            outcome="failure",
+            failure_category=type(exc).__name__,
+        )
         await db.commit()
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached.") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached."
+        ) from exc
     if not delivered:
-        platform_audit(db, request, context, "central_logging.syslog_test_failed", "platform_setting", reason=body.reason, outcome="failure", failure_category="dispatcher_delivery_failed")
+        platform_audit(
+            db,
+            request,
+            context,
+            "central_logging.syslog_test_failed",
+            "platform_setting",
+            reason=body.reason,
+            outcome="failure",
+            failure_category="dispatcher_delivery_failed",
+        )
         await db.commit()
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached.")
-    platform_audit(db, request, context, "central_logging.syslog_test_succeeded", "platform_setting", reason=body.reason, new={"event_type": "syslog_test"})
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached."
+        )
+    platform_audit(
+        db,
+        request,
+        context,
+        "central_logging.syslog_test_succeeded",
+        "platform_setting",
+        reason=body.reason,
+        new={"event_type": "syslog_test"},
+    )
     await db.commit()
     return {"message": "Syslog test message sent."}
 
 
 def _holiday_source_payload(source: PlatformHolidaySource, cached_count: int) -> dict[str, Any]:
     return {
-        "id": source.id, "country_code": source.country_code, "country_name": source.country_name,
-        "flag_emoji": source.flag_emoji, "region_code": source.region_code, "region_name": source.region_name,
-        "provider": source.provider, "source_url": source.source_url, "enabled": source.enabled,
-        "sync_status": source.sync_status, "last_successful_sync": source.last_successful_sync,
-        "next_scheduled_sync": source.next_scheduled_sync, "last_sync_error": source.last_sync_error,
+        "id": source.id,
+        "country_code": source.country_code,
+        "country_name": source.country_name,
+        "flag_emoji": source.flag_emoji,
+        "region_code": source.region_code,
+        "region_name": source.region_name,
+        "provider": source.provider,
+        "source_url": source.source_url,
+        "enabled": source.enabled,
+        "sync_status": source.sync_status,
+        "last_successful_sync": source.last_successful_sync,
+        "next_scheduled_sync": source.next_scheduled_sync,
+        "last_sync_error": source.last_sync_error,
         "cached_holiday_count": cached_count,
     }
 
@@ -5833,43 +6001,94 @@ def _holiday_source_payload(source: PlatformHolidaySource, cached_count: int) ->
 async def holiday_calendars(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
 ) -> list[dict[str, Any]]:
-    sources = (await db.scalars(select(PlatformHolidaySource).order_by(PlatformHolidaySource.country_name, PlatformHolidaySource.region_name))).all()
-    counts = dict((await db.execute(select(PlatformHolidayDate.source_id, func.count()).group_by(PlatformHolidayDate.source_id))).all())
+    sources = (
+        await db.scalars(
+            select(PlatformHolidaySource).order_by(
+                PlatformHolidaySource.country_name, PlatformHolidaySource.region_name
+            )
+        )
+    ).all()
+    counts = dict(
+        (
+            await db.execute(
+                select(PlatformHolidayDate.source_id, func.count()).group_by(
+                    PlatformHolidayDate.source_id
+                )
+            )
+        ).all()
+    )
     return [_holiday_source_payload(source, counts.get(source.id, 0)) for source in sources]
 
 
 @router.put("/calendar/holiday-calendars/{source_id}")
 async def update_holiday_calendar_source(
-    source_id: uuid.UUID, body: HolidaySourceUpdate, request: Request,
-    context: PlatformContext = Depends(require_roles(*SETTINGS)), db: AsyncSession = Depends(get_db),
+    source_id: uuid.UUID,
+    body: HolidaySourceUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)),
+    db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    source = await db.scalar(select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update())
+    source = await db.scalar(
+        select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update()
+    )
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
     previous = source.enabled
     source.enabled = body.enabled
-    platform_audit(db, request, context, "calendar_holiday_source.updated", "holiday_source", source.id, reason=body.reason, previous={"enabled": previous}, new={"enabled": body.enabled})
+    platform_audit(
+        db,
+        request,
+        context,
+        "calendar_holiday_source.updated",
+        "holiday_source",
+        source.id,
+        reason=body.reason,
+        previous={"enabled": previous},
+        new={"enabled": body.enabled},
+    )
     await db.commit()
-    count = await db.scalar(select(func.count()).select_from(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id))
+    count = await db.scalar(
+        select(func.count())
+        .select_from(PlatformHolidayDate)
+        .where(PlatformHolidayDate.source_id == source.id)
+    )
     return _holiday_source_payload(source, count or 0)
 
 
 @router.post("/calendar/holiday-calendars/{source_id}/sync")
 async def sync_holiday_calendar_source(
-    source_id: uuid.UUID, body: SensitiveActionRequest, request: Request,
-    context: PlatformContext = Depends(require_roles(*OPERATORS)), db: AsyncSession = Depends(get_db),
+    source_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    source = await db.scalar(select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update())
+    source = await db.scalar(
+        select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update()
+    )
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
     count = await sync_holiday_source(db, source)
-    platform_audit(db, request, context, "calendar_holiday_source.sync_requested", "holiday_source", source.id, reason=body.reason, new={"status": source.sync_status, "count": count})
+    platform_audit(
+        db,
+        request,
+        context,
+        "calendar_holiday_source.sync_requested",
+        "holiday_source",
+        source.id,
+        reason=body.reason,
+        new={"status": source.sync_status, "count": count},
+    )
     await db.commit()
-    cached = await db.scalar(select(func.count()).select_from(PlatformHolidayDate).where(PlatformHolidayDate.source_id == source.id))
+    cached = await db.scalar(
+        select(func.count())
+        .select_from(PlatformHolidayDate)
+        .where(PlatformHolidayDate.source_id == source.id)
+    )
     return _holiday_source_payload(source, cached or 0)
 
 
@@ -5911,7 +6130,14 @@ async def update_setting(
         db.add(row)
     else:
         previous_payload = {key: row.value.get("value"), "previous_source": "platform_admin"}
-        row.value = {"value": body.value, **({"health": row.value.get("health")} if key == "driveway_dvla_enabled" and row.value.get("health") else {})}
+        row.value = {
+            "value": body.value,
+            **(
+                {"health": row.value.get("health")}
+                if key == "driveway_dvla_enabled" and row.value.get("health")
+                else {}
+            ),
+        }
         row.updated_by = context.administrator.id
     platform_audit(
         db,
@@ -5933,7 +6159,9 @@ async def driveway_dvla_status(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled"))
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled")
+    )
     value = row.value if row else {}
     enabled = value.get("value") is True
     configured = settings.dvla_configured
@@ -5987,9 +6215,15 @@ async def driveway_dvla_test(
         result = {"state": "Unavailable", "message": "DVLA authentication failed."}
     except VehicleLookupUnavailable:
         result = {"state": "Unavailable", "message": "DVLA service is unavailable."}
-    row = await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled").with_for_update())
+    row = await db.scalar(
+        select(PlatformSetting)
+        .where(PlatformSetting.key == "driveway_dvla_enabled")
+        .with_for_update()
+    )
     if row is None:
-        row = PlatformSetting(key="driveway_dvla_enabled", value={"value": False}, updated_by=context.administrator.id)
+        row = PlatformSetting(
+            key="driveway_dvla_enabled", value={"value": False}, updated_by=context.administrator.id
+        )
         db.add(row)
     health = dict(row.value.get("health") or {})
     now = datetime.now(UTC).isoformat()
@@ -6001,7 +6235,15 @@ async def driveway_dvla_test(
         health["last_failure_at"] = now
         health["last_failure_summary"] = result["message"]
     row.value = {**row.value, "health": health}
-    platform_audit(db, request, context, "driveway.dvla.test_connection", "integration", reason=body.reason, new={"state": result["state"]})
+    platform_audit(
+        db,
+        request,
+        context,
+        "driveway.dvla.test_connection",
+        "integration",
+        reason=body.reason,
+        new={"state": result["state"]},
+    )
     await db.commit()
     return result
 
@@ -6589,7 +6831,9 @@ async def push_configuration(
             device.id: device
             for device in (
                 await db.scalars(
-                    select(NativePushDevice).where(NativePushDevice.id.in_(failed_native_device_ids))
+                    select(NativePushDevice).where(
+                        NativePushDevice.id.in_(failed_native_device_ids)
+                    )
                 )
             ).all()
         }
@@ -6931,14 +7175,20 @@ async def send_test_push(
                     "notification_type": "test_push",
                 },
             )
-            results.append({"channel": "web", "device_label": subscription.device_label, "result": "accepted"})
+            results.append(
+                {"channel": "web", "device_label": subscription.device_label, "result": "accepted"}
+            )
         except Exception as exc:
             # Covers both WebPushException (the push service rejected/failed the
             # request) and lower-level encoding errors from a malformed subscription
             # (e.g. corrupted or truncated keys) — either way this is a per-device
             # delivery failure, not a reason to fail the whole admin request.
             results.append(
-                {"channel": "web", "device_label": subscription.device_label, "result": type(exc).__name__}
+                {
+                    "channel": "web",
+                    "device_label": subscription.device_label,
+                    "result": type(exc).__name__,
+                }
             )
             await log.awarning(
                 "platform_test_push_device_failed",
@@ -6979,7 +7229,13 @@ async def send_test_push(
                 }
             )
         except Exception as exc:
-            results.append({"channel": "native", "device_label": device.device_label, "result": type(exc).__name__})
+            results.append(
+                {
+                    "channel": "native",
+                    "device_label": device.device_label,
+                    "result": type(exc).__name__,
+                }
+            )
             await log.awarning(
                 "platform_test_push_device_failed",
                 channel="native",
@@ -7131,7 +7387,9 @@ async def stripe_configuration(
         enabled=row.enabled if row else False,
         acquisition_enabled=row.acquisition_enabled if row else config.acquisition_enabled,
         family_signups_enabled=row.family_signups_enabled if row else config.family_signups_enabled,
-        ultimate_signups_enabled=row.ultimate_signups_enabled if row else config.ultimate_signups_enabled,
+        ultimate_signups_enabled=row.ultimate_signups_enabled
+        if row
+        else config.ultimate_signups_enabled,
         mode=row.mode.value if row else config.mode,
         source=config.source,
         incomplete_reason=config.incomplete_reason,
@@ -7287,8 +7545,16 @@ async def update_stripe_settings(
         active_publishable = (
             body.test_publishable_key if body.mode == "test" else body.live_publishable_key
         )
-        active_monthly = body.test_family_monthly_price_id if body.mode == "test" else body.live_family_monthly_price_id
-        active_annual = body.test_family_annual_price_id if body.mode == "test" else body.live_family_annual_price_id
+        active_monthly = (
+            body.test_family_monthly_price_id
+            if body.mode == "test"
+            else body.live_family_monthly_price_id
+        )
+        active_annual = (
+            body.test_family_annual_price_id
+            if body.mode == "test"
+            else body.live_family_annual_price_id
+        )
         active_secret_provided = bool(
             body.test_secret_key if body.mode == "test" else body.live_secret_key
         )
@@ -7316,8 +7582,16 @@ async def update_stripe_settings(
             if not active_annual:
                 missing.append("Family annual Price ID")
         if body.ultimate_signups_enabled:
-            ultimate_monthly = body.test_ultimate_monthly_price_id if body.mode == "test" else body.live_ultimate_monthly_price_id
-            ultimate_annual = body.test_ultimate_annual_price_id if body.mode == "test" else body.live_ultimate_annual_price_id
+            ultimate_monthly = (
+                body.test_ultimate_monthly_price_id
+                if body.mode == "test"
+                else body.live_ultimate_monthly_price_id
+            )
+            ultimate_annual = (
+                body.test_ultimate_annual_price_id
+                if body.mode == "test"
+                else body.live_ultimate_annual_price_id
+            )
             if not ultimate_monthly:
                 missing.append("Ultimate monthly Price ID")
             if not ultimate_annual:
@@ -7565,8 +7839,7 @@ async def list_notification_templates(
     # unique constraint means keying purely by template_type here is
     # unambiguous even across a mix of email/in-app-registered types.
     overrides = {
-        row.template_type: row
-        for row in (await db.scalars(select(NotificationTemplate))).all()
+        row.template_type: row for row in (await db.scalars(select(NotificationTemplate))).all()
     }
     names = await _administrator_names(
         db,
@@ -8108,7 +8381,9 @@ async def resolve_incident(
     if resolved_at.tzinfo is None:
         resolved_at = resolved_at.replace(tzinfo=UTC)
     if resolved_at < row.starts_at:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Resolved time cannot precede start time.")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Resolved time cannot precede start time."
+        )
     previous = {"lifecycle_state": row.lifecycle_state.value, "resolved": False}
     row.lifecycle_state = IncidentLifecycleState.resolved
     row.resolved_at = resolved_at

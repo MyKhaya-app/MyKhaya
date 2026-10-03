@@ -233,7 +233,9 @@ async def apply_stripe_subscription_state(
     requested_plan = (stripe_subscription.get("metadata") or {}).get("mykhaya_plan")
     price_plan = plan_by_price.get(price_id) if plan_by_price and price_id else None
     try:
-        incoming_plan = price_plan or SubscriptionPlan(requested_plan or SubscriptionPlan.family.value)
+        incoming_plan = price_plan or SubscriptionPlan(
+            requested_plan or SubscriptionPlan.family.value
+        )
     except ValueError:
         incoming_plan = SubscriptionPlan.family
     period_start, period_end = extract_period(stripe_subscription)
@@ -285,7 +287,6 @@ async def apply_stripe_subscription_state(
         subscription.complimentary_reason = None
         subscription.complimentary_note = None
         subscription.complimentary_expires_at = None
-
 
     from mykhaya.family_retention import restore_family_retention
 

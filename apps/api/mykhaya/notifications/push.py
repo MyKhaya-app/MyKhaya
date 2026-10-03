@@ -274,9 +274,7 @@ def resolve_apns_config(settings: Settings) -> ApnsConfig:
         key_id=settings.apns_key_id,
         bundle_id=settings.apns_bundle_id,
         private_key=(
-            settings.apns_private_key.get_secret_value()
-            if settings.apns_private_key
-            else None
+            settings.apns_private_key.get_secret_value() if settings.apns_private_key else None
         ),
     )
 

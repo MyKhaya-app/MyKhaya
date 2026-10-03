@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -390,7 +390,9 @@ async def _require_template_owner_or_household_manage(
     db: AsyncSession, home_id: uuid.UUID, row: ListTemplate, auth: AuthContext
 ) -> None:
     if row.scope == RoutineScope.personal and row.owner_user_id != auth.user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to edit that template.")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "You do not have permission to edit that template."
+        )
     await require_capability(home_id, Capability.lists_manage, auth, db)
 
 
@@ -406,12 +408,17 @@ async def list_templates(
     filters = [ListTemplate.group_id == home_id, ListTemplate.archived_at.is_(None)]
     filters.append(
         (ListTemplate.scope == RoutineScope.household)
-        | ((ListTemplate.scope == RoutineScope.personal) & (ListTemplate.owner_user_id == auth.user.id))
+        | (
+            (ListTemplate.scope == RoutineScope.personal)
+            & (ListTemplate.owner_user_id == auth.user.id)
+        )
     )
     if q and q.strip():
         filters.append(ListTemplate.name.ilike(f"%{q.strip()}%"))
     rows = (
-        await db.scalars(select(ListTemplate).where(*filters).order_by(ListTemplate.updated_at.desc()))
+        await db.scalars(
+            select(ListTemplate).where(*filters).order_by(ListTemplate.updated_at.desc())
+        )
     ).all()
     return ListTemplateListResponse(items=[await _template_response(db, row) for row in rows])
 
@@ -436,11 +443,17 @@ async def create_template(
     db.add(row)
     await db.flush()
     for section_position, section_input in enumerate(body.sections):
-        section = ListTemplateSection(template_id=row.id, name=section_input.name.strip(), position=section_position)
+        section = ListTemplateSection(
+            template_id=row.id, name=section_input.name.strip(), position=section_position
+        )
         db.add(section)
         await db.flush()
         for item_position, item_input in enumerate(section_input.items):
-            db.add(ListTemplateItem(section_id=section.id, text=item_input.text.strip(), position=item_position))
+            db.add(
+                ListTemplateItem(
+                    section_id=section.id, text=item_input.text.strip(), position=item_position
+                )
+            )
     audit(db, request, "lists.template.created", auth.user.id, home_id, "list_template", row.id)
     await db.commit()
     await db.refresh(row)
@@ -475,26 +488,40 @@ async def update_template(
     row = await _get_template(db, home_id, template_id, for_update=True)
     await _require_template_owner_or_household_manage(db, home_id, row, auth)
     if row.updated_at != body.expected_updated_at:
-        raise HTTPException(status.HTTP_409_CONFLICT, "This template changed. Reload and try again.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This template changed. Reload and try again."
+        )
     row.name = " ".join(body.name.strip().split())
     row.description = body.description.strip() if body.description else None
     row.scope = body.scope
     old_sections = await _template_sections(db, row.id)
     if old_sections:
-        await db.execute(delete(ListTemplateSection).where(ListTemplateSection.template_id == row.id))
+        await db.execute(
+            delete(ListTemplateSection).where(ListTemplateSection.template_id == row.id)
+        )
     for section_position, section_input in enumerate(body.sections):
-        section = ListTemplateSection(template_id=row.id, name=section_input.name.strip(), position=section_position)
+        section = ListTemplateSection(
+            template_id=row.id, name=section_input.name.strip(), position=section_position
+        )
         db.add(section)
         await db.flush()
         for item_position, item_input in enumerate(section_input.items):
-            db.add(ListTemplateItem(section_id=section.id, text=item_input.text.strip(), position=item_position))
+            db.add(
+                ListTemplateItem(
+                    section_id=section.id, text=item_input.text.strip(), position=item_position
+                )
+            )
     audit(db, request, "lists.template.updated", auth.user.id, home_id, "list_template", row.id)
     await db.commit()
     await db.refresh(row)
     return await _template_response(db, row)
 
 
-@router.post("/{home_id}/list-templates/{template_id}/duplicate", response_model=ListTemplateResponse, status_code=201)
+@router.post(
+    "/{home_id}/list-templates/{template_id}/duplicate",
+    response_model=ListTemplateResponse,
+    status_code=201,
+)
 async def duplicate_template(
     home_id: uuid.UUID,
     template_id: uuid.UUID,
@@ -509,17 +536,26 @@ async def duplicate_template(
     if source.scope == RoutineScope.personal and source.owner_user_id != auth.user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That template could not be found")
     row = ListTemplate(
-        group_id=home_id, owner_user_id=auth.user.id, name=" ".join(body.name.strip().split()),
-        description=body.description, scope=body.scope,
+        group_id=home_id,
+        owner_user_id=auth.user.id,
+        name=" ".join(body.name.strip().split()),
+        description=body.description,
+        scope=body.scope,
     )
     db.add(row)
     await db.flush()
     for source_section in await _template_sections(db, source.id):
-        section = ListTemplateSection(template_id=row.id, name=source_section.name, position=source_section.position)
+        section = ListTemplateSection(
+            template_id=row.id, name=source_section.name, position=source_section.position
+        )
         db.add(section)
         await db.flush()
         items = (
-            await db.scalars(select(ListTemplateItem).where(ListTemplateItem.section_id == source_section.id).order_by(ListTemplateItem.position))
+            await db.scalars(
+                select(ListTemplateItem)
+                .where(ListTemplateItem.section_id == source_section.id)
+                .order_by(ListTemplateItem.position)
+            )
         ).all()
         for item in items:
             db.add(ListTemplateItem(section_id=section.id, text=item.text, position=item.position))
@@ -616,9 +652,13 @@ async def create_list(
     audit(db, request, "lists.list.created", auth.user.id, home_id, "list", row.id)
     await db.commit()
     await record_usage_event(
-        db, event_name=ProductUsageEventName.list_created,
-        platform=platform_from_request(request), module=ProductUsageModule.lists,
-        user_id=auth.user.id, group_id=home_id, event_key=f"list-created:{row.id}",
+        db,
+        event_name=ProductUsageEventName.list_created,
+        platform=platform_from_request(request),
+        module=ProductUsageModule.lists,
+        user_id=auth.user.id,
+        group_id=home_id,
+        event_key=f"list-created:{row.id}",
     )
     return await _detail_response(db, row, {row.id: True})
 
@@ -763,17 +803,25 @@ async def delete_list(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{home_id}/lists/{list_id}/sections", response_model=ListDetailResponse, status_code=201)
+@router.post(
+    "/{home_id}/lists/{list_id}/sections", response_model=ListDetailResponse, status_code=201
+)
 async def add_list_section(
-    home_id: uuid.UUID, list_id: uuid.UUID, body: ListSectionCreate, request: Request,
-    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    body: ListSectionCreate,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
     row = await _get_active_list(db, home_id, list_id, viewer_id=auth.user.id)
     access = await _list_access(db, home_id)
     _require_list_writable(access, row.id)
-    position = int(await db.scalar(select(func.count()).where(HouseholdListSection.list_id == row.id)) or 0)
+    position = int(
+        await db.scalar(select(func.count()).where(HouseholdListSection.list_id == row.id)) or 0
+    )
     db.add(HouseholdListSection(list_id=row.id, name=body.name.strip(), position=position))
     audit(db, request, "lists.section.added", auth.user.id, home_id, "list", row.id)
     await db.commit()
@@ -782,8 +830,13 @@ async def add_list_section(
 
 @router.patch("/{home_id}/lists/{list_id}/sections/{section_id}", response_model=ListDetailResponse)
 async def rename_list_section(
-    home_id: uuid.UUID, list_id: uuid.UUID, section_id: uuid.UUID, body: ListSectionRenameRequest,
-    request: Request, auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    section_id: uuid.UUID,
+    body: ListSectionRenameRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
@@ -799,10 +852,16 @@ async def rename_list_section(
     return await _detail_response(db, row, access)
 
 
-@router.delete("/{home_id}/lists/{list_id}/sections/{section_id}", response_model=ListDetailResponse)
+@router.delete(
+    "/{home_id}/lists/{list_id}/sections/{section_id}", response_model=ListDetailResponse
+)
 async def remove_list_section(
-    home_id: uuid.UUID, list_id: uuid.UUID, section_id: uuid.UUID, request: Request,
-    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    section_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
@@ -811,7 +870,9 @@ async def remove_list_section(
     _require_list_writable(access, row.id)
     section = await _get_active_section(db, row.id, section_id)
     await db.execute(
-        HouseholdListItem.__table__.update().where(HouseholdListItem.section_id == section.id).values(section_id=None)
+        update(HouseholdListItem)
+        .where(HouseholdListItem.section_id == section.id)
+        .values(section_id=None)
     )
     await db.delete(section)
     audit(db, request, "lists.section.removed", auth.user.id, home_id, "list", row.id)
@@ -821,8 +882,11 @@ async def remove_list_section(
 
 @router.post("/{home_id}/lists/{list_id}/sections/reorder", response_model=ListDetailResponse)
 async def reorder_list_sections(
-    home_id: uuid.UUID, list_id: uuid.UUID, body: ListSectionReorderRequest,
-    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db),
+    home_id: uuid.UUID,
+    list_id: uuid.UUID,
+    body: ListSectionReorderRequest,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> ListDetailResponse:
     await require_capability(home_id, Capability.lists_manage, auth, db)
     await require_entitlement(db, home_id, "lists.enabled")
@@ -836,8 +900,12 @@ async def reorder_list_sections(
             )
         ).all()
     )
-    if {section.id for section in sections} != set(body.section_ids) or len(sections) != len(body.section_ids):
-        raise HTTPException(status.HTTP_409_CONFLICT, "This list's sections changed. Reload and try again.")
+    if {section.id for section in sections} != set(body.section_ids) or len(sections) != len(
+        body.section_ids
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This list's sections changed. Reload and try again."
+        )
     by_id = {section.id: section for section in sections}
     for position, section_id in enumerate(body.section_ids):
         by_id[section_id].position = position
@@ -884,7 +952,11 @@ async def add_list_item(
     await db.flush()
     if item.assigned_member_id is not None:
         await notify_list_assignment(
-            db, settings=settings, item=item, list_row=row, actor=auth.user,
+            db,
+            settings=settings,
+            item=item,
+            list_row=row,
+            actor=auth.user,
             recipient_user_id=item.assigned_member_id,
         )
     audit(db, request, "lists.item.added", auth.user.id, home_id, "list", row.id)
@@ -953,16 +1025,24 @@ async def update_list_item(
 
     if item.assigned_member_id is not None and item.assigned_member_id != previous_assignee:
         await notify_list_assignment(
-            db, settings=settings, item=item, list_row=row, actor=auth.user,
+            db,
+            settings=settings,
+            item=item,
+            list_row=row,
+            actor=auth.user,
             recipient_user_id=item.assigned_member_id,
         )
     audit(db, request, "lists.item.updated", auth.user.id, home_id, "list", row.id)
     await db.commit()
     if "is_checked" in fields and new_checked:
         await record_usage_event(
-            db, event_name=ProductUsageEventName.list_item_completed,
-            platform=platform_from_request(request), module=ProductUsageModule.lists,
-            user_id=auth.user.id, group_id=home_id, event_key=f"list-item-completed:{item.id}:{item.completed_at}",
+            db,
+            event_name=ProductUsageEventName.list_item_completed,
+            platform=platform_from_request(request),
+            module=ProductUsageModule.lists,
+            user_id=auth.user.id,
+            group_id=home_id,
+            event_key=f"list-item-completed:{item.id}:{item.completed_at}",
         )
     return await _detail_response(db, row, access)
 

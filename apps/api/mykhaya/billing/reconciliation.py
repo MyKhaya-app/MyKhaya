@@ -118,7 +118,7 @@ async def confirm_checkout_session(
         raise CheckoutConfirmationError("The Stripe subscription does not belong to this Home.")
 
     items = (stripe_subscription.get("items") or {}).get("data") or []
-    price_id = ((items[0].get("price") or {}).get("id") if items else None)
+    price_id = (items[0].get("price") or {}).get("id") if items else None
     configured_prices = {
         config.family_monthly_price_id,
         config.family_annual_price_id,

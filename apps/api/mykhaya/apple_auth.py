@@ -133,15 +133,19 @@ def authorization_url(
     scope: str = "name email",
 ) -> str:
     require_apple_configuration(settings)
-    return f"{settings.apple_authorize_url}?{urlencode({
-        'response_type': 'code',
-        'response_mode': 'query',
-        'client_id': apple_client_identifier(settings),
-        'redirect_uri': apple_redirect_uri(settings),
-        'scope': scope,
-        'state': state,
-        'nonce': nonce,
-    })}"
+    return f"{settings.apple_authorize_url}?{
+        urlencode(
+            {
+                'response_type': 'code',
+                'response_mode': 'query',
+                'client_id': apple_client_identifier(settings),
+                'redirect_uri': apple_redirect_uri(settings),
+                'scope': scope,
+                'state': state,
+                'nonce': nonce,
+            }
+        )
+    }"
 
 
 async def exchange_code(settings: Settings, code: str) -> str:

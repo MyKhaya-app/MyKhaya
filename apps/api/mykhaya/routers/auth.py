@@ -2,7 +2,6 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -24,6 +23,7 @@ from mykhaya.apple_auth import (
 from mykhaya.audit import audit
 from mykhaya.auth_providers import external_auth_provider_statuses
 from mykhaya.browser_preauth import (
+    BrowserPreAuth,
     consume_browser_pre_auth,
     create_browser_pre_auth,
     load_browser_pre_auth,
@@ -201,7 +201,7 @@ async def _resolve_browser_mfa_policy(
 
 async def _mfa_preauth_user(
     transaction_id: str, db: AsyncSession, settings: Settings
-) -> tuple[object, User]:
+) -> tuple[BrowserPreAuth, User]:
     state = await load_browser_pre_auth(settings, transaction_id)
     if state is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
@@ -255,9 +255,7 @@ def _usable_browser_mfa_methods(
     if email_verified and UserMfaMethod.email in allowed:
         usable.add(UserMfaMethod.email)
     methods = [
-        method.value
-        for method in (UserMfaMethod.totp, UserMfaMethod.email)
-        if method in usable
+        method.value for method in (UserMfaMethod.totp, UserMfaMethod.email) if method in usable
     ]
     if allow_totp_enrolment and not methods and allowed == {UserMfaMethod.totp}:
         return [UserMfaMethod.totp.value]
@@ -431,9 +429,7 @@ async def browser_mfa_verify(
             )
             audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
             await db.commit()
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
-            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
         challenge.attempts += 1
         if not secrets.compare_digest(challenge.code_hash, hash_email_code(settings, body.code)):
             audit(
@@ -445,9 +441,7 @@ async def browser_mfa_verify(
             )
             audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="browser_mfa")
             await db.commit()
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED, "That verification code is invalid."
-            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
         challenge.consumed_at = now
         factor = await db.scalar(
             select(UserMfaMethodRecord).where(
@@ -553,9 +547,7 @@ async def authenticated_mfa_status(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This action is not available to a Child.")
     policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
     active = await _active_mfa_methods(db, auth.user.id)
-    email_available = (
-        auth.user.email_verified_at is not None and "email" in policy.allowed_methods
-    )
+    email_available = auth.user.email_verified_at is not None and "email" in policy.allowed_methods
     totp_enabled = UserMfaMethod.totp in active
     usable_methods = _usable_browser_mfa_methods(
         {UserMfaMethod(method) for method in policy.allowed_methods},
@@ -654,9 +646,7 @@ async def verify_authenticated_totp(
     )
     if factor is None or not factor.encrypted_secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
-    step = matched_totp_step(
-        decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
-    )
+    step = matched_totp_step(decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code)
     if step is None or not await claim_totp_step(settings, auth.user.id, step):
         audit(db, request, "MFA_TOTP_ENROLMENT_FAILED", auth.user.id, target_type="mfa_method")
         await db.commit()
@@ -1240,7 +1230,7 @@ async def authenticate_credentials(
     valid = verify_password(body.password, pair[1].password_hash if pair else DUMMY_HASH)
     if pair is None or not valid or not pair[0].is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
-    user = cast(User, pair[0])
+    user = pair[0]
     if settings.email_verification_enabled and user.email_verified_at is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
@@ -1505,9 +1495,7 @@ async def passkey_login_verify(
     await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
     token = request.cookies.get(PASSKEY_LOGIN_COOKIE)
     challenge = (
-        await pop_webauthn_token_challenge(settings, "family-login", token)
-        if token
-        else None
+        await pop_webauthn_token_challenge(settings, "family-login", token) if token else None
     )
     if challenge is None:
         raise HTTPException(
@@ -1742,9 +1730,7 @@ async def mobile_child_login(
     of transport — this does not introduce a second child-auth mechanism,
     just a second way to carry the same session."""
     require_secure_transport(request, settings)
-    user = await authenticate_child_credentials(
-        db, request, settings, body, "child-login-mobile"
-    )
+    user = await authenticate_child_credentials(db, request, settings, body, "child-login-mobile")
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, kind=SessionKind.managed_child
     )
@@ -1806,8 +1792,7 @@ async def renew(
             select(User, TrustedDevice)
             .join(TrustedDevice, TrustedDevice.user_id == User.id)
             .where(
-                TrustedDevice.token_hash
-                == hash_secret(raw, settings.secret_key.get_secret_value())
+                TrustedDevice.token_hash == hash_secret(raw, settings.secret_key.get_secret_value())
             )
         )
         known_pair = known_device_result.one_or_none()

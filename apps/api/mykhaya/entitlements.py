@@ -493,9 +493,7 @@ async def explain_user_entitlement(
         )
     )
     if legacy_membership is not None and await has_entitlement(db, home_id, key):
-        return UserEntitlementDecision(
-            user_id, home_id, key, EntitlementSource.legacy_home_member
-        )
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.legacy_home_member)
 
     grant = await db.scalar(
         select(HomeEntitlementGrant).where(
@@ -567,10 +565,11 @@ async def grant_home_family_sponsorship(
     )
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user is not an active Home member.")
-    home_owner_id = await db.scalar(
-        select(Group.created_by).where(Group.id == source_home_id)
-    )
-    if recipient_user_id == home_owner_id or membership.relationship == HouseholdRelationship.home_admin:
+    home_owner_id = await db.scalar(select(Group.created_by).where(Group.id == source_home_id))
+    if (
+        recipient_user_id == home_owner_id
+        or membership.relationship == HouseholdRelationship.home_admin
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "The Home Admin receives Family access from this Home's subscription, not sponsorship.",
@@ -655,7 +654,7 @@ async def transition_expired_family_home(
     ).all()
     for membership in memberships:
         if membership.user_id != retained_user_id:
-                membership.removed_at = effective_expiry
+            membership.removed_at = effective_expiry
 
     grants = (
         await db.scalars(
@@ -667,7 +666,7 @@ async def transition_expired_family_home(
         )
     ).all()
     for grant in grants:
-            grant.revoked_at = effective_expiry
+        grant.revoked_at = effective_expiry
 
     await record_subscription_event(
         db,

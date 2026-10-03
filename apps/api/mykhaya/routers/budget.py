@@ -7,11 +7,12 @@ for feature availability and membership checks; no Budget table is Home-owned.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,13 +54,13 @@ from mykhaya.features import require_feature
 from mykhaya.models import (
     BudgetActualSource,
     BudgetCategory,
+    BudgetIncomeSource,
     BudgetItem,
     BudgetItemType,
-    BudgetIncomeSource,
     BudgetMonth,
     BudgetMonthCategory,
-    BudgetMonthItem,
     BudgetMonthIncome,
+    BudgetMonthItem,
     BudgetPartnerShare,
     BudgetProfile,
     BudgetSharingLevel,
@@ -124,7 +125,9 @@ def _profile_response(row: BudgetProfile) -> BudgetProfileResponse:
     )
 
 
-def _entry_response(row: BudgetSpendingEntry, category_id: uuid.UUID) -> BudgetSpendingEntryResponse:
+def _entry_response(
+    row: BudgetSpendingEntry, category_id: uuid.UUID
+) -> BudgetSpendingEntryResponse:
     return BudgetSpendingEntryResponse(
         id=row.id,
         category_id=category_id,
@@ -161,9 +164,14 @@ async def _resolve_linked_item(
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Fixed item not found for that month")
     if item.category_id != category_id:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Fixed item does not belong to that category")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Fixed item does not belong to that category"
+        )
     if item.item_type_snapshot != BudgetItemType.fixed:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Only fixed items can be linked to a spending entry")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Only fixed items can be linked to a spending entry",
+        )
     return item
 
 
@@ -211,7 +219,9 @@ async def _create_month_snapshot(
     ).all()
     for category in categories:
         db.add(
-            BudgetMonthCategory(month_id=row.id, category_id=category.id, category_name=category.name)
+            BudgetMonthCategory(
+                month_id=row.id, category_id=category.id, category_name=category.name
+            )
         )
     fixed_items = (
         await db.scalars(
@@ -258,7 +268,9 @@ async def _create_month_snapshot(
                     recurring=source.recurring,
                 )
             )
-    audit(db, request, "budget.month.created", user_id, target_type="budget_month", target_id=row.id)
+    audit(
+        db, request, "budget.month.created", user_id, target_type="budget_month", target_id=row.id
+    )
     return row
 
 
@@ -267,7 +279,7 @@ def _is_current_or_future_month(year: int, month: int, month_start_day: int = 1)
     return budget_period(year, month, month_start_day).end > datetime.now(UTC).date()
 
 
-def _item_active_in_month(year: int, month: int, month_start_day: int):
+def _item_active_in_month(year: int, month: int, month_start_day: int) -> ColumnElement[bool]:
     """Lifecycle predicate against the start of the displayed budget period."""
     first_of_period = budget_period(year, month, month_start_day).start
     return and_(
@@ -332,7 +344,11 @@ async def _reconcile_month_items(
                 BudgetItem.archived_at.is_(None),
                 _item_active_in_month(month.year, month.month, month_start_day),
                 ((BudgetItem.item_type == BudgetItemType.fixed) & BudgetItem.recurring.is_(True))
-                | ((BudgetItem.item_type == BudgetItemType.variable) if include_variables else False),
+                | (
+                    (BudgetItem.item_type == BudgetItemType.variable)
+                    if include_variables
+                    else False
+                ),
             )
         )
     ).all()
@@ -447,13 +463,15 @@ async def _reconcile_month_income(
     )
     missing = [source for source in sources if source.id not in existing_ids]
     for source in missing:
-        db.add(BudgetMonthIncome(
-            month_id=month.id,
-            source_id=source.id,
-            source_name=source.name,
-            usual_payday_day=source.usual_payday_day,
-            recurring=source.recurring,
-        ))
+        db.add(
+            BudgetMonthIncome(
+                month_id=month.id,
+                source_id=source.id,
+                source_name=source.name,
+                usual_payday_day=source.usual_payday_day,
+                recurring=source.recurring,
+            )
+        )
     if missing:
         await db.flush()
         if request is not None:
@@ -488,7 +506,9 @@ async def _item_payment_status(
     )
     if entry is None:
         return "not_paid", None
-    return "paid", BudgetMonthItemPaidEntry(id=entry.id, amount=float(entry.amount), spent_on=entry.spent_on)
+    return "paid", BudgetMonthItemPaidEntry(
+        id=entry.id, amount=float(entry.amount), spent_on=entry.spent_on
+    )
 
 
 async def _month_response(
@@ -518,19 +538,29 @@ async def _month_response(
             )
             item_rows = (
                 await db.scalars(
-                    select(BudgetMonthItem).where(
+                    select(BudgetMonthItem)
+                    .where(
                         BudgetMonthItem.month_id == month.id,
                         BudgetMonthItem.category_id == row.category_id,
                         BudgetMonthItem.archived_at.is_(None),
-                    ).order_by(BudgetMonthItem.name_snapshot)
+                    )
+                    .order_by(BudgetMonthItem.name_snapshot)
                 )
             ).all()
             fixed_planned = sum(
-                (item.planned_amount for item in item_rows if item.item_type_snapshot == BudgetItemType.fixed),
+                (
+                    item.planned_amount
+                    for item in item_rows
+                    if item.item_type_snapshot == BudgetItemType.fixed
+                ),
                 Decimal("0"),
             )
             variable_planned = sum(
-                (item.planned_amount for item in item_rows if item.item_type_snapshot == BudgetItemType.variable),
+                (
+                    item.planned_amount
+                    for item in item_rows
+                    if item.item_type_snapshot == BudgetItemType.variable
+                ),
                 Decimal("0"),
             )
             planned = fixed_planned + variable_planned if item_rows else row.planned_amount
@@ -569,7 +599,9 @@ async def _month_response(
                     category_name=row.category_name,
                     planned_amount=float(planned),
                     actual_source=row.actual_source,
-                    manual_actual=float(row.manual_actual) if row.manual_actual is not None else None,
+                    manual_actual=float(row.manual_actual)
+                    if row.manual_actual is not None
+                    else None,
                     entries_actual=float(entries_amount),
                     fixed_actual=(
                         float(row.fixed_actual) if row.fixed_actual is not None else None
@@ -679,10 +711,17 @@ async def list_categories(
             .order_by(BudgetCategory.sort_order, BudgetCategory.name)
         )
     ).all()
-    return [BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False) for row in rows]
+    return [
+        BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+        for row in rows
+    ]
 
 
-@router.post("/{home_id}/budget/categories", response_model=BudgetCategoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{home_id}/budget/categories",
+    response_model=BudgetCategoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_category(
     home_id: uuid.UUID,
     body: BudgetCategoryCreate,
@@ -722,9 +761,18 @@ async def create_category(
                     category_name=row.name,
                 )
             )
-    audit(db, request, "budget.category.created", auth.user.id, target_type="budget_category", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.category.created",
+        auth.user.id,
+        target_type="budget_category",
+        target_id=row.id,
+    )
     await db.commit()
-    return BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+    return BudgetCategoryResponse(
+        id=row.id, name=row.name, sort_order=row.sort_order, archived=False
+    )
 
 
 @router.put("/{home_id}/budget/categories/{category_id}", response_model=BudgetCategoryResponse)
@@ -738,20 +786,46 @@ async def update_category(
 ) -> BudgetCategoryResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
+    row = await db.scalar(
+        select(BudgetCategory).where(
+            BudgetCategory.id == category_id,
+            BudgetCategory.profile_id == profile.id,
+            BudgetCategory.archived_at.is_(None),
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
     row.name = body.name.strip()
     row.sort_order = body.sort_order
-    months = (await db.scalars(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)))).all()
+    months = (
+        await db.scalars(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)
+            )
+        )
+    ).all()
     for month in months:
         if _is_current_or_future_month(month.year, month.month):
-            membership = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == row.id))
+            membership = await db.scalar(
+                select(BudgetMonthCategory).where(
+                    BudgetMonthCategory.month_id == month.id,
+                    BudgetMonthCategory.category_id == row.id,
+                )
+            )
             if membership is not None:
                 membership.category_name = row.name
-    audit(db, request, "budget.category.updated", auth.user.id, target_type="budget_category", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.category.updated",
+        auth.user.id,
+        target_type="budget_category",
+        target_id=row.id,
+    )
     await db.commit()
-    return BudgetCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, archived=False)
+    return BudgetCategoryResponse(
+        id=row.id, name=row.name, sort_order=row.sort_order, archived=False
+    )
 
 
 @router.delete("/{home_id}/budget/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -764,15 +838,41 @@ async def delete_category(
 ) -> None:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
+    row = await db.scalar(
+        select(BudgetCategory).where(
+            BudgetCategory.id == category_id,
+            BudgetCategory.profile_id == profile.id,
+            BudgetCategory.archived_at.is_(None),
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
-    months = (await db.scalars(select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)))).all()
-    current_future_ids = [month.id for month in months if _is_current_or_future_month(month.year, month.month)]
+    months = (
+        await db.scalars(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id, BudgetMonth.archived_at.is_(None)
+            )
+        )
+    ).all()
+    current_future_ids = [
+        month.id for month in months if _is_current_or_future_month(month.year, month.month)
+    ]
     if current_future_ids:
-        await db.execute(delete(BudgetMonthCategory).where(BudgetMonthCategory.category_id == row.id, BudgetMonthCategory.month_id.in_(current_future_ids)))
+        await db.execute(
+            delete(BudgetMonthCategory).where(
+                BudgetMonthCategory.category_id == row.id,
+                BudgetMonthCategory.month_id.in_(current_future_ids),
+            )
+        )
     row.archived_at = datetime.now(UTC)
-    audit(db, request, "budget.category.archived", auth.user.id, target_type="budget_category", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.category.archived",
+        auth.user.id,
+        target_type="budget_category",
+        target_id=row.id,
+    )
     await db.commit()
 
 
@@ -785,16 +885,24 @@ async def list_budget_items(
 ) -> list[BudgetItemResponse]:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    query = select(BudgetItem).where(
-        BudgetItem.profile_id == profile.id,
-        BudgetItem.archived_at.is_(None),
-    ).order_by(BudgetItem.name)
+    query = (
+        select(BudgetItem)
+        .where(
+            BudgetItem.profile_id == profile.id,
+            BudgetItem.archived_at.is_(None),
+        )
+        .order_by(BudgetItem.name)
+    )
     if category_id is not None:
         query = query.where(BudgetItem.category_id == category_id)
     return [_item_response(row) for row in (await db.scalars(query)).all()]
 
 
-@router.post("/{home_id}/budget/items", response_model=BudgetItemResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{home_id}/budget/items",
+    response_model=BudgetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_budget_item(
     home_id: uuid.UUID,
     body: BudgetItemCreate,
@@ -804,11 +912,13 @@ async def create_budget_item(
 ) -> BudgetItemResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    category = await db.scalar(select(BudgetCategory).where(
-        BudgetCategory.id == body.category_id,
-        BudgetCategory.profile_id == profile.id,
-        BudgetCategory.archived_at.is_(None),
-    ))
+    category = await db.scalar(
+        select(BudgetCategory).where(
+            BudgetCategory.id == body.category_id,
+            BudgetCategory.profile_id == profile.id,
+            BudgetCategory.archived_at.is_(None),
+        )
+    )
     if category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
     row = BudgetItem(
@@ -824,27 +934,44 @@ async def create_budget_item(
     )
     db.add(row)
     await db.flush()
-    target = (body.year, body.month) if body.year is not None else (datetime.now(UTC).year, datetime.now(UTC).month)
-    month = await db.scalar(select(BudgetMonth).where(
-        BudgetMonth.profile_id == profile.id,
-        BudgetMonth.year == target[0],
-        BudgetMonth.month == target[1],
-        BudgetMonth.archived_at.is_(None),
-    ))
+    target = (
+        (body.year, body.month)
+        if body.year is not None and body.month is not None
+        else (datetime.now(UTC).year, datetime.now(UTC).month)
+    )
+    month = await db.scalar(
+        select(BudgetMonth).where(
+            BudgetMonth.profile_id == profile.id,
+            BudgetMonth.year == target[0],
+            BudgetMonth.month == target[1],
+            BudgetMonth.archived_at.is_(None),
+        )
+    )
     if month is None:
-        month = await _create_month_snapshot(db, profile, target[0], target[1], request, auth.user.id)
-    db.add(BudgetMonthItem(
-        month_id=month.id,
-        budget_item_id=row.id,
-        category_id=category.id,
-        name_snapshot=row.name,
-        item_type_snapshot=row.item_type,
-        planned_amount=row.default_amount,
-        note=row.notes,
-    ))
+        month = await _create_month_snapshot(
+            db, profile, target[0], target[1], request, auth.user.id
+        )
+    db.add(
+        BudgetMonthItem(
+            month_id=month.id,
+            budget_item_id=row.id,
+            category_id=category.id,
+            name_snapshot=row.name,
+            item_type_snapshot=row.item_type,
+            planned_amount=row.default_amount,
+            note=row.notes,
+        )
+    )
     await db.flush()
     await _sync_category_planned_compatibility(db, month, category.id)
-    audit(db, request, "budget.item.created", auth.user.id, target_type="budget_item", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.item.created",
+        auth.user.id,
+        target_type="budget_item",
+        target_id=row.id,
+    )
     await db.commit()
     return _item_response(row)
 
@@ -860,11 +987,13 @@ async def update_budget_item(
 ) -> BudgetItemResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = await db.scalar(select(BudgetItem).where(
-        BudgetItem.id == item_id,
-        BudgetItem.profile_id == profile.id,
-        BudgetItem.archived_at.is_(None),
-    ))
+    row = await db.scalar(
+        select(BudgetItem).where(
+            BudgetItem.id == item_id,
+            BudgetItem.profile_id == profile.id,
+            BudgetItem.archived_at.is_(None),
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget item not found")
     lifecycle_changed = row.starts_on != body.starts_on or row.ends_on != body.ends_on
@@ -876,13 +1005,17 @@ async def update_budget_item(
     row.notes = body.notes.strip() if body.notes else None
     if body.year is not None and body.month is not None:
         if not _is_current_or_future_month(body.year, body.month):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be changed")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be changed"
+            )
         month = await _month_for_owner(db, profile.id, body.year, body.month)
-        snapshot = await db.scalar(select(BudgetMonthItem).where(
-            BudgetMonthItem.month_id == month.id,
-            BudgetMonthItem.budget_item_id == row.id,
-            BudgetMonthItem.archived_at.is_(None),
-        ))
+        snapshot = await db.scalar(
+            select(BudgetMonthItem).where(
+                BudgetMonthItem.month_id == month.id,
+                BudgetMonthItem.budget_item_id == row.id,
+                BudgetMonthItem.archived_at.is_(None),
+            )
+        )
         if snapshot is None:
             snapshot = BudgetMonthItem(
                 month_id=month.id,
@@ -890,7 +1023,13 @@ async def update_budget_item(
                 category_id=row.category_id,
                 name_snapshot=row.name,
                 item_type_snapshot=row.item_type,
-                planned_amount=Decimal(str(body.planned_amount if body.planned_amount is not None else body.default_amount)),
+                planned_amount=Decimal(
+                    str(
+                        body.planned_amount
+                        if body.planned_amount is not None
+                        else body.default_amount
+                    )
+                ),
                 note=row.notes,
             )
             db.add(snapshot)
@@ -901,7 +1040,14 @@ async def update_budget_item(
                 snapshot.planned_amount = Decimal(str(body.planned_amount))
         await db.flush()
         await _sync_category_planned_compatibility(db, month, row.category_id)
-    audit(db, request, "budget.item.updated", auth.user.id, target_type="budget_item", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.item.updated",
+        auth.user.id,
+        target_type="budget_item",
+        target_id=row.id,
+    )
     if lifecycle_changed:
         audit(
             db,
@@ -929,29 +1075,44 @@ async def delete_budget_item(
 ) -> None:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = await db.scalar(select(BudgetItem).where(
-        BudgetItem.id == item_id,
-        BudgetItem.profile_id == profile.id,
-        BudgetItem.archived_at.is_(None),
-    ))
+    row = await db.scalar(
+        select(BudgetItem).where(
+            BudgetItem.id == item_id,
+            BudgetItem.profile_id == profile.id,
+            BudgetItem.archived_at.is_(None),
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget item not found")
     row.archived_at = datetime.now(UTC)
-    months = (await db.scalars(select(BudgetMonth).where(
-        BudgetMonth.profile_id == profile.id,
-        BudgetMonth.archived_at.is_(None),
-    ))).all()
+    months = (
+        await db.scalars(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id,
+                BudgetMonth.archived_at.is_(None),
+            )
+        )
+    ).all()
     for month in months:
         if _is_current_or_future_month(month.year, month.month):
-            snapshot = await db.scalar(select(BudgetMonthItem).where(
-                BudgetMonthItem.month_id == month.id,
-                BudgetMonthItem.budget_item_id == row.id,
-                BudgetMonthItem.archived_at.is_(None),
-            ))
+            snapshot = await db.scalar(
+                select(BudgetMonthItem).where(
+                    BudgetMonthItem.month_id == month.id,
+                    BudgetMonthItem.budget_item_id == row.id,
+                    BudgetMonthItem.archived_at.is_(None),
+                )
+            )
             if snapshot is not None:
                 snapshot.archived_at = datetime.now(UTC)
                 await _sync_category_planned_compatibility(db, month, row.category_id)
-    audit(db, request, "budget.item.archived", auth.user.id, target_type="budget_item", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.item.archived",
+        auth.user.id,
+        target_type="budget_item",
+        target_id=row.id,
+    )
     await db.commit()
 
 
@@ -966,7 +1127,10 @@ async def list_income_sources(
     rows = (
         await db.scalars(
             select(BudgetIncomeSource)
-            .where(BudgetIncomeSource.profile_id == profile.id, BudgetIncomeSource.archived_at.is_(None))
+            .where(
+                BudgetIncomeSource.profile_id == profile.id,
+                BudgetIncomeSource.archived_at.is_(None),
+            )
             .order_by(BudgetIncomeSource.sort_order, BudgetIncomeSource.name)
         )
     ).all()
@@ -983,7 +1147,11 @@ async def list_income_sources(
     ]
 
 
-@router.post("/{home_id}/budget/income-sources", response_model=BudgetIncomeSourceResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{home_id}/budget/income-sources",
+    response_model=BudgetIncomeSourceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_income_source(
     home_id: uuid.UUID,
     body: BudgetIncomeSourceCreate,
@@ -1028,13 +1196,21 @@ async def create_income_source(
                     db, profile, target_year, target_month_number, request, auth.user.id
                 )
             await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
-        audit(db, request, "budget.income_source.created", auth.user.id, target_type="budget_income_source", target_id=row.id)
+        audit(
+            db,
+            request,
+            "budget.income_source.created",
+            auth.user.id,
+            target_type="budget_income_source",
+            target_id=row.id,
+        )
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
+            f"Income source already exists. You already have an income source called"
+            f" “{name}”. You can edit the existing one instead.",
         ) from None
     return BudgetIncomeSourceResponse(
         id=row.id,
@@ -1046,7 +1222,9 @@ async def create_income_source(
     )
 
 
-@router.put("/{home_id}/budget/income-sources/{source_id}", response_model=BudgetIncomeSourceResponse)
+@router.put(
+    "/{home_id}/budget/income-sources/{source_id}", response_model=BudgetIncomeSourceResponse
+)
 async def update_income_source(
     home_id: uuid.UUID,
     source_id: uuid.UUID,
@@ -1094,13 +1272,21 @@ async def update_income_source(
                     membership.source_name = name
                     membership.usual_payday_day = row.usual_payday_day
                     membership.recurring = row.recurring
-        audit(db, request, "budget.income_source.updated", auth.user.id, target_type="budget_income_source", target_id=row.id)
+        audit(
+            db,
+            request,
+            "budget.income_source.updated",
+            auth.user.id,
+            target_type="budget_income_source",
+            target_id=row.id,
+        )
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f'Income source already exists. You already have an income source called “{name}”. You can edit the existing one instead.',
+            f"Income source already exists. You already have an income source called"
+            f" “{name}”. You can edit the existing one instead.",
         ) from None
     return BudgetIncomeSourceResponse(
         id=row.id,
@@ -1112,7 +1298,9 @@ async def update_income_source(
     )
 
 
-@router.delete("/{home_id}/budget/income-sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{home_id}/budget/income-sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT
+)
 async def delete_income_source(
     home_id: uuid.UUID,
     source_id: uuid.UUID,
@@ -1139,7 +1327,9 @@ async def delete_income_source(
             )
         )
     ).all()
-    current_future_ids = [month.id for month in months if _is_current_or_future_month(month.year, month.month)]
+    current_future_ids = [
+        month.id for month in months if _is_current_or_future_month(month.year, month.month)
+    ]
     if current_future_ids:
         await db.execute(
             delete(BudgetMonthIncome).where(
@@ -1148,11 +1338,22 @@ async def delete_income_source(
             )
         )
     row.archived_at = datetime.now(UTC)
-    audit(db, request, "budget.income_source.archived", auth.user.id, target_type="budget_income_source", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.income_source.archived",
+        auth.user.id,
+        target_type="budget_income_source",
+        target_id=row.id,
+    )
     await db.commit()
 
 
-@router.post("/{home_id}/budget/months/{year}/{month}", response_model=BudgetMonthResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{home_id}/budget/months/{year}/{month}",
+    response_model=BudgetMonthResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_month(
     home_id: uuid.UUID,
     year: int,
@@ -1166,7 +1367,11 @@ async def create_month(
     if not 1 <= month <= 12:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Month must be between 1 and 12")
     existing = await db.scalar(
-        select(BudgetMonth).where(BudgetMonth.profile_id == profile.id, BudgetMonth.year == year, BudgetMonth.month == month)
+        select(BudgetMonth).where(
+            BudgetMonth.profile_id == profile.id,
+            BudgetMonth.year == year,
+            BudgetMonth.month == month,
+        )
     )
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "That budget month already exists")
@@ -1188,46 +1393,64 @@ async def copy_month(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     if not _is_current_or_future_month(year, month, profile.month_start_day):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be created")
-    target = await db.scalar(select(BudgetMonth).where(
-        BudgetMonth.profile_id == profile.id,
-        BudgetMonth.year == year,
-        BudgetMonth.month == month,
-        BudgetMonth.archived_at.is_(None),
-    ))
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Historical month plans cannot be created"
+        )
+    target = await db.scalar(
+        select(BudgetMonth).where(
+            BudgetMonth.profile_id == profile.id,
+            BudgetMonth.year == year,
+            BudgetMonth.month == month,
+            BudgetMonth.archived_at.is_(None),
+        )
+    )
     if target is None:
         target = await _create_month_snapshot(
             db, profile, year, month, request, auth.user.id, copy_income=body.copy_income_sources
         )
-    await _reconcile_month_items(db, profile.id, target, profile.month_start_day, include_variables=False)
+    await _reconcile_month_items(
+        db, profile.id, target, profile.month_start_day, include_variables=False
+    )
     if body.copy_variable_items:
         previous_date = date(year, month, 1) - timedelta(days=1)
-        source_month = await db.scalar(select(BudgetMonth).where(
-            BudgetMonth.profile_id == profile.id,
-            BudgetMonth.year == previous_date.year,
-            BudgetMonth.month == previous_date.month,
-            BudgetMonth.archived_at.is_(None),
-        ))
-        source_items = []
+        source_month = await db.scalar(
+            select(BudgetMonth).where(
+                BudgetMonth.profile_id == profile.id,
+                BudgetMonth.year == previous_date.year,
+                BudgetMonth.month == previous_date.month,
+                BudgetMonth.archived_at.is_(None),
+            )
+        )
+        source_items: Sequence[BudgetMonthItem] | Sequence[BudgetItem] = []
         if source_month is not None:
-            source_items = (await db.scalars(select(BudgetMonthItem).where(
-                BudgetMonthItem.month_id == source_month.id,
-                BudgetMonthItem.item_type_snapshot == BudgetItemType.variable,
-                BudgetMonthItem.archived_at.is_(None),
-            ))).all()
+            source_items = (
+                await db.scalars(
+                    select(BudgetMonthItem).where(
+                        BudgetMonthItem.month_id == source_month.id,
+                        BudgetMonthItem.item_type_snapshot == BudgetItemType.variable,
+                        BudgetMonthItem.archived_at.is_(None),
+                    )
+                )
+            ).all()
         if not source_items:
-            source_items = (await db.scalars(select(BudgetItem).where(
-                BudgetItem.profile_id == profile.id,
-                BudgetItem.item_type == BudgetItemType.variable,
-                BudgetItem.archived_at.is_(None),
-            ))).all()
+            source_items = (
+                await db.scalars(
+                    select(BudgetItem).where(
+                        BudgetItem.profile_id == profile.id,
+                        BudgetItem.item_type == BudgetItemType.variable,
+                        BudgetItem.archived_at.is_(None),
+                    )
+                )
+            ).all()
         for source in source_items:
             item_id = source.budget_item_id if isinstance(source, BudgetMonthItem) else source.id
-            exists = await db.scalar(select(BudgetMonthItem).where(
-                BudgetMonthItem.month_id == target.id,
-                BudgetMonthItem.budget_item_id == item_id,
-                BudgetMonthItem.archived_at.is_(None),
-            ))
+            exists = await db.scalar(
+                select(BudgetMonthItem).where(
+                    BudgetMonthItem.month_id == target.id,
+                    BudgetMonthItem.budget_item_id == item_id,
+                    BudgetMonthItem.archived_at.is_(None),
+                )
+            )
             if exists is not None:
                 continue
             if isinstance(source, BudgetMonthItem):
@@ -1236,21 +1459,34 @@ async def copy_month(
                 item = await db.get(BudgetItem, source.budget_item_id)
                 if item is None or item.archived_at is not None:
                     continue
-                name, amount, category_id = source.name_snapshot, source.planned_amount, source.category_id
+                name, amount, category_id = (
+                    source.name_snapshot,
+                    source.planned_amount,
+                    source.category_id,
+                )
             else:
                 item = source
                 name, amount, category_id = item.name, item.default_amount, item.category_id
-            db.add(BudgetMonthItem(
-                month_id=target.id,
-                budget_item_id=item.id,
-                category_id=category_id,
-                name_snapshot=name,
-                item_type_snapshot=BudgetItemType.variable,
-                planned_amount=amount,
-            ))
+            db.add(
+                BudgetMonthItem(
+                    month_id=target.id,
+                    budget_item_id=item.id,
+                    category_id=category_id,
+                    name_snapshot=name,
+                    item_type_snapshot=BudgetItemType.variable,
+                    planned_amount=amount,
+                )
+            )
             await db.flush()
             await _sync_category_planned_compatibility(db, target, category_id)
-    audit(db, request, "budget.month.copied", auth.user.id, target_type="budget_month", target_id=target.id)
+    audit(
+        db,
+        request,
+        "budget.month.copied",
+        auth.user.id,
+        target_type="budget_month",
+        target_id=target.id,
+    )
     await db.commit()
     return await _month_response(db, target)
 
@@ -1277,7 +1513,9 @@ async def get_month(
         )
     )
     if month_row is None:
-        return BudgetMonthResponse(configured=False, year=year, month=month, categories=[], income=[])
+        return BudgetMonthResponse(
+            configured=False, year=year, month=month, categories=[], income=[]
+        )
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
     await _reconcile_month_income(db, profile.id, month_row, request, auth.user.id)
     await _reconcile_month_items(db, profile.id, month_row, profile.month_start_day)
@@ -1285,7 +1523,11 @@ async def get_month(
     return await _month_response(db, month_row)
 
 
-@router.post("/{home_id}/budget/entries", response_model=BudgetSpendingEntryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{home_id}/budget/entries",
+    response_model=BudgetSpendingEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_entry(
     home_id: uuid.UUID,
     body: BudgetSpendingEntryCreate,
@@ -1295,22 +1537,36 @@ async def create_entry(
 ) -> BudgetSpendingEntryResponse:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    category = await db.scalar(select(BudgetCategory).where(BudgetCategory.id == body.category_id, BudgetCategory.profile_id == profile.id, BudgetCategory.archived_at.is_(None)))
+    category = await db.scalar(
+        select(BudgetCategory).where(
+            BudgetCategory.id == body.category_id,
+            BudgetCategory.profile_id == profile.id,
+            BudgetCategory.archived_at.is_(None),
+        )
+    )
     if category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found")
     target_period = budget_period_for_date(body.spent_on, profile.month_start_day)
-    month = await db.scalar(select(BudgetMonth).where(
-        BudgetMonth.profile_id == profile.id,
-        BudgetMonth.year == target_period.year,
-        BudgetMonth.month == target_period.month,
-        BudgetMonth.archived_at.is_(None),
-    ))
+    month = await db.scalar(
+        select(BudgetMonth).where(
+            BudgetMonth.profile_id == profile.id,
+            BudgetMonth.year == target_period.year,
+            BudgetMonth.month == target_period.month,
+            BudgetMonth.archived_at.is_(None),
+        )
+    )
     if month is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget month not found")
     await _reconcile_month_categories(db, profile.id, month, request, auth.user.id)
-    month_category = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == category.id))
+    month_category = await db.scalar(
+        select(BudgetMonthCategory).where(
+            BudgetMonthCategory.month_id == month.id, BudgetMonthCategory.category_id == category.id
+        )
+    )
     if month_category is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Category is not part of that historical month"
+        )
     linked_item = await _resolve_linked_item(db, month, category.id, body.budget_month_item_id)
     row = BudgetSpendingEntry(
         month_category_id=month_category.id,
@@ -1322,7 +1578,14 @@ async def create_entry(
     )
     db.add(row)
     await db.flush()
-    audit(db, request, "budget.entry.created", auth.user.id, target_type="budget_entry", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.entry.created",
+        auth.user.id,
+        target_type="budget_entry",
+        target_id=row.id,
+    )
     if linked_item is not None:
         audit(
             db,
@@ -1434,7 +1697,9 @@ async def update_entry(
         )
     )
     if target_month_category is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Category is not part of that historical month")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Category is not part of that historical month"
+        )
     previous_link_id = entry.budget_month_item_id
     requested_link_id = body.budget_month_item_id
     # The edit sheet preserves an unchanged fixed-item link.  A link belongs
@@ -1445,14 +1710,23 @@ async def update_entry(
     # that month.
     if target_month.id != entry_month.id and requested_link_id == previous_link_id:
         requested_link_id = None
-    linked_item = await _resolve_linked_item(db, target_month, target_category.id, requested_link_id)
+    linked_item = await _resolve_linked_item(
+        db, target_month, target_category.id, requested_link_id
+    )
     entry.month_category_id = target_month_category.id
     entry.description = body.description.strip()
     entry.amount = Decimal(str(body.amount))
     entry.spent_on = body.spent_on
     entry.note = body.note.strip() if body.note else None
     entry.budget_month_item_id = linked_item.id if linked_item else None
-    audit(db, request, "budget.entry.updated", auth.user.id, target_type="budget_entry", target_id=entry.id)
+    audit(
+        db,
+        request,
+        "budget.entry.updated",
+        auth.user.id,
+        target_type="budget_entry",
+        target_id=entry.id,
+    )
     if previous_link_id != entry.budget_month_item_id:
         audit(
             db,
@@ -1462,8 +1736,12 @@ async def update_entry(
             target_type="budget_entry",
             target_id=entry.id,
             metadata={
-                "previous_budget_month_item_id": str(previous_link_id) if previous_link_id else None,
-                "budget_month_item_id": str(entry.budget_month_item_id) if entry.budget_month_item_id else None,
+                "previous_budget_month_item_id": str(previous_link_id)
+                if previous_link_id
+                else None,
+                "budget_month_item_id": str(entry.budget_month_item_id)
+                if entry.budget_month_item_id
+                else None,
             },
         )
     await db.commit()
@@ -1483,7 +1761,14 @@ async def delete_entry(
     entry, _, _ = await _entry_for_owner(db, profile.id, entry_id)
     linked_item_id = entry.budget_month_item_id
     entry.archived_at = datetime.now(UTC)
-    audit(db, request, "budget.entry.deleted", auth.user.id, target_type="budget_entry", target_id=entry.id)
+    audit(
+        db,
+        request,
+        "budget.entry.deleted",
+        auth.user.id,
+        target_type="budget_entry",
+        target_id=entry.id,
+    )
     if linked_item_id is not None:
         audit(
             db,
@@ -1497,7 +1782,10 @@ async def delete_entry(
     await db.commit()
 
 
-@router.put("/{home_id}/budget/months/{year}/{month}/categories/{category_id}/actual", response_model=BudgetMonthCategoryResponse)
+@router.put(
+    "/{home_id}/budget/months/{year}/{month}/categories/{category_id}/actual",
+    response_model=BudgetMonthCategoryResponse,
+)
 async def update_actual(
     home_id: uuid.UUID,
     year: int,
@@ -1512,7 +1800,12 @@ async def update_actual(
     profile = await _profile(db, auth.user.id)
     month_row = await _month_for_owner(db, profile.id, year, month)
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
-    row = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month_row.id, BudgetMonthCategory.category_id == category_id))
+    row = await db.scalar(
+        select(BudgetMonthCategory).where(
+            BudgetMonthCategory.month_id == month_row.id,
+            BudgetMonthCategory.category_id == category_id,
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
     if body.source == BudgetActualSource.manual:
@@ -1548,7 +1841,10 @@ async def update_actual(
     return next(item for item in response.categories if item.category_id == category_id)
 
 
-@router.put("/{home_id}/budget/months/{year}/{month}/categories/{category_id}/plan", response_model=BudgetMonthCategoryResponse)
+@router.put(
+    "/{home_id}/budget/months/{year}/{month}/categories/{category_id}/plan",
+    response_model=BudgetMonthCategoryResponse,
+)
 async def update_planned_amount(
     home_id: uuid.UUID,
     year: int,
@@ -1572,13 +1868,23 @@ async def update_planned_amount(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
     row.planned_amount = Decimal(str(body.planned_amount))
-    audit(db, request, "budget.plan_amount.updated", auth.user.id, target_type="budget_month_category", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.plan_amount.updated",
+        auth.user.id,
+        target_type="budget_month_category",
+        target_id=row.id,
+    )
     await db.commit()
     response = await _month_response(db, month_row)
     return next(item for item in response.categories if item.category_id == category_id)
 
 
-@router.put("/{home_id}/budget/months/{year}/{month}/categories/{category_id}/note", response_model=BudgetMonthCategoryResponse)
+@router.put(
+    "/{home_id}/budget/months/{year}/{month}/categories/{category_id}/note",
+    response_model=BudgetMonthCategoryResponse,
+)
 async def update_category_note(
     home_id: uuid.UUID,
     year: int,
@@ -1593,17 +1899,32 @@ async def update_category_note(
     profile = await _profile(db, auth.user.id)
     month_row = await _month_for_owner(db, profile.id, year, month)
     await _reconcile_month_categories(db, profile.id, month_row, request, auth.user.id)
-    row = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.month_id == month_row.id, BudgetMonthCategory.category_id == category_id))
+    row = await db.scalar(
+        select(BudgetMonthCategory).where(
+            BudgetMonthCategory.month_id == month_row.id,
+            BudgetMonthCategory.category_id == category_id,
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget category not found for that month")
     row.note = body.note.strip() if body.note else None
-    audit(db, request, "budget.category.note.updated", auth.user.id, target_type="budget_month_category", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.category.note.updated",
+        auth.user.id,
+        target_type="budget_month_category",
+        target_id=row.id,
+    )
     await db.commit()
     response = await _month_response(db, month_row)
     return next(item for item in response.categories if item.category_id == category_id)
 
 
-@router.put("/{home_id}/budget/months/{year}/{month}/income/{source_id}", response_model=BudgetMonthIncomeResponse)
+@router.put(
+    "/{home_id}/budget/months/{year}/{month}/income/{source_id}",
+    response_model=BudgetMonthIncomeResponse,
+)
 async def update_month_income(
     home_id: uuid.UUID,
     year: int,
@@ -1646,7 +1967,14 @@ async def update_month_income(
     row.expected_amount = Decimal(str(body.expected_amount))
     row.received_amount = Decimal(str(body.received_amount))
     row.received_date = body.received_date
-    audit(db, request, "budget.month_income.updated", auth.user.id, target_type="budget_month_income", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.month_income.updated",
+        auth.user.id,
+        target_type="budget_month_income",
+        target_id=row.id,
+    )
     await db.commit()
     return BudgetMonthIncomeResponse(
         id=row.id,
@@ -1680,8 +2008,21 @@ async def list_shares(
 ) -> list[BudgetPartnerShareResponse]:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    rows = (await db.scalars(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id))).all()
-    return [BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=row.revoked_at is None, category_ids=row.category_ids) for row in rows]
+    rows = (
+        await db.scalars(
+            select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id)
+        )
+    ).all()
+    return [
+        BudgetPartnerShareResponse(
+            id=row.id,
+            partner_user_id=row.partner_user_id,
+            level=row.level,
+            active=row.revoked_at is None,
+            category_ids=row.category_ids,
+        )
+        for row in rows
+    ]
 
 
 @router.put("/{home_id}/budget/shares/{partner_user_id}", response_model=BudgetPartnerShareResponse)
@@ -1696,8 +2037,16 @@ async def set_share(
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
     if partner_user_id == auth.user.id:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A Budget cannot be shared with its owner")
-    partner = await db.scalar(select(Membership).where(Membership.group_id == home_id, Membership.user_id == partner_user_id, Membership.removed_at.is_(None)))
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "A Budget cannot be shared with its owner"
+        )
+    partner = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == home_id,
+            Membership.user_id == partner_user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
     if partner is None or partner.relationship == HouseholdRelationship.child:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Partner not found")
     category_ids: list[str] | None = None
@@ -1715,19 +2064,45 @@ async def set_share(
             ).all()
         )
         if not requested.issubset(valid):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "One or more shared categories are invalid")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "One or more shared categories are invalid"
+            )
         category_ids = sorted(requested)
-    row = await db.scalar(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id, BudgetPartnerShare.partner_user_id == partner_user_id))
+    row = await db.scalar(
+        select(BudgetPartnerShare).where(
+            BudgetPartnerShare.profile_id == profile.id,
+            BudgetPartnerShare.partner_user_id == partner_user_id,
+        )
+    )
     if row is None:
-        row = BudgetPartnerShare(profile_id=profile.id, partner_user_id=partner_user_id, level=body.level, category_ids=category_ids)
+        row = BudgetPartnerShare(
+            profile_id=profile.id,
+            partner_user_id=partner_user_id,
+            level=body.level,
+            category_ids=category_ids,
+        )
         db.add(row)
     else:
         row.level = body.level
         row.category_ids = category_ids
         row.revoked_at = None
-    audit(db, request, "budget.partner_sharing.updated", auth.user.id, target_type="budget_partner_share", target_id=row.id, metadata={"level": body.level.value})
+    audit(
+        db,
+        request,
+        "budget.partner_sharing.updated",
+        auth.user.id,
+        target_type="budget_partner_share",
+        target_id=row.id,
+        metadata={"level": body.level.value},
+    )
     await db.commit()
-    return BudgetPartnerShareResponse(id=row.id, partner_user_id=row.partner_user_id, level=row.level, active=True, category_ids=row.category_ids)
+    return BudgetPartnerShareResponse(
+        id=row.id,
+        partner_user_id=row.partner_user_id,
+        level=row.level,
+        active=True,
+        category_ids=row.category_ids,
+    )
 
 
 @router.delete("/{home_id}/budget/shares/{partner_user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1740,11 +2115,23 @@ async def revoke_share(
 ) -> None:
     await _member_and_feature(home_id, auth, db)
     profile = await _profile(db, auth.user.id)
-    row = await db.scalar(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id, BudgetPartnerShare.partner_user_id == partner_user_id))
+    row = await db.scalar(
+        select(BudgetPartnerShare).where(
+            BudgetPartnerShare.profile_id == profile.id,
+            BudgetPartnerShare.partner_user_id == partner_user_id,
+        )
+    )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
     row.revoked_at = datetime.now(UTC)
-    audit(db, request, "budget.partner_sharing.revoked", auth.user.id, target_type="budget_partner_share", target_id=row.id)
+    audit(
+        db,
+        request,
+        "budget.partner_sharing.revoked",
+        auth.user.id,
+        target_type="budget_partner_share",
+        target_id=row.id,
+    )
     await db.commit()
 
 
@@ -1796,7 +2183,10 @@ async def list_incoming_shares(
     ]
 
 
-@router.get("/{home_id}/budget/shared/{owner_user_id}/months/{year}/{month}", response_model=BudgetMonthResponse)
+@router.get(
+    "/{home_id}/budget/shared/{owner_user_id}/months/{year}/{month}",
+    response_model=BudgetMonthResponse,
+)
 async def get_shared_month(
     home_id: uuid.UUID,
     owner_user_id: uuid.UUID,
@@ -1808,18 +2198,42 @@ async def get_shared_month(
     await _member_and_feature(home_id, auth, db)
     if owner_user_id == auth.user.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Use the owner Budget endpoint")
-    viewer = await db.scalar(select(Membership).where(Membership.group_id == home_id, Membership.user_id == auth.user.id, Membership.removed_at.is_(None)))
+    viewer = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == home_id,
+            Membership.user_id == auth.user.id,
+            Membership.removed_at.is_(None),
+        )
+    )
     if viewer is None or viewer.relationship == HouseholdRelationship.child:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget not found")
-    profile = await db.scalar(select(BudgetProfile).where(BudgetProfile.owner_user_id == owner_user_id, BudgetProfile.archived_at.is_(None)))
-    share = None if profile is None else await db.scalar(select(BudgetPartnerShare).where(BudgetPartnerShare.profile_id == profile.id, BudgetPartnerShare.partner_user_id == auth.user.id, BudgetPartnerShare.revoked_at.is_(None)))
+    profile = await db.scalar(
+        select(BudgetProfile).where(
+            BudgetProfile.owner_user_id == owner_user_id, BudgetProfile.archived_at.is_(None)
+        )
+    )
+    share = (
+        None
+        if profile is None
+        else await db.scalar(
+            select(BudgetPartnerShare).where(
+                BudgetPartnerShare.profile_id == profile.id,
+                BudgetPartnerShare.partner_user_id == auth.user.id,
+                BudgetPartnerShare.revoked_at.is_(None),
+            )
+        )
+    )
     if profile is None or share is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Budget not found")
     month_row = await _month_for_owner(db, profile.id, year, month)
-    response = await _month_response(db, month_row, include_categories=share.level != BudgetSharingLevel.summary)
+    response = await _month_response(
+        db, month_row, include_categories=share.level != BudgetSharingLevel.summary
+    )
     if share.level == BudgetSharingLevel.categories and share.category_ids is not None:
         allowed = set(share.category_ids)
-        response.categories = [category for category in response.categories if str(category.category_id) in allowed]
+        response.categories = [
+            category for category in response.categories if str(category.category_id) in allowed
+        ]
     if share.level != BudgetSharingLevel.full:
         for category in response.categories:
             category.items = []

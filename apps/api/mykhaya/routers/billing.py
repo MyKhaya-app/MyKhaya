@@ -250,7 +250,9 @@ async def plan_comparison(
                 label="Personal routines",
                 free_display=_personal_routines_display(free_personal_routines),
                 family_display=_personal_routines_display(family_personal_routines),
-                ultimate_display=_personal_routines_display(ultimate.limits.get("routines.personal.max_active")),
+                ultimate_display=_personal_routines_display(
+                    ultimate.limits.get("routines.personal.max_active")
+                ),
             ),
             PlanComparisonRow(
                 key="routines.household.enabled",
@@ -277,7 +279,9 @@ async def plan_comparison(
                 label="Driveway",
                 free_display=_included_display(free.booleans.get("driveway.enabled", False)),
                 family_display=_included_display(family.booleans.get("driveway.enabled", False)),
-                ultimate_display=_included_display(ultimate.booleans.get("driveway.enabled", False)),
+                ultimate_display=_included_display(
+                    ultimate.booleans.get("driveway.enabled", False)
+                ),
             ),
             PlanComparisonRow(
                 key="premium.future",
@@ -417,8 +421,10 @@ async def checkout_session(
     if not config.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
     plan_enabled = (
-        config.family_signups_enabled if body.plan == SubscriptionPlan.family
-        else config.ultimate_signups_enabled if body.plan == SubscriptionPlan.ultimate
+        config.family_signups_enabled
+        if body.plan == SubscriptionPlan.family
+        else config.ultimate_signups_enabled
+        if body.plan == SubscriptionPlan.ultimate
         else False
     )
     if not plan_enabled:
@@ -429,7 +435,8 @@ async def checkout_session(
         # docs/architecture/commercial-entitlements.md#billing-acquisition-gate.
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"New {body.plan.value.capitalize()} subscriptions are temporarily unavailable. Please try again later.",
+            f"New {body.plan.value.capitalize()} subscriptions are temporarily unavailable."
+            " Please try again later.",
         )
 
     # Serialises concurrent checkout attempts for the same Home (double-click,

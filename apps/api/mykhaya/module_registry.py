@@ -144,7 +144,8 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         FeatureKey.wish_lists.value,
         "Wishlists",
-        "Gift ideas for birthdays and Christmas, shared with selected people without spoiling the surprise.",
+        "Gift ideas for birthdays and Christmas, shared with selected people without spoiling"
+        " the surprise.",
         "Family",
         ReleaseState.released,
         False,

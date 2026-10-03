@@ -1,4 +1,5 @@
 """Consumer browser MFA primitives for the Phase 4.5 pre-auth handoff."""
+
 from __future__ import annotations
 
 import secrets

@@ -47,8 +47,7 @@ async def record_billing_diagnostic(
         result = "mismatch"
         safe_error_code = safe_error_code or "entitlement_mismatch"
         safe_error_message = (
-            safe_error_message
-            or "Stripe reports an active subscription but MyKhaya resolves Free."
+            safe_error_message or "Stripe reports an active subscription but MyKhaya resolves Free."
         )
     row = StripeBillingDiagnostic(
         source=source,

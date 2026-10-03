@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import get_settings
@@ -48,7 +48,9 @@ def _date_range(days: int, end: date | None) -> tuple[datetime, datetime, date]:
     )
 
 
-def _classification_clause(classification: UsageClassification):
+def _classification_clause(
+    classification: UsageClassification,
+) -> tuple[ColumnElement[bool], ...] | None:
     if classification is UsageClassification.all:
         return None
     if classification is UsageClassification.production:
