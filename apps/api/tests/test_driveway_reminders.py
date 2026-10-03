@@ -15,11 +15,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.driveway_reminders import (
     DRIVEWAY_SOURCE_TYPE,
     DrivewayReminderEventType,
-    ensure_vehicles_category,
     upsert_driveway_reminder,
 )
 from mykhaya.entitlements import get_home_subscription
@@ -29,7 +29,11 @@ from mykhaya.models import (
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
     Reminder,
+    Role,
     RoutineScope,
     SubscriptionPlan,
     TodoCategory,
@@ -38,7 +42,6 @@ from mykhaya.models import (
     Vehicle,
 )
 from mykhaya.security import derived_token
-from mykhaya.config import get_settings
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
@@ -127,7 +130,11 @@ async def create_driveway_home(client: AsyncClient, name: str = "Driveway Test H
 
 
 async def create_vehicle(
-    client: AsyncClient, home_id: uuid.UUID, *, scope: str = "household", nickname: str = "BMW i4",
+    client: AsyncClient,
+    home_id: uuid.UUID,
+    *,
+    scope: str = "household",
+    nickname: str = "BMW i4",
     owner_user_id: uuid.UUID | None = None,
 ) -> dict:
     assert owner_user_id or CURRENT_USER_ID
@@ -135,10 +142,38 @@ async def create_vehicle(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/vehicles",
-        json={"nickname": nickname, "owner_user_id": str(owner_user_id or CURRENT_USER_ID), "country_code": "GB", "registration": "AP22 OOJ"},
+        json={
+            "nickname": nickname,
+            "owner_user_id": str(owner_user_id or CURRENT_USER_ID),
+            "country_code": "GB",
+            "registration": "AP22 OOJ",
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+async def add_partner(home_id: uuid.UUID, prefix: str) -> uuid.UUID:
+    """A second verified user, joined to the Home as a standard partner.
+
+    Note create_verified_user also repoints CURRENT_USER_ID at this new user, so
+    callers that go on to create a vehicle pass owner_user_id explicitly."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        partner_id = await create_verified_user(other_client, unique_email(prefix), "Partner")
+    async with SessionFactory() as db:
+        db.add(
+            Membership(
+                group_id=home_id,
+                user_id=partner_id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+            )
+        )
+        await db.commit()
+    return partner_id
 
 
 async def db_reminder(reminder_id: str) -> Reminder:
@@ -173,7 +208,9 @@ async def test_vehicles_category_created_on_first_driveway_reminder(client: Asyn
 
 
 @pytest.mark.asyncio
-async def test_vehicles_category_reused_not_duplicated_on_second_reminder(client: AsyncClient) -> None:
+async def test_vehicles_category_reused_not_duplicated_on_second_reminder(
+    client: AsyncClient,
+) -> None:
     await create_verified_user(client, unique_email("cat-second"), "Owner")
     home_id = await create_driveway_home(client)
     vehicle = await create_vehicle(client, home_id)
@@ -196,7 +233,9 @@ async def test_vehicles_category_reused_not_duplicated_on_second_reminder(client
     async with SessionFactory() as db:
         rows = (
             await db.scalars(
-                select(TodoCategory).where(TodoCategory.group_id == home_id, TodoCategory.name == "Vehicles")
+                select(TodoCategory).where(
+                    TodoCategory.group_id == home_id, TodoCategory.name == "Vehicles"
+                )
             )
         ).all()
         assert len(rows) == 1
@@ -284,10 +323,17 @@ async def test_personal_vehicle_creates_personal_reminder_with_source_metadata(
 
 
 @pytest.mark.asyncio
-async def test_household_vehicle_creates_household_reminder(client: AsyncClient) -> None:
-    await create_verified_user(client, unique_email("household-veh"), "Owner")
+async def test_vehicle_reminder_is_personal_to_the_vehicles_owner_not_its_creator(
+    client: AsyncClient,
+) -> None:
+    """Vehicles have an explicit owner (there is no household/personal scope any
+    more), and a Driveway reminder is always a personal reminder owned by the
+    vehicle's owner — even when someone else added the vehicle or the reminder."""
+    admin_id = await create_verified_user(client, unique_email("owner-veh"), "Admin")
     home_id = await create_driveway_home(client)
-    vehicle = await create_vehicle(client, home_id, scope="household")
+    partner_id = await add_partner(home_id, "partner-veh")
+    vehicle = await create_vehicle(client, home_id, owner_user_id=partner_id)
+    assert vehicle["owner_user_id"] == str(partner_id)
     today = datetime.now(UTC).date().isoformat()
 
     created = await unsafe(
@@ -297,8 +343,13 @@ async def test_household_vehicle_creates_household_reminder(client: AsyncClient)
         json={"title": "Insurance renewal", "due_date": today},
     )
     assert created.status_code == 201, created.text
-    assert created.json()["scope"] == "household"
-    assert created.json()["owner_user_id"] is None
+    assert created.json()["scope"] == "personal"
+    assert created.json()["owner_user_id"] == str(partner_id)
+    assert created.json()["owner_user_id"] != str(admin_id)
+
+    row = await db_reminder(created.json()["id"])
+    assert row.scope == RoutineScope.personal
+    assert row.owner_user_id == partner_id
 
 
 @pytest.mark.asyncio
@@ -465,7 +516,9 @@ async def _seed_home_and_vehicle(db: AsyncSession) -> tuple[uuid.UUID, uuid.UUID
 
 
 @pytest.mark.asyncio
-async def test_editing_via_generic_reminder_patch_keeps_source_metadata(client: AsyncClient) -> None:
+async def test_editing_via_generic_reminder_patch_keeps_source_metadata(
+    client: AsyncClient,
+) -> None:
     await create_verified_user(client, unique_email("edit-keeps"), "Owner")
     home_id = await create_driveway_home(client)
     vehicle = await create_vehicle(client, home_id)
@@ -547,12 +600,13 @@ async def test_deleting_vehicle_cleans_up_linked_managed_reminders(client: Async
 
 
 @pytest.mark.asyncio
-async def test_vehicle_scope_change_updates_linked_managed_reminder_scope(
+async def test_changing_a_vehicles_owner_moves_its_linked_reminders_to_the_new_owner(
     client: AsyncClient,
 ) -> None:
-    user_id = await create_verified_user(client, unique_email("scope-change"), "Owner")
+    admin_id = await create_verified_user(client, unique_email("owner-change"), "Admin")
     home_id = await create_driveway_home(client)
-    vehicle = await create_vehicle(client, home_id, scope="personal")
+    partner_id = await add_partner(home_id, "new-owner")
+    vehicle = await create_vehicle(client, home_id, owner_user_id=admin_id)
     today = datetime.now(UTC).date().isoformat()
 
     created = await unsafe(
@@ -561,7 +615,9 @@ async def test_vehicle_scope_change_updates_linked_managed_reminder_scope(
         f"/api/v1/homes/{home_id}/vehicles/{vehicle['id']}/reminders",
         json={"title": "MOT due", "due_date": today},
     )
+    assert created.status_code == 201, created.text
     reminder_id = created.json()["id"]
+    assert (await db_reminder(reminder_id)).owner_user_id == admin_id
 
     changed = await unsafe(
         client,
@@ -569,7 +625,7 @@ async def test_vehicle_scope_change_updates_linked_managed_reminder_scope(
         f"/api/v1/homes/{home_id}/vehicles/{vehicle['id']}",
         json={
             "nickname": vehicle["nickname"],
-            "scope": "household",
+            "owner_user_id": str(partner_id),
             "country_code": "GB",
             "registration": vehicle["registration"],
             "expected_updated_at": vehicle["updated_at"],
@@ -577,9 +633,11 @@ async def test_vehicle_scope_change_updates_linked_managed_reminder_scope(
     )
     assert changed.status_code == 200, changed.text
 
+    # The linked managed reminder follows the vehicle to its new owner and stays
+    # a personal reminder.
     row = await db_reminder(reminder_id)
-    assert row.scope == RoutineScope.household
-    assert row.owner_user_id is None
+    assert row.scope == RoutineScope.personal
+    assert row.owner_user_id == partner_id
 
 
 @pytest.mark.asyncio

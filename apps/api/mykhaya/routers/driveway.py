@@ -49,6 +49,7 @@ from mykhaya.driveway_reminders import (
     DrivewayReminderEventType,
     delete_reminders_for_vehicle,
     reminders_for_vehicle,
+    sync_reminder_scope_to_vehicle,
     upsert_driveway_reminder,
 )
 from mykhaya.driveway_schemas import (
@@ -92,7 +93,9 @@ def _may_see_sensitive_fields(vehicle: Vehicle, auth: AuthContext, membership: M
     return membership.relationship == HouseholdRelationship.home_admin
 
 
-def _vehicle_response(vehicle: Vehicle, auth: AuthContext, membership: Membership) -> VehicleResponse:
+def _vehicle_response(
+    vehicle: Vehicle, auth: AuthContext, membership: Membership
+) -> VehicleResponse:
     reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership)
     return VehicleResponse(
         id=vehicle.id,
@@ -189,7 +192,9 @@ async def _require_home_member_owner(
         )
     )
     if membership is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The vehicle owner must be an active member of this Home.")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "The vehicle owner must be an active member of this Home."
+        )
     return membership
 
 
@@ -209,9 +214,7 @@ async def list_vehicles(
     rows = (
         await db.scalars(select(Vehicle).where(*filters).order_by(Vehicle.created_at.asc()))
     ).all()
-    return VehicleListResponse(
-        items=[_vehicle_response(row, auth, membership) for row in rows]
-    )
+    return VehicleListResponse(items=[_vehicle_response(row, auth, membership) for row in rows])
 
 
 @router.post("/{home_id}/vehicles/lookup", response_model=VehicleLookupResult)
@@ -225,20 +228,26 @@ async def lookup_vehicle(
 ) -> VehicleLookupResult:
     await require_capability(home_id, Capability.driveway_view, auth, db)
     await enforce_rate_limit(
-        request, settings, f"driveway-lookup:{auth.user.id}", settings.driveway_lookup_rate_limit, 300
+        request,
+        settings,
+        f"driveway-lookup:{auth.user.id}",
+        settings.driveway_lookup_rate_limit,
+        300,
     )
     country = body.country_code.upper()
     if country != "GB":
         return VehicleLookupResult(
             found=False,
             manual_entry_required=True,
-            message="Automatic vehicle lookup isn't available for this country yet, but you can still add the vehicle manually.",
+            message="Automatic vehicle lookup isn't available for this country yet, but you can"
+            " still add the vehicle manually.",
         )
     if not settings.dvla_configured:
         return VehicleLookupResult(
             found=False,
             manual_entry_required=True,
-            message="We can't check vehicle details right now. You can try again later or add the vehicle manually.",
+            message="We can't check vehicle details right now. You can try again later or add"
+            " the vehicle manually.",
         )
     enabled = await db.scalar(
         select(PlatformSetting.value).where(PlatformSetting.key == "driveway_dvla_enabled")
@@ -247,7 +256,8 @@ async def lookup_vehicle(
         return VehicleLookupResult(
             found=False,
             manual_entry_required=True,
-            message="Automatic UK vehicle lookup is temporarily unavailable. You can still add the vehicle manually.",
+            message="Automatic UK vehicle lookup is temporarily unavailable. You can still add"
+            " the vehicle manually.",
         )
     assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
     provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
@@ -255,13 +265,28 @@ async def lookup_vehicle(
         result = await provider.lookup(body.registration)
     except VehicleLookupNotFound:
         await _record_lookup_health(db, success=True, summary="Vehicle registration not found")
-        return VehicleLookupResult(found=False, manual_entry_required=True, message="We couldn't find that registration. Check it and try again, or add the vehicle manually.")
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="We couldn't find that registration. Check it and try again, or add the"
+            " vehicle manually.",
+        )
     except VehicleLookupAuthFailed:
         await _record_lookup_health(db, success=False, summary="Provider authentication failed")
-        return VehicleLookupResult(found=False, manual_entry_required=True, message="We can't check vehicle details right now. You can try again later or add the vehicle manually.")
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="We can't check vehicle details right now. You can try again later or add"
+            " the vehicle manually.",
+        )
     except VehicleLookupUnavailable:
         await _record_lookup_health(db, success=False, summary="Provider unavailable")
-        return VehicleLookupResult(found=False, manual_entry_required=True, message="We can't check vehicle details right now. You can try again later or add the vehicle manually.")
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="We can't check vehicle details right now. You can try again later or add"
+            " the vehicle manually.",
+        )
     await _record_lookup_health(db, success=True, summary="Vehicle lookup succeeded")
     return VehicleLookupResult(
         found=True,
@@ -311,7 +336,13 @@ async def create_vehicle(
     db.add(row)
     await db.flush()
     audit(
-        db, request, "driveway.vehicle.created", auth.user.id, home_id, "vehicle", row.id,
+        db,
+        request,
+        "driveway.vehicle.created",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        row.id,
         _audit_metadata(row),
     )
     await db.commit()
@@ -436,6 +467,7 @@ async def update_vehicle(
     if row.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again.")
     await _require_home_member_owner(db, home_id, body.owner_user_id)
+    owner_changed = row.owner_user_id != body.owner_user_id
     row.owner_user_id = body.owner_user_id
     row.nickname = " ".join(body.nickname.strip().split())
     row.make = body.make.strip() if body.make else None
@@ -454,8 +486,18 @@ async def update_vehicle(
     # who could see the real value may overwrite it.
     if _may_see_sensitive_fields(row, auth, membership):
         row.vin = body.vin.strip() if body.vin else None
+    if owner_changed:
+        # Linked managed reminders follow the vehicle to its new owner (see
+        # sync_reminder_scope_to_vehicle) rather than staying with the previous one.
+        await sync_reminder_scope_to_vehicle(db, row)
     audit(
-        db, request, "driveway.vehicle.updated", auth.user.id, home_id, "vehicle", row.id,
+        db,
+        request,
+        "driveway.vehicle.updated",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        row.id,
         _audit_metadata(row),
     )
     await db.commit()
@@ -480,14 +522,25 @@ async def delete_vehicle(
     # in the same transaction rather than left orphaned.
     await delete_reminders_for_vehicle(db, home_id, row.id)
     audit(
-        db, request, "driveway.vehicle.deleted", auth.user.id, home_id, "vehicle", row.id,
+        db,
+        request,
+        "driveway.vehicle.deleted",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        row.id,
         _audit_metadata(row),
     )
     await db.commit()
 
 
-def _require_vehicle_visible(vehicle: Vehicle, auth: AuthContext) -> None:
-    return None
+def _require_vehicle_visible(vehicle: Vehicle, auth: AuthContext, membership: Membership) -> None:
+    """A vehicle's reminders are as private as its sensitive fields: only its owner
+    or a Home Admin (see _may_see_sensitive_fields) may list or add to them. Anyone
+    else gets the same 404 as for a vehicle that does not exist, so this can never
+    be used to enumerate or infer another member's personal reminders."""
+    if not _may_see_sensitive_fields(vehicle, auth, membership):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That vehicle could not be found")
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}/reminders", response_model=ReminderListResponse)
@@ -503,9 +556,9 @@ async def list_vehicle_reminders(
     touched, so a Personal vehicle's reminders stay exactly as private as
     the vehicle itself — this route can never be used to enumerate or
     infer another member's personal reminders."""
-    await require_capability(home_id, Capability.driveway_view, auth, db)
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     vehicle = await _get_vehicle(db, home_id, vehicle_id)
-    _require_vehicle_visible(vehicle, auth)
+    _require_vehicle_visible(vehicle, auth, membership)
     rows = await reminders_for_vehicle(db, home_id, vehicle.id)
     return ReminderListResponse(items=[await _reminder_response(db, row) for row in rows])
 
@@ -529,9 +582,9 @@ async def create_vehicle_reminder(
     required first; the actual reminder-management authorization reuses
     the identical capability routers.reminders.create_reminder checks, so
     this is never a weaker path to creating a Reminder than Nudges itself."""
-    await require_capability(home_id, Capability.driveway_view, auth, db)
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     vehicle = await _get_vehicle(db, home_id, vehicle_id)
-    _require_vehicle_visible(vehicle, auth)
+    _require_vehicle_visible(vehicle, auth, membership)
     await require_capability(home_id, Capability.household_manage_reminders, auth, db)
     reminder, _created = await upsert_driveway_reminder(
         db,
@@ -547,7 +600,13 @@ async def create_vehicle_reminder(
         created_by=auth.user.id,
     )
     audit(
-        db, request, "driveway.reminder.created", auth.user.id, home_id, "reminder", reminder.id,
+        db,
+        request,
+        "driveway.reminder.created",
+        auth.user.id,
+        home_id,
+        "reminder",
+        reminder.id,
         {"vehicle_id": str(vehicle.id), "source_event": reminder.source_event},
     )
     await db.commit()
