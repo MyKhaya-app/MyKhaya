@@ -56,12 +56,13 @@ from mykhaya.models import (
 )
 from mykhaya.notifications.calendar_shares import notify_calendar_share_recipients
 from mykhaya.notifications.deep_links import target
-from mykhaya.notifications.engine import notify
+from mykhaya.notifications.engine import get_or_create_preferences, notify
 from mykhaya.notifications.templates import render_notification
 from mykhaya.notifications.visibility import home_viewer_ids_for_event
 from mykhaya.schemas import (
     CalendarListResponse,
     EventActivityResponse,
+    EventAttendanceUpdate,
     EventCreate,
     EventDetailResponse,
     EventLabelCreate,
@@ -476,14 +477,14 @@ async def create_calendar(
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"calendar:{home_id}"}
     )
-    # Unchanged since before Phase 2C: creating a new *shared* calendar is
-    # still governed by calendar.max_categories (shared calendars only) —
-    # see CALENDAR_LIMIT_KEY's own docstring/history. On Free this was
-    # already unreachable before Phase 2C (the seeded primary "Home
-    # Calendar" alone already fills the limit=1 allowance) and still is;
-    # Phase 2C's calendar.max_calendars (CALENDARS_LIMIT_KEY) governs a
-    # different question — which *existing* calendar (shared or Personal)
-    # is currently writable — see _calendar_access, not this create path.
+    # Creating a new *shared* calendar is governed by calendar.max_calendars
+    # (CALENDARS_LIMIT_KEY), counting shared calendars only — Personal Calendars
+    # are excluded from this count. (calendar.max_categories is now just a
+    # read-only compatibility key; Calendar Tags use calendar.max_tags.) On Free
+    # the seeded primary "Home Calendar" alone already fills the limit=1
+    # allowance, so this path is unreachable there. Which *existing* calendar
+    # (shared or Personal) is currently writable is a separate question — see
+    # _calendar_access.
     current_count = await db.scalar(
         select(func.count())
         .select_from(HomeCalendar)
@@ -644,9 +645,7 @@ def _to_label_response(label: CalendarEventLabel | None) -> EventLabelResponse |
     )
 
 
-async def _calendar_color_map(
-    db: AsyncSession, group_id: uuid.UUID
-) -> dict[uuid.UUID, str]:
+async def _calendar_color_map(db: AsyncSession, group_id: uuid.UUID) -> dict[uuid.UUID, str]:
     """Every calendar in the Home (shared and Personal alike) mapped to its
     own colour — the fallback an event on it renders with when it carries no
     label. One query per request, reused across every event in the response,
@@ -1191,6 +1190,7 @@ async def list_events(
 ) -> EventListResponse:
     membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     capabilities = await capabilities_for(db, membership)
+    calendar_preferences = await get_or_create_preferences(db, auth.user.id)
     if end_at <= start_at:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid date range")
     if end_at - start_at > timedelta(days=MAX_RANGE_DAYS):
@@ -1236,6 +1236,19 @@ async def list_events(
     ).all()
     has_more = len(rows) > page_size
     events = rows[:page_size]
+    if not calendar_preferences.show_declined_events:
+        declined_ids = set(
+            (
+                await db.scalars(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.event_id.in_([event.id for event in events]),
+                        CalendarEventMember.user_id == auth.user.id,
+                        CalendarEventMember.attendance_status == "declined",
+                    )
+                )
+            ).all()
+        )
+        events = [event for event in events if event.id not in declined_ids]
     label_by_id = await _label_map(db, home_id)
     members_by_event = await _event_members_map(db, [event.id for event in events])
     calendar_colors = await _calendar_color_map(db, home_id)
@@ -1279,6 +1292,7 @@ async def list_upcoming_events(
     just reused rather than duplicated."""
     membership = await require_capability(home_id, Capability.calendar_view, auth, db)
     capabilities = await capabilities_for(db, membership)
+    calendar_preferences = await get_or_create_preferences(db, auth.user.id)
 
     filters = [
         CalendarEvent.group_id == home_id,
@@ -1301,6 +1315,19 @@ async def list_upcoming_events(
         )
 
     events = (await db.scalars(select(CalendarEvent).where(and_(*filters)))).all()
+    if not calendar_preferences.show_declined_events:
+        declined_ids = set(
+            (
+                await db.scalars(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.event_id.in_([event.id for event in events]),
+                        CalendarEventMember.user_id == auth.user.id,
+                        CalendarEventMember.attendance_status == "declined",
+                    )
+                )
+            ).all()
+        )
+        events = [event for event in events if event.id not in declined_ids]
     label_by_id = await _label_map(db, home_id)
     members_by_event = await _event_members_map(db, [event.id for event in events])
     calendar_colors = await _calendar_color_map(db, home_id)
@@ -1344,6 +1371,7 @@ async def create_event(
         body.timezone,
         body.is_all_day,
     )
+    calendar_preferences = await get_or_create_preferences(db, auth.user.id)
 
     home_calendar = await _ensure_home_calendar(db, home_id)
     calendar_row = home_calendar
@@ -1367,6 +1395,25 @@ async def create_event(
         access = await _calendar_access(db, home_id)
         if not access.get(home_calendar.id, False):
             calendar_row = await ensure_personal_calendar(db, home_id, auth.user.id)
+
+    # Personal calendar default is a preference, not a permission grant. Only
+    # honour it when it belongs to this Home and remains writable for the
+    # current user; otherwise retain the established primary/personal fallback.
+    if body.calendar_id is None:
+        if calendar_preferences.default_calendar_id is not None:
+            preferred = await db.get(HomeCalendar, calendar_preferences.default_calendar_id)
+            if preferred is not None and preferred.group_id == home_id:
+                if preferred.owner_user_id in (None, auth.user.id):
+                    try:
+                        if preferred.owner_user_id is not None:
+                            await _require_personal_calendar_writable(db, home_id, auth.user.id)
+                        else:
+                            _require_calendar_writable(
+                                await _calendar_access(db, home_id), preferred.id
+                            )
+                        calendar_row = preferred
+                    except HTTPException:
+                        pass
 
     if calendar_row.owner_user_id is not None:
         # Personal Calendar: only its owner may create events on it. 404,
@@ -1444,6 +1491,9 @@ async def create_event(
         is_all_day=body.is_all_day,
         timezone=body.timezone,
         location_text=body.location_text,
+        # A missing event reminder remains NULL. The notification scanner
+        # resolves the attendee's current personal default at delivery time;
+        # it must not copy one person's preference into shared event state.
         reminder_minutes=body.reminder_minutes,
         recurrence=body.recurrence,
         recurrence_interval=body.recurrence_interval,
@@ -1490,15 +1540,40 @@ async def create_event(
     await db.commit()
     await db.refresh(event)
     await record_usage_event(
-        db, event_name=ProductUsageEventName.calendar_event_created,
-        platform=platform_from_request(request), module=ProductUsageModule.calendar,
-        user_id=auth.user.id, group_id=home_id, event_key=f"calendar-event-created:{event.id}",
+        db,
+        event_name=ProductUsageEventName.calendar_event_created,
+        platform=platform_from_request(request),
+        module=ProductUsageModule.calendar,
+        user_id=auth.user.id,
+        group_id=home_id,
+        event_key=f"calendar-event-created:{event.id}",
     )
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
-    return _occurrence(
-        event, _own_occurrence(event), label, requested_members, calendar_row.color
+    return _occurrence(event, _own_occurrence(event), label, requested_members, calendar_row.color)
+
+
+@router.put("/{home_id}/events/{event_id}/attendance")
+async def update_event_attendance(
+    home_id: uuid.UUID,
+    event_id: uuid.UUID,
+    body: EventAttendanceUpdate,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    await require_capability(home_id, Capability.calendar_view, auth, db)
+    member = await db.scalar(
+        select(CalendarEventMember).where(
+            CalendarEventMember.event_id == event_id,
+            CalendarEventMember.group_id == home_id,
+            CalendarEventMember.user_id == auth.user.id,
+        )
     )
+    if member is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "You are not an attendee of this event.")
+    member.attendance_status = body.status
+    await db.commit()
+    return {"status": member.attendance_status}
 
 
 @router.get("/{home_id}/events/{event_id}", response_model=EventDetailResponse)
@@ -1660,7 +1735,7 @@ async def _apply_occurrence_edit(
     start_at: datetime,
     end_at: datetime,
 ) -> EventOccurrence:
-    """"This occurrence only": create/update a CalendarEventException for
+    """ "This occurrence only": create/update a CalendarEventException for
     body.occurrence_start (already validated by the caller as a real
     canonical occurrence of `event`) — never touches the base event row.
     Idempotent under retry via ON CONFLICT DO UPDATE keyed on
@@ -1710,8 +1785,13 @@ async def _apply_occurrence_edit(
         db, event, auth.user.id, "event.occurrence_updated", "updated one occurrence"
     )
     audit(
-        db, request, "calendar.event.occurrence_updated", auth.user.id, event.group_id,
-        "event", event.id,
+        db,
+        request,
+        "calendar.event.occurrence_updated",
+        auth.user.id,
+        event.group_id,
+        "event",
+        event.id,
     )
 
     visible_ids = await home_viewer_ids_for_event(db, event)
@@ -1762,7 +1842,7 @@ async def _apply_future_split_edit(
     end_at: datetime,
     recurrence_end_date: date | None,
 ) -> EventOccurrence:
-    """"This and future occurrences": split the series at
+    """ "This and future occurrences": split the series at
     body.occurrence_start. The OLD event row is truncated to end
     immediately before the split (history preserved, untouched); a NEW
     CalendarEvent row is created starting at the split point carrying the
@@ -1851,12 +1931,20 @@ async def _apply_future_split_edit(
             exception.last_edited_by = auth.user.id
 
     await _record_activity(
-        db, event, auth.user.id, "event.series_split",
+        db,
+        event,
+        auth.user.id,
+        "event.series_split",
         "split the series — this and future occurrences updated",
     )
     audit(
-        db, request, "calendar.event.future_updated", auth.user.id, home_id,
-        "event", new_event.id,
+        db,
+        request,
+        "calendar.event.future_updated",
+        auth.user.id,
+        home_id,
+        "event",
+        new_event.id,
     )
 
     visible_ids = await home_viewer_ids_for_event(db, new_event)
@@ -1950,9 +2038,7 @@ async def update_event(
 
     if body.scope != "series":
         if event.recurrence == RecurrencePattern.none:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat"
-            )
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat")
         assert body.occurrence_start is not None  # enforced by EventUpdate's own validator
         if not is_canonical_occurrence(event, body.occurrence_start):
             raise HTTPException(
@@ -1969,8 +2055,17 @@ async def update_event(
         # less historical row behind.
         if len(canonical_occurrences_up_to(event, body.occurrence_start)) > 1:
             return await _apply_future_split_edit(
-                db, request, home_id, event, is_personal_calendar, auth, settings,
-                body, start_at, end_at, recurrence_end_date,
+                db,
+                request,
+                home_id,
+                event,
+                is_personal_calendar,
+                auth,
+                settings,
+                body,
+                start_at,
+                end_at,
+                recurrence_end_date,
             )
 
     # Transition-safe, same rule as shared events/routines: only a genuine
@@ -2025,14 +2120,16 @@ async def update_event(
 
     # Transition-safe shared-event enforcement (same philosophy as Calendar's
     # own downgrade rule and household_routines' scope-transition check —
-    # preserve existing paid state, block only *new* growth into it): a
-    # historical shared event that already has multiple participants can
-    # still be edited (title, time, location, ...) and can still have
-    # members *removed* on Free, but introducing any participant that wasn't
-    # already on the event — whether that turns a personal event into a
-    # shared one, grows an already-shared event, or swaps one participant
-    # for another — requires events.shared.enabled. Retaining the exact same
-    # participant set is never blocked, however this edit reached the API.
+    # preserve existing paid state, block only *new* growth into it):
+    # introducing any participant that wasn't already on the event — whether
+    # that turns a personal event into a shared one, grows an already-shared
+    # event, or swaps one participant for another — requires
+    # events.shared.enabled. Retaining the exact same participant set is never
+    # blocked by this check. Note that on a Free Home the shared Home calendar
+    # is read-only (Phase 2C, see _calendar_access), so an event on it is
+    # refused earlier, by _require_calendar_writable, for *every* edit —
+    # including editing other fields and removing participants. This check is
+    # then the second line of defence for any calendar that is writable.
     genuinely_new_participants = set(requested_members) - previous_member_ids
     if genuinely_new_participants and len(requested_members) > 1:
         await require_entitlement(db, home_id, "events.shared.enabled")
@@ -2141,9 +2238,7 @@ async def update_event(
     calendar_color = (
         event_calendar.color if event_calendar is not None else DEFAULT_LABEL_COLOUR_HEX
     )
-    return _occurrence(
-        event, _own_occurrence(event), label, requested_members, calendar_color
-    )
+    return _occurrence(event, _own_occurrence(event), label, requested_members, calendar_color)
 
 
 @router.delete("/{home_id}/events/{event_id}", status_code=204)
@@ -2191,9 +2286,7 @@ async def delete_event(
 
     if scope != "series":
         if event.recurrence == RecurrencePattern.none:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat"
-            )
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "This event does not repeat")
         assert occurrence_start is not None
         if not is_canonical_occurrence(event, occurrence_start):
             raise HTTPException(
@@ -2264,7 +2357,7 @@ async def _delete_single_occurrence(
     settings: Settings,
     occurrence_start: datetime,
 ) -> None:
-    """"Delete this occurrence": an excluded-occurrence exception, never a
+    """ "Delete this occurrence": an excluded-occurrence exception, never a
     mutation of the base recurrence rule — see Phase D. Idempotent under
     retry (ON CONFLICT DO UPDATE, same is_deleted=True result either way)."""
     await db.execute(
@@ -2295,8 +2388,13 @@ async def _delete_single_occurrence(
         db, event, auth.user.id, "event.occurrence_deleted", "deleted one occurrence"
     )
     audit(
-        db, request, "calendar.event.occurrence_deleted", auth.user.id, event.group_id,
-        "event", event.id,
+        db,
+        request,
+        "calendar.event.occurrence_deleted",
+        auth.user.id,
+        event.group_id,
+        "event",
+        event.id,
     )
     await _notify_members_event_cancelled(
         db,
@@ -2320,7 +2418,7 @@ async def _delete_future_occurrences(
     occurrence_start: datetime,
     last_kept_start: datetime,
 ) -> None:
-    """"Delete this and future occurrences": truncate the series to end
+    """ "Delete this and future occurrences": truncate the series to end
     immediately after `last_kept_start` — history preserved, nothing after
     the selected occurrence ever generates again. No new event row is
     created (unlike the edit-scope future split): there is nothing to
@@ -2355,12 +2453,20 @@ async def _delete_future_occurrences(
     }
     visible_member_ids = await home_viewer_ids_for_event(db, event)
     await _record_activity(
-        db, event, auth.user.id, "event.future_deleted",
+        db,
+        event,
+        auth.user.id,
+        "event.future_deleted",
         "deleted this and future occurrences",
     )
     audit(
-        db, request, "calendar.event.future_deleted", auth.user.id, event.group_id,
-        "event", event.id,
+        db,
+        request,
+        "calendar.event.future_deleted",
+        auth.user.id,
+        event.group_id,
+        "event",
+        event.id,
     )
     await _notify_members_event_cancelled(
         db,
@@ -2476,8 +2582,7 @@ async def home_summary(
     # briefing already do.
     today_candidate_rows = (
         await db.scalars(
-            select(CalendarEvent)
-            .where(
+            select(CalendarEvent).where(
                 CalendarEvent.group_id == home_id,
                 CalendarEvent.deleted_at.is_(None),
                 recurrence_candidate_filter(day_start, day_end),
@@ -2508,8 +2613,7 @@ async def home_summary(
 
     next_candidate_rows = (
         await db.scalars(
-            select(CalendarEvent)
-            .where(
+            select(CalendarEvent).where(
                 CalendarEvent.group_id == home_id,
                 CalendarEvent.deleted_at.is_(None),
                 upcoming_candidate_filter(now),

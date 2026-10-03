@@ -88,6 +88,7 @@ const MORE_GROUPS: readonly MoreGroup[] = [
       { name: "Legal & Privacy", detail: "Review notices, terms and your recorded versions", href: "/settings/legal", icon: Scale, tone: "sage", gate: "all" },
       { name: "Notifications", detail: "See what has happened in your home", href: "/me/notifications", icon: Bell, tone: "cream", gate: "all" },
       { name: "Notification settings", detail: "Push, reminders and your daily briefing", href: "/settings/notifications", icon: Bell, tone: "sage", gate: "all" },
+      { name: "Calendar settings", detail: "Personal reminders and calendar defaults", href: "/settings/calendar", icon: Calendar, tone: "lavender", gate: "all" },
     ],
   },
   {

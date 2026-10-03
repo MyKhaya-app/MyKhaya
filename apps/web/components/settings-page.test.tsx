@@ -197,7 +197,14 @@ describe("More — Security lives in You, not a separate block", () => {
     const names = Array.from(youGroup.querySelectorAll(".more-row-text h2")).map(
       (el) => el.textContent,
     );
-    expect(names).toEqual(["Profile", "Security", "Legal & Privacy", "Notifications", "Notification settings"]);
+    expect(names).toEqual([
+      "Profile",
+      "Security",
+      "Legal & Privacy",
+      "Notifications",
+      "Notification settings",
+      "Calendar settings",
+    ]);
 
     expect(screen.queryByRole("heading", { name: "Devices" })).not.toBeInTheDocument();
     expect(

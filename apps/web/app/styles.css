@@ -2540,6 +2540,88 @@ html.native-shell .home-section-overlap {
   max-width: 760px;
   padding: 1.5rem;
 }
+
+/* Calendar settings uses the existing SettingsPage/card vocabulary with a
+   compact, mobile-first treatment matching the approved calendar mockup. */
+.calendar-settings-page form {
+  display: grid;
+  gap: 1rem;
+}
+.calendar-settings-info {
+  align-items: flex-start;
+  background: var(--colour-blue-soft, #eef5ff);
+  border: 1px solid var(--colour-blue-border, #c9def7);
+  border-radius: 1.35rem;
+  color: var(--colour-slate);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  padding: 1.15rem;
+}
+/* The text column may shrink and, when there is no room beside the icon (large text on a
+   narrow screen), wraps beneath it instead of overflowing the card. */
+.calendar-settings-info > div { flex: 1 1 12rem; min-width: 0; }
+.calendar-settings-info-icon,
+.calendar-settings-icon {
+  align-items: center;
+  border-radius: 0.9rem;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 3rem;
+  justify-content: center;
+  width: 3rem;
+}
+.calendar-settings-info-icon { background: #dfeaf5; color: #3d6fb0; }
+.calendar-settings-info strong { display: block; font-size: 1.05rem; }
+.calendar-settings-info p { color: var(--colour-muted); margin: 0.2rem 0 0; }
+.calendar-settings-card { max-width: none; padding: 1.2rem; }
+.calendar-settings-card h2 { margin: 0; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.9rem; }
+.calendar-settings-card-intro { color: var(--colour-muted); margin: 0.55rem 0 0; }
+.calendar-settings-row {
+  align-items: center;
+  border-top: 1px solid #f1ece1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+.calendar-settings-row > span:not(.calendar-settings-select):not(.calendar-settings-icon) { line-height: 1.45; }
+.calendar-settings-row strong,
+.calendar-settings-row small { display: block; }
+.calendar-settings-row small { color: var(--colour-muted); margin-top: 0.2rem; }
+/* The visible box stays 2.1rem; padding grows the tappable label to at least 44x44 CSS px and
+   the negative margin cancels it, so surrounding layout is unchanged. */
+.calendar-settings-check {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin: -0.5rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.5rem;
+  position: relative;
+}
+.calendar-settings-check input { height: 100%; inset: 0; margin: 0; min-height: 0; opacity: 0; padding: 0; position: absolute; width: 100%; }
+.calendar-settings-check > span { align-items: center; background: var(--colour-forest); border-radius: 0.55rem; color: var(--colour-white); display: inline-flex; height: 2.1rem; justify-content: center; margin: auto; width: 2.1rem; }
+.calendar-settings-check input:not(:checked) + span { background: transparent; border: 1px solid var(--colour-border-strong, #b7c0bd); color: transparent; }
+/* The input itself is invisible, so its own focus ring cannot be seen: draw the shared focus
+   ring (see the global button/input :focus-visible rule) on the visible box instead. */
+.calendar-settings-check input:focus-visible + span { outline: 3px solid var(--colour-mustard); outline-offset: 3px; }
+.calendar-settings-select { align-items: center; display: inline-flex; max-width: 100%; min-width: 0; position: relative; }
+.calendar-settings-select select { appearance: none; background: var(--colour-sage-soft); border: 0; border-radius: 0.8rem; color: var(--colour-slate); max-width: 100%; min-width: min(7rem, 100%); padding: 0.75rem 2.2rem 0.75rem 0.85rem; text-overflow: ellipsis; }
+.calendar-settings-select svg { pointer-events: none; position: absolute; right: 0.65rem; }
+.calendar-settings-select select:disabled { opacity: 0.55; }
+.calendar-settings-supporting-copy { margin: 0.7rem 0 0 3rem; }
+.calendar-settings-default-row { flex-wrap: nowrap; }
+.calendar-settings-default-row > span:nth-child(2) { flex: 1 1 auto; }
+.calendar-settings-icon.lavender { background: #e8e3f5; color: #6c63b5; }
+.calendar-settings-icon.blue { background: #dfeaf5; color: #3d6fb0; }
+.calendar-settings-save { justify-self: start; }
+@media (max-width: 520px) {
+  .calendar-settings-default-row { align-items: flex-start; flex-wrap: wrap; }
+  .calendar-settings-default-row .calendar-settings-select { margin-left: 3.7rem; max-width: calc(100% - 3.7rem); }
+}
 /* Help & Support hub (Phase 2C): compact Service Status summary and
    Helpful diagnostics list. Status is never colour-only — .help-status-line
    always carries the real wording too (see help-support-logic.ts). */

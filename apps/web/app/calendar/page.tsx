@@ -1251,6 +1251,7 @@ export default function CalendarPage() {
   // browser's own timezone). FALLBACK_TIMEZONE only covers the brief window
   // before the first successful load.
   const [calendarTimezone, setCalendarTimezone] = useState(FALLBACK_TIMEZONE);
+  const [weekStartsOn, setWeekStartsOn] = useState<"monday" | "sunday">("monday");
   // The signed-in user's own private Personal Calendar within this Home —
   // null before the first load resolves, or for a managed Child (see
   // apps/api/mykhaya/calendar_provisioning.py). Never another member's.
@@ -1269,6 +1270,10 @@ export default function CalendarPage() {
   const agendaAnchorRef = useRef<HTMLElement | null>(null);
   const agendaEntryToken = useRef(0);
   const positionedAgendaToken = useRef(-1);
+
+  useEffect(() => {
+    api.notificationPreferences().then((preferences) => setWeekStartsOn(preferences.week_starts_on)).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!debugEnabled) return;
@@ -1424,12 +1429,12 @@ export default function CalendarPage() {
 
   const range = useMemo(() => {
     if (view === "month") return monthRange(focusDate);
-    if (view === "week") return weekRange(focusDate);
+    if (view === "week") return weekRange(focusDate, weekStartsOn);
     if (view === "day") return dayRange(focusDate);
     return agendaRange(focusDate);
-  }, [focusDate, view]);
+  }, [focusDate, view, weekStartsOn]);
 
-  const cells = useMemo(() => monthCells(focusDate), [focusDate]);
+  const cells = useMemo(() => monthCells(focusDate, weekStartsOn), [focusDate, weekStartsOn]);
 
   // Month view renders 6 weeks (42 cells) padded with days from the adjacent months,
   // but `range` above is the exact calendar month (1st to last day) — a multi-day

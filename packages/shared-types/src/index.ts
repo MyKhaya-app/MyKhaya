@@ -486,6 +486,13 @@ export interface NotificationPreferences {
   in_app_enabled: boolean;
   email_enabled: boolean;
   event_reminders_enabled: boolean;
+  default_event_reminder_enabled: boolean;
+  default_event_reminder_minutes: number;
+  all_day_reminder_enabled: boolean;
+  all_day_reminder_time: string;
+  default_calendar_id: string | null;
+  week_starts_on: "monday" | "sunday";
+  show_declined_events: boolean;
   event_invitations_enabled: boolean;
   event_changes_enabled: boolean;
   household_reminders_enabled: boolean;

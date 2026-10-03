@@ -142,8 +142,8 @@ export function monthRange(base: Date) {
   };
 }
 
-export function weekRange(base: Date) {
-  const offset = (base.getUTCDay() + 6) % 7;
+export function weekRange(base: Date, weekStartsOn: "monday" | "sunday" = "monday") {
+  const offset = weekStartsOn === "sunday" ? base.getUTCDay() : (base.getUTCDay() + 6) % 7;
   const start = new Date(
     Date.UTC(
       base.getUTCFullYear(),
@@ -178,9 +178,10 @@ export function agendaRange(base: Date) {
   return { start, end };
 }
 
-export function monthCells(base: Date): Date[] {
+export function monthCells(base: Date, weekStartsOn: "monday" | "sunday" = "monday"): Date[] {
   const start = monthRange(base).start;
-  start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+  const offset = weekStartsOn === "sunday" ? start.getUTCDay() : (start.getUTCDay() + 6) % 7;
+  start.setUTCDate(start.getUTCDate() - offset);
   return Array.from({ length: 42 }, (_, index) => {
     const day = new Date(start);
     day.setUTCDate(day.getUTCDate() + index);

@@ -1113,6 +1113,11 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").EventDetailResponse>(
       `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}`,
     );
+  updateEventAttendance = (homeId: string, eventId: string, status: "accepted" | "declined") =>
+    this.request<{ status: "accepted" | "declined" }>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}/attendance`,
+      { method: "PUT", body: JSON.stringify({ status }) },
+    );
   // External Calendar Sharing — see apps/api/mykhaya/routers/calendar_sharing.py.
   createCalendarShare = (
     homeId: string,

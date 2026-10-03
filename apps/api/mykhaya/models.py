@@ -812,6 +812,12 @@ class CalendarEventMember(UuidTimeMixin, Base):
         ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Existing rows are accepted by the migration default. Declining is a
+    # participant state, not a visibility state, and is therefore kept on the
+    # event membership row.
+    attendance_status: Mapped[str] = mapped_column(
+        String(10), default="accepted", server_default="accepted"
+    )
 
 
 class CalendarEventActivity(UuidTimeMixin, Base):
@@ -1120,7 +1126,10 @@ class ProductUsageDailyAggregate(Base):
     __tablename__ = "product_usage_daily_aggregates"
     __table_args__ = (
         UniqueConstraint(
-            "reporting_date", "metric", "module", "platform",
+            "reporting_date",
+            "metric",
+            "module",
+            "platform",
             name="uq_product_usage_daily_dimension",
         ),
         Index("ix_product_usage_daily_reporting_date", "reporting_date"),
@@ -1480,7 +1489,9 @@ class BudgetProfile(UuidTimeMixin, Base):
     )
     currency: Mapped[str] = mapped_column(String(3), default="GBP", server_default="GBP")
     month_start_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
-    default_view: Mapped[str] = mapped_column(String(20), default="personal", server_default="personal")
+    default_view: Mapped[str] = mapped_column(
+        String(20), default="personal", server_default="personal"
+    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1525,7 +1536,11 @@ class BudgetItem(UuidTimeMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(160))
     item_type: Mapped[BudgetItemType] = mapped_column(
-        Enum(BudgetItemType, name="budget_item_type", values_callable=lambda enum: [item.value for item in enum]),
+        Enum(
+            BudgetItemType,
+            name="budget_item_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         nullable=False,
     )
     default_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
@@ -1564,7 +1579,11 @@ class BudgetMonthCategory(UuidTimeMixin, Base):
     category_name: Mapped[str] = mapped_column(String(100))
     planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
     actual_source: Mapped[BudgetActualSource] = mapped_column(
-        Enum(BudgetActualSource, name="budget_actual_source", values_callable=lambda enum: [item.value for item in enum]),
+        Enum(
+            BudgetActualSource,
+            name="budget_actual_source",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         default=BudgetActualSource.manual,
         server_default=BudgetActualSource.manual.value,
     )
@@ -1595,7 +1614,11 @@ class BudgetMonthItem(UuidTimeMixin, Base):
     )
     name_snapshot: Mapped[str] = mapped_column(String(160))
     item_type_snapshot: Mapped[BudgetItemType] = mapped_column(
-        Enum(BudgetItemType, name="budget_item_type", values_callable=lambda enum: [item.value for item in enum]),
+        Enum(
+            BudgetItemType,
+            name="budget_item_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         nullable=False,
     )
     planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
@@ -1647,7 +1670,11 @@ class BudgetPartnerShare(UuidTimeMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     level: Mapped[BudgetSharingLevel] = mapped_column(
-        Enum(BudgetSharingLevel, name="budget_sharing_level", values_callable=lambda enum: [item.value for item in enum]),
+        Enum(
+            BudgetSharingLevel,
+            name="budget_sharing_level",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         default=BudgetSharingLevel.summary,
         server_default=BudgetSharingLevel.summary.value,
     )
@@ -2225,12 +2252,17 @@ class NativePushDevice(UuidTimeMixin, Base):
         ),
         Index(
             "uq_native_push_device_legacy_installation",
-            "platform", "installation_id", unique=True,
+            "platform",
+            "installation_id",
+            unique=True,
             postgresql_where=text("apns_environment IS NULL"),
         ),
         Index(
             "uq_native_push_device_environment",
-            "platform", "installation_id", "apns_environment", unique=True,
+            "platform",
+            "installation_id",
+            "apns_environment",
+            unique=True,
             postgresql_where=text("apns_environment IS NOT NULL"),
         ),
         Index("ix_native_push_devices_user", "user_id", "disabled_at"),
@@ -2331,6 +2363,35 @@ class NotificationPreferences(UuidTimeMixin, Base):
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     event_reminders_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
+    )
+    # Calendar settings are intentionally stored with the existing per-user
+    # notification preferences record so they remain scoped to the signed-in
+    # person rather than to a Home or shared calendar.
+    #
+    # The two default-reminder toggles are opt-in (False), for new rows and — via the
+    # server default in migration 0106 — for every existing row: nobody starts receiving
+    # extra Calendar notifications because of a deploy. event_reminders_enabled (below)
+    # is a different thing: the category switch for reminders an event sets for itself.
+    default_event_reminder_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    default_event_reminder_minutes: Mapped[int] = mapped_column(
+        Integer, default=30, server_default="30"
+    )
+    all_day_reminder_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    all_day_reminder_time: Mapped[time] = mapped_column(
+        Time, default=time(9, 0), server_default="09:00:00"
+    )
+    default_calendar_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="SET NULL"), nullable=True
+    )
+    week_starts_on: Mapped[str] = mapped_column(
+        String(9), default="monday", server_default="monday"
+    )
+    show_declined_events: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
     )
     event_invitations_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
@@ -2684,8 +2745,12 @@ class Todo(UuidTimeMixin, Base):
 class TodoMember(UuidTimeMixin, Base):
     __tablename__ = "todo_members"
     __table_args__ = (UniqueConstraint("todo_id", "user_id", name="uq_todo_member"),)
-    todo_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("todos.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    todo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
 
 
 class MealType(StrEnum):
@@ -2888,17 +2953,25 @@ class ListTemplate(UuidTimeMixin, Base):
         CheckConstraint("char_length(name) >= 1", name="ck_list_template_name_nonempty"),
         Index("ix_list_template_home_scope_active", "group_id", "scope", "archived_at"),
     )
-    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(500))
-    scope: Mapped[RoutineScope] = mapped_column(Enum(RoutineScope, name="routine_scope", create_type=False))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False)
+    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ListTemplateSection(UuidTimeMixin, Base):
     __tablename__ = "list_template_sections"
-    __table_args__ = (Index("ix_list_template_section_template_position", "template_id", "position"),)
+    __table_args__ = (
+        Index("ix_list_template_section_template_position", "template_id", "position"),
+    )
     template_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("list_templates.id", ondelete="CASCADE"), index=True
     )
@@ -3491,7 +3564,11 @@ class PlatformHolidaySource(UuidTimeMixin, Base):
     provider: Mapped[str] = mapped_column(String(80), nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(500))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    sync_status: Mapped[str] = mapped_column(String(20), default=HolidaySyncStatus.warning.value, server_default=HolidaySyncStatus.warning.value)
+    sync_status: Mapped[str] = mapped_column(
+        String(20),
+        default=HolidaySyncStatus.warning.value,
+        server_default=HolidaySyncStatus.warning.value,
+    )
     last_successful_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_scheduled_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_error: Mapped[str | None] = mapped_column(String(500))
@@ -3670,7 +3747,9 @@ class Subprocessor(Base):
     purpose: Mapped[str] = mapped_column(Text, nullable=False)
     data_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     processing_location: Mapped[str | None] = mapped_column(String(160))
-    international_transfer: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    international_transfer: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     transfer_mechanism: Mapped[str | None] = mapped_column(String(300))
     dpa_status: Mapped[str | None] = mapped_column(String(80))
     privacy_url: Mapped[str | None] = mapped_column(String(500))
@@ -3982,9 +4061,15 @@ class Vehicle(UuidTimeMixin, Base):
         CheckConstraint("char_length(country_code) = 2", name="ck_vehicle_country_code_iso2"),
         Index("ix_vehicle_home_scope_active", "group_id", "scope", "archived_at"),
     )
-    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
-    scope: Mapped[RoutineScope] = mapped_column(Enum(RoutineScope, name="routine_scope", create_type=False))
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False)
+    )
     nickname: Mapped[str] = mapped_column(String(120))
     make: Mapped[str | None] = mapped_column(String(80))
     model: Mapped[str | None] = mapped_column(String(80))

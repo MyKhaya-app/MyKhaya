@@ -175,8 +175,7 @@ def _send_native_push(
 async def _process_native_push(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
     delivery = await db.scalar(
         select(NotificationDelivery).where(
-            NotificationDelivery.idempotency_key
-            == event.payload["delivery_idempotency_key"]
+            NotificationDelivery.idempotency_key == event.payload["delivery_idempotency_key"]
         )
     )
     device = await db.get(NativePushDevice, uuid.UUID(event.payload["native_push_device_id"]))
@@ -359,6 +358,8 @@ async def process(event_id: uuid.UUID) -> None:
                     event.payload["event_id"],
                     event.payload["occurrence_start"],
                     event.payload["reminder_minutes"],
+                    event.payload.get("recipient_user_id"),
+                    event.payload.get("all_day_reminder_time"),
                 )
             elif event.topic == "notification.daily_briefing":
                 await deliver_daily_briefing(

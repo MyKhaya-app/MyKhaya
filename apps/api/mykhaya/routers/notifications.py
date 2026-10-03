@@ -1,6 +1,5 @@
 import uuid
 from datetime import UTC, datetime, time
-
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -153,6 +152,13 @@ async def get_preferences(
         in_app_enabled=prefs.in_app_enabled,
         email_enabled=prefs.email_enabled,
         event_reminders_enabled=prefs.event_reminders_enabled,
+        default_event_reminder_enabled=prefs.default_event_reminder_enabled,
+        default_event_reminder_minutes=prefs.default_event_reminder_minutes,
+        all_day_reminder_enabled=prefs.all_day_reminder_enabled,
+        all_day_reminder_time=_time_str(prefs.all_day_reminder_time) or "09:00",
+        default_calendar_id=prefs.default_calendar_id,
+        week_starts_on=prefs.week_starts_on,
+        show_declined_events=prefs.show_declined_events,
         event_invitations_enabled=prefs.event_invitations_enabled,
         event_changes_enabled=prefs.event_changes_enabled,
         household_reminders_enabled=prefs.household_reminders_enabled,
@@ -185,6 +191,13 @@ async def update_preferences(
     prefs.in_app_enabled = body.in_app_enabled
     prefs.email_enabled = body.email_enabled
     prefs.event_reminders_enabled = body.event_reminders_enabled
+    prefs.default_event_reminder_enabled = body.default_event_reminder_enabled
+    prefs.default_event_reminder_minutes = body.default_event_reminder_minutes
+    prefs.all_day_reminder_enabled = body.all_day_reminder_enabled
+    prefs.all_day_reminder_time = time.fromisoformat(body.all_day_reminder_time)
+    prefs.default_calendar_id = body.default_calendar_id
+    prefs.week_starts_on = body.week_starts_on
+    prefs.show_declined_events = body.show_declined_events
     prefs.event_invitations_enabled = body.event_invitations_enabled
     prefs.event_changes_enabled = body.event_changes_enabled
     prefs.household_reminders_enabled = body.household_reminders_enabled

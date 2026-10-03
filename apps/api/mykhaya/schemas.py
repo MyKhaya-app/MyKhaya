@@ -979,6 +979,10 @@ class EventUpdate(StrictModel):
         return self
 
 
+class EventAttendanceUpdate(StrictModel):
+    status: Literal["accepted", "declined"]
+
+
 class EventOccurrence(BaseModel):
     occurrence_id: str
     event_id: uuid.UUID
@@ -1681,6 +1685,13 @@ class NotificationPreferencesResponse(BaseModel):
     in_app_enabled: bool
     email_enabled: bool
     event_reminders_enabled: bool
+    default_event_reminder_enabled: bool = False
+    default_event_reminder_minutes: int = 30
+    all_day_reminder_enabled: bool = False
+    all_day_reminder_time: str = "09:00"
+    default_calendar_id: uuid.UUID | None = None
+    week_starts_on: Literal["monday", "sunday"] = "monday"
+    show_declined_events: bool = False
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
@@ -1706,6 +1717,16 @@ class NotificationPreferencesUpdate(StrictModel):
     in_app_enabled: bool
     email_enabled: bool
     event_reminders_enabled: bool
+    # Opt-in. A PUT that omits these (an older client) must not switch reminders on.
+    default_event_reminder_enabled: bool = False
+    default_event_reminder_minutes: int = Field(default=30, ge=15, le=120)
+    all_day_reminder_enabled: bool = False
+    all_day_reminder_time: str = Field(
+        default="09:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    default_calendar_id: uuid.UUID | None = None
+    week_starts_on: Literal["monday", "sunday"] = "monday"
+    show_declined_events: bool = False
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
