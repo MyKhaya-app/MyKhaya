@@ -48,9 +48,7 @@ def test_briefing_meals_use_slot_order_and_existing_item_cap() -> None:
         MealBriefingItem(uuid4(), "Breakfast", "Oats", None, True, None),
         MealBriefingItem(uuid4(), "Lunch", "School lunch", time(12, 0), False, None),
     ]
-    title, body = format_daily_briefing(
-        [], local_date=date(2026, 8, 20), tz=UTC, meal_items=items
-    )
+    title, body = format_daily_briefing([], local_date=date(2026, 8, 20), tz=UTC, meal_items=items)
     assert title == "You have 3 events today."
     assert "• Breakfast: Oats · You're cooking" in body
     assert "• Lunch: School lunch at 12:00" in body

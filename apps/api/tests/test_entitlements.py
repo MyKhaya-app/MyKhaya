@@ -198,13 +198,16 @@ async def test_home_admin_family_access_is_subscription_derived_not_sponsorship(
         with pytest.raises(HTTPException) as error:
             await grant_home_family_sponsorship(db, home_id, owner_id)
         assert error.value.status_code == 409
-        assert await db.scalar(
-            select(HomeEntitlementGrant).where(
-                HomeEntitlementGrant.source_group_id == home_id,
-                HomeEntitlementGrant.recipient_user_id == owner_id,
-                HomeEntitlementGrant.revoked_at.is_(None),
+        assert (
+            await db.scalar(
+                select(HomeEntitlementGrant).where(
+                    HomeEntitlementGrant.source_group_id == home_id,
+                    HomeEntitlementGrant.recipient_user_id == owner_id,
+                    HomeEntitlementGrant.revoked_at.is_(None),
+                )
             )
-        ) is None
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -250,11 +253,15 @@ async def test_sponsorship_requires_current_family_source_and_active_membership(
         assert membership is not None
         membership.removed_at = datetime.now(UTC)
         assert await has_user_entitlement(db, recipient_id, source_home, "meals.enabled") is False
-        assert await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+        assert (
+            await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+        )
 
 
 @pytest.mark.asyncio
-async def test_explicit_sponsorship_decision_is_home_scoped_and_legacy_members_are_preserved() -> None:
+async def test_explicit_sponsorship_decision_is_home_scoped_and_legacy_members_are_preserved() -> (
+    None
+):
     recipient_id, personal_home = await _make_personal_home()
     _, family_home = await _make_personal_home(family=True)
     await _add_member(family_home, recipient_id, family_sponsorship_decided=None)
@@ -271,11 +278,17 @@ async def test_explicit_sponsorship_decision_is_home_scoped_and_legacy_members_a
         # without creating a HomeEntitlementGrant row.
         assert membership.family_sponsorship_decided is None
         assert await has_user_entitlement(db, recipient_id, family_home, "family_plans.enabled")
-        assert await has_user_entitlement(db, recipient_id, personal_home, "family_plans.enabled") is False
+        assert (
+            await has_user_entitlement(db, recipient_id, personal_home, "family_plans.enabled")
+            is False
+        )
 
         membership.family_sponsorship_decided = False
         await db.flush()
-        assert await has_user_entitlement(db, recipient_id, family_home, "family_plans.enabled") is False
+        assert (
+            await has_user_entitlement(db, recipient_id, family_home, "family_plans.enabled")
+            is False
+        )
 
 
 @pytest.mark.asyncio
@@ -298,8 +311,14 @@ async def test_revoking_one_home_sponsorship_keeps_another_source_and_membership
         )
         assert first_membership is not None
         assert first_membership.removed_at is None
-        assert await has_user_entitlement(db, recipient_id, first_home, "family_plans.enabled") is False
-        assert await has_user_entitlement(db, recipient_id, second_home, "family_plans.enabled") is True
+        assert (
+            await has_user_entitlement(db, recipient_id, first_home, "family_plans.enabled")
+            is False
+        )
+        assert (
+            await has_user_entitlement(db, recipient_id, second_home, "family_plans.enabled")
+            is True
+        )
 
 
 @pytest.mark.asyncio
@@ -314,7 +333,9 @@ async def test_legacy_member_loses_home_family_access_after_paid_period_expiry()
         subscription.provider = SubscriptionProvider.stripe
         subscription.status = SubscriptionStatus.cancel_at_period_end
         subscription.current_period_end = datetime.now(UTC) - timedelta(minutes=1)
-        assert await has_user_entitlement(db, recipient_id, home_id, "family_plans.enabled") is False
+        assert (
+            await has_user_entitlement(db, recipient_id, home_id, "family_plans.enabled") is False
+        )
 
 
 @pytest.mark.asyncio
@@ -343,7 +364,9 @@ async def test_resource_share_is_explicit_and_does_not_grant_family_entitlement(
         assert resource is not None
         assert resource.source is EntitlementSource.resource_share
         assert resource.home_id == source_home
-        assert await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+        assert (
+            await has_user_entitlement(db, recipient_id, recipient_home, "meals.enabled") is False
+        )
 
 
 @pytest.mark.asyncio

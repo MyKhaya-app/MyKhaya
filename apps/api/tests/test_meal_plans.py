@@ -159,9 +159,7 @@ async def test_family_user_can_access_meal_plans(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("family"), "Family User")
     home_id = await create_home(client, "Family Meals Home")
 
-    created = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body()
-    )
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json=meal_body())
     assert created.status_code == 201, created.text
     assert created.json()["name"] == "Spaghetti Bolognese"
 
@@ -248,9 +246,7 @@ async def test_user_cannot_read_or_modify_another_homes_meal(client: AsyncClient
         )
         assert update.status_code == 404
 
-        delete = await unsafe(
-            outsider, "DELETE", f"/api/v1/homes/{outsider_home}/meals/{meal_id}"
-        )
+        delete = await unsafe(outsider, "DELETE", f"/api/v1/homes/{outsider_home}/meals/{meal_id}")
         assert delete.status_code == 404
 
         # Cannot even reference the other Home's meal from within their own
@@ -958,9 +954,7 @@ async def test_add_ingredients_to_list_rejects_a_meal_with_no_ingredients(
 ) -> None:
     await create_verified_user(client, unique_email("no-ing"), "No Ingredients User")
     home_id = await create_home(client, "No Ingredients Home")
-    meal = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/meals", json={"name": "Cereal"}
-    )
+    meal = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/meals", json={"name": "Cereal"})
     meal_id = meal.json()["id"]
     target_list = await unsafe(
         client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Groceries"}
@@ -1003,9 +997,7 @@ async def test_add_ingredients_to_list_rejects_cross_home_list_and_deleted_meal(
         assert cross.status_code == 404
 
     # A deleted Meal must also be rejected, not silently resurrected.
-    own_list = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Own"}
-    )
+    own_list = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Own"})
     await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/meals/{meal_id}")
     deleted_meal = await unsafe(
         client,

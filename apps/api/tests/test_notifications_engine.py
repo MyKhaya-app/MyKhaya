@@ -272,8 +272,14 @@ def test_lists_and_wishlists_have_explicit_preference_gates_and_links() -> None:
     prefs.wishlist_sharing_enabled = False
     assert _category_enabled(prefs, "list_item_assigned") is False
     assert _category_enabled(prefs, "wishlist_share_revoked") is False
-    assert resolve_path(target("list", uuid.UUID(int=1))) == "/lists/00000000-0000-0000-0000-000000000001"
-    assert resolve_path(target("wishlist", uuid.UUID(int=1))) == "/wish-lists/00000000-0000-0000-0000-000000000001"
+    assert (
+        resolve_path(target("list", uuid.UUID(int=1)))
+        == "/lists/00000000-0000-0000-0000-000000000001"
+    )
+    assert (
+        resolve_path(target("wishlist", uuid.UUID(int=1)))
+        == "/wish-lists/00000000-0000-0000-0000-000000000001"
+    )
 
 
 @pytest.mark.asyncio
@@ -456,9 +462,7 @@ async def test_notification_listing_filters_and_clear_actions_are_user_scoped(
         unread = await client.get("/api/v1/notifications?filter=unread")
         assert [item["title"] for item in unread.json()["items"]] == ["Unread two", "Unread one"]
 
-        cleared = await unsafe(
-            client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear"
-        )
+        cleared = await unsafe(client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear")
         assert cleared.status_code == 200
         repeated = await unsafe(
             client, "POST", f"/api/v1/notifications/{notifications[0].id}/clear"
@@ -470,7 +474,9 @@ async def test_notification_listing_filters_and_clear_actions_are_user_scoped(
 
         marked_all = await unsafe(client, "POST", "/api/v1/notifications/read-all")
         assert marked_all.status_code == 200
-        assert (await client.get("/api/v1/notifications/unread-count")).json() == {"unread_count": 0}
+        assert (await client.get("/api/v1/notifications/unread-count")).json() == {
+            "unread_count": 0
+        }
 
         cleared_all = await unsafe(client, "POST", "/api/v1/notifications/clear-all")
         assert cleared_all.status_code == 200
@@ -484,7 +490,11 @@ async def test_notification_listing_filters_and_clear_actions_are_user_scoped(
             ).all()
             assert len(stored) == 3
             assert all(row.cleared_at is not None for row in stored)
-            assert stored[0].read_at is None
+            # Clearing a notification is not reading it: the one cleared individually, before
+            # "read all", was never read. Looked up by id — the query above has no ORDER BY,
+            # so its row order is whatever the table's physical layout happens to be.
+            by_id = {row.id: row for row in stored}
+            assert by_id[notifications[0].id].read_at is None
 
         other_user_list = await second_client.get("/api/v1/notifications")
         assert [item["title"] for item in other_user_list.json()["items"]] == ["Other user"]

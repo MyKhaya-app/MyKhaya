@@ -66,9 +66,12 @@ async def test_cancellation_before_expiry_does_not_start_retention() -> None:
         subscription.current_period_end = expiry
         await db.commit()
         assert await start_family_retention(db, home_id, now=datetime.now(UTC)) is None
-        assert await db.scalar(
-            select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == home_id)
-        ) is None
+        assert (
+            await db.scalar(
+                select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == home_id)
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -93,9 +96,18 @@ async def test_expiry_starts_exact_90_day_retention_once() -> None:
         await db.commit()
     async with SessionFactory() as db:
         assert await start_family_retention(db, home_id, now=now) is not None
-        assert len((await db.scalars(
-            select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == home_id)
-        )).all()) == 1
+        assert (
+            len(
+                (
+                    await db.scalars(
+                        select(HomeRetentionLifecycle).where(
+                            HomeRetentionLifecycle.home_id == home_id
+                        )
+                    )
+                ).all()
+            )
+            == 1
+        )
 
 
 @pytest.mark.asyncio
@@ -172,12 +184,20 @@ async def test_restore_reactivates_child_and_grants_but_not_former_adult() -> No
         await restore_family_retention(db, home_id)
         await db.commit()
     async with SessionFactory() as db:
-        memberships = (await db.scalars(select(Membership).where(Membership.group_id == home_id))).all()
-        child_row = next(row for row in memberships if row.relationship == HouseholdRelationship.child)
-        adult_row = next(row for row in memberships if row.relationship == HouseholdRelationship.partner)
+        memberships = (
+            await db.scalars(select(Membership).where(Membership.group_id == home_id))
+        ).all()
+        child_row = next(
+            row for row in memberships if row.relationship == HouseholdRelationship.child
+        )
+        adult_row = next(
+            row for row in memberships if row.relationship == HouseholdRelationship.partner
+        )
         assert child_row.removed_at is None
         assert adult_row.removed_at is not None
-        grant = await db.scalar(select(HomeEntitlementGrant).where(HomeEntitlementGrant.source_group_id == home_id))
+        grant = await db.scalar(
+            select(HomeEntitlementGrant).where(HomeEntitlementGrant.source_group_id == home_id)
+        )
         assert grant is not None and grant.revoked_at is None
 
 
@@ -185,9 +205,15 @@ async def test_restore_reactivates_child_and_grants_but_not_former_adult() -> No
 async def test_purge_preserves_home_admin_and_personal_calendars() -> None:
     home_id, owner_id = await _home()
     async with SessionFactory() as db:
-        primary = HomeCalendar(group_id=home_id, name="Home Calendar", is_primary=True, owner_user_id=None)
-        personal = HomeCalendar(group_id=home_id, name="Personal calendar", is_primary=False, owner_user_id=owner_id)
-        secondary = HomeCalendar(group_id=home_id, name="Family trips", is_primary=False, owner_user_id=None)
+        primary = HomeCalendar(
+            group_id=home_id, name="Home Calendar", is_primary=True, owner_user_id=None
+        )
+        personal = HomeCalendar(
+            group_id=home_id, name="Personal calendar", is_primary=False, owner_user_id=owner_id
+        )
+        secondary = HomeCalendar(
+            group_id=home_id, name="Family trips", is_primary=False, owner_user_id=None
+        )
         db.add_all([primary, personal, secondary])
         db.add(HouseholdList(group_id=home_id, name="Family list", created_by=owner_id))
         lifecycle = HomeRetentionLifecycle(
@@ -206,11 +232,22 @@ async def test_purge_preserves_home_admin_and_personal_calendars() -> None:
         await db.commit()
     async with SessionFactory() as db:
         assert await db.get(Group, home_id) is not None
-        assert await db.get(Membership, next(
-            row.id for row in (await db.scalars(select(Membership).where(Membership.group_id == home_id))).all()
-        )) is not None
+        assert (
+            await db.get(
+                Membership,
+                next(
+                    row.id
+                    for row in (
+                        await db.scalars(select(Membership).where(Membership.group_id == home_id))
+                    ).all()
+                ),
+            )
+            is not None
+        )
         assert await db.get(HomeCalendar, primary_id) is not None
         assert await db.get(HomeCalendar, personal_id) is not None
         assert await db.get(HomeCalendar, secondary_id) is None
-        lifecycle = await db.scalar(select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == home_id))
+        lifecycle = await db.scalar(
+            select(HomeRetentionLifecycle).where(HomeRetentionLifecycle.home_id == home_id)
+        )
         assert lifecycle is not None and lifecycle.state == HomeRetentionState.purged

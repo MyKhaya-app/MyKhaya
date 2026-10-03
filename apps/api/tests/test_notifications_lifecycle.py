@@ -472,9 +472,7 @@ async def test_removed_membership_is_not_operationally_active(client: AsyncClien
     home_id = await create_home(client)
     async with SessionFactory() as db:
         membership = await db.scalar(
-            select(Membership).where(
-                Membership.group_id == home_id, Membership.user_id == user_id
-            )
+            select(Membership).where(Membership.group_id == home_id, Membership.user_id == user_id)
         )
         assert membership is not None
         membership.removed_at = datetime.now(UTC)

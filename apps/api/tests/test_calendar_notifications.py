@@ -307,10 +307,15 @@ async def test_editing_to_add_a_second_member_only_notifies_the_new_one(
     )
     assert edited.status_code == 200, edited.text
 
-    # member_a already had their one notification and gets no second one;
-    # member_b, newly added, gets exactly one.
+    # member_a already had their one notification and gets no second one.
     assert len(await _notifications_for(member_a)) == 1
-    assert len(await _notifications_for(member_b)) == 1
+    # member_b is a standard partner, who can view every Home event: they were
+    # already told about the event when it was created without them (the
+    # visible-members "shared event created" notice), and being newly added
+    # now sends exactly one more — the "added to an event" notice. Nothing else.
+    member_b_notifications = await _notifications_for(member_b)
+    assert len(member_b_notifications) == 2
+    assert {n.notification_type for n in member_b_notifications} == {"event_invitation"}
 
 
 @pytest.mark.asyncio
@@ -347,10 +352,12 @@ async def test_removing_a_member_notifies_them_and_updating_details_notifies_rem
     )
     assert edited.status_code == 200, edited.text
 
-    # member_b was removed: one "added" notification (from creation) plus
-    # one "removed" notification, both type-tagged distinctly.
+    # member_b was removed: the "added" notification from creation, the
+    # "removed" notification, and — because a standard partner can still view
+    # every Home event and the time materially changed — the ordinary "event
+    # updated" notice that remaining viewers get. Each is type-tagged.
     member_b_notifications = await _notifications_for(member_b)
-    assert len(member_b_notifications) == 2
+    assert len(member_b_notifications) == 3
     types = {n.notification_type for n in member_b_notifications}
     assert types == {"event_invitation", "event_updated"}
     removed = next(n for n in member_b_notifications if "removed" in n.title.lower())

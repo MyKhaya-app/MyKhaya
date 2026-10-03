@@ -101,7 +101,9 @@ async def test_only_partners_and_home_admins_can_approve_or_manage_roles() -> No
     )
     assert Capability.members_approve_join_requests in await capabilities_for(AsyncMock(), partner)
     assert Capability.members_manage_relationships in await capabilities_for(AsyncMock(), partner)
-    assert Capability.members_approve_join_requests not in await capabilities_for(AsyncMock(), adult)
+    assert Capability.members_approve_join_requests not in await capabilities_for(
+        AsyncMock(), adult
+    )
     assert Capability.members_manage_relationships not in await capabilities_for(AsyncMock(), adult)
 
 
@@ -155,7 +157,11 @@ def test_pure_local_development_can_explicitly_disable_both_controls() -> None:
         status_url="http://status.localhost:8080",
         native_api_url="http://api.localhost:8080",
         trusted_hosts=["localhost", "admin.localhost", "status.localhost", "api.localhost"],
-        cors_origins=["http://localhost:8080", "http://admin.localhost:8080", "http://status.localhost:8080"],
+        cors_origins=[
+            "http://localhost:8080",
+            "http://admin.localhost:8080",
+            "http://status.localhost:8080",
+        ],
         cookie_secure=False,
         admin_mfa_required=False,
     )
@@ -196,6 +202,7 @@ async def test_request_body_guard_rejects_malformed_length_and_chunked_overflow(
     assert response.status_code == 400
 
     oversized = make_request([], b"x" * (1_048_576 + 1))
+
     async def consume_body(request: Request) -> Response:
         await request.body()
         return Response("ok")

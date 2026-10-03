@@ -29,9 +29,7 @@ def test_browser_mfa_methods_only_include_currently_usable_factors() -> None:
         {UserMfaMethod.totp},
         True,
     ) == ["totp", "email"]
-    assert auth_router._usable_browser_mfa_methods(
-        {UserMfaMethod.totp}, set(), False
-    ) == []
+    assert auth_router._usable_browser_mfa_methods({UserMfaMethod.totp}, set(), False) == []
     assert auth_router._usable_browser_mfa_methods(
         {UserMfaMethod.totp}, set(), False, allow_totp_enrolment=True
     ) == ["totp"]
@@ -173,9 +171,7 @@ async def test_email_mfa_handoff_has_no_session_before_success(
     monkeypatch.setattr(auth_router, "new_email_code", lambda: "123456")
     try:
         email = await _verified_user(client, "mfa-email")
-        login = await client.post(
-            "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
-        )
+        login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
         assert login.status_code == 200
         transaction = login.json()["transaction_id"]
         assert login.json()["authentication_state"] == "additional_auth_required"
@@ -185,9 +181,7 @@ async def test_email_mfa_handoff_has_no_session_before_success(
             assert user is not None
             assert await db.scalar(select(Session.id).where(Session.user_id == user.id)) is None
 
-        options = await client.get(
-            f"/api/v1/auth/mfa/options?transaction_id={transaction}"
-        )
+        options = await client.get(f"/api/v1/auth/mfa/options?transaction_id={transaction}")
         assert options.status_code == 200
         start = await client.post(
             "/api/v1/auth/mfa/start",
@@ -218,9 +212,7 @@ async def test_totp_enrolment_and_replay_protection(client: AsyncClient) -> None
                 )
             )
             await db.commit()
-        login = await client.post(
-            "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
-        )
+        login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
         transaction = login.json()["transaction_id"]
         start = await client.post(
             "/api/v1/auth/mfa/start",

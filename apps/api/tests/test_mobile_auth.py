@@ -10,12 +10,14 @@ from sqlalchemy import select, update
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
     AuditEvent,
     FeatureKey,
     FeatureOverride,
+    SubscriptionPlan,
     TokenPurpose,
     TrustedDevice,
     User,
@@ -175,9 +177,7 @@ async def test_family_passkey_registers_logs_in_revokes_individually_and_keeps_p
     assert len(listed_before_revoke.json()) == 1
 
     await client.post("/api/v1/auth/logout", headers=csrf_header(client))
-    monkeypatch.setattr(
-        "mykhaya.routers.auth.verify_family_authentication", lambda *_args: 0
-    )
+    monkeypatch.setattr("mykhaya.routers.auth.verify_family_authentication", lambda *_args: 0)
     login_options = await client.post("/api/v1/auth/passkeys/login/options", json={})
     assert login_options.status_code == 200
     passkey_login = await client.post(
@@ -569,9 +569,7 @@ async def test_mobile_login_with_wrong_password_returns_401_and_no_token(
     assert not client.cookies.get("mk_session")
 
 
-async def _make_family_home_with_child(
-    client: AsyncClient, suffix: str
-) -> tuple[str, str, str]:
+async def _make_family_home_with_child(client: AsyncClient, suffix: str) -> tuple[str, str, str]:
     """Registers a Home Admin (cookie session) and adds a Child. Returns
     (group_id, membership_id, home_code) — mirrors the equivalent helper in
     test_child_login.py/test_child_home_dashboard_permissions.py, kept local
@@ -591,6 +589,14 @@ async def _make_family_home_with_child(
     group_id = group.json()["id"]
     home_code = group.json()["child_login_code"]
     assert home_code
+
+    # Managed Children are a Family-plan feature (family_plans.enabled) — a new
+    # Home starts on Free — so put this Home on Family before adding one.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(group_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     members = await client.get(f"/api/v1/groups/{group_id}/members")
     assert members.status_code == 200
@@ -853,9 +859,7 @@ async def test_renew_mints_a_fresh_session_after_the_bearer_session_has_expired(
         await db.commit()
 
     # The expired session_token alone can no longer reach anything...
-    denied = await client.get(
-        "/api/v1/users/me", headers=bearer(body["session_token"])
-    )
+    denied = await client.get("/api/v1/users/me", headers=bearer(body["session_token"]))
     assert denied.status_code == 401
 
     # ...but the long-lived device_token silently mints a working replacement,
@@ -894,7 +898,8 @@ async def test_renew_device_token_is_single_use(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_renew_rejects_a_revoked_or_unknown_device_token(client: AsyncClient) -> None:
     unknown = await client.post(
-        "/api/v1/auth/mobile/sessions/renew", json={"device_token": "not-a-real-device-token"}
+        "/api/v1/auth/mobile/sessions/renew",
+        json={"device_token": "not-a-real-device-token-" + "x" * 30},
     )
     assert unknown.status_code == 401
 

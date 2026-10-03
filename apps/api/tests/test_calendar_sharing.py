@@ -266,9 +266,7 @@ async def test_upcoming_shared_events_visible_once_accepted_and_hidden_before(
         titles = [item["title"] for item in after_accept.json()["items"]]
         assert titles == ["Grandkids visit"]
 
-        leave = await unsafe(
-            recipient_client, "POST", f"/api/v1/calendar-shares/{share_id}/leave"
-        )
+        leave = await unsafe(recipient_client, "POST", f"/api/v1/calendar-shares/{share_id}/leave")
         assert leave.status_code == 200, leave.text
 
         after_leave = await unsafe(

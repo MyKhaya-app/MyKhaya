@@ -71,9 +71,9 @@ def test_legacy_manual_value_is_not_reinterpreted_when_unchanged() -> None:
 
 
 def test_actual_source_contract_requires_only_the_selected_value() -> None:
-    assert BudgetActualUpdate(
-        source=BudgetActualSource.manual, manual_actual=100
-    ).manual_actual == 100
+    assert (
+        BudgetActualUpdate(source=BudgetActualSource.manual, manual_actual=100).manual_actual == 100
+    )
     assert BudgetActualUpdate(source=BudgetActualSource.entries).manual_actual is None
     with pytest.raises(ValidationError):
         BudgetActualUpdate(source=BudgetActualSource.manual)
@@ -122,9 +122,15 @@ def test_spending_entry_contract_supports_edit_and_delete_without_source_mixing(
         spent_on="2026-09-20",
     )
     assert entry.amount == 42.50
-    assert calculate_actual_amount(BudgetActualSource.entries, Decimal("100"), Decimal("42.50")) == Decimal("42.50")
-    assert calculate_actual_amount(BudgetActualSource.entries, Decimal("100"), Decimal("0")) == Decimal("0")
-    assert calculate_actual_amount(BudgetActualSource.manual, Decimal("100"), Decimal("42.50")) == Decimal("100")
+    assert calculate_actual_amount(
+        BudgetActualSource.entries, Decimal("100"), Decimal("42.50")
+    ) == Decimal("42.50")
+    assert calculate_actual_amount(
+        BudgetActualSource.entries, Decimal("100"), Decimal("0")
+    ) == Decimal("0")
+    assert calculate_actual_amount(
+        BudgetActualSource.manual, Decimal("100"), Decimal("42.50")
+    ) == Decimal("100")
 
 
 def test_monthly_income_mutation_is_explicitly_amount_based() -> None:

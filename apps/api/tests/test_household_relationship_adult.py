@@ -119,22 +119,31 @@ def test_adult_and_legacy_relationships_all_round_trip_through_the_enum() -> Non
 async def test_adult_is_accepted_as_a_member_relationship(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("adult-valid"), "Home Owner")
     home_id = await _make_family_home(client, "Adult Valid Home")
-    owner = await _owner_membership(client, home_id)
+
+    # A Home Admin cannot change their own role, so move a different member
+    # (a Partner) to Adult: the API must accept "adult" and persist it.
+    async with SessionFactory() as db:
+        partner = await _insert_membership(
+            db,
+            group_id=home_id,
+            email=unique_email("adult-valid-partner"),
+            display_name="Future Adult",
+            relationship=HouseholdRelationship.partner,
+        )
+        partner_user_id = partner.user_id
 
     updated = await unsafe(
         client,
         "PATCH",
-        f"/api/v1/groups/{home_id}/members/{owner['user_id']}",
+        f"/api/v1/groups/{home_id}/members/{partner_user_id}",
         json={
             "relationship": "adult",
             "reason": "Testing the new Adult relationship",
             "confirmed": True,
         },
     )
-    # Blocked for an unrelated reason (would leave the Home without any Home
-    # Admin) — this proves "adult" itself parsed as a valid relationship and
-    # reached that later check, rather than failing schema validation.
-    assert updated.status_code == 409
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["relationship"] == "adult"
 
 
 # --- Adult defaults to Partner's permission profile, independently ---------
@@ -175,7 +184,15 @@ async def test_adult_member_receives_partners_default_capabilities(client: Async
         adult_capabilities = await capabilities_for(db, adult_membership)
         partner_capabilities = await capabilities_for(db, partner_membership)
 
-    assert adult_capabilities == partner_capabilities
+    # An Adult gets the Partner's *profile* capabilities. The two delegations that
+    # belong to the Partner relationship itself — approving join requests and
+    # managing members' relationships (capabilities_for) — are Partner-only.
+    partner_only = {
+        Capability.members_approve_join_requests,
+        Capability.members_manage_relationships,
+    }
+    assert adult_capabilities == partner_capabilities - partner_only
+    assert not (adult_capabilities & partner_only)
     assert Capability.calendar_create in adult_capabilities
     assert Capability.household_manage not in adult_capabilities
     assert Capability.features_manage not in adult_capabilities

@@ -141,7 +141,9 @@ def test_same_backend_routes_sandbox_and_production_devices_independently(
     requests: list[str] = []
 
     class RecordingClient(_FakeClient):
-        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
+        def post(
+            self, url: str, *, headers: dict[str, str], json: dict[str, object]
+        ) -> httpx.Response:
             requests.append(url)
             return super().post(url, headers=headers, json=json)
 
@@ -242,8 +244,10 @@ def test_apns_jwt_uses_configured_kid_iss_seconds_and_es256(
     ]
     assert fake.request is not None
     encoded = fake.request.headers["authorization"].removeprefix("bearer ").split(".")
+
     def decode(value: str) -> dict[str, object]:
         return json.loads(base64.urlsafe_b64decode(value + "=="))
+
     assert decode(encoded[0]) == {"alg": "ES256", "kid": "KEY123", "typ": "JWT"}
     assert decode(encoded[1]) == {"iss": "TEAM123", "iat": issued_at}
     signature = base64.urlsafe_b64decode(encoded[2] + "==")

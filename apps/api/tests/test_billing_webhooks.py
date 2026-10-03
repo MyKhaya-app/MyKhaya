@@ -314,7 +314,9 @@ async def test_confirm_checkout_reconciles_authoritative_active_subscription(
     monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
     monkeypatch.setattr(stripe.Subscription, "retrieve", lambda *args, **kwargs: subscription)
 
-    response = await client.post(
+    response = await unsafe(
+        client,
+        "POST",
         "/api/v1/billing/stripe/confirm-checkout",
         json={"session_id": "cs_confirmed_123"},
     )
@@ -324,8 +326,9 @@ async def test_confirm_checkout_reconciles_authoritative_active_subscription(
     async with SessionFactory() as db:
         assert await effective_plan(db, home_id) == SubscriptionPlan.family
         diagnostic = await db.scalar(
-            select(StripeBillingDiagnostic)
-            .where(StripeBillingDiagnostic.checkout_session_id == "cs_confirmed_123")
+            select(StripeBillingDiagnostic).where(
+                StripeBillingDiagnostic.checkout_session_id == "cs_confirmed_123"
+            )
         )
         assert diagnostic is not None
         assert diagnostic.result == "completed"
@@ -348,11 +351,15 @@ async def test_confirm_checkout_rejects_session_for_another_home(
         "metadata": {"mykhaya_group_id": str(first_home_id)},
     }
     monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
-    response = await client.post(
+    response = await unsafe(
+        client,
+        "POST",
         "/api/v1/billing/stripe/confirm-checkout",
         json={"session_id": "cs_other_home"},
     )
-    assert response.status_code == 403
+    # Not 403: the endpoint deliberately never reveals whether another Home's
+    # Checkout Session exists, so one the caller has no billing access to is "not found".
+    assert response.status_code == 404
     async with SessionFactory() as db:
         assert await effective_plan(db, second_home_id) == SubscriptionPlan.free
 
@@ -379,7 +386,9 @@ async def test_confirm_checkout_does_not_activate_incomplete_subscription(
     )
     monkeypatch.setattr(stripe.checkout.Session, "retrieve", lambda *args, **kwargs: session)
     monkeypatch.setattr(stripe.Subscription, "retrieve", lambda *args, **kwargs: subscription)
-    response = await client.post(
+    response = await unsafe(
+        client,
+        "POST",
         "/api/v1/billing/stripe/confirm-checkout",
         json={"session_id": "cs_incomplete_sub"},
     )

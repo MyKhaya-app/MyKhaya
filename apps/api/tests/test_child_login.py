@@ -442,7 +442,9 @@ async def test_child_session_can_still_reach_its_own_profile_and_home(
 
             home = await child_client.get(f"/api/v1/groups/{group_id}")
             assert home.status_code == 200
-            assert home.json()["capabilities"] == []
+            # A Child's read-only baseline is meals.view and nothing else (see
+            # PROFILE_CAPABILITIES[child_restricted]) — never any manage capability.
+            assert home.json()["capabilities"] == ["meals.view"]
         finally:
             app.dependency_overrides.pop(get_settings, None)
 

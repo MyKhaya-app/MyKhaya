@@ -180,10 +180,14 @@ async def test_acceptance_dashboard_serialises_managed_child_identifier(
     response = await admin_client.get("/api/v1/platform/compliance/acceptance?scope=production")
     assert response.status_code == 200, response.text
     rows = response.json()["rows"]
-    managed = next(row for row in rows if row["account_type"] == "managed_child")
+    # The dashboard lists every active account in the shared test database, ordered
+    # by display name, so other tests' managed children may sort ahead of this one:
+    # every managed-child row must carry the operational identifier, and this
+    # test's own child ("Kid") must be among them.
+    managed_rows = [row for row in rows if row["account_type"] == "managed_child"]
+    assert all(row["email"] == "Managed child" for row in managed_rows)
+    managed = next(row for row in managed_rows if row["display_name"] == "Kid")
     adult = next(row for row in rows if row["account_type"] == "adult")
-    assert managed["email"] == "Managed child"
-    assert managed["display_name"] == "Kid"
     assert adult["email"].endswith("@example.com")
 
     # The operational response field accepts the existing managed-child

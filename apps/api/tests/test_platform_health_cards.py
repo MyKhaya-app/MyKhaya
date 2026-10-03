@@ -358,8 +358,11 @@ async def test_push_health_classifies_production_apns(
     user_id = await create_verified_user(client, unique_email("prod-class"), "Prod Class User")
     now = datetime.now(UTC)
     await _native_delivery(
-        user_id, platform="ios", apns_environment="production",
-        status=NotificationDeliveryStatus.failed, attempted_at=now,
+        user_id,
+        platform="ios",
+        apns_environment="production",
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=now,
     )
 
     components = _push_components(await _health_services(admin_client))
@@ -382,8 +385,11 @@ async def test_push_health_classifies_sandbox_apns(
     )
     now = datetime.now(UTC)
     await _native_delivery(
-        user_id, platform="ios", apns_environment="sandbox",
-        status=NotificationDeliveryStatus.failed, attempted_at=now,
+        user_id,
+        platform="ios",
+        apns_environment="sandbox",
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=now,
     )
 
     components = _push_components(await _health_services(admin_client))
@@ -404,8 +410,11 @@ async def test_push_health_classifies_android_fcm(
     user_id = await create_verified_user(client, unique_email("fcm-class"), "FCM Class User")
     now = datetime.now(UTC)
     await _native_delivery(
-        user_id, platform="android", apns_environment=None,
-        status=NotificationDeliveryStatus.failed, attempted_at=now,
+        user_id,
+        platform="android",
+        apns_environment=None,
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=now,
     )
 
     components = _push_components(await _health_services(admin_client))
@@ -426,8 +435,11 @@ async def test_push_health_classifies_legacy_ios(
     user_id = await create_verified_user(client, unique_email("legacy-class"), "Legacy Class User")
     now = datetime.now(UTC)
     await _native_delivery(
-        user_id, platform="ios", apns_environment=None,
-        status=NotificationDeliveryStatus.failed, attempted_at=now,
+        user_id,
+        platform="ios",
+        apns_environment=None,
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=now,
     )
 
     components = _push_components(await _health_services(admin_client))
@@ -454,12 +466,18 @@ async def test_push_health_sandbox_failure_alone_does_not_degrade_top_level(
     user_id = await create_verified_user(client, unique_email("mixed"), "Mixed User")
     now = datetime.now(UTC)
     await _native_delivery(
-        user_id, platform="ios", apns_environment="production",
-        status=NotificationDeliveryStatus.sent, attempted_at=now,
+        user_id,
+        platform="ios",
+        apns_environment="production",
+        status=NotificationDeliveryStatus.sent,
+        attempted_at=now,
     )
     await _native_delivery(
-        user_id, platform="ios", apns_environment="sandbox",
-        status=NotificationDeliveryStatus.failed, attempted_at=now,
+        user_id,
+        platform="ios",
+        apns_environment="sandbox",
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=now,
     )
 
     services = await _health_services(admin_client)
@@ -482,8 +500,11 @@ async def test_push_health_production_apns_failure_degrades_top_level(
     await _enable_web_push()
     user_id = await create_verified_user(client, unique_email("prod-fail"), "Prod Fail User")
     await _native_delivery(
-        user_id, platform="ios", apns_environment="production",
-        status=NotificationDeliveryStatus.failed, attempted_at=datetime.now(UTC),
+        user_id,
+        platform="ios",
+        apns_environment="production",
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=datetime.now(UTC),
     )
 
     services = await _health_services(admin_client)
@@ -503,8 +524,11 @@ async def test_push_health_fcm_failure_degrades_top_level(
     await _enable_web_push()
     user_id = await create_verified_user(client, unique_email("fcm-fail"), "FCM Fail User")
     await _native_delivery(
-        user_id, platform="android", apns_environment=None,
-        status=NotificationDeliveryStatus.failed, attempted_at=datetime.now(UTC),
+        user_id,
+        platform="android",
+        apns_environment=None,
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=datetime.now(UTC),
     )
 
     services = await _health_services(admin_client)
@@ -550,8 +574,11 @@ async def test_push_health_excludes_failures_from_currently_disabled_native_devi
         client, unique_email("disabled-hist"), "Disabled Hist User"
     )
     device = await _native_delivery(
-        user_id, platform="ios", apns_environment="production",
-        status=NotificationDeliveryStatus.failed, attempted_at=datetime.now(UTC),
+        user_id,
+        platform="ios",
+        apns_environment="production",
+        status=NotificationDeliveryStatus.failed,
+        attempted_at=datetime.now(UTC),
     )
     services = await _health_services(admin_client)
     assert _push_components(services)["Production APNs"]["failures_24h"] == 1
@@ -596,8 +623,11 @@ async def test_push_health_excludes_cancelled_permanent_failures(
     await _enable_web_push()
     user_id = await create_verified_user(client, unique_email("cancelled"), "Cancelled User")
     await _native_delivery(
-        user_id, platform="ios", apns_environment="production",
-        status=NotificationDeliveryStatus.cancelled, attempted_at=datetime.now(UTC),
+        user_id,
+        platform="ios",
+        apns_environment="production",
+        status=NotificationDeliveryStatus.cancelled,
+        attempted_at=datetime.now(UTC),
     )
 
     services = await _health_services(admin_client)

@@ -41,11 +41,14 @@ PASSWORD = "A separate operator password!"
 def test_incident_activity_respects_lifecycle_state(
     lifecycle_state: IncidentLifecycleState, expected: bool
 ) -> None:
-    assert is_incident_active(
-        datetime.now(UTC) - timedelta(minutes=1),
-        None,
-        lifecycle_state=lifecycle_state,
-    ) is expected
+    assert (
+        is_incident_active(
+            datetime.now(UTC) - timedelta(minutes=1),
+            None,
+            lifecycle_state=lifecycle_state,
+        )
+        is expected
+    )
 
 
 @pytest.fixture
@@ -491,6 +494,9 @@ async def test_dedicated_resolve_appends_final_update_and_preserves_remaining_im
         title=unique_title("Dedicated resolve outage"),
         message="The web application is unavailable.",
         services=[{"service": "web_application", "impact": "major_outage"}],
+        # Started well before the resolve time below: an incident cannot be
+        # resolved before it started.
+        starts_at=(datetime.now(UTC) - timedelta(minutes=10)).isoformat(),
     )
     second = await create_incident(
         admin_client,

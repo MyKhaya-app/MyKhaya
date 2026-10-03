@@ -153,21 +153,31 @@ async def test_new_free_home_has_exactly_one_active_seeded_category(client: Asyn
 
 
 @pytest.mark.asyncio
-async def test_settings_page_endpoint_shows_one_normal_category_and_the_rest_locked(
+async def test_settings_page_endpoint_locks_the_rest_once_free_reaches_its_limit(
     client: AsyncClient,
 ) -> None:
+    """Free allows two categories (calendar.max_tags). With one active a Home can
+    still activate another, so every category is usable; once a second is
+    active the remaining five lock."""
     home_id = await _make_home(client, _suffix())
-    response = await unsafe(
-        client, "GET", f"/api/v1/homes/{home_id}/event-labels", params={"include_inactive": "true"}
-    )
+    path = f"/api/v1/homes/{home_id}/event-labels"
+    response = await unsafe(client, "GET", path, params={"include_inactive": "true"})
     assert response.status_code == 200
     items = response.json()
     assert len(items) == 7
+    assert sum(1 for row in items if row["is_active"]) == 1
+    assert all(row["commercial_access"] == "normal" for row in items)
+
+    inactive = next(row for row in items if not row["is_active"])
+    activated = await unsafe(client, "PATCH", f"{path}/{inactive['id']}", json={"is_active": True})
+    assert activated.status_code == 200, activated.text
+
+    items = (await unsafe(client, "GET", path, params={"include_inactive": "true"})).json()
     normal = [row for row in items if row["commercial_access"] == "normal"]
     locked = [row for row in items if row["commercial_access"] == "read_only_due_to_plan"]
-    assert len(normal) == 1
-    assert len(locked) == 6
-    assert normal[0]["is_active"] is True
+    assert len(normal) == 2
+    assert len(locked) == 5
+    assert all(row["is_active"] for row in normal)
     assert all(not row["is_active"] for row in locked)
 
 
@@ -185,7 +195,8 @@ async def test_free_home_can_create_a_second_category_but_not_a_third(client: As
         client,
         "POST",
         f"/api/v1/homes/{home_id}/event-labels",
-        json={"name": "School", "color": "blue"},
+        # Not a seeded default name ("School" etc.) -- those are a 409 name conflict.
+        json={"name": "Hobbies", "color": "blue"},
     )
     assert response.status_code == 403
     detail = response.json()["detail"]
@@ -273,7 +284,7 @@ async def test_family_home_can_create_new_categories(client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
-async def test_downgrade_preserves_categories_but_only_one_remains_usable(
+async def test_downgrade_preserves_categories_but_only_two_remain_usable(
     client: AsyncClient,
 ) -> None:
     home_id = await _make_home(client, _suffix())
@@ -300,8 +311,9 @@ async def test_downgrade_preserves_categories_but_only_one_remains_usable(
     )
     items = listing.json()
     normal = [row for row in items if row["commercial_access"] == "normal"]
-    assert len(normal) == 1
-    assert normal[0]["id"] == str(rows[0].id)
+    # Free keeps the first two (by order) usable; the third active one is preserved
+    # but restricted.
+    assert {row["id"] for row in normal} == {str(rows[0].id), str(rows[1].id)}
 
     # Cannot create another.
     blocked_create = await unsafe(
@@ -312,7 +324,7 @@ async def test_downgrade_preserves_categories_but_only_one_remains_usable(
     )
     assert blocked_create.status_code == 403
 
-    # Cannot reactivate/newly activate the 6 that were never active either.
+    # Cannot newly activate any of the ones that were never active either.
     inactive = next(row for row in after if not row.is_active)
     blocked_activate = await unsafe(
         client,
@@ -330,14 +342,17 @@ async def test_downgraded_home_cannot_assign_a_locked_category_to_a_new_event(
     home_id = await _make_home(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
     rows = await _label_rows(home_id)
-    second = rows[1]
-    activated = await unsafe(
-        client,
-        "PATCH",
-        f"/api/v1/homes/{home_id}/event-labels/{second.id}",
-        json={"is_active": True},
-    )
-    assert activated.status_code == 200
+    # Three active (the seeded one plus two more) -- Free keeps the first two
+    # usable, so the third is the locked one.
+    for row in rows[1:3]:
+        activated = await unsafe(
+            client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/event-labels/{row.id}",
+            json={"is_active": True},
+        )
+        assert activated.status_code == 200
+    locked = rows[2]
 
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
 
@@ -345,7 +360,7 @@ async def test_downgraded_home_cannot_assign_a_locked_category_to_a_new_event(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
-        json=_event_body(label_id=str(second.id)),
+        json=_event_body(label_id=str(locked.id)),
     )
     assert blocked.status_code == 403
     detail = blocked.json()["detail"]
@@ -377,20 +392,28 @@ async def test_existing_historical_event_keeps_rendering_after_downgrade(
     home_id = await _make_home(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.family)
     rows = await _label_rows(home_id)
-    second = rows[1]
-    await unsafe(
-        client,
-        "PATCH",
-        f"/api/v1/homes/{home_id}/event-labels/{second.id}",
-        json={"is_active": True},
-    )
+    # The third active category is the one Free locks after a downgrade.
+    for row in rows[1:3]:
+        await unsafe(
+            client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/event-labels/{row.id}",
+            json={"is_active": True},
+        )
+    second = rows[2]
+    # Put the event on the owner's Personal Calendar, which stays usable on Free,
+    # so this exercises only the *category* lock (what this test is about) and not
+    # the separate read-only rule for the shared Home calendar.
+    calendars = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    personal_calendar_id = calendars.json()["personal_calendar"]["id"]
     created = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
-        json=_event_body(label_id=str(second.id)),
+        json=_event_body(label_id=str(second.id), calendar_id=personal_calendar_id),
     )
-    assert created.status_code == 201
+    assert created.status_code == 201, created.text
     event_id = created.json()["event_id"]
 
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
@@ -433,11 +456,12 @@ async def test_free_to_family_restores_full_access_to_preserved_categories(
         )
 
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
+    # rows[2] is the third active category: preserved but locked on Free.
     blocked = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
-        json=_event_body(label_id=str(rows[1].id)),
+        json=_event_body(label_id=str(rows[2].id)),
     )
     assert blocked.status_code == 403
 
@@ -446,6 +470,6 @@ async def test_free_to_family_restores_full_access_to_preserved_categories(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
-        json=_event_body(label_id=str(rows[1].id)),
+        json=_event_body(label_id=str(rows[2].id)),
     )
     assert restored.status_code == 201, restored.text

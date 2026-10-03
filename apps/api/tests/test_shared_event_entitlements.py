@@ -174,25 +174,41 @@ async def test_family_home_can_create_a_shared_event(client: AsyncClient) -> Non
 async def test_downgraded_free_home_cannot_create_a_new_shared_event(client: AsyncClient) -> None:
     home_id, _owner_id, second_id = await _make_family_home_with_two_members(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
+
+    # An unqualified create on Free lands on the caller's own Personal Calendar
+    # (the one calendar a Free Home keeps usable), and a Personal Calendar event
+    # can never be assigned to other members -- so a shared event is refused.
     response = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/events",
         json=_event_body([str(second_id)]),
     )
-    assert response.status_code == 403
+    assert response.status_code == 422, response.text
+    assert "Personal Calendar" in response.json()["detail"]
+
+    # Targeting the shared Home calendar explicitly does not get around it: that
+    # calendar is read-only on Free.
+    calendars = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    shared_calendar_id = calendars.json()["items"][0]["id"]
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json=_event_body([str(second_id)], calendar_id=shared_calendar_id),
+    )
+    assert response.status_code == 403, response.text
     detail = response.json()["detail"]
-    assert detail["code"] == "plan_feature_unavailable"
-    assert detail["entitlement"] == "events.shared.enabled"
+    assert detail["code"] == "resource_restricted_by_plan"
+    assert detail["entitlement"] == "calendar.max_calendars"
 
 
 @pytest.mark.asyncio
 async def test_free_home_can_still_create_an_ordinary_personal_event(client: AsyncClient) -> None:
     home_id, _owner_id, _second_id = await _make_family_home_with_two_members(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
-    response = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body([])
-    )
+    response = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body([]))
     assert response.status_code == 201, response.text
     assert len(response.json()["member_ids"]) == 1
 
@@ -222,9 +238,7 @@ async def test_downgraded_home_cannot_convert_a_personal_event_to_shared(
 ) -> None:
     home_id, _owner_id, second_id = await _make_family_home_with_two_members(client, _suffix())
     await _set_subscription(home_id, plan=SubscriptionPlan.free)
-    created = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body([])
-    )
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=_event_body([]))
     assert created.status_code == 201
     event = created.json()
 
@@ -237,10 +251,10 @@ async def test_downgraded_home_cannot_convert_a_personal_event_to_shared(
             expected_updated_at=event["updated_at"],
         ),
     )
-    assert switch.status_code == 403
-    detail = switch.json()["detail"]
-    assert detail["code"] == "plan_feature_unavailable"
-    assert detail["entitlement"] == "events.shared.enabled"
+    # A Free Home's ordinary event lives on the creator's Personal Calendar, and a
+    # Personal Calendar event can never be assigned to other members.
+    assert switch.status_code == 422, switch.text
+    assert "Personal Calendar" in switch.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -272,12 +286,20 @@ async def test_downgraded_home_cannot_add_a_participant_to_its_historical_shared
             expected_updated_at=event["updated_at"],
         ),
     )
-    assert grow.status_code == 403
-    assert grow.json()["detail"]["entitlement"] == "events.shared.enabled"
+    # The event sits on the shared Home calendar, which is read-only on Free, so
+    # every edit -- including growing the participant list -- is refused for that
+    # reason, and nothing about the event changes.
+    assert grow.status_code == 403, grow.text
+    detail = grow.json()["detail"]
+    assert detail["code"] == "resource_restricted_by_plan"
+    assert detail["entitlement"] == "calendar.max_calendars"
+    after = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/events/{event['event_id']}")
+    assert after.status_code == 200
+    assert len(after.json()["event"]["member_ids"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_editing_unrelated_fields_on_a_historical_shared_event_preserves_participants(
+async def test_historical_shared_event_is_read_only_after_downgrade_and_loses_nothing(
     client: AsyncClient,
 ) -> None:
     home_id, owner_id, second_id = await _make_family_home_with_two_members(client, _suffix())
@@ -302,13 +324,19 @@ async def test_editing_unrelated_fields_on_a_historical_shared_event_preserves_p
             expected_updated_at=event["updated_at"],
         ),
     )
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["title"] == "Family outing (renamed)"
-    assert set(edited.json()["member_ids"]) == {str(second_id), str(owner_id)}
+    # Read-only on Free (Phase 2C: the shared Home calendar is restricted): preserve
+    # the data, deny the edit.
+    assert edited.status_code == 403, edited.text
+    assert edited.json()["detail"]["code"] == "resource_restricted_by_plan"
+
+    unchanged = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/events/{event['event_id']}")
+    assert unchanged.status_code == 200
+    assert unchanged.json()["event"]["title"] == "Family outing"
+    assert set(unchanged.json()["event"]["member_ids"]) == {str(second_id), str(owner_id)}
 
 
 @pytest.mark.asyncio
-async def test_downgraded_home_can_still_remove_a_participant_from_a_shared_event(
+async def test_downgraded_home_cannot_remove_a_participant_from_a_read_only_shared_event(
     client: AsyncClient,
 ) -> None:
     home_id, owner_id, second_id = await _make_family_home_with_two_members(client, _suffix())
@@ -329,5 +357,10 @@ async def test_downgraded_home_can_still_remove_a_participant_from_a_shared_even
         f"/api/v1/homes/{home_id}/events/{event['event_id']}",
         json=_event_body([], expected_updated_at=event["updated_at"]),
     )
-    assert shrink.status_code == 200, shrink.text
-    assert shrink.json()["member_ids"] == [str(owner_id)]
+    # The event is on the read-only shared Home calendar, so the participant list is
+    # frozen along with everything else on it.
+    assert shrink.status_code == 403, shrink.text
+    assert shrink.json()["detail"]["code"] == "resource_restricted_by_plan"
+    unchanged = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/events/{event['event_id']}")
+    assert unchanged.status_code == 200
+    assert set(unchanged.json()["event"]["member_ids"]) == {str(second_id), str(owner_id)}

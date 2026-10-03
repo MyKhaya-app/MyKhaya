@@ -225,7 +225,7 @@ async def test_free_home_second_calendar_is_blocked_with_a_structured_error(
     assert response.status_code == 403
     detail = response.json()["detail"]
     assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "calendar.max_categories"
+    assert detail["entitlement"] == "calendar.max_calendars"
     assert detail["limit"] == 1
     # Never leaks provider/subscription internals.
     assert "stripe" not in str(detail).lower()
@@ -239,9 +239,9 @@ async def test_free_home_shared_calendar_cannot_be_recoloured_but_the_limit_is_u
     """Phase 2C: the shared "Home Calendar" is read_only_due_to_plan on
     Free (see _calendar_access), so recolouring it — a mutation, same rule
     as adding/editing an event there — is now blocked, unlike before Phase
-    2C when it was the Home's one entitled calendar. calendar.max_categories
-    (which still separately governs *creating* a second shared calendar) is
-    untouched by this — see routers.calendar.update_calendar/create_calendar."""
+    2C when it was the Home's one entitled calendar. calendar.max_calendars
+    (which also governs *creating* a second shared calendar) is untouched by
+    this — see routers.calendar.update_calendar/create_calendar."""
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"freecolour-{suffix}@example.com", "Free Colour Owner")
     home_id = await _home_with_calendar(client, "Free Colour Home")
@@ -263,7 +263,7 @@ async def test_free_home_shared_calendar_cannot_be_recoloured_but_the_limit_is_u
     assert blocked_recolour.json()["detail"]["code"] == "resource_restricted_by_plan"
 
     # Still exactly one shared calendar, same limit — nothing about the
-    # blocked recolour attempt moved calendar.max_categories' own count.
+    # blocked recolour attempt moved calendar.max_calendars' own count.
     after = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/calendars")
     assert after.status_code == 200
     assert after.json()["limit"] == 1
@@ -280,7 +280,7 @@ async def test_free_home_shared_calendar_cannot_be_recoloured_but_the_limit_is_u
     assert blocked.status_code == 403
     detail = blocked.json()["detail"]
     assert detail["code"] == "plan_limit_reached"
-    assert detail["entitlement"] == "calendar.max_categories"
+    assert detail["entitlement"] == "calendar.max_calendars"
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +642,7 @@ async def test_concurrent_calendar_creation_cannot_exceed_the_limit(
         PLAN_DEFINITIONS[SubscriptionPlan.free].__class__(
             plan=SubscriptionPlan.free,
             booleans=PLAN_DEFINITIONS[SubscriptionPlan.free].booleans,
-            limits={**original_limits, "calendar.max_categories": 3},
+            limits={**original_limits, "calendar.max_calendars": 3},
         ),
     )
 

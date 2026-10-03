@@ -93,9 +93,7 @@ async def test_worker_dispatches_ios_device_to_apns_and_not_fcm(
     fcm_calls = []
     monkeypatch.setattr(worker_module, "resolve_apns_config", _configured_apns_config)
     monkeypatch.setattr(worker_module, "resolve_fcm_config", _configured_fcm_config)
-    monkeypatch.setattr(
-        worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k))
-    )
+    monkeypatch.setattr(worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k)))
     monkeypatch.setattr(worker_module, "send_fcm", lambda *a, **k: fcm_calls.append((a, k)))
 
     await process(event_id)
@@ -117,9 +115,7 @@ async def test_worker_dispatches_android_device_to_fcm_and_not_apns(
     fcm_calls = []
     monkeypatch.setattr(worker_module, "resolve_apns_config", _configured_apns_config)
     monkeypatch.setattr(worker_module, "resolve_fcm_config", _configured_fcm_config)
-    monkeypatch.setattr(
-        worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k))
-    )
+    monkeypatch.setattr(worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k)))
     monkeypatch.setattr(worker_module, "send_fcm", lambda *a, **k: fcm_calls.append((a, k)))
 
     await process(event_id)
@@ -203,9 +199,7 @@ async def test_fcm_failure_never_falls_back_to_apns(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(worker_module, "resolve_fcm_config", _configured_fcm_config)
     monkeypatch.setattr(worker_module, "send_fcm", fail)
-    monkeypatch.setattr(
-        worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k))
-    )
+    monkeypatch.setattr(worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k)))
 
     await process(event_id)
 

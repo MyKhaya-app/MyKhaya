@@ -28,15 +28,21 @@ async def test_usage_event_is_server_timed_and_idempotent() -> None:
         key = f"test-usage-{unique('event')}"
         before = datetime.now(UTC)
         first = await record_usage_event(
-            db, event_name=ProductUsageEventName.app_open,
-            platform=ProductUsagePlatform.web, module=ProductUsageModule.app,
-            user_id=user.id, event_key=key,
+            db,
+            event_name=ProductUsageEventName.app_open,
+            platform=ProductUsagePlatform.web,
+            module=ProductUsageModule.app,
+            user_id=user.id,
+            event_key=key,
         )
         after = datetime.now(UTC)
         second = await record_usage_event(
-            db, event_name=ProductUsageEventName.app_open,
-            platform=ProductUsagePlatform.web, module=ProductUsageModule.app,
-            user_id=user.id, event_key=key,
+            db,
+            event_name=ProductUsageEventName.app_open,
+            platform=ProductUsagePlatform.web,
+            module=ProductUsageModule.app,
+            user_id=user.id,
+            event_key=key,
         )
         assert first is not None
         assert before <= first.occurred_at <= after
@@ -50,6 +56,7 @@ async def test_usage_event_is_server_timed_and_idempotent() -> None:
 @pytest.mark.asyncio
 async def test_usage_daily_aggregation_is_rerunnable() -> None:
     from mykhaya.db import SessionFactory
+
     async with SessionFactory() as db:
         count = await aggregate_usage_day(db, datetime.now(UTC).date())
         assert count >= 4

@@ -82,9 +82,7 @@ async def _set_override(home_id: str, feature: FeatureKey, enabled: bool) -> Non
         )
         if row is None:
             db.add(
-                FeatureOverride(
-                    group_id=uuid.UUID(home_id), feature_key=feature, enabled=enabled
-                )
+                FeatureOverride(group_id=uuid.UUID(home_id), feature_key=feature, enabled=enabled)
             )
         else:
             row.enabled = enabled
@@ -334,9 +332,7 @@ async def test_home_override_enabled_does_not_bypass_global_disabled_state(
     response = await client.get(f"/api/v1/homes/{home_id}/routines")
     assert response.status_code == 404
     async with SessionFactory() as db:
-        assert (
-            await is_feature_enabled(db, FeatureKey.nudges, uuid.UUID(home_id))
-        ) is False
+        assert (await is_feature_enabled(db, FeatureKey.nudges, uuid.UUID(home_id))) is False
 
 
 @pytest.mark.asyncio
@@ -351,9 +347,7 @@ async def test_disabling_nudges_does_not_disable_notifications(
     assert response.status_code == 404
 
     async with SessionFactory() as db:
-        assert (
-            await is_feature_enabled(db, FeatureKey.notifications, uuid.UUID(home_id))
-        ) is True
+        assert (await is_feature_enabled(db, FeatureKey.notifications, uuid.UUID(home_id))) is True
 
 
 @pytest.mark.asyncio
@@ -511,13 +505,10 @@ async def test_hidden_module_fails_closed_regardless_of_flags_or_overrides(
     try:
         await _set_override(home_id, FeatureKey.tasks, True)
         async with SessionFactory() as db:
-            assert (
-                await is_feature_enabled(db, FeatureKey.tasks, uuid.UUID(home_id))
-            ) is False
+            assert (await is_feature_enabled(db, FeatureKey.tasks, uuid.UUID(home_id))) is False
     finally:
         async with SessionFactory() as db:
             row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.tasks))
             assert row is not None
             row.enabled = original
             await db.commit()
-

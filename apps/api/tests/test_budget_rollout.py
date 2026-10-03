@@ -21,7 +21,6 @@ from datetime import UTC, datetime
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
-
 from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.db import SessionFactory
@@ -201,7 +200,9 @@ async def test_category_creation_seeds_only_selected_snapshot_and_future_months(
     assert planned.status_code == 200
     reloaded = await client.get(f"/api/v1/homes/{home_id}/budget/months/2026/9")
     assert (
-        next(row for row in reloaded.json()["categories"] if row["category_id"] == category_id)["planned_amount"]
+        next(row for row in reloaded.json()["categories"] if row["category_id"] == category_id)[
+            "planned_amount"
+        ]
         == 1150
     )
 
@@ -271,9 +272,15 @@ async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculate
         stored = await db.scalar(
             select(BudgetSpendingEntry).where(BudgetSpendingEntry.id == uuid.UUID(entry_id))
         )
-        stored_category = await db.scalar(
-            select(BudgetMonthCategory).where(BudgetMonthCategory.id == stored.month_category_id)
-        ) if stored is not None else None
+        stored_category = (
+            await db.scalar(
+                select(BudgetMonthCategory).where(
+                    BudgetMonthCategory.id == stored.month_category_id
+                )
+            )
+            if stored is not None
+            else None
+        )
     assert stored is not None
     assert stored.description == "Primark"
     assert stored.amount == 50
@@ -284,7 +291,9 @@ async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculate
 
     month_response = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
     assert month_response.status_code == 200
-    category = next(row for row in month_response.json()["categories"] if row["category_id"] == category_id)
+    category = next(
+        row for row in month_response.json()["categories"] if row["category_id"] == category_id
+    )
     assert category["actual_source"] == "manual"
     assert category["fixed_actual"] == 0
     assert category["entries_actual"] == 50
@@ -310,14 +319,18 @@ async def test_spending_entry_uses_additive_zero_fixed_component_and_recalculate
     )
     assert updated.status_code == 200
     after_edit = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
-    edited_category = next(row for row in after_edit.json()["categories"] if row["category_id"] == category_id)
+    edited_category = next(
+        row for row in after_edit.json()["categories"] if row["category_id"] == category_id
+    )
     assert edited_category["actual_amount"] == 75
     assert edited_category["planned_amount"] - edited_category["actual_amount"] == 275
 
     deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/budget/entries/{entry_id}")
     assert deleted.status_code == 204
     after_delete = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
-    deleted_category = next(row for row in after_delete.json()["categories"] if row["category_id"] == category_id)
+    deleted_category = next(
+        row for row in after_delete.json()["categories"] if row["category_id"] == category_id
+    )
     assert deleted_category["actual_amount"] == 0
     assert deleted_category["entries_actual"] == 0
 
@@ -381,7 +394,13 @@ async def test_spending_entry_create_and_update_follow_configured_budget_period(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/budget/entries",
-        json={"category_id": category_id, "description": "Rent", "amount": 1000, "spent_on": "2026-10-01", "budget_month_item_id": item_id},
+        json={
+            "category_id": category_id,
+            "description": "Rent",
+            "amount": 1000,
+            "spent_on": "2026-10-01",
+            "budget_month_item_id": item_id,
+        },
     )
     assert entry.status_code == 201, entry.text
     entry_id = entry.json()["id"]
@@ -389,7 +408,13 @@ async def test_spending_entry_create_and_update_follow_configured_budget_period(
         client,
         "PUT",
         f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
-        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-01", "budget_month_item_id": item_id},
+        json={
+            "category_id": category_id,
+            "description": "Rent paid",
+            "amount": 1000,
+            "spent_on": "2026-10-01",
+            "budget_month_item_id": item_id,
+        },
     )
     assert unchanged_period.status_code == 200, unchanged_period.text
 
@@ -397,7 +422,13 @@ async def test_spending_entry_create_and_update_follow_configured_budget_period(
         client,
         "PUT",
         f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
-        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-25", "budget_month_item_id": item_id},
+        json={
+            "category_id": category_id,
+            "description": "Rent paid",
+            "amount": 1000,
+            "spent_on": "2026-10-25",
+            "budget_month_item_id": item_id,
+        },
     )
     assert moved_to_november.status_code == 200, moved_to_november.text
     assert moved_to_november.json()["budget_month_item_id"] is None
@@ -405,16 +436,27 @@ async def test_spending_entry_create_and_update_follow_configured_budget_period(
         client,
         "PUT",
         f"/api/v1/homes/{home_id}/budget/entries/{entry_id}",
-        json={"category_id": category_id, "description": "Rent paid", "amount": 1000, "spent_on": "2026-10-24"},
+        json={
+            "category_id": category_id,
+            "description": "Rent paid",
+            "amount": 1000,
+            "spent_on": "2026-10-24",
+        },
     )
     assert moved_back.status_code == 200, moved_back.text
 
     async with SessionFactory() as db:
-        stored = await db.scalar(select(BudgetSpendingEntry).where(BudgetSpendingEntry.id == uuid.UUID(entry_id)))
+        stored = await db.scalar(
+            select(BudgetSpendingEntry).where(BudgetSpendingEntry.id == uuid.UUID(entry_id))
+        )
         assert stored is not None
-        month_category = await db.scalar(select(BudgetMonthCategory).where(BudgetMonthCategory.id == stored.month_category_id))
+        month_category = await db.scalar(
+            select(BudgetMonthCategory).where(BudgetMonthCategory.id == stored.month_category_id)
+        )
         assert month_category is not None
-        month = await db.scalar(select(BudgetMonth).where(BudgetMonth.id == month_category.month_id))
+        month = await db.scalar(
+            select(BudgetMonth).where(BudgetMonth.id == month_category.month_id)
+        )
         assert month is not None
         assert (month.year, month.month) == (2026, 10)
 
@@ -504,9 +546,12 @@ async def test_current_snapshot_reconciles_pre_fix_missing_category_without_touc
     reloaded = await client.get(
         f"/api/v1/homes/{home_id}/budget/months/{current_year}/{current_month}"
     )
-    assert next(
-        row for row in reloaded.json()["categories"] if row["category_id"] == str(category_id)
-    )["planned_amount"] == 500
+    assert (
+        next(
+            row for row in reloaded.json()["categories"] if row["category_id"] == str(category_id)
+        )["planned_amount"]
+        == 500
+    )
 
     historical = await client.get(
         f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
@@ -599,7 +644,12 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
         f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}",
     )
     assert historical.status_code == 201
-    assert next(row for row in historical.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
+    assert (
+        next(row for row in historical.json()["income"] if row["source_id"] == source_id)[
+            "source_name"
+        ]
+        == "NNUH"
+    )
 
     renamed = await unsafe(
         client,
@@ -609,11 +659,21 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
     )
     assert renamed.status_code == 200
     current_after_rename = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
-    assert next(row for row in current_after_rename.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH Salary"
+    assert (
+        next(row for row in current_after_rename.json()["income"] if row["source_id"] == source_id)[
+            "source_name"
+        ]
+        == "NNUH Salary"
+    )
     historical_after_rename = await client.get(
         f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
     )
-    assert next(row for row in historical_after_rename.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
+    assert (
+        next(
+            row for row in historical_after_rename.json()["income"] if row["source_id"] == source_id
+        )["source_name"]
+        == "NNUH"
+    )
 
     archived = await unsafe(
         client,
@@ -621,12 +681,21 @@ async def test_income_source_creation_reconciles_selected_month_and_handles_dupl
         f"/api/v1/homes/{home_id}/budget/income-sources/{source_id}",
     )
     assert archived.status_code == 204
-    current_after_archive = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
+    current_after_archive = await client.get(
+        f"/api/v1/homes/{home_id}/budget/months/{year}/{month}"
+    )
     assert all(row["source_id"] != source_id for row in current_after_archive.json()["income"])
     historical_after_archive = await client.get(
         f"/api/v1/homes/{home_id}/budget/months/{previous_year}/{previous_month}"
     )
-    assert next(row for row in historical_after_archive.json()["income"] if row["source_id"] == source_id)["source_name"] == "NNUH"
+    assert (
+        next(
+            row
+            for row in historical_after_archive.json()["income"]
+            if row["source_id"] == source_id
+        )["source_name"]
+        == "NNUH"
+    )
 
     async with SessionFactory() as db:
         memberships = (
@@ -642,8 +711,12 @@ async def test_income_received_date_and_budget_period_assignment_are_independent
     client: AsyncClient,
 ) -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
-    await create_verified_user(client, f"budget-income-period-{suffix}@example.com", "Income Period Owner")
-    home = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Budget Income Period Home"})
+    await create_verified_user(
+        client, f"budget-income-period-{suffix}@example.com", "Income Period Owner"
+    )
+    home = await unsafe(
+        client, "POST", "/api/v1/groups", json={"name": "Budget Income Period Home"}
+    )
     assert home.status_code == 201
     home_id = home.json()["id"]
     await _set_ultimate_plan(home_id)
@@ -666,7 +739,13 @@ async def test_income_received_date_and_budget_period_assignment_are_independent
         client,
         "POST",
         f"/api/v1/homes/{home_id}/budget/income-sources",
-        json={"name": "Salary", "usual_payday_day": 25, "recurring": True, "year": 2026, "month": 10},
+        json={
+            "name": "Salary",
+            "usual_payday_day": 25,
+            "recurring": True,
+            "year": 2026,
+            "month": 10,
+        },
     )
     assert created.status_code == 201, created.text
     source_id = created.json()["id"]
@@ -769,7 +848,9 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
 
     current = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
     assert current.status_code == 200
-    current_row = next(row for row in current.json()["categories"] if row["category_id"] == category_id)
+    current_row = next(
+        row for row in current.json()["categories"] if row["category_id"] == category_id
+    )
     assert current_row["planned_amount"] == 1450
     assert {item["item_type"] for item in current_row["items"]} == {"fixed", "variable"}
 
@@ -789,7 +870,9 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
     )
     assert edited.status_code == 200
     current = await client.get(f"/api/v1/homes/{home_id}/budget/months/{year}/{month}")
-    current_row = next(row for row in current.json()["categories"] if row["category_id"] == category_id)
+    current_row = next(
+        row for row in current.json()["categories"] if row["category_id"] == category_id
+    )
     assert current_row["planned_amount"] == 1500
 
     copied = await unsafe(
@@ -799,7 +882,9 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
         json={},
     )
     assert copied.status_code == 200
-    copied_row = next(row for row in copied.json()["categories"] if row["category_id"] == category_id)
+    copied_row = next(
+        row for row in copied.json()["categories"] if row["category_id"] == category_id
+    )
     assert [item["item_type"] for item in copied_row["items"]] == ["fixed"]
     assert copied_row["planned_amount"] == 1200
 
@@ -810,7 +895,11 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
         json={"copy_fixed_items": True, "copy_variable_items": True, "copy_income_sources": True},
     )
     assert copied_with_variable.status_code == 200
-    copied_row = next(row for row in copied_with_variable.json()["categories"] if row["category_id"] == category_id)
+    copied_row = next(
+        row
+        for row in copied_with_variable.json()["categories"]
+        if row["category_id"] == category_id
+    )
     assert {item["item_type"] for item in copied_row["items"]} == {"fixed", "variable"}
     repeated = await unsafe(
         client,
@@ -819,14 +908,22 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
         json={"copy_fixed_items": True, "copy_variable_items": True, "copy_income_sources": True},
     )
     assert repeated.status_code == 200
-    repeated_row = next(row for row in repeated.json()["categories"] if row["category_id"] == category_id)
+    repeated_row = next(
+        row for row in repeated.json()["categories"] if row["category_id"] == category_id
+    )
     assert len(repeated_row["items"]) == len(copied_row["items"])
 
     entry = await unsafe(
         client,
         "POST",
         f"/api/v1/homes/{home_id}/budget/entries",
-        json={"category_id": category_id, "description": "Builder supplies", "amount": 42, "spent_on": f"{year}-{month:02d}-15", "note": "Keep receipt"},
+        json={
+            "category_id": category_id,
+            "description": "Builder supplies",
+            "amount": 42,
+            "spent_on": f"{year}-{month:02d}-15",
+            "note": "Keep receipt",
+        },
     )
     assert entry.status_code == 201
     assert entry.json()["note"] == "Keep receipt"
@@ -834,7 +931,13 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
         client,
         "PUT",
         f"/api/v1/homes/{home_id}/budget/entries/{entry.json()['id']}",
-        json={"category_id": category_id, "description": "Builder supplies", "amount": 42, "spent_on": f"{year}-{month:02d}-15", "note": "Receipt filed"},
+        json={
+            "category_id": category_id,
+            "description": "Builder supplies",
+            "amount": 42,
+            "spent_on": f"{year}-{month:02d}-15",
+            "note": "Receipt filed",
+        },
     )
     assert updated_entry.status_code == 200
     assert updated_entry.json()["note"] == "Receipt filed"
@@ -842,7 +945,11 @@ async def test_budget_items_copy_recurrence_totals_and_entry_notes(
     await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/budget/items/{variable_id}")
     async with SessionFactory() as db:
         historical_items = (
-            await db.scalars(select(BudgetMonthItem).where(BudgetMonthItem.budget_item_id == uuid.UUID(variable_id)))
+            await db.scalars(
+                select(BudgetMonthItem).where(
+                    BudgetMonthItem.budget_item_id == uuid.UUID(variable_id)
+                )
+            )
         ).all()
     assert historical_items
 
@@ -952,7 +1059,8 @@ async def test_budget_item_partner_sharing_filters_detail_and_revokes_access(
         assert all(key not in discovery.text for key in ("Mortgage", "Insurance", mortgage_id))
 
         summary = await partner_client.get(
-            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}/months/{year}/{month}"
+            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}"
+            f"/months/{year}/{month}"
         )
         assert summary.status_code == 200
         assert summary.json()["categories"] == []
@@ -962,11 +1070,16 @@ async def test_budget_item_partner_sharing_filters_detail_and_revokes_access(
             client,
             "PUT",
             f"/api/v1/homes/{home_id}/budget/shares/{partner_id}",
-            json={"partner_user_id": str(partner_id), "level": "categories", "category_ids": [first_id]},
+            json={
+                "partner_user_id": str(partner_id),
+                "level": "categories",
+                "category_ids": [first_id],
+            },
         )
         assert categories_share.status_code == 200
         shared_categories = await partner_client.get(
-            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}/months/{year}/{month}"
+            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}"
+            f"/months/{year}/{month}"
         )
         assert shared_categories.status_code == 200
         assert [row["category_id"] for row in shared_categories.json()["categories"]] == [first_id]
@@ -981,7 +1094,8 @@ async def test_budget_item_partner_sharing_filters_detail_and_revokes_access(
         )
         assert full_share.status_code == 200
         full = await partner_client.get(
-            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}/months/{year}/{month}"
+            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}"
+            f"/months/{year}/{month}"
         )
         assert full.status_code == 200
         assert any(item["name"] == "Mortgage" for item in full.json()["categories"][0]["items"])
@@ -1001,10 +1115,13 @@ async def test_budget_item_partner_sharing_filters_detail_and_revokes_access(
         )
         assert direct_update.status_code == 404
 
-        revoked = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/budget/shares/{partner_id}")
+        revoked = await unsafe(
+            client, "DELETE", f"/api/v1/homes/{home_id}/budget/shares/{partner_id}"
+        )
         assert revoked.status_code == 204
         after_revoke = await partner_client.get(
-            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}/months/{year}/{month}"
+            f"/api/v1/homes/{home_id}/budget/shared/{await _owner_id(owner_email)}"
+            f"/months/{year}/{month}"
         )
         assert after_revoke.status_code == 404
 

@@ -65,7 +65,9 @@ def unique_email(prefix: str) -> str:
 
 async def create_verified_user(client: AsyncClient, email: str, name: str) -> uuid.UUID:
     response = await unsafe(
-        client, "POST", "/api/v1/auth/register",
+        client,
+        "POST",
+        "/api/v1/auth/register",
         json={"email": email, "display_name": name, "password": PASSWORD},
     )
     assert response.status_code == 202
@@ -75,9 +77,7 @@ async def create_verified_user(client: AsyncClient, email: str, name: str) -> uu
         user_id = user.id
         token = await db.scalar(
             select(ActionToken)
-            .where(
-                ActionToken.user_id == user.id, ActionToken.purpose == TokenPurpose.verify_email
-            )
+            .where(ActionToken.user_id == user.id, ActionToken.purpose == TokenPurpose.verify_email)
             .order_by(ActionToken.created_at.desc())
         )
         assert token is not None
@@ -464,9 +464,7 @@ async def test_home_join_request_uses_the_template_and_still_reaches_the_admin(
         assert subscription is not None
         subscription.plan = SubscriptionPlan.family
         await db.commit()
-    code_response = await unsafe(
-        client, "POST", f"/api/v1/groups/{home_id}/join-code/regenerate"
-    )
+    code_response = await unsafe(client, "POST", f"/api/v1/groups/{home_id}/join-code/regenerate")
     assert code_response.status_code == 200
     code = code_response.json()["code"]
 

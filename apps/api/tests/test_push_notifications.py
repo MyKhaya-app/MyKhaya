@@ -615,9 +615,7 @@ async def test_native_device_list_paginates(
             )
         await db.commit()
 
-    first_page = await admin_client.get(
-        "/api/v1/platform/push/native-devices?page=1&page_size=2"
-    )
+    first_page = await admin_client.get("/api/v1/platform/push/native-devices?page=1&page_size=2")
     assert first_page.status_code == 200
     first_body = first_page.json()
     assert len(first_body["items"]) == 2

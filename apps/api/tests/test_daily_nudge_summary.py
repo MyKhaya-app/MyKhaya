@@ -345,9 +345,7 @@ async def test_deliver_skips_on_free_plan_even_with_outstanding_items(client: As
     today = datetime.now(UTC).astimezone(TZ).date()
 
     async with SessionFactory() as db:
-        db.add(
-            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
-        )
+        db.add(Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id))
         await db.commit()
         await deliver_daily_nudge_summary(db, get_settings(), str(user_id), today.isoformat())
         await db.commit()
@@ -371,9 +369,7 @@ async def test_deliver_skips_when_nudges_module_disabled_for_home(client: AsyncC
     today = datetime.now(UTC).astimezone(TZ).date()
 
     async with SessionFactory() as db:
-        db.add(
-            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
-        )
+        db.add(Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id))
         await db.commit()
         await deliver_daily_nudge_summary(db, get_settings(), str(user_id), today.isoformat())
         await db.commit()
@@ -398,9 +394,7 @@ async def test_deliver_skips_when_notifications_disabled_for_home(client: AsyncC
     today = datetime.now(UTC).astimezone(TZ).date()
 
     async with SessionFactory() as db:
-        db.add(
-            Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id)
-        )
+        db.add(Todo(group_id=home_id, title="Buy milk", due_date=today, created_by=user_id))
         # The Home's own FeatureOverride says notifications=True (set by
         # create_home_with_notifications) — disable it globally instead, to
         # prove the platform layer is checked too, not just the override.
@@ -779,9 +773,7 @@ async def test_reminder_not_suppressed_when_item_not_in_summary(client: AsyncCli
         db.add(reminder)
         await db.flush()
         db.add(
-            ReminderCompletion(
-                reminder_id=reminder.id, occurrence_date=today, completed_by=user_id
-            )
+            ReminderCompletion(reminder_id=reminder.id, occurrence_date=today, completed_by=user_id)
         )
         await db.commit()
         reminder_id = str(reminder.id)

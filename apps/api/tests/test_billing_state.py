@@ -428,7 +428,9 @@ async def test_expiry_disconnects_members_and_sponsorship_without_deleting_accou
             await db.scalars(select(Membership).where(Membership.group_id == home_id))
         ).all()
         member_membership = next(row for row in memberships if row.user_id == member_id)
-        owner_membership = next(row for row in memberships if row.relationship == HouseholdRelationship.home_admin)
+        owner_membership = next(
+            row for row in memberships if row.relationship == HouseholdRelationship.home_admin
+        )
         assert member_membership.removed_at is not None
         assert owner_membership.removed_at is None
         assert await effective_plan(db, home_id) == SubscriptionPlan.free

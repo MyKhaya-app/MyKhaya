@@ -137,7 +137,9 @@ async def create_list(
 
 
 @pytest.mark.asyncio
-async def test_templates_copy_ordered_sections_and_defaults_without_live_coupling(client: AsyncClient) -> None:
+async def test_templates_copy_ordered_sections_and_defaults_without_live_coupling(
+    client: AsyncClient,
+) -> None:
     await create_verified_user(client, unique_email("template-owner"), "Template Owner")
     home_id = await create_home(client, "Template Home")
     template = await unsafe(
@@ -155,10 +157,15 @@ async def test_templates_copy_ordered_sections_and_defaults_without_live_couplin
     )
     assert template.status_code == 201, template.text
     template_body = template.json()
-    assert [section["name"] for section in template_body["sections"]] == ["Fresh & Fridge", "Cupboard"]
+    assert [section["name"] for section in template_body["sections"]] == [
+        "Fresh & Fridge",
+        "Cupboard",
+    ]
     assert template_body["sections"][0]["items"][0]["text"] == "Milk"
 
-    created = await create_list(client, home_id, name="Saturday shopping", template_id=template_body["id"])
+    created = await create_list(
+        client, home_id, name="Saturday shopping", template_id=template_body["id"]
+    )
     assert [section["name"] for section in created["sections"]] == ["Fresh & Fridge", "Cupboard"]
     assert [item["text"] for item in created["items"]] == ["Milk", "Pasta"]
     assert created["source_template_id"] == template_body["id"]
@@ -189,7 +196,9 @@ async def test_personal_template_is_not_visible_to_another_home_member(client: A
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as partner_client:
-        partner_id = await create_verified_user(partner_client, unique_email("template-partner"), "Template Partner")
+        partner_id = await create_verified_user(
+            partner_client, unique_email("template-partner"), "Template Partner"
+        )
         async with SessionFactory() as db:
             db.add(
                 Membership(
@@ -241,9 +250,7 @@ async def test_free_user_cannot_create_a_third_list(client: AsyncClient) -> None
     await create_list(client, home_id, name="Groceries")
     await create_list(client, home_id, name="Packing")
 
-    third = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Third"}
-    )
+    third = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Third"})
     assert third.status_code == 403
     assert third.json()["detail"]["code"] == "plan_limit_reached"
     assert third.json()["detail"]["entitlement"] == "lists.max_lists"
@@ -840,7 +847,9 @@ async def test_cross_home_list_and_item_operations_are_rejected(client: AsyncCli
 
 
 @pytest.mark.asyncio
-async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(client: AsyncClient) -> None:
+async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(
+    client: AsyncClient,
+) -> None:
     owner_id = await create_verified_user(client, unique_email("scope-owner"), "Scope Owner")
     home_id = await create_home(client, "List Scope Home")
     personal = await create_list(client, home_id, name="Private errands", scope="personal")
@@ -895,12 +904,17 @@ async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(c
 
 
 @pytest.mark.asyncio
-async def test_list_scope_move_preserves_content_and_changes_visibility(client: AsyncClient) -> None:
+async def test_list_scope_move_preserves_content_and_changes_visibility(
+    client: AsyncClient,
+) -> None:
     await create_verified_user(client, unique_email("move-owner"), "Move Owner")
     home_id = await create_home(client, "List Move Home")
     created = await create_list(client, home_id, name="Moving list", scope="personal")
     section = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/lists/{created['id']}/sections", json={"name": "Fridge"}
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/sections",
+        json={"name": "Fridge"},
     )
     section_id = section.json()["sections"][0]["id"]
     item = await unsafe(
@@ -935,10 +949,15 @@ async def test_list_scope_move_preserves_content_and_changes_visibility(client: 
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as partner_client:
         login = await unsafe(
-            partner_client, "POST", "/api/v1/auth/login", json={"email": partner_email, "password": PASSWORD}
+            partner_client,
+            "POST",
+            "/api/v1/auth/login",
+            json={"email": partner_email, "password": PASSWORD},
         )
         assert login.status_code == 200
-        assert (await partner_client.get(f"/api/v1/homes/{home_id}/lists/{created['id']}")).status_code == 200
+        assert (
+            await partner_client.get(f"/api/v1/homes/{home_id}/lists/{created['id']}")
+        ).status_code == 200
 
     latest = moved_household.json()
     moved_personal = await unsafe(
@@ -950,8 +969,15 @@ async def test_list_scope_move_preserves_content_and_changes_visibility(client: 
     assert moved_personal.status_code == 200
     assert moved_personal.json()["scope"] == "personal"
     assert moved_personal.json()["items"][0]["text"] == "Milk"
-    assert (await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")).json()["items"] == []
-    assert [row["id"] for row in (await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")).json()["items"]] == [created["id"]]
+    assert (await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")).json()[
+        "items"
+    ] == []
+    assert [
+        row["id"]
+        for row in (await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")).json()[
+            "items"
+        ]
+    ] == [created["id"]]
 
 
 # ---------------------------------------------------------------------------

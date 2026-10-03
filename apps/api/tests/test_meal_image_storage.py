@@ -42,8 +42,11 @@ def import_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 async def test_import_saves_processed_photo(import_dependencies: Settings) -> None:
     home_id = uuid.uuid4()
     result = await meal_plans.import_recipe_draft(
-        home_id, RecipeImportRequest(url="https://example.com/recipes/kebabs"),
-        auth=Mock(), db=AsyncMock(), settings=import_dependencies,
+        home_id,
+        RecipeImportRequest(url="https://example.com/recipes/kebabs"),
+        auth=Mock(),
+        db=AsyncMock(),
+        settings=import_dependencies,
     )
     assert result.image_url is not None
     assert result.image_url.startswith(f"/homes/{home_id}/meals/images/")
@@ -56,22 +59,25 @@ async def test_import_saves_processed_photo(import_dependencies: Settings) -> No
 
 @pytest.mark.parametrize("failure_stage", ["directory", "write"])
 async def test_image_storage_failure_preserves_recipe_text(
-    import_dependencies: Settings, monkeypatch: pytest.MonkeyPatch, failure_stage: str,
+    import_dependencies: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
 ) -> None:
     failure = OSError(errno.EROFS, "Read-only file system")
     storage = Mock()
     storage.save = AsyncMock(side_effect=failure)
     factory = (
-        Mock(side_effect=failure)
-        if failure_stage == "directory"
-        else Mock(return_value=storage)
+        Mock(side_effect=failure) if failure_stage == "directory" else Mock(return_value=storage)
     )
     monkeypatch.setattr(meal_plans, "get_meal_image_storage", factory)
     log = Mock()
     monkeypatch.setattr(meal_plans, "log", log)
     result = await meal_plans.import_recipe_draft(
-        uuid.uuid4(), RecipeImportRequest(url="https://example.com/recipes/kebabs"),
-        auth=Mock(), db=AsyncMock(), settings=import_dependencies,
+        uuid.uuid4(),
+        RecipeImportRequest(url="https://example.com/recipes/kebabs"),
+        auth=Mock(),
+        db=AsyncMock(),
+        settings=import_dependencies,
     )
     assert result.image_url is None
     assert result.name == "Chicken kebabs"
@@ -82,8 +88,11 @@ async def test_image_storage_failure_preserves_recipe_text(
 
 
 def test_meal_volume_matches_existing_non_root_read_only_deployment() -> None:
-    root = Path(__file__).resolve().parents[3]
-    if not (root / "compose.yml").exists():
+    # In the API test image this file sits only three levels deep (/build/tests),
+    # so there is no repository root to find at all — skip rather than raise.
+    ancestors = Path(__file__).resolve().parents
+    root = ancestors[3] if len(ancestors) > 3 else None
+    if root is None or not (root / "compose.yml").exists():
         pytest.skip("Deployment files are not copied into the API test image")
     compose = (root / "compose.yml").read_text(encoding="utf-8")
     dockerfile = (root / "apps/api/Dockerfile").read_text(encoding="utf-8")

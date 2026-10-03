@@ -14,24 +14,19 @@ mykhaya.config.Settings.native_api_url's docstring for the full story.
 """
 
 from collections.abc import AsyncIterator
-import os
-
-# This module imports the application during collection. Supply only a
-# deterministic test configuration before that import; this is never a
-# production credential and avoids requiring a developer's .env file in CI.
-os.environ["MYKHAYA_ENVIRONMENT"] = "test"
-os.environ["MYKHAYA_SECRET_KEY"] = "test-only-native-cors-secret-32-bytes!!"
-os.environ["MYKHAYA_PUBLIC_WEB_URL"] = "https://mykhaya.app"
-os.environ["MYKHAYA_NATIVE_API_URL"] = "https://api.mykhaya.app"
-os.environ["MYKHAYA_CORS_ORIGINS"] = '["https://mykhaya.app"]'
-os.environ["MYKHAYA_TRUSTED_HOSTS"] = '["mykhaya.app","api.mykhaya.app"]'
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from mykhaya.config import get_settings
 from mykhaya.main import app
 
-ORIGIN = "https://mykhaya.app"
+# The shared test app is built once from the process-wide test configuration
+# (tests/conftest.py and the compose `test` service), so this exercises a real
+# allow-listed origin from that configuration. It deliberately never rewrites
+# os.environ: an import-time override here would leak into every Settings()
+# built later in the session.
+ORIGIN = get_settings().cors_origins[0]
 
 
 @pytest.fixture
@@ -43,7 +38,7 @@ async def client() -> AsyncIterator[AsyncClient]:
 
 
 def _allowed_origin() -> str:
-    return "https://mykhaya.app"
+    return ORIGIN
 
 
 @pytest.mark.asyncio
@@ -75,7 +70,9 @@ async def test_preflight_for_native_mobile_login_allows_the_native_client_header
 
 
 @pytest.mark.asyncio
-async def test_preflight_for_native_bearer_requests_allows_authorization(client: AsyncClient) -> None:
+async def test_preflight_for_native_bearer_requests_allows_authorization(
+    client: AsyncClient,
+) -> None:
     response = await client.options(
         "/api/v1/users/me",
         headers={

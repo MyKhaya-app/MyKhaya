@@ -43,6 +43,7 @@ async def test_request_below_500_is_logged_at_info(
 
     monkeypatch.setattr(main, "log", Logger())
     request = make_request()
+
     async def call_next(_request: Request) -> Response:
         return _response(status_code)
 
@@ -67,6 +68,7 @@ async def test_request_5xx_is_logged_at_error(
 
     monkeypatch.setattr(main, "log", Logger())
     request = make_request()
+
     async def call_next(_request: Request) -> Response:
         return _response(status_code)
 

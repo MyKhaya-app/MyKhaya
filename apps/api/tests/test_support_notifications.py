@@ -767,7 +767,12 @@ async def test_internal_note_does_not_notify_requester() -> None:
         db.add(message)
         await db.flush()
         await ticket_reply(
-            db, settings, ticket, requester, message.message, message.id,
+            db,
+            settings,
+            ticket,
+            requester,
+            message.message,
+            message.id,
             visibility=SupportMessageVisibility.internal,
         )
         await db.commit()
@@ -810,9 +815,7 @@ async def test_native_push_failure_does_not_prevent_reply_from_persisting(
     async def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("push dispatch exploded")
 
-    monkeypatch.setattr(
-        "mykhaya.support_notifications._notify_reply_in_app_and_push", boom
-    )
+    monkeypatch.setattr("mykhaya.support_notifications._notify_reply_in_app_and_push", boom)
 
     async with SessionFactory() as db:
         ticket = await _reload_ticket(db, ticket.id)

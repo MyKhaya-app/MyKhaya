@@ -23,8 +23,7 @@ def test_provider_returns_region_specific_and_christmas_holidays() -> None:
     rows = built_in_holidays(source("GB", "scotland"), 2026)
     assert any(name == "St Andrew's Day" for _, _, name, _ in rows)
     assert any(
-        day.month == 12 and day.day == 25 and name == "Christmas Day"
-        for _, day, name, _ in rows
+        day.month == 12 and day.day == 25 and name == "Christmas Day" for _, day, name, _ in rows
     )
 
 

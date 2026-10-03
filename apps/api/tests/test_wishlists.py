@@ -435,8 +435,17 @@ async def test_owner_never_sees_reservation_data_even_after_a_reservation(
     assert "reservation_status" not in owner_item
     assert "reserved_by_display_name" not in owner_item
     assert set(owner_item.keys()) == {
-        "id", "name", "url", "price", "currency", "note", "image_url",
-        "quantity", "sort_order", "created_at", "updated_at",
+        "id",
+        "name",
+        "url",
+        "price",
+        "currency",
+        "note",
+        "image_url",
+        "quantity",
+        "sort_order",
+        "created_at",
+        "updated_at",
     }
     # No aggregate leak either (no reservation-shaped key anywhere, at any
     # nesting level, in the owner's response).
@@ -601,7 +610,9 @@ async def test_cross_home_share_grants_only_that_one_wishlist(client: AsyncClien
 
     # Revoke, then confirm access is gone.
     revoke = await unsafe(
-        client, "POST", f"/api/v1/homes/{home_id}/wishlists/{wishlist['id']}/shares/{share_id}/revoke"
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/wishlists/{wishlist['id']}/shares/{share_id}/revoke",
     )
     assert revoke.status_code == 204
 
@@ -692,7 +703,9 @@ async def test_cross_home_wishlist_and_item_operations_are_rejected(client: Asyn
             )
         ).status_code == 404
         assert (
-            await unsafe(other_client, "DELETE", f"/api/v1/homes/{home_b}/wishlists/{wishlist['id']}")
+            await unsafe(
+                other_client, "DELETE", f"/api/v1/homes/{home_b}/wishlists/{wishlist['id']}"
+            )
         ).status_code == 404
         assert (
             await unsafe(
@@ -704,9 +717,7 @@ async def test_cross_home_wishlist_and_item_operations_are_rejected(client: Asyn
         ).status_code == 404
         # No membership and no share -> the top-level view/reserve endpoints
         # 404 too, not just the Home-scoped ones.
-        assert (
-            await other_client.get(f"/api/v1/wishlists/{wishlist['id']}")
-        ).status_code == 404
+        assert (await other_client.get(f"/api/v1/wishlists/{wishlist['id']}")).status_code == 404
         assert (
             await unsafe(
                 other_client,
@@ -768,7 +779,9 @@ async def test_owner_always_sees_own_wishlist_regardless_of_visibility(client: A
 
 
 @pytest.mark.asyncio
-async def test_toggling_home_visibility_grants_and_revokes_member_access(client: AsyncClient) -> None:
+async def test_toggling_home_visibility_grants_and_revokes_member_access(
+    client: AsyncClient,
+) -> None:
     await create_verified_user(client, unique_email("visowner3"), "Vis Owner 3")
     home_id = await create_home(client, "Vis Toggle Home")
     wishlist = await create_wishlist(client, home_id)
@@ -811,7 +824,9 @@ async def test_individual_share_works_independently_of_home_visibility(client: A
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as recipient_client:
-        recipient_id = await create_verified_user(recipient_client, recipient_email, "Vis Recipient 4")
+        recipient_id = await create_verified_user(
+            recipient_client, recipient_email, "Vis Recipient 4"
+        )
 
     share = await unsafe(
         client,
@@ -862,7 +877,9 @@ async def test_toggling_home_visibility_does_not_revoke_shares(client: AsyncClie
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as recipient_client:
-        recipient_id = await create_verified_user(recipient_client, recipient_email, "Vis Recipient 5")
+        recipient_id = await create_verified_user(
+            recipient_client, recipient_email, "Vis Recipient 5"
+        )
 
     share = await unsafe(
         client,
@@ -897,7 +914,9 @@ async def test_cross_home_share_unaffected_by_home_visibility_either_state(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as recipient_client:
-        recipient_id = await create_verified_user(recipient_client, recipient_email, "Vis Recipient 6")
+        recipient_id = await create_verified_user(
+            recipient_client, recipient_email, "Vis Recipient 6"
+        )
         await create_home(recipient_client, "Vis Recipient's Own Home")
 
     share = await unsafe(

@@ -223,12 +223,7 @@ def test_format_daily_briefing_sorts_events_in_recipient_timezone() -> None:
         tz=TZ,
     )
     assert title == "You have 3 events today."
-    assert body == (
-        "Please take care of yourself!\n"
-        "• 09:50 Earlier\n"
-        "• 11:20 Middle\n"
-        "• 17:30 Later"
-    )
+    assert body == ("Please take care of yourself!\n• 09:50 Earlier\n• 11:20 Middle\n• 17:30 Later")
 
 
 def test_format_daily_briefing_formats_all_day_and_local_timezone() -> None:
@@ -242,9 +237,7 @@ def test_format_daily_briefing_formats_all_day_and_local_timezone() -> None:
     )
     assert title == "You have 2 events today."
     assert body == (
-        "Please take care of yourself!\n"
-        "• All day – All-day thing\n"
-        "• 09:50 Local appointment"
+        "Please take care of yourself!\n• All day – All-day thing\n• 09:50 Local appointment"
     )
 
 

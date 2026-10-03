@@ -61,9 +61,9 @@ async def household_client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
-async def admin_factory() -> (
-    AsyncIterator[Callable[[PlatformRole], Awaitable[PlatformAdministrator]]]
-):
+async def admin_factory() -> AsyncIterator[
+    Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
+]:
     identifiers: list[uuid.UUID] = []
 
     async def factory(role: PlatformRole = PlatformRole.owner) -> PlatformAdministrator:

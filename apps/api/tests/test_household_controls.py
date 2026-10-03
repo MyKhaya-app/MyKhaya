@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from test_journey import ORIGIN, create_verified_user, unsafe
 
+from mykhaya.colour_palette import MEMBER_COLOUR_CYCLE
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
@@ -220,9 +221,11 @@ async def test_member_colours_are_assigned_and_collision_free(
     """Colour belongs to the person's membership, assigned server-side, and
     must never collide with another active member of the same home while
     the palette has spare colours — see docs/design/visual-identity.md and
-    mykhaya.member_colours. The palette has 18 tokens (mykhaya.colour_palette
-    .ColourToken); this creates one more member than that to exercise both
+    mykhaya.member_colours. The palette size is read from the palette itself
+    (mykhaya.colour_palette.MEMBER_COLOUR_CYCLE) so it cannot go stale as
+    tokens are added; this creates one more member than that to exercise both
     "everyone distinct while there's room" and "cycles once exhausted"."""
+    palette_size = len(MEMBER_COLOUR_CYCLE)
     client = api_client
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"colour-{suffix}@example.com", "Colour Owner")
@@ -240,7 +243,7 @@ async def test_member_colours_are_assigned_and_collision_free(
     assert admin["colour"] is not None
     guardian_id = admin["membership_id"]
 
-    for index in range(18):
+    for index in range(palette_size):
         child = await unsafe(
             client,
             "POST",
@@ -256,16 +259,16 @@ async def test_member_colours_are_assigned_and_collision_free(
     all_members = await client.get(f"/api/v1/groups/{home_id}/members")
     assert all_members.status_code == 200
     rows = all_members.json()
-    assert len(rows) == 19
+    assert len(rows) == palette_size + 1
     member_colours = [row["colour"] for row in rows]
     assert all(colour is not None for colour in member_colours)
-    # Every one of the 18 palette colours gets used at least once — nobody is
-    # left without a colour and nothing is skipped while there's still room.
-    assert len(set(member_colours)) == 18
-    # The 19th member, past the palette's capacity, cycles back to a colour
-    # already in use rather than staying blank.
+    # Every palette colour gets used at least once — nobody is left without a
+    # colour and nothing is skipped while there's still room.
+    assert len(set(member_colours)) == palette_size
+    # The member past the palette's capacity cycles back to a colour already in
+    # use rather than staying blank.
     duplicate_counts = Counter(member_colours)
-    assert sum(duplicate_counts.values()) == 19
+    assert sum(duplicate_counts.values()) == palette_size + 1
     assert max(duplicate_counts.values()) == 2
 
 

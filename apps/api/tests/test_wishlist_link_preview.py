@@ -23,7 +23,14 @@ from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import ActionToken, FeatureKey, FeatureOverride, SubscriptionPlan, TokenPurpose, User
+from mykhaya.models import (
+    ActionToken,
+    FeatureKey,
+    FeatureOverride,
+    SubscriptionPlan,
+    TokenPurpose,
+    User,
+)
 from mykhaya.routers import wishlists as wishlists_router
 from mykhaya.security import derived_token
 from mykhaya.wishlist_link_preview import (
@@ -457,9 +464,7 @@ async def test_fetch_safely_follows_meta_refresh_and_extracts_from_final_page() 
             return httpx.Response(200, headers={"content-type": "text/html"}, content=final)
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    body = await _fetch_safely(
-        "http://93.184.216.34/start", transport=httpx.MockTransport(handler)
-    )
+    body = await _fetch_safely("http://93.184.216.34/start", transport=httpx.MockTransport(handler))
     assert body == final
     result = _extract_metadata(body.decode("utf-8"))
     assert result.title == "Final Product Page"
@@ -481,9 +486,7 @@ async def test_fetch_safely_rejects_meta_refresh_to_a_blocked_target() -> None:
             return httpx.Response(200, headers={"content-type": "text/html"}, content=interim)
         raise AssertionError("must never follow through to the blocked meta-refresh target")
 
-    body = await _fetch_safely(
-        "http://93.184.216.34/start", transport=httpx.MockTransport(handler)
-    )
+    body = await _fetch_safely("http://93.184.216.34/start", transport=httpx.MockTransport(handler))
     assert body is None
 
 

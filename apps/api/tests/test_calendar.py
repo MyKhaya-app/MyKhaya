@@ -670,13 +670,9 @@ async def test_upcoming_events_endpoint_recurring_and_all_day_ordering(
     old_start = (now - timedelta(days=400)).replace(hour=9, minute=0, second=0, microsecond=0)
     one_off_start = now + timedelta(days=3)
     all_day_start = (now + timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
-    await _create_upcoming_event(
-        client, home_id, "Weekly standup", old_start, recurrence="weekly"
-    )
+    await _create_upcoming_event(client, home_id, "Weekly standup", old_start, recurrence="weekly")
     await _create_upcoming_event(client, home_id, "One-off soon", one_off_start)
-    await _create_upcoming_event(
-        client, home_id, "All-day trip", all_day_start, is_all_day=True
-    )
+    await _create_upcoming_event(client, home_id, "All-day trip", all_day_start, is_all_day=True)
 
     after = now - timedelta(hours=1)
     response = await client.get(
@@ -1115,8 +1111,9 @@ async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient
         assert blocked.status_code == 403
 
     unchanged = await client.get(f"/api/v1/homes/{home_id}/event-labels")
-    assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == (
-        PALETTE_HEX[ColourToken.coral]
+    assert (
+        next(row for row in unchanged.json() if row["id"] == label_id)["color"]
+        == (PALETTE_HEX[ColourToken.coral])
     )
 
 
@@ -1138,9 +1135,7 @@ async def test_authorised_user_can_delete_a_calendar_tag(client: AsyncClient) ->
     assert created.status_code == 201
     label_id = created.json()["id"]
 
-    deleted = await unsafe(
-        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
-    )
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
     assert deleted.status_code == 204
 
     listed = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
@@ -1286,9 +1281,7 @@ async def test_deleting_a_calendar_tag_untags_its_events_without_touching_anythi
     event = created_event.json()
     assert event["label"]["id"] == label_id
 
-    deleted = await unsafe(
-        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
-    )
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
     assert deleted.status_code == 204
 
     # The label itself is gone.
@@ -1352,9 +1345,7 @@ async def test_deleting_a_calendar_tag_leaves_a_recurring_event_intact(
     assert created_event.status_code == 201, created_event.text
     event_id = created_event.json()["event_id"]
 
-    deleted = await unsafe(
-        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
-    )
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
     assert deleted.status_code == 204
 
     listed = await client.get(
@@ -1385,9 +1376,7 @@ async def test_a_system_seeded_default_calendar_tag_can_still_be_deleted(
     to assert the new restriction instead."""
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"tagsystem-{suffix}@example.com", "System Tag Owner")
-    group = await unsafe(
-        client, "POST", "/api/v1/groups", json={"name": "System Tag Home"}
-    )
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "System Tag Home"})
     assert group.status_code == 201
     home_id = group.json()["id"]
     async with SessionFactory() as db:

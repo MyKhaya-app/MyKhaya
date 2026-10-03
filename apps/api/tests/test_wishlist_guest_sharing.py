@@ -17,7 +17,14 @@ from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import ActionToken, FeatureKey, FeatureOverride, SubscriptionPlan, TokenPurpose, User
+from mykhaya.models import (
+    ActionToken,
+    FeatureKey,
+    FeatureOverride,
+    SubscriptionPlan,
+    TokenPurpose,
+    User,
+)
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -140,7 +147,9 @@ async def add_item(client: AsyncClient, home_id: uuid.UUID, wishlist_id: str, **
     return response.json()
 
 
-async def create_guest_share(client: AsyncClient, home_id: uuid.UUID, wishlist_id: str, name: str = "Grandad"):
+async def create_guest_share(
+    client: AsyncClient, home_id: uuid.UUID, wishlist_id: str, name: str = "Grandad"
+):
     response = await unsafe(
         client,
         "POST",
@@ -152,7 +161,9 @@ async def create_guest_share(client: AsyncClient, home_id: uuid.UUID, wishlist_i
 
 
 async def fresh_client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN})
+    return AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    )
 
 
 # ---------------------------------------------------------------------------

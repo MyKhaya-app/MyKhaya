@@ -44,7 +44,12 @@ def test_rfc5424_contains_environment_service_and_structured_fields() -> None:
 
 def test_legacy_config_enables_all_categories_and_mapping_is_canonical() -> None:
     assert SyslogConfig.from_value({}, "test").categories == {
-        "application", "http", "security", "audit", "worker", "integration"
+        "application",
+        "http",
+        "security",
+        "audit",
+        "worker",
+        "integration",
     }
     assert categorize_event({"event": "request"}) == "http"
     assert categorize_event({"event": "auth_diag"}) == "security"
@@ -74,9 +79,12 @@ def test_external_integration_and_application_fallback_categories(
 
 def test_canonical_category_overwrites_supplied_category_and_event_type_wins() -> None:
     assert categorize_event({"event": "request", "category": "security"}) == "http"
-    assert categorize_event(
-        {"event": "request", "event_type": "dvla_lookup_failed", "category": "application"}
-    ) == "integration"
+    assert (
+        categorize_event(
+            {"event": "request", "event_type": "dvla_lookup_failed", "category": "application"}
+        )
+        == "integration"
+    )
     payload = format_rfc5424(
         config(),
         {"event": "request", "category": "security"},
@@ -354,7 +362,9 @@ async def test_configuration_changes_are_seen_without_restarting_dispatcher(
         sent.append(payload)
 
     dispatcher = SyslogDispatcher(
-        Settings(), service="test", config_loader=load_config  # type: ignore[arg-type]
+        Settings(),
+        service="test",
+        config_loader=load_config,  # type: ignore[arg-type]
     )
     monkeypatch.setattr("mykhaya.syslog_forwarding.send_syslog", capture)
     await dispatcher.start()
@@ -432,7 +442,7 @@ async def test_structlog_async_events_are_marshaled_to_dispatcher_loop(
         await dispatcher.stop()
 
     assert len(sent) == 1
-    assert b"request_id=\"req-1\"" in sent[0]
+    assert b'request_id="req-1"' in sent[0]
 
 
 @pytest.mark.asyncio
@@ -460,12 +470,10 @@ async def test_actual_fastapi_request_middleware_reaches_syslog(
     from mykhaya.syslog_forwarding import _forward_to_syslog
 
     assert any(
-        processor is _forward_to_syslog
-        for processor in structlog.get_config()["processors"]
+        processor is _forward_to_syslog for processor in structlog.get_config()["processors"]
     )
     assert any(
-        isinstance(processor, ConsoleRenderer)
-        for processor in structlog.get_config()["processors"]
+        isinstance(processor, ConsoleRenderer) for processor in structlog.get_config()["processors"]
     )
     await dispatcher.start()
     try:
@@ -481,7 +489,9 @@ async def test_actual_fastapi_request_middleware_reaches_syslog(
 
     assert response.status_code == 200
     assert any(payload.endswith(b" request\n") for payload in sent), (
-        dispatcher.queue.qsize(), dispatcher.last_error, dispatcher.dropped_count
+        dispatcher.queue.qsize(),
+        dispatcher.last_error,
+        dispatcher.dropped_count,
     )
     diagnostics = dispatcher.diagnostics()
     assert diagnostics["events_seen"] >= 1
@@ -544,9 +554,11 @@ async def test_real_audit_pipeline_reaches_syslog_with_redaction(
 
 
 def test_all_transport_values_are_accepted() -> None:
-    assert {
-        config(protocol=protocol).protocol for protocol in ("udp", "tcp", "tls")
-    } == {"udp", "tcp", "tls"}
+    assert {config(protocol=protocol).protocol for protocol in ("udp", "tcp", "tls")} == {
+        "udp",
+        "tcp",
+        "tls",
+    }
 
 
 @pytest.mark.asyncio

@@ -88,9 +88,9 @@ async def test_required_policy_with_empty_intersection_fails_closed() -> None:
 
 def test_usable_methods_excludes_unenrolled_methods_except_required_totp_enrollment() -> None:
     # Normal challenge resolution exposes only methods usable immediately.
-    assert _usable_browser_mfa_methods(
-        {UserMfaMethod.totp, UserMfaMethod.email}, set(), True
-    ) == ["email"]
+    assert _usable_browser_mfa_methods({UserMfaMethod.totp, UserMfaMethod.email}, set(), True) == [
+        "email"
+    ]
     assert _usable_browser_mfa_methods({UserMfaMethod.totp}, set(), True) == []
     # The enrolment-aware login flow is the only path that exposes a TOTP-only
     # method before the user has enrolled it.

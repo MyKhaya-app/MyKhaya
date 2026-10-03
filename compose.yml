@@ -193,6 +193,14 @@ services:
       MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost"]'
       MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]'
       MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128"]'
+      # The suite's simulated reverse-proxy peers (172.16.0.2-.4, set via
+      # ASGITransport client=(...) in tests/test_platform_control_centre.py and
+      # others — no real network). Pinned for the test service only, to just that
+      # block, rather than inherited from .env/.env.example, whose
+      # TRUSTED_PROXY_CIDRS is the real dev-server proxy addresses: without this the
+      # test client's X-Forwarded-For is ignored, the Control Centre network gate
+      # sees the proxy address instead of the admin's, and every PCC route 404s.
+      MYKHAYA_TRUSTED_PROXY_CIDRS: '["172.16.0.0/24"]'
       # Most test files' admin_factory fixtures log in without completing an
       # MFA step; only test_platform_mfa.py exercises the MFA-required path,
       # and does so explicitly via get_settings().model_copy(update={

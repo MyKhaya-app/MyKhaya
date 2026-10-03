@@ -71,9 +71,7 @@ def _next_weekday_at(weekday: int, hour: int) -> datetime:
     now = datetime.now(UTC)
     days_ahead = (weekday - now.weekday()) % 7
     days_ahead = days_ahead or 7  # always strictly in the future
-    base = (now + timedelta(days=days_ahead)).replace(
-        hour=hour, minute=0, second=0, microsecond=0
-    )
+    base = (now + timedelta(days=days_ahead)).replace(hour=hour, minute=0, second=0, microsecond=0)
     return base
 
 

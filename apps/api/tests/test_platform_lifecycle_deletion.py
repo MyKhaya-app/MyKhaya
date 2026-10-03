@@ -288,9 +288,7 @@ async def test_anonymise_removes_auth_and_device_data() -> None:
             assert (
                 await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == uid))
             ) is None
-            assert (
-                await db.scalar(select(UserPasskey).where(UserPasskey.user_id == uid))
-            ) is None
+            assert (await db.scalar(select(UserPasskey).where(UserPasskey.user_id == uid))) is None
             assert (
                 await db.scalar(select(PushSubscription).where(PushSubscription.user_id == uid))
             ) is None

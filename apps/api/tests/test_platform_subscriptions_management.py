@@ -166,8 +166,14 @@ async def grant_complimentary(
 
 @pytest.mark.asyncio
 async def test_unauthenticated_client_cannot_reach_subscription_endpoints() -> None:
+    # Arrive the way a real operator does — through the trusted proxy, with a
+    # valid forwarding chain — so the request gets past the fail-closed network
+    # gate (a direct client is a 404 before authentication ever runs) and this
+    # actually exercises authentication.
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url=ADMIN_ORIGIN, headers={"Origin": ADMIN_ORIGIN}
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44200)),
+        base_url=ADMIN_ORIGIN,
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
     ) as client:
         summary = await client.get("/api/v1/platform/subscriptions/summary")
         listing = await client.get("/api/v1/platform/subscriptions")
