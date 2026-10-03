@@ -416,7 +416,17 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "nudges.evening_cleanup": TemplateDefault(
         subject="A quick evening tidy-up",
         body="You’ve got {{outstanding_count}} things still open today.\n\n{{summary}}",
-        allowed_variables=frozenset({"first_name", "outstanding_count", "routine_count", "todo_count", "overdue_count", "summary", "deep_link"}),
+        allowed_variables=frozenset(
+            {
+                "first_name",
+                "outstanding_count",
+                "routine_count",
+                "todo_count",
+                "overdue_count",
+                "summary",
+                "deep_link",
+            }
+        ),
         description="A calm summary of relevant outstanding Nudges at the end of the day.",
         module="nudges",
         channel=NotificationChannel.in_app,
@@ -451,8 +461,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
         body="Today is {{display_name}}'s birthday.",
         allowed_variables=frozenset({"display_name"}),
         description=(
-            "Sent to everyone else in the household when it's a member's or child's "
-            "birthday."
+            "Sent to everyone else in the household when it's a member's or child's birthday."
         ),
         module="birthdays",
         channel=NotificationChannel.in_app,
@@ -476,12 +485,9 @@ TEMPLATES: dict[str, TemplateDefault] = {
     "wishlist_share_created": TemplateDefault(
         subject="Wishlist shared with {{recipient_scope}}",
         body='{{actor_display_name}} shared "{{wishlist_name}}" with {{recipient_scope}}.',
-        allowed_variables=frozenset(
-            {"actor_display_name", "wishlist_name", "recipient_scope"}
-        ),
+        allowed_variables=frozenset({"actor_display_name", "wishlist_name", "recipient_scope"}),
         description=(
-            "Sent when a wishlist is shared with a specific person or made visible to "
-            "a whole Home."
+            "Sent when a wishlist is shared with a specific person or made visible to a whole Home."
         ),
         module="wishlists",
         channel=NotificationChannel.in_app,
@@ -524,9 +530,7 @@ TEMPLATES: dict[str, TemplateDefault] = {
         allowed_variables=frozenset(
             {"meal_day", "meal_slot_lower", "meal_name", "meal_time", "cook_line"}
         ),
-        description=(
-            "Sent to a meal plan entry's participants and cook when its details change."
-        ),
+        description=("Sent to a meal plan entry's participants and cook when its details change."),
         module="meal_plans",
         channel=NotificationChannel.in_app,
     ),
@@ -568,6 +572,7 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
+    "mfa_email_code": {"code": "123456"},
     "daily_nudge_summary": {
         "user_display_name": "Jamie",
         "routine_count": "2",
@@ -579,8 +584,20 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "delivery_date": "2026-01-01",
         "deep_link": "/settings/routines-reminders",
     },
-    "nudges.evening_cleanup": {"first_name": "Jamie", "outstanding_count": "2", "routine_count": "1", "todo_count": "1", "overdue_count": "1", "summary": "Overdue\n• Call plumber", "deep_link": "/settings/routines-reminders"},
-    "nudges.day_complete": {"first_name": "Jamie", "completed_count": "5", "deep_link": "/settings/routines-reminders"},
+    "nudges.evening_cleanup": {
+        "first_name": "Jamie",
+        "outstanding_count": "2",
+        "routine_count": "1",
+        "todo_count": "1",
+        "overdue_count": "1",
+        "summary": "Overdue\n• Call plumber",
+        "deep_link": "/settings/routines-reminders",
+    },
+    "nudges.day_complete": {
+        "first_name": "Jamie",
+        "completed_count": "5",
+        "deep_link": "/settings/routines-reminders",
+    },
     "email_verification": {"link": "https://example.com/verify-email?token=SAMPLE-TOKEN"},
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
     "household_invitation": {

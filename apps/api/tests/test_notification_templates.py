@@ -147,6 +147,7 @@ async def clean_template_overrides() -> AsyncIterator[None]:
 def test_registry_matches_migration_version() -> None:
     assert DEFAULT_TEMPLATE_VERSION >= 1
     assert set(TEMPLATES) == {
+        "mfa_email_code",
         "email_verification",
         "password_reset",
         "household_invitation",
@@ -180,6 +181,7 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.received",
         "support.ticket.reply",
         "support.ticket.resolved",
+        "support.ticket.follow_up",
     }
 
 
@@ -191,8 +193,7 @@ def test_every_template_has_sample_variables_covering_its_allowed_set() -> None:
         assert template_type in SAMPLE_VARIABLES, f"no sample variables for {template_type}"
         sample = SAMPLE_VARIABLES[template_type]
         assert default.allowed_variables <= set(sample), (
-            f"{template_type} sample variables missing: "
-            f"{default.allowed_variables - set(sample)}"
+            f"{template_type} sample variables missing: {default.allowed_variables - set(sample)}"
         )
 
 
@@ -1012,9 +1013,7 @@ async def test_template_update_is_audited_without_storing_the_wording(
 
 
 @pytest.mark.asyncio
-async def test_reset_all_is_audited(
-    admin_client: AsyncClient, admin_factory: AdminFactory
-) -> None:
+async def test_reset_all_is_audited(admin_client: AsyncClient, admin_factory: AdminFactory) -> None:
     admin = await admin_factory(PlatformRole.owner)
     await admin_login(admin_client, admin)
     response = await unsafe(
@@ -1127,12 +1126,15 @@ def test_expected_templates_declare_the_expected_required_variables() -> None:
 
 
 def test_security_critical_templates_all_require_their_link() -> None:
-    """Every security_critical template happens to centre on a single secure
-    link today — if a future one doesn't, this test should be updated
-    deliberately rather than silently passing."""
+    """Every security_critical template centres on a single secure link — or,
+    for the email MFA code, a single one-time code — today. If a future one
+    doesn't, this test should be updated deliberately rather than silently
+    passing."""
+    required_by_type = {"mfa_email_code": frozenset({"code"})}
     for template_type, default in TEMPLATES.items():
         if default.security_critical:
-            assert default.required_variables == frozenset({"link"}), template_type
+            expected = required_by_type.get(template_type, frozenset({"link"}))
+            assert default.required_variables == expected, template_type
             assert default.disableable is False, template_type
 
 
