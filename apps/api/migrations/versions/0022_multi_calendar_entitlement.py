@@ -41,6 +41,54 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_home_calendar_one_primary_per_group", table_name="home_calendars")
+    # The restored (group_id, is_primary) constraint also caps a Home at exactly one
+    # non-primary calendar, which this migration's upgrade deliberately lifted. A Home
+    # that has since created more than one secondary calendar cannot be represented
+    # under the old schema, so collapse the surplus rather than fail the downgrade:
+    # keep each Home's oldest secondary calendar, move every event on the others onto
+    # the Home's primary calendar, and only then delete the (now empty) surplus
+    # calendars. No event is lost; only the surplus calendars' own names are. (The
+    # DELETE is limited to Homes that do have a primary calendar, so a Home that
+    # somehow lacks one is left alone and fails loudly at the constraint below
+    # instead of cascading its events away.)
+    op.execute(
+        """
+        WITH surplus AS (
+            SELECT id, group_id FROM (
+                SELECT id, group_id,
+                       row_number() OVER (PARTITION BY group_id ORDER BY created_at, id) AS rn
+                FROM home_calendars
+                WHERE NOT is_primary
+            ) ranked
+            WHERE rn > 1
+        )
+        UPDATE calendar_events
+        SET calendar_id = primary_calendar.id
+        FROM surplus
+        JOIN home_calendars AS primary_calendar
+          ON primary_calendar.group_id = surplus.group_id AND primary_calendar.is_primary
+        WHERE calendar_events.calendar_id = surplus.id
+        """
+    )
+    op.execute(
+        """
+        DELETE FROM home_calendars AS surplus_calendar
+        WHERE surplus_calendar.id IN (
+            SELECT id FROM (
+                SELECT id,
+                       row_number() OVER (PARTITION BY group_id ORDER BY created_at, id) AS rn
+                FROM home_calendars
+                WHERE NOT is_primary
+            ) ranked
+            WHERE rn > 1
+        )
+        AND EXISTS (
+            SELECT 1 FROM home_calendars AS primary_calendar
+            WHERE primary_calendar.group_id = surplus_calendar.group_id
+              AND primary_calendar.is_primary
+        )
+        """
+    )
     op.create_unique_constraint(
         "uq_home_primary_calendar", "home_calendars", ["group_id", "is_primary"]
     )
