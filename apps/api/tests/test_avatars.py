@@ -9,15 +9,26 @@ import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pillow_heif
 import pytest
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from sqlalchemy import select
+from test_child_login import (
+    _child_login,
+    _configure_login,
+    _make_home_with_child,
+    new_client,
+    unique,
+)
 
 from mykhaya.avatars.processing import (
     AVATAR_SIZE,
+    MAX_AVATAR_PIXELS,
     OUTPUT_CONTENT_TYPE,
+    AvatarResourceError,
     UnsupportedImageError,
+    _heif_mimetype_hint,
     process_avatar_upload,
 )
 from mykhaya.avatars.storage import LocalAvatarStorage
@@ -34,6 +45,8 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.security import derived_token
+
+pillow_heif.register_heif_opener()
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
@@ -61,6 +74,13 @@ def make_png(size: tuple[int, int] = (400, 900)) -> bytes:
     image = Image.new("RGB", size, (30, 80, 200))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def make_heif() -> bytes:
+    image = Image.new("RGB", (900, 600), (80, 160, 90))
+    buffer = io.BytesIO()
+    image.save(buffer, format="HEIF")
     return buffer.getvalue()
 
 
@@ -137,6 +157,73 @@ def test_process_avatar_upload_accepts_png_and_produces_square_output() -> None:
     assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
 
 
+def test_heif_mimetype_hint_is_diagnostic_only_and_never_raises() -> None:
+    # A real HEIF payload reports a real hint...
+    assert _heif_mimetype_hint(make_heif()) in ("image/heic", "image/heif")
+    # ...and non-HEIF/garbage bytes degrade to "" rather than raising, since
+    # this is only ever logged, never used to accept or reject an upload.
+    assert _heif_mimetype_hint(make_jpeg()) == ""
+    assert _heif_mimetype_hint(b"not an image") == ""
+
+
+def test_process_avatar_upload_accepts_heif_and_produces_webp() -> None:
+    processed = process_avatar_upload(make_heif())
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_accepts_webp_and_produces_webp() -> None:
+    source = Image.new("RGB", (640, 480), (120, 40, 180))
+    buffer = io.BytesIO()
+    source.save(buffer, format="WEBP")
+
+    processed = process_avatar_upload(buffer.getvalue())
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_accepts_jpeg_larger_than_previous_five_megabyte_limit() -> None:
+    # JPEG decoders legitimately ignore trailing bytes. This keeps the fixture
+    # deterministic while proving the processor no longer couples source size
+    # to the 512x512 stored output or the retired 5 MiB ceiling.
+    source = make_jpeg() + b"\0" * (6 * 1024 * 1024)
+
+    processed = process_avatar_upload(source)
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_rejects_corrupted_heif() -> None:
+    source = make_heif()
+    corrupted = source[: max(1, len(source) // 2)]
+
+    with pytest.raises(UnsupportedImageError, match="could not be read"):
+        process_avatar_upload(corrupted)
+
+
+def test_process_avatar_upload_rejects_excessive_decoded_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OversizedImage:
+        format = "JPEG"
+        width = MAX_AVATAR_PIXELS + 1
+        height = 1
+
+        def load(self) -> None:
+            raise AssertionError("resource limit should run before full decode")
+
+    monkeypatch.setattr(
+        "mykhaya.avatars.processing.Image.open",
+        lambda _stream: OversizedImage(),
+    )
+
+    with pytest.raises(AvatarResourceError):
+        process_avatar_upload(b"bounded test input")
+
+
 def test_process_avatar_upload_rejects_non_image_bytes() -> None:
     with pytest.raises(UnsupportedImageError):
         process_avatar_upload(b"not an image, just some bytes pretending to be one")
@@ -146,6 +233,58 @@ def test_process_avatar_upload_rejects_svg_masquerading_as_image() -> None:
     svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
     with pytest.raises(UnsupportedImageError):
         process_avatar_upload(svg)
+
+
+def test_process_avatar_upload_accepts_heif_larger_than_previous_five_megabyte_limit() -> None:
+    # A real (decodable) HEIF payload padded past the retired 5 MiB client
+    # ceiling — proves the 5 MiB assumption was never coupled to format
+    # handling either, only ever to the now-removed client-side check.
+    source = make_heif() + b"\0" * (6 * 1024 * 1024)
+
+    processed = process_avatar_upload(source)
+    image = Image.open(io.BytesIO(processed))
+    assert image.format == "WEBP"
+    assert image.size == (AVATAR_SIZE, AVATAR_SIZE)
+
+
+def test_process_avatar_upload_rejects_a_decodable_but_disallowed_format() -> None:
+    # GIF is a format Pillow can decode perfectly well but that
+    # ALLOWED_PILLOW_FORMATS deliberately excludes (see its own module
+    # docstring) — proves the allow-list, not decodability alone, is what
+    # gates acceptance, and that rejection is reported as "not supported"
+    # rather than "could not be read".
+    image = Image.new("RGB", (200, 200), (10, 10, 10))
+    buffer = io.BytesIO()
+    image.save(buffer, format="GIF")
+
+    with pytest.raises(UnsupportedImageError, match="format is not supported"):
+        process_avatar_upload(buffer.getvalue())
+
+
+def test_process_avatar_upload_rejects_extreme_declared_dimensions_before_full_decode() -> None:
+    # A real, tiny, genuinely-decodable PNG (solid colour compresses to a few
+    # hundred bytes) whose *declared* dimensions alone exceed the pixel
+    # ceiling — a realistic decompression-bomb shape, not a mock. Proves the
+    # width*height check runs before any full-frame decode/load() happens.
+    huge = Image.new("RGB", (10_000, 10_000), (5, 5, 5))
+    buffer = io.BytesIO()
+    huge.save(buffer, format="PNG")
+    assert len(buffer.getvalue()) < 500_000  # genuinely small on the wire
+
+    with pytest.raises(AvatarResourceError):
+        process_avatar_upload(buffer.getvalue())
+
+
+def test_process_avatar_upload_reports_heic_unsupported_when_runtime_support_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only the module's own availability flag is patched — never pillow_heif
+    # itself — so this exercises the real "runtime support missing" branch
+    # without touching the primary HEIC success test's real decode path.
+    monkeypatch.setattr("mykhaya.avatars.processing.HEIC_SUPPORTED", False)
+
+    with pytest.raises(UnsupportedImageError, match="HEIC/HEIF photos are not supported"):
+        process_avatar_upload(make_heif())
 
 
 # --- storage unit tests ------------------------------------------------------
@@ -226,6 +365,127 @@ async def test_upload_rejects_non_image_and_svg_and_oversized(client: AsyncClien
         files={"file": ("photo.jpg", oversized, "image/jpeg")},
     )
     assert oversized_response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_heif_upload_endpoint_accepts_multipart_source_and_returns_avatar_version(
+    client: AsyncClient,
+) -> None:
+    user_id = await create_verified_user(client, unique_email("heifupload"), "HEIF Upload")
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_1234.HEIC", make_heif(), "image/heic")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+    served = await client.get(f"/api/v1/users/{user_id}/avatar")
+    assert served.status_code == 200
+    assert served.headers["content-type"].startswith(OUTPUT_CONTENT_TYPE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "declared_content_type",
+    ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"],
+)
+async def test_upload_endpoint_ignores_client_declared_heif_variant_mime(
+    client: AsyncClient, declared_content_type: str
+) -> None:
+    """The client's Content-Type header — including the ISO-BMFF "sequence"
+    container variants a genuine iPhone Live Photo/burst HEIC asset may
+    declare — is never part of the accept/reject decision (see
+    mykhaya.avatars.processing's own module docstring); only the decoded
+    bytes are. The same real HEIF bytes must succeed regardless of which of
+    these strings the multipart request declares."""
+    await create_verified_user(
+        client, unique_email(f"heifvariant{declared_content_type[-3:]}"), "HEIF Variant Upload"
+    )
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_1234.HEIC", make_heif(), declared_content_type)},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+
+
+@pytest.mark.asyncio
+async def test_large_jpeg_upload_over_five_megabytes_is_processed_by_endpoint(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("largeupload"), "Large Upload")
+    large_jpeg = make_jpeg() + b"\0" * (6 * 1024 * 1024)
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("large-camera-photo.jpg", large_jpeg, "image/jpeg")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+
+
+@pytest.mark.asyncio
+async def test_large_heif_upload_over_five_megabytes_is_processed_by_endpoint(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("largeheifupload"), "Large HEIF Upload")
+    large_heif = make_heif() + b"\0" * (6 * 1024 * 1024)
+
+    upload = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("IMG_5678.HEIC", large_heif, "image/heic")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["avatar_version"]
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_rejects_a_decodable_but_disallowed_format(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("gifupload"), "Gif Upload")
+    image = Image.new("RGB", (200, 200), (10, 10, 10))
+    buffer = io.BytesIO()
+    image.save(buffer, format="GIF")
+
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("photo.gif", buffer.getvalue(), "image/gif")},
+    )
+    assert response.status_code == 422
+    assert "format is not supported" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_rejects_extreme_declared_dimensions(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("bombupload"), "Bomb Upload")
+    huge = Image.new("RGB", (10_000, 10_000), (5, 5, 5))
+    buffer = io.BytesIO()
+    huge.save(buffer, format="PNG")
+
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/users/me/avatar",
+        files={"file": ("huge.png", buffer.getvalue(), "image/png")},
+    )
+    assert response.status_code == 413
+    assert "too large to process" in response.json()["detail"]
 
 
 # --- API: successful upload, persistence, generated filename ------------------
@@ -428,3 +688,65 @@ async def test_remove_avatar_resets_to_initials_and_deletes_file(client: AsyncCl
     removed_again = await unsafe(client, "DELETE", "/api/v1/users/me/avatar")
     assert removed_again.status_code == 200
     assert removed_again.json()["avatar_version"] is None
+
+
+# --- API: authorised adult management of a managed child's avatar ------------
+
+
+@pytest.mark.asyncio
+async def test_home_admin_can_upload_replace_and_remove_child_avatar(client: AsyncClient) -> None:
+    group_id, membership_id, _ = await _make_home_with_child(client, unique("childavatar"))
+    async with SessionFactory() as db:
+        membership = await db.get(Membership, uuid.UUID(membership_id))
+        assert membership is not None
+        child_user_id = membership.user_id
+
+    first = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+        files={"file": ("child.jpg", make_jpeg(), "image/jpeg")},
+    )
+    assert first.status_code == 200, first.text
+    first_version = first.json()["avatar_version"]
+    assert first.json()["relationship"] == "child"
+
+    second = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+        files={"file": ("child-new.png", make_png(), "image/png")},
+    )
+    assert second.status_code == 200
+    assert second.json()["avatar_version"] != first_version
+
+    removed = await unsafe(
+        client, "DELETE", f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar"
+    )
+    assert removed.status_code == 200
+    assert removed.json()["avatar_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_child_session_cannot_manage_a_child_avatar(client: AsyncClient) -> None:
+    group_id, membership_id, home_code = await _make_home_with_child(client, unique("childdeny"))
+    await _configure_login(
+        client, group_id, membership_id, enabled=True, username="kid", pin="4242"
+    )
+    child_client = await new_client()
+    try:
+        login = await _child_login(child_client, home_code, "kid", "4242")
+        assert login.status_code == 200
+        async with SessionFactory() as db:
+            membership = await db.get(Membership, uuid.UUID(membership_id))
+            assert membership is not None
+            child_user_id = membership.user_id
+        response = await unsafe(
+            child_client,
+            "POST",
+            f"/api/v1/groups/{group_id}/members/{child_user_id}/avatar",
+            files={"file": ("child.jpg", make_jpeg(), "image/jpeg")},
+        )
+        assert response.status_code == 403
+    finally:
+        await child_client.aclose()

@@ -15,11 +15,14 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
 from mykhaya.models import (
+    Group,
+    NativePushDevice,
     Notification,
     NotificationChannel,
     NotificationDelivery,
@@ -32,6 +35,8 @@ from mykhaya.models import (
 from mykhaya.notifications.deep_links import DeepLinkTarget
 from mykhaya.notifications.quiet_hours import effective_timezone, is_within_quiet_hours
 
+log = structlog.get_logger()
+
 # Maps a notification_type's category to the NotificationPreferences toggle that gates
 # it. Types not listed here are gated only by the channel-level toggles (push_enabled /
 # in_app_enabled) — used for things like test sends that don't belong to a category.
@@ -42,7 +47,13 @@ PREFERENCE_GATES: dict[str, str] = {
     "event_cancelled": "event_changes_enabled",
     "household_routine_reminder": "household_reminders_enabled",
     "birthday_reminder": "household_reminders_enabled",
+    "list_item_assigned": "list_assignments_enabled",
+    "wishlist_share_created": "wishlist_sharing_enabled",
+    "wishlist_share_revoked": "wishlist_sharing_enabled",
     "daily_briefing": "daily_briefing_enabled",
+    "daily_nudge_summary": "daily_nudge_summary_enabled",
+    "nudges_evening_cleanup": "nudges_evening_cleanup_enabled",
+    "nudges_day_complete": "nudges_day_complete_enabled",
 }
 
 # Notification types that must always be delivered by email regardless of any
@@ -54,6 +65,30 @@ MANDATORY_EMAIL_TYPES = {
     "password_reset",
     "household_invitation",
     "platform_administrator_invitation",
+    # An external calendar-share invitation is exactly as action-required as
+    # a household_invitation — the recipient can't accept/decline without it.
+    "calendar_share_invitation",
+    "mfa_email_code",
+    "support.ticket.received",
+    "support.ticket.reply",
+    "support.ticket.resolved",
+    # Team-only: never sent to a real MyKhaya user (recipient_user_id is
+    # always None — see support_notifications.ticket_follow_up), so it must
+    # be mandatory to satisfy notify()'s "no user account yet" exemption.
+    "support.ticket.follow_up",
+}
+
+# Notification types whose in-app and push/native-push delivery is mandatory
+# — never suppressible by NotificationPreferences (channel toggles or
+# category gates). Distinct from MANDATORY_EMAIL_TYPES, which forces the
+# EMAIL channel only and deliberately skips in-app/push for those types
+# (e.g. password_reset shouldn't also create an in-app notification). This
+# still respects real delivery constraints that aren't a "preference" —
+# no registered push subscription/device means no push is sent, an inactive
+# recipient account still suppresses delivery, and an OS-level notification
+# permission denial is still honoured (MyKhaya never sees or bypasses that).
+MANDATORY_CHANNEL_TYPES = {
+    "support.ticket.reply_notice",
 }
 
 
@@ -93,6 +128,9 @@ async def notify(
     deep_link: DeepLinkTarget | None = None,
     is_critical: bool = False,
     timezone_override: str | None = None,
+    html_body: str | None = None,
+    allow_email: bool = True,
+    sensitive_email_expires_at: datetime | None = None,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -109,6 +147,19 @@ async def notify(
     """
     is_mandatory = notification_type in MANDATORY_EMAIL_TYPES
 
+    # Slice 4.5: a Disabled/Archived Home never gets Home-specific work,
+    # full stop — even a MANDATORY_EMAIL_TYPES invitation to an address
+    # with no account yet (household_invitation is always Home-scoped).
+    if group_id is not None:
+        home = await db.get(Group, group_id)
+        if home is None or not home.is_active:
+            log.info(
+                "notification.suppressed_inactive_home",
+                notification_type=notification_type,
+                group_id=str(group_id),
+            )
+            return None
+
     if recipient_user_id is None:
         if not is_mandatory or not recipient_email:
             raise ValueError(
@@ -123,14 +174,33 @@ async def notify(
             title=title,
             body=body,
             idempotency_key=idempotency_key,
+            html_body=html_body,
+            group_id=group_id,
+            sensitive_email_expires_at=sensitive_email_expires_at,
+        )
+        return None
+
+    # A Disabled/Archived user gets no normal notifications at all — except
+    # MANDATORY_EMAIL_TYPES (account-security / action-required messages
+    # like password_reset or an invitation to a *different* still-active
+    # Home), which this codebase already treats as always-deliver
+    # regardless of preferences; lifecycle suppression follows that same
+    # existing exemption rather than inventing a new one.
+    user = await db.get(User, recipient_user_id)
+    if not is_mandatory and (user is None or not user.is_active):
+        log.info(
+            "notification.suppressed_inactive_user",
+            notification_type=notification_type,
+            recipient_user_id=str(recipient_user_id),
         )
         return None
 
     prefs = await get_or_create_preferences(db, recipient_user_id)
     category_enabled = _category_enabled(prefs, notification_type)
+    force_channels = notification_type in MANDATORY_CHANNEL_TYPES
 
     notification: Notification | None = None
-    if not is_mandatory and prefs.in_app_enabled and category_enabled:
+    if force_channels or (not is_mandatory and prefs.in_app_enabled and category_enabled):
         in_app_key = f"{idempotency_key}:in_app"
         already_sent = await db.scalar(
             select(NotificationDelivery.id).where(
@@ -161,11 +231,12 @@ async def notify(
                 )
             )
 
-    if not is_mandatory and prefs.push_enabled and category_enabled:
+    if force_channels or (not is_mandatory and prefs.push_enabled and category_enabled):
         await _enqueue_push(
             db,
             settings=settings,
             prefs=prefs,
+            user=user,
             recipient_user_id=recipient_user_id,
             notification_type=notification_type,
             title=title,
@@ -174,10 +245,10 @@ async def notify(
             deep_link=deep_link,
             is_critical=is_critical,
             timezone_override=timezone_override,
+            group_id=group_id,
         )
 
-    if is_mandatory or (prefs.email_enabled and category_enabled):
-        user = await db.get(User, recipient_user_id)
+    if allow_email and (is_mandatory or (prefs.email_enabled and category_enabled)):
         resolved_email = recipient_email or (user.email if user else None)
         if resolved_email:
             await _enqueue_email(
@@ -188,6 +259,9 @@ async def notify(
                 title=title,
                 body=body,
                 idempotency_key=idempotency_key,
+                html_body=html_body,
+                group_id=group_id,
+                sensitive_email_expires_at=sensitive_email_expires_at,
             )
 
     return notification
@@ -202,6 +276,9 @@ async def _enqueue_email(
     title: str,
     body: str,
     idempotency_key: str,
+    html_body: str | None = None,
+    group_id: uuid.UUID | None = None,
+    sensitive_email_expires_at: datetime | None = None,
 ) -> None:
     email_key = f"{idempotency_key}:email"
     already_queued = await db.scalar(
@@ -215,8 +292,20 @@ async def _enqueue_email(
             "recipient_email": recipient_email,
             "subject": title,
             "body": body,
+            "html_body": html_body,
             "delivery_idempotency_key": email_key,
             "notification_type": notification_type,
+            "recipient_user_id": str(recipient_user_id) if recipient_user_id else None,
+            # So the worker can re-verify Home eligibility at dispatch time,
+            # not just recipient eligibility (Slice 4.5 §5) — notify() has
+            # already checked both once, but time passes between enqueue
+            # and a worker actually picking this up.
+            "group_id": str(group_id) if group_id else None,
+            "sensitive_email_expires_at": (
+                sensitive_email_expires_at.isoformat()
+                if sensitive_email_expires_at is not None
+                else None
+            ),
         },
     )
     db.add(event)
@@ -238,6 +327,7 @@ async def _enqueue_push(
     *,
     settings: Settings,
     prefs: NotificationPreferences,
+    user: User | None,
     recipient_user_id: uuid.UUID,
     notification_type: str,
     title: str,
@@ -246,9 +336,9 @@ async def _enqueue_push(
     deep_link: DeepLinkTarget | None,
     is_critical: bool,
     timezone_override: str | None,
+    group_id: uuid.UUID | None = None,
 ) -> None:
     if not is_critical or not prefs.quiet_hours_critical_only:
-        user = await db.get(User, recipient_user_id)
         tz = effective_timezone(
             timezone_override or (user.timezone if user else None), settings.default_timezone
         )
@@ -281,6 +371,7 @@ async def _enqueue_push(
                 "delivery_idempotency_key": push_key,
                 "notification_type": notification_type,
                 "recipient_user_id": str(recipient_user_id),
+                "group_id": str(group_id) if group_id else None,
             },
         )
         db.add(event)
@@ -296,3 +387,79 @@ async def _enqueue_push(
                 scheduled_at=datetime.now(UTC),
             )
         )
+    native_devices = (
+        await db.scalars(
+            select(NativePushDevice).where(
+                NativePushDevice.user_id == recipient_user_id,
+                # Phase 5: widened from iOS-only. Provider selection (APNs vs
+                # FCM) happens once, in the worker, based on this same
+                # `platform` column — this query only needs to admit the set
+                # of platforms the worker actually knows how to dispatch.
+                NativePushDevice.platform.in_(("ios", "android")),
+                NativePushDevice.disabled_at.is_(None),
+            )
+        )
+    ).all()
+    for device in native_devices:
+        await enqueue_native_push(
+            db,
+            device=device,
+            recipient_user_id=recipient_user_id,
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            idempotency_key=f"{idempotency_key}:native:{device.id}",
+            deep_link=deep_link,
+            group_id=group_id,
+        )
+
+
+async def enqueue_native_push(
+    db: AsyncSession,
+    *,
+    device: NativePushDevice,
+    recipient_user_id: uuid.UUID,
+    notification_type: str,
+    title: str,
+    body: str,
+    idempotency_key: str,
+    deep_link: DeepLinkTarget | None,
+    group_id: uuid.UUID | None = None,
+) -> NotificationDelivery:
+    """Create the durable native delivery consumed by scheduler and worker.
+
+    This is deliberately shared by normal notifications and administrative test
+    sends. It performs no APNs work; the worker is the only native sender.
+    """
+    duplicate = await db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.idempotency_key == idempotency_key)
+    )
+    if duplicate is not None:
+        return duplicate
+    event = OutboxEvent(
+        topic="notification.native_push",
+        payload={
+            "native_push_device_id": str(device.id),
+            "title": title,
+            "body": body,
+            "deep_link": dict(deep_link) if deep_link else None,
+            "delivery_idempotency_key": idempotency_key,
+            "notification_type": notification_type,
+            "recipient_user_id": str(recipient_user_id),
+            "group_id": str(group_id) if group_id else None,
+        },
+    )
+    db.add(event)
+    await db.flush()
+    delivery = NotificationDelivery(
+        channel=NotificationChannel.push,
+        recipient_user_id=recipient_user_id,
+        notification_type=notification_type,
+        idempotency_key=idempotency_key,
+        outbox_event_id=event.id,
+        native_push_device_id=device.id,
+        scheduled_at=datetime.now(UTC),
+    )
+    db.add(delivery)
+    await db.flush()
+    return delivery

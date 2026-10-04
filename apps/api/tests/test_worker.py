@@ -7,14 +7,49 @@ lost. See docs/design/visual-identity.md context and the fix itself in
 mykhaya/worker.py and mykhaya/scheduler.py.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
+from mykhaya import worker
+from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.models import OutboxEvent, WorkerJobRecord
-from mykhaya.worker import MAX_ATTEMPTS, _backoff_seconds, process
+from mykhaya.models import (
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationDeliveryStatus,
+    OutboxEvent,
+    PlatformSmtpSettings,
+    SmtpConnectionSecurity,
+    WorkerJobRecord,
+)
+from mykhaya.secrets_crypto import encrypt_secret
+from mykhaya.worker import (
+    MAX_ATTEMPTS,
+    _backoff_seconds,
+    _redact_sensitive_email_payload,
+    process,
+)
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_duplicate_scheduler_occurrence() -> None:
+    key = "synthetic-scheduler-occurrence:2026-08-13T23:59:00Z"
+    async with SessionFactory() as db:
+        first = OutboxEvent(topic="notification.test", payload={}, dedupe_key=key)
+        db.add(first)
+        await db.commit()
+        first_id = first.id
+        try:
+            db.add(OutboxEvent(topic="notification.test", payload={}, dedupe_key=key))
+            with pytest.raises(IntegrityError):
+                await db.commit()
+        finally:
+            await db.rollback()
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == first_id))
+            await db.commit()
 
 
 def test_backoff_grows_and_is_capped() -> None:
@@ -24,6 +59,39 @@ def test_backoff_grows_and_is_capped() -> None:
     # Must not grow forever — capped so a permanently-failing job doesn't
     # end up scheduled a year in the future.
     assert _backoff_seconds(20) == 3600
+
+
+def test_sensitive_email_payload_is_redacted() -> None:
+    event = OutboxEvent(
+        topic="notification.email",
+        payload={
+            "body": "Your verification code is 123456.",
+            "html_body": "<p>Your verification code is <strong>123456</strong>.</p>",
+            "sensitive_email_expires_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+        },
+    )
+
+    _redact_sensitive_email_payload(event)
+
+    assert event.payload == {
+        "body": "[redacted]",
+        "html_body": None,
+        "sensitive_email_expires_at": None,
+    }
+    assert "123456" not in repr(event.payload)
+
+
+def test_non_sensitive_email_payload_is_unchanged() -> None:
+    payload = {
+        "body": "Your weekly summary is ready.",
+        "html_body": "<p>Your weekly summary is ready.</p>",
+        "sensitive_email_expires_at": None,
+    }
+    event = OutboxEvent(topic="notification.email", payload=payload.copy())
+
+    _redact_sensitive_email_payload(event)
+
+    assert event.payload == payload
 
 
 @pytest.mark.asyncio
@@ -113,3 +181,95 @@ async def test_already_processed_event_is_not_reprocessed() -> None:
             select(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id)
         )
         assert job is None
+
+
+@pytest.mark.asyncio
+async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings().model_copy(
+        update={
+            "environment": "development",
+            "email_delivery_configured": True,
+            "smtp_host": "mailpit",
+        }
+    )
+    event = OutboxEvent(
+        topic="notification.email",
+        payload={
+            "recipient_email": "recipient@example.com",
+            "subject": "Verify your MyKhaya email",
+            "body": "Your verification code is 123456.",
+            "html_body": "<p>Your verification code is <strong>123456</strong>.</p>",
+            "delivery_idempotency_key": "worker-pcc-smtp-test:email",
+            "sensitive_email_expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+        },
+    )
+    smtp = PlatformSmtpSettings(
+        enabled=True,
+        host="smtp2go.example",
+        port=587,
+        connection_security=SmtpConnectionSecurity.starttls,
+        auth_enabled=True,
+        username="smtp-user",
+        encrypted_password=encrypt_secret(settings, "smtp-password"),
+        sender_name="MyKhaya",
+        sender_email="hello@example.com",
+        timeout_seconds=10,
+    )
+    async with SessionFactory() as db:
+        db.add_all([event, smtp])
+        await db.flush()
+        delivery = NotificationDelivery(
+            channel=NotificationChannel.email,
+            notification_type="email_verification",
+            idempotency_key="worker-pcc-smtp-test:email",
+            outbox_event_id=event.id,
+            status=NotificationDeliveryStatus.queued,
+        )
+        db.add(delivery)
+        await db.commit()
+        event_id = event.id
+        smtp_id = smtp.id
+
+    calls: list[tuple[object, str, str, str]] = []
+
+    def fake_send(
+        config: object, recipient: str, subject: str, body: str, html: str | None
+    ) -> None:
+        calls.append((config, recipient, subject, body))
+
+    monkeypatch.setattr(worker, "get_settings", lambda: settings)
+    monkeypatch.setattr(worker, "send_email", fake_send)
+    try:
+        await worker.process(event_id)
+        assert len(calls) == 1
+        config, recipient, subject, body = calls[0]
+        assert config.source == "platform_admin"
+        assert config.host == "smtp2go.example"
+        assert config.password == "smtp-password"
+        assert recipient == "recipient@example.com"
+        assert subject == "Verify your MyKhaya email"
+        assert body == "Your verification code is 123456."
+        async with SessionFactory() as db:
+            stored_delivery = await db.scalar(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.idempotency_key == "worker-pcc-smtp-test:email"
+                )
+            )
+            assert stored_delivery is not None
+            assert stored_delivery.status == NotificationDeliveryStatus.sent
+            stored_event = await db.get(OutboxEvent, event_id)
+            assert stored_event is not None
+            assert stored_event.payload["body"] == "[redacted]"
+            assert stored_event.payload["html_body"] is None
+            assert stored_event.payload["sensitive_email_expires_at"] is None
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(delete(WorkerJobRecord).where(WorkerJobRecord.id == event_id))
+            await db.execute(
+                delete(NotificationDelivery).where(NotificationDelivery.outbox_event_id == event_id)
+            )
+            await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+            await db.execute(delete(PlatformSmtpSettings).where(PlatformSmtpSettings.id == smtp_id))
+            await db.commit()

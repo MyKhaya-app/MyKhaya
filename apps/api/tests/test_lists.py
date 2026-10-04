@@ -1,0 +1,1039 @@
+"""Household Lists V1: list/item CRUD, quantity/note/assignment, reorder,
+clear-completed, rename concurrency, entitlement/capability gating and
+cross-Home authorisation. See docs/architecture/lists.md and
+mykhaya.routers.lists.
+
+Meal Plans' own ingredients-to-list regression coverage lives in
+test_meal_plans.py (test_add_meal_ingredients_to_list and friends) — this
+file focuses on the Lists module itself.
+"""
+
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+
+from mykhaya.config import get_settings
+from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
+from mykhaya.main import app
+from mykhaya.models import (
+    ActionToken,
+    FeatureFlag,
+    FeatureKey,
+    FeatureOverride,
+    HouseholdRelationship,
+    Membership,
+    PermissionProfile,
+    Role,
+    SubscriptionPlan,
+    TokenPurpose,
+    User,
+)
+from mykhaya.security import derived_token
+
+ORIGIN = "http://localhost:8080"
+PASSWORD = "Correct horse battery staple!"
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as value:
+        yield value
+
+
+async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: object):
+    headers = dict(kwargs.pop("headers", {}))
+    csrf = client.cookies.get("mk_csrf")
+    if csrf:
+        headers["X-CSRF-Token"] = csrf
+    return await client.request(method, path, headers=headers, **kwargs)
+
+
+def unique_email(prefix: str) -> str:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    return f"{prefix}-{suffix}@example.com"
+
+
+async def create_verified_user(client: AsyncClient, email: str, name: str) -> uuid.UUID:
+    response = await unsafe(
+        client,
+        "POST",
+        "/api/v1/auth/register",
+        json={"email": email, "display_name": name, "password": PASSWORD},
+    )
+    assert response.status_code == 202
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        user_id = user.id
+        token = await db.scalar(
+            select(ActionToken)
+            .where(
+                ActionToken.user_id == user.id,
+                ActionToken.purpose == TokenPurpose.verify_email,
+            )
+            .order_by(ActionToken.created_at.desc())
+        )
+        assert token is not None
+        raw = derived_token(
+            token.id, TokenPurpose.verify_email.value, get_settings().secret_key.get_secret_value()
+        )
+    verified = await unsafe(client, "POST", "/api/v1/auth/verify-email", json={"token": raw})
+    assert verified.status_code == 200
+    login = await unsafe(
+        client, "POST", "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert login.status_code == 200
+    return user_id
+
+
+async def create_home(
+    client: AsyncClient, name: str, *, plan: SubscriptionPlan = SubscriptionPlan.family
+) -> uuid.UUID:
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": name})
+    assert group.status_code == 201
+    home_id = uuid.UUID(group.json()["id"])
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.shopping, group_id=home_id, enabled=True))
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = plan
+        await db.commit()
+    return home_id
+
+
+async def add_partner(client: AsyncClient, home_id: uuid.UUID, email: str, name: str) -> uuid.UUID:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        user_id = await create_verified_user(partner_client, email, name)
+    async with SessionFactory() as db:
+        db.add(
+            Membership(
+                group_id=home_id,
+                user_id=user_id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+            )
+        )
+        await db.commit()
+    return user_id
+
+
+async def create_list(
+    client: AsyncClient, home_id: uuid.UUID, name: str = "Groceries", **overrides: object
+):
+    body = {"name": name, **overrides}
+    response = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_templates_copy_ordered_sections_and_defaults_without_live_coupling(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("template-owner"), "Template Owner")
+    home_id = await create_home(client, "Template Home")
+    template = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/list-templates",
+        json={
+            "name": "ALDI route",
+            "scope": "personal",
+            "sections": [
+                {"name": "Fresh & Fridge", "items": [{"text": "Milk"}]},
+                {"name": "Cupboard", "items": [{"text": "Pasta"}]},
+            ],
+        },
+    )
+    assert template.status_code == 201, template.text
+    template_body = template.json()
+    assert [section["name"] for section in template_body["sections"]] == [
+        "Fresh & Fridge",
+        "Cupboard",
+    ]
+    assert template_body["sections"][0]["items"][0]["text"] == "Milk"
+
+    created = await create_list(
+        client, home_id, name="Saturday shopping", template_id=template_body["id"]
+    )
+    assert [section["name"] for section in created["sections"]] == ["Fresh & Fridge", "Cupboard"]
+    assert [item["text"] for item in created["items"]] == ["Milk", "Pasta"]
+    assert created["source_template_id"] == template_body["id"]
+
+    item_id = created["items"][0]["id"]
+    changed = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"text": "Oat milk"},
+    )
+    assert changed.status_code == 200, changed.text
+    original = await client.get(f"/api/v1/homes/{home_id}/list-templates/{template_body['id']}")
+    assert original.json()["sections"][0]["items"][0]["text"] == "Milk"
+
+
+@pytest.mark.asyncio
+async def test_personal_template_is_not_visible_to_another_home_member(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("template-private"), "Template Owner")
+    home_id = await create_home(client, "Private Template Home")
+    template = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/list-templates",
+        json={"name": "Private", "scope": "personal", "sections": []},
+    )
+    assert template.status_code == 201, template.text
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        partner_id = await create_verified_user(
+            partner_client, unique_email("template-partner"), "Template Partner"
+        )
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=home_id,
+                    user_id=partner_id,
+                    role=Role.adult_member,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.standard_partner,
+                )
+            )
+            await db.commit()
+        response = await partner_client.get(
+            f"/api/v1/homes/{home_id}/list-templates/{template.json()['id']}"
+        )
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Entitlement / feature gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_family_user_can_use_lists(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("family"), "Family User")
+    home_id = await create_home(client, "Family Lists Home")
+    created = await create_list(client, home_id)
+    assert created["name"] == "Groceries"
+    assert created["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_free_user_can_create_first_and_second_list(client: AsyncClient) -> None:
+    """Lists is included on Free (Phase 2B) — bounded by lists.max_lists=2,
+    not a boolean gate. See docs/architecture/commercial-entitlements.md."""
+    await create_verified_user(client, unique_email("free"), "Free User")
+    home_id = await create_home(client, "Free Lists Home", plan=SubscriptionPlan.free)
+
+    first = await create_list(client, home_id, name="Groceries")
+    assert first["commercial_access"] == "normal"
+    second = await create_list(client, home_id, name="Packing")
+    assert second["commercial_access"] == "normal"
+
+
+@pytest.mark.asyncio
+async def test_free_user_cannot_create_a_third_list(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("free3"), "Free User")
+    home_id = await create_home(client, "Free Lists Limit Home", plan=SubscriptionPlan.free)
+    await create_list(client, home_id, name="Groceries")
+    await create_list(client, home_id, name="Packing")
+
+    third = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "Third"})
+    assert third.status_code == 403
+    assert third.json()["detail"]["code"] == "plan_limit_reached"
+    assert third.json()["detail"]["entitlement"] == "lists.max_lists"
+
+
+@pytest.mark.asyncio
+async def test_family_can_create_more_than_two_lists(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("family3"), "Family User")
+    home_id = await create_home(client, "Family Lists Home")
+    for name in ("A", "B", "C", "D"):
+        created = await create_list(client, home_id, name=name)
+        assert created["commercial_access"] == "normal"
+
+
+@pytest.mark.asyncio
+async def test_lists_feature_off_returns_404_even_on_family(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("nofeature"), "No Feature User")
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "No Feature Home"})
+    home_id = uuid.UUID(group.json()["id"])
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
+    # Lists (shopping) is globally released (0063_feature_flag_backfill), so
+    # explicitly disable it for this one Home via a FeatureOverride to
+    # exercise the "feature gate is independent of commercial entitlement"
+    # path — an absent override now correctly inherits the global released
+    # state rather than defaulting to disabled.
+    async with SessionFactory() as db:
+        db.add(FeatureOverride(feature_key=FeatureKey.shopping, group_id=home_id, enabled=False))
+        await db.commit()
+    response = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X"})
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_platform_disabled_blocks_lists_even_with_home_override_and_family_plan(
+    client: AsyncClient,
+) -> None:
+    """PCC platform availability outranks both the Home FeatureOverride and
+    the commercial plan (Phase 2A precedence fix) — a Home override alone
+    was the pre-Phase-2A bug this guards against regressing."""
+    await create_verified_user(client, unique_email("platformoff"), "Platform Off User")
+    home_id = await create_home(client, "Platform Off Home")  # override=True, plan=family
+    async with SessionFactory() as db:
+        flag = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.shopping))
+        assert flag is not None
+        original = flag.enabled
+        flag.enabled = False
+        await db.commit()
+    try:
+        response = await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X"}
+        )
+        assert response.status_code == 404
+    finally:
+        async with SessionFactory() as db:
+            flag = await db.scalar(
+                select(FeatureFlag).where(FeatureFlag.key == FeatureKey.shopping)
+            )
+            assert flag is not None
+            flag.enabled = original
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_excess_lists_survive_downgrade_and_are_deterministically_classified(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("downgrade"), "Downgrade User")
+    home_id = await create_home(client, "Downgrade Lists Home")
+    first = await create_list(client, home_id, name="Oldest")
+    second = await create_list(client, home_id, name="Middle")
+    third = await create_list(client, home_id, name="Newest")
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
+    assert listed.status_code == 200
+    by_id = {row["id"]: row for row in listed.json()["items"]}
+    # All three preserved — nothing deleted by the downgrade.
+    assert {first["id"], second["id"], third["id"]} == set(by_id)
+    # Oldest-created-first is the deterministic rule (no "primary" concept
+    # for Lists) — the first two created stay normal, the third locks.
+    assert by_id[first["id"]]["commercial_access"] == "normal"
+    assert by_id[second["id"]]["commercial_access"] == "normal"
+    assert by_id[third["id"]]["commercial_access"] == "read_only_due_to_plan"
+
+    # The excess list is still fully viewable...
+    detail = await client.get(f"/api/v1/homes/{home_id}/lists/{third['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["commercial_access"] == "read_only_due_to_plan"
+
+    # ...but rejects every mutation.
+    rename = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}",
+        json={"name": "Renamed", "expected_updated_at": third["updated_at"]},
+    )
+    assert rename.status_code == 403
+    assert rename.json()["detail"]["code"] == "resource_restricted_by_plan"
+
+    add_item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert add_item.status_code == 403
+    assert add_item.json()["detail"]["code"] == "resource_restricted_by_plan"
+
+    # Voluntary deletion of an excess list is still allowed (the customer's
+    # own way to get back within the Free limit) — matches Calendar's
+    # identical downgrade exemption.
+    delete = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/lists/{third['id']}")
+    assert delete.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_upgrade_restores_full_access_to_preserved_lists(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("reupgrade"), "Reupgrade User")
+    home_id = await create_home(client, "Reupgrade Lists Home")
+    first = await create_list(client, home_id, name="Oldest")
+    await create_list(client, home_id, name="Middle")
+    third = await create_list(client, home_id, name="Newest")
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.free
+        await db.commit()
+    blocked = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert blocked.status_code == 403
+
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, home_id)
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
+
+    restored = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{third['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert restored.status_code == 201
+    assert restored.json()["commercial_access"] == "normal"
+    listed = await client.get(f"/api/v1/homes/{home_id}/lists")
+    ids = {row["id"] for row in listed.json()["items"]}
+    assert first["id"] in ids
+    assert third["id"] in ids
+    assert all(row["commercial_access"] == "normal" for row in listed.json()["items"])
+
+
+# ---------------------------------------------------------------------------
+# List CRUD
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_list_with_icon(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("icon"), "Icon User")
+    home_id = await create_home(client, "Icon Home")
+    created = await create_list(client, home_id, name="Packing", icon="packing")
+    assert created["icon"] == "packing"
+
+
+@pytest.mark.asyncio
+async def test_create_list_rejects_unknown_icon(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("badicon"), "Bad Icon User")
+    home_id = await create_home(client, "Bad Icon Home")
+    response = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists", json={"name": "X", "icon": "spaceship"}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_overview_reports_counts_without_icon_required(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("counts"), "Counts User")
+    home_id = await create_home(client, "Counts Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+    for text in ("Milk", "Bread", "Bananas"):
+        await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/lists/{list_id}/items",
+            json={"text": text},
+        )
+    items = (await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")).json()["items"]
+    bread_id = next(row["id"] for row in items if row["text"] == "Bread")
+    await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/{bread_id}",
+        json={"is_checked": True},
+    )
+
+    overview = await client.get(f"/api/v1/homes/{home_id}/lists")
+    row = next(r for r in overview.json()["items"] if r["id"] == list_id)
+    assert row["item_count"] == 3
+    assert row["remaining_count"] == 2
+    assert row["icon"] is None
+
+
+@pytest.mark.asyncio
+async def test_rename_list_requires_matching_expected_updated_at(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("rename"), "Rename User")
+    home_id = await create_home(client, "Rename Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+
+    stale = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{list_id}",
+        json={
+            "name": "Groceries 2",
+            "expected_updated_at": "2000-01-01T00:00:00Z",
+        },
+    )
+    assert stale.status_code == 409
+
+    fresh = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{list_id}",
+        json={"name": "Groceries 2", "expected_updated_at": created["updated_at"]},
+    )
+    assert fresh.status_code == 200
+    assert fresh.json()["name"] == "Groceries 2"
+
+
+@pytest.mark.asyncio
+async def test_delete_list_soft_deletes_and_blocks_further_use(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("del"), "Delete User")
+    home_id = await create_home(client, "Delete Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert deleted.status_code == 204
+
+    after = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert after.status_code == 404
+
+    overview = await client.get(f"/api/v1/homes/{home_id}/lists")
+    assert all(row["id"] != list_id for row in overview.json()["items"])
+
+    add_item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items",
+        json={"text": "Too late"},
+    )
+    assert add_item.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_search_by_name(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("search"), "Search User")
+    home_id = await create_home(client, "Search Home")
+    await create_list(client, home_id, name="Groceries")
+    await create_list(client, home_id, name="Holiday packing")
+
+    result = await client.get(f"/api/v1/homes/{home_id}/lists", params={"q": "pack"})
+    names = {row["name"] for row in result.json()["items"]}
+    assert names == {"Holiday packing"}
+
+
+# ---------------------------------------------------------------------------
+# Item CRUD: quantity, note, assignment, completion metadata
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_item_minimal_text_only(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("min"), "Minimal User")
+    home_id = await create_home(client, "Minimal Home")
+    created = await create_list(client, home_id)
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Milk"},
+    )
+    assert result.status_code == 201
+    item = result.json()["items"][0]
+    assert item["text"] == "Milk"
+    assert item["quantity"] is None
+    assert item["note"] is None
+    assert item["assigned_member_id"] is None
+    assert item["is_checked"] is False
+
+
+@pytest.mark.asyncio
+async def test_add_item_with_quantity_note_and_assignment(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("full"), "Full User")
+    home_id = await create_home(client, "Full Home")
+    created = await create_list(client, home_id)
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={
+            "text": "AA batteries",
+            "quantity": "4",
+            "note": "For the remote",
+            "assigned_member_id": str(owner_id),
+        },
+    )
+    assert result.status_code == 201
+    item = result.json()["items"][0]
+    assert item["quantity"] == "4"
+    assert item["note"] == "For the remote"
+    assert item["assigned_member_id"] == str(owner_id)
+
+
+@pytest.mark.asyncio
+async def test_assigning_a_member_from_another_home_is_rejected(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("assign-a"), "Assign Home A")
+    home_a = await create_home(client, "Assign Home A")
+    created = await create_list(client, home_a)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        outsider_id = await create_verified_user(other_client, unique_email("assign-b"), "Outsider")
+        await create_home(other_client, "Assign Home B")
+
+    result = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_a}/lists/{created['id']}/items",
+        json={"text": "Sneaky", "assigned_member_id": str(outsider_id)},
+    )
+    assert result.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_toggle_completion_records_actor_and_timestamp(client: AsyncClient) -> None:
+    owner_id = await create_verified_user(client, unique_email("complete"), "Complete User")
+    home_id = await create_home(client, "Complete Home")
+    created = await create_list(client, home_id)
+    added = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Bread"},
+    )
+    item_id = added.json()["items"][0]["id"]
+
+    checked = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"is_checked": True},
+    )
+    row = checked.json()["items"][0]
+    assert row["is_checked"] is True
+    assert row["completed_by"] == str(owner_id)
+    assert row["completed_at"] is not None
+
+    unchecked = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"is_checked": False},
+    )
+    row = unchecked.json()["items"][0]
+    assert row["is_checked"] is False
+    assert row["completed_by"] is None
+    assert row["completed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_edit_item_only_touches_fields_present_in_the_request(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("partial"), "Partial User")
+    home_id = await create_home(client, "Partial Home")
+    created = await create_list(client, home_id)
+    added = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Milk", "quantity": "2", "note": "Semi-skimmed"},
+    )
+    item_id = added.json()["items"][0]["id"]
+
+    # Only toggling is_checked — text/quantity/note must survive untouched.
+    toggled = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"is_checked": True},
+    )
+    row = toggled.json()["items"][0]
+    assert row["text"] == "Milk"
+    assert row["quantity"] == "2"
+    assert row["note"] == "Semi-skimmed"
+
+    # Explicitly clearing quantity (null) while leaving note untouched.
+    edited = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"quantity": None},
+    )
+    row = edited.json()["items"][0]
+    assert row["quantity"] is None
+    assert row["note"] == "Semi-skimmed"
+    assert row["is_checked"] is True  # untouched by this call
+
+
+@pytest.mark.asyncio
+async def test_delete_item(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("delitem"), "Delete Item User")
+    home_id = await create_home(client, "Delete Item Home")
+    created = await create_list(client, home_id)
+    added = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Milk"},
+    )
+    item_id = added.json()["items"][0]["id"]
+    removed = await unsafe(
+        client,
+        "DELETE",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+    )
+    assert removed.status_code == 200
+    assert removed.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_clear_completed_removes_only_checked_items(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("clear"), "Clear User")
+    home_id = await create_home(client, "Clear Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+    for text in ("Milk", "Bread", "Bananas"):
+        await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/lists/{list_id}/items", json={"text": text}
+        )
+    detail = (await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")).json()
+    bread_id = next(row["id"] for row in detail["items"] if row["text"] == "Bread")
+    await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/{bread_id}",
+        json={"is_checked": True},
+    )
+
+    cleared = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists/{list_id}/items/clear-completed"
+    )
+    assert cleared.status_code == 200
+    remaining_texts = {row["text"] for row in cleared.json()["items"]}
+    assert remaining_texts == {"Milk", "Bananas"}
+
+
+# ---------------------------------------------------------------------------
+# Reordering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reorder_items_persists_new_order(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("reorder"), "Reorder User")
+    home_id = await create_home(client, "Reorder Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+    ids = []
+    for text in ("Milk", "Bread", "Bananas"):
+        added = await unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/lists/{list_id}/items", json={"text": text}
+        )
+        ids.append(added.json()["items"][-1]["id"])
+
+    reversed_ids = list(reversed(ids))
+    reordered = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/reorder",
+        json={"item_ids": reversed_ids},
+    )
+    assert reordered.status_code == 200
+    assert [row["id"] for row in reordered.json()["items"]] == reversed_ids
+
+    refetched = await client.get(f"/api/v1/homes/{home_id}/lists/{list_id}")
+    assert [row["id"] for row in refetched.json()["items"]] == reversed_ids
+
+
+@pytest.mark.asyncio
+async def test_reorder_rejects_a_stale_or_mismatched_item_set(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("stale"), "Stale User")
+    home_id = await create_home(client, "Stale Home")
+    created = await create_list(client, home_id)
+    list_id = created["id"]
+    added = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/lists/{list_id}/items", json={"text": "Milk"}
+    )
+    real_id = added.json()["items"][0]["id"]
+
+    missing_one = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/reorder",
+        json={"item_ids": [str(uuid.uuid4())]},
+    )
+    assert missing_one.status_code == 409
+
+    # Sanity: the real id on its own is accepted.
+    ok = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{list_id}/items/reorder",
+        json={"item_ids": [real_id]},
+    )
+    assert ok.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Cross-Home IDOR
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_home_list_and_item_operations_are_rejected(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("idor-a"), "IDOR Home A")
+    home_a = await create_home(client, "IDOR Home A")
+    created = await create_list(client, home_a)
+    list_id = created["id"]
+    added = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_a}/lists/{list_id}/items", json={"text": "Milk"}
+    )
+    item_id = added.json()["items"][0]["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        await create_verified_user(other_client, unique_email("idor-b"), "IDOR Home B")
+        home_b = await create_home(other_client, "IDOR Home B")
+
+        read = await other_client.get(f"/api/v1/homes/{home_b}/lists/{list_id}")
+        assert read.status_code == 404
+        assert (
+            await unsafe(
+                other_client,
+                "PATCH",
+                f"/api/v1/homes/{home_b}/lists/{list_id}",
+                json={"name": "Hijacked", "expected_updated_at": created["updated_at"]},
+            )
+        ).status_code == 404
+        assert (
+            await unsafe(other_client, "DELETE", f"/api/v1/homes/{home_b}/lists/{list_id}")
+        ).status_code == 404
+        assert (
+            await unsafe(
+                other_client,
+                "POST",
+                f"/api/v1/homes/{home_b}/lists/{list_id}/items",
+                json={"text": "Sneaky"},
+            )
+        ).status_code == 404
+        assert (
+            await unsafe(
+                other_client,
+                "PATCH",
+                f"/api/v1/homes/{home_b}/lists/{list_id}/items/{item_id}",
+                json={"is_checked": True},
+            )
+        ).status_code == 404
+        assert (
+            await unsafe(
+                other_client,
+                "DELETE",
+                f"/api/v1/homes/{home_b}/lists/{list_id}/items/{item_id}",
+            )
+        ).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_personal_lists_are_owner_only_and_household_lists_remain_shared(
+    client: AsyncClient,
+) -> None:
+    owner_id = await create_verified_user(client, unique_email("scope-owner"), "Scope Owner")
+    home_id = await create_home(client, "List Scope Home")
+    personal = await create_list(client, home_id, name="Private errands", scope="personal")
+    household = await create_list(client, home_id, name="Shared groceries", scope="household")
+    assert personal["scope"] == "personal"
+    assert household["scope"] == "household"
+
+    personal_items = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{personal['id']}/items",
+        json={"text": "Private item"},
+    )
+    assert personal_items.status_code == 201
+
+    owner_personal = await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")
+    assert [row["id"] for row in owner_personal.json()["items"]] == [personal["id"]]
+    owner_household = await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")
+    assert [row["id"] for row in owner_household.json()["items"]] == [household["id"]]
+
+    partner_email = unique_email("scope-partner")
+    await add_partner(client, home_id, partner_email, "Scope Partner")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        login = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/auth/login",
+            json={"email": partner_email, "password": PASSWORD},
+        )
+        assert login.status_code == 200
+        partner_lists = await partner_client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")
+        assert partner_lists.status_code == 200
+        assert partner_lists.json()["items"] == []
+        assert (
+            await partner_client.get(f"/api/v1/homes/{home_id}/lists/{personal['id']}")
+        ).status_code == 404
+        partner_household = await partner_client.get(
+            f"/api/v1/homes/{home_id}/lists?scope=household"
+        )
+        assert [row["id"] for row in partner_household.json()["items"]] == [household["id"]]
+        shared_item = await unsafe(
+            partner_client,
+            "POST",
+            f"/api/v1/homes/{home_id}/lists/{household['id']}/items",
+            json={"text": "Shared item"},
+        )
+        assert shared_item.status_code == 201
+
+    assert uuid.UUID(personal["created_by"]) == owner_id
+
+
+@pytest.mark.asyncio
+async def test_list_scope_move_preserves_content_and_changes_visibility(
+    client: AsyncClient,
+) -> None:
+    await create_verified_user(client, unique_email("move-owner"), "Move Owner")
+    home_id = await create_home(client, "List Move Home")
+    created = await create_list(client, home_id, name="Moving list", scope="personal")
+    section = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/sections",
+        json={"name": "Fridge"},
+    )
+    section_id = section.json()["sections"][0]["id"]
+    item = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items",
+        json={"text": "Milk", "section_id": section_id},
+    )
+    item_id = item.json()["items"][0]["id"]
+    checked = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/items/{item_id}",
+        json={"is_checked": True},
+    )
+    before_move = checked.json()
+    moved_household = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/scope",
+        json={"scope": "household", "expected_updated_at": before_move["updated_at"]},
+    )
+    assert moved_household.status_code == 200
+    assert moved_household.json()["id"] == created["id"]
+    assert moved_household.json()["scope"] == "household"
+    assert moved_household.json()["sections"][0]["name"] == "Fridge"
+    assert moved_household.json()["items"][0]["is_checked"] is True
+
+    partner_email = unique_email("move-partner")
+    await add_partner(client, home_id, partner_email, "Move Partner")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        login = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/auth/login",
+            json={"email": partner_email, "password": PASSWORD},
+        )
+        assert login.status_code == 200
+        assert (
+            await partner_client.get(f"/api/v1/homes/{home_id}/lists/{created['id']}")
+        ).status_code == 200
+
+    latest = moved_household.json()
+    moved_personal = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/lists/{created['id']}/scope",
+        json={"scope": "personal", "expected_updated_at": latest["updated_at"]},
+    )
+    assert moved_personal.status_code == 200
+    assert moved_personal.json()["scope"] == "personal"
+    assert moved_personal.json()["items"][0]["text"] == "Milk"
+    assert (await client.get(f"/api/v1/homes/{home_id}/lists?scope=household")).json()[
+        "items"
+    ] == []
+    assert [
+        row["id"]
+        for row in (await client.get(f"/api/v1/homes/{home_id}/lists?scope=personal")).json()[
+            "items"
+        ]
+    ] == [created["id"]]
+
+
+# ---------------------------------------------------------------------------
+# Capability: standard_partner has full manage rights (documented V1 matrix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_partner_has_full_manage_rights_matching_home_admin(client: AsyncClient) -> None:
+    """Documents the V1 permission matrix: a standard_partner gets the same
+    lists_manage capability as home_admin — create/rename/delete a List and
+    add/edit/delete/check items all succeed for a Partner, not just the
+    Home Admin who created the Home. See lists.py's module docstring."""
+    await create_verified_user(client, unique_email("owner"), "Owner")
+    home_id = await create_home(client, "Partner Rights Home")
+    partner_email = unique_email("partner")
+    partner_id = await add_partner(client, home_id, partner_email, "Partner")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as partner_client:
+        login = await unsafe(
+            partner_client,
+            "POST",
+            "/api/v1/auth/login",
+            json={"email": partner_email, "password": PASSWORD},
+        )
+        assert login.status_code == 200
+        assert uuid.UUID(login.json()["id"]) == partner_id
+
+        created = await create_list(partner_client, home_id, name="Partner List")
+        list_id = created["id"]
+        added = await unsafe(
+            partner_client,
+            "POST",
+            f"/api/v1/homes/{home_id}/lists/{list_id}/items",
+            json={"text": "Milk"},
+        )
+        assert added.status_code == 201
+        item_id = added.json()["items"][0]["id"]
+
+        checked = await unsafe(
+            partner_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/lists/{list_id}/items/{item_id}",
+            json={"is_checked": True},
+        )
+        assert checked.status_code == 200
+
+        renamed = await unsafe(
+            partner_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/lists/{list_id}",
+            json={"name": "Renamed by partner", "expected_updated_at": created["updated_at"]},
+        )
+        assert renamed.status_code == 200
+
+        deleted = await unsafe(partner_client, "DELETE", f"/api/v1/homes/{home_id}/lists/{list_id}")
+        assert deleted.status_code == 204

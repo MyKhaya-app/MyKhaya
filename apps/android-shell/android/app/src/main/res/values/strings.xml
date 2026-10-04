@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MyKhaya</string>
+    <string name="title_activity_main">MyKhaya</string>
+    <string name="package_name">app.mykhaya.mobile</string>
+    <string name="custom_url_scheme">app.mykhaya.mobile</string>
+</resources>

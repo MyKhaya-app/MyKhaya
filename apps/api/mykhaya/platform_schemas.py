@@ -1,13 +1,32 @@
+import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from mykhaya.models import FeatureKey, PlatformRole, ServiceState
+from mykhaya.models import (
+    BillingInterval,
+    FeatureKey,
+    HouseholdRelationship,
+    IncidentLifecycleState,
+    PlatformRole,
+    PrivacyIdentityStatus,
+    PrivacyRequestStatus,
+    PrivacyRequestType,
+    ServiceState,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
+    SupportTicketAppArea,
+    SupportTicketPriority,
+    SupportTicketSource,
+    SupportTicketStatus,
+    SupportTicketType,
+)
 from mykhaya.module_registry import ReleaseState
-from mykhaya.schemas import StrictModel
+from mykhaya.schemas import CalendarUsageResponse, StrictModel
 
 
 class PlatformLoginRequest(StrictModel):
@@ -31,6 +50,18 @@ class PlatformActorResponse(BaseModel):
     # enrollment endpoints are reachable until one is set up. The frontend
     # branches its post-login screen on this field.
     session_status: Literal["full", "pending_mfa", "mfa_setup_required"]
+    # Only populated at "pending_mfa" (i.e. after password verification for
+    # this exact account) — the login page uses this to show only the
+    # fallback methods that genuinely exist, instead of always rendering
+    # "use an authenticator app" / "use a recovery code" regardless of
+    # whether either was ever set up. Safe to disclose here: the caller has
+    # already proven the password for this specific account, so this isn't
+    # an account-enumeration channel.
+    available_factors: list[Literal["passkey", "totp", "recovery_code"]] = []
+    # Only populated once, atomically with the response that completes an
+    # administrator's *first* MFA factor — never retrievable again afterwards.
+    # See routers.platform._issue_recovery_codes_if_first_factor.
+    recovery_codes: list[str] | None = None
 
 
 class SensitiveActionRequest(StrictModel):
@@ -41,6 +72,10 @@ class SensitiveActionRequest(StrictModel):
     @classmethod
     def clean_reason(cls, value: str) -> str:
         return " ".join(value.strip().split())
+
+
+class HolidaySourceUpdate(SensitiveActionRequest):
+    enabled: bool
 
 
 class TotpSetupResponse(BaseModel):
@@ -159,6 +194,21 @@ class MfaPolicyResponse(BaseModel):
     environment_enforced: bool
 
 
+class ConsumerMfaPolicyUpdate(SensitiveActionRequest):
+    policy: Literal["optional", "required", "inherit"]
+    allowed_methods: list[Literal["totp", "email"]] = ["totp", "email"]
+
+
+class ConsumerMfaPolicyResponse(BaseModel):
+    configured: str
+    effective: Literal["optional", "required"]
+    source: str
+    allowed_methods: list[Literal["totp", "email"]]
+    enforcement_enabled: bool
+    email_code_lifetime_minutes: int = 15
+    recent_auth_window_minutes: int = 15
+
+
 class AdministratorInvitationCreate(SensitiveActionRequest):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=100)
@@ -202,10 +252,74 @@ class NoteRequest(StrictModel):
     body: str = Field(min_length=2, max_length=1000)
 
 
+class ManagedDemoHomeCreate(StrictModel):
+    fixture_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]+$")
+    display_name: str = Field(min_length=2, max_length=100)
+    fixture_type: Literal["apple_review", "demo", "qa_test", "free_demo"]
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
+    expires_at: datetime | None = None
+    enabled: bool = True
+
+
+class ManagedDemoHomeResponse(BaseModel):
+    id: uuid.UUID
+    fixture_key: str
+    display_name: str
+    fixture_type: Literal["apple_review", "demo", "qa_test", "free_demo"]
+    home_id: uuid.UUID
+    owner_user_id: uuid.UUID
+    status: Literal["enabled", "disabled", "expired"]
+    template_version: str
+    expires_at: datetime | None
+    refreshed_at: datetime | None
+    created_at: datetime
+    created_by: uuid.UUID | None
+    disabled_at: datetime | None
+    account_email: EmailStr
+    email_verified: bool
+    # Reflects the Home's actual resolved subscription plan (see
+    # mykhaya.routers.platform._managed_demo_response) — never a hardcoded
+    # default, since Free Plan Demo must show "free" here, not "family".
+    access: Literal["family", "free"]
+
+
+class ManagedDemoPasswordReset(StrictModel):
+    password: str = Field(min_length=12, max_length=128)
+
+
+class ManagedDemoExpiryUpdate(StrictModel):
+    expires_at: datetime | None = None
+
+
 class SettingUpdate(StrictModel):
     value: bool | int | str | list[str]
     reason: str = Field(min_length=10, max_length=500)
     confirmed: Literal[True]
+
+
+SyslogCategory = Literal["application", "http", "security", "audit", "worker", "integration"]
+
+
+def _default_syslog_categories() -> list[SyslogCategory]:
+    return ["application", "http", "security", "audit", "worker", "integration"]
+
+
+class SyslogSettingsUpdate(SensitiveActionRequest):
+    enabled: bool = False
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=6514, ge=1, le=65535)
+    protocol: Literal["udp", "tcp", "tls"] = "tls"
+    facility: int = Field(default=16, ge=0, le=23)
+    environment: str = Field(min_length=1, max_length=80)
+    tls_verify: bool = True
+    minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    categories: list[SyslogCategory] = Field(default_factory=_default_syslog_categories)
+    timeout_seconds: float = Field(default=2.0, ge=0.1, le=10)
+
+
+class DrivewayDvlaTestRequest(SensitiveActionRequest):
+    registration: str = Field(min_length=2, max_length=20)
 
 
 class ModuleUpdate(StrictModel):
@@ -261,6 +375,207 @@ class SmtpSettingsUpdate(SensitiveActionRequest):
         return self
 
 
+_STRIPE_PUBLISHABLE_KEY_PATTERN = r"^pk_(test|live)_\w+$"
+_STRIPE_SECRET_KEY_PATTERN = r"^sk_(test|live)_\w+$"  # noqa: S105 — a shape pattern, not a secret
+_STRIPE_WEBHOOK_SECRET_PATTERN = r"^whsec_\w+$"  # noqa: S105 — a shape pattern, not a secret
+_STRIPE_PRICE_ID_PATTERN = r"^price_\w+$"
+
+
+class StripeSettingsUpdate(SensitiveActionRequest):
+    """Non-secret fields are saved as sent. The four secret fields
+    (test/live secret key, test/live webhook secret) are "replace-only": None/omitted
+    means "keep the existing stored value", matching SmtpSettingsUpdate's password
+    field — a blank password input is never treated as "clear the password" (there is
+    a separate clear-secret action for that). Never pre-populated with the real
+    stored value by the frontend."""
+
+    enabled: bool
+    acquisition_enabled: bool = False
+    family_signups_enabled: bool = False
+    ultimate_signups_enabled: bool = False
+    mode: Literal["test", "live"]
+    test_publishable_key: str | None = Field(default=None, max_length=200)
+    test_secret_key: str | None = Field(default=None, max_length=500)
+    test_webhook_secret: str | None = Field(default=None, max_length=500)
+    test_family_monthly_price_id: str | None = Field(default=None, max_length=200)
+    test_family_annual_price_id: str | None = Field(default=None, max_length=200)
+    test_ultimate_monthly_price_id: str | None = Field(default=None, max_length=200)
+    test_ultimate_annual_price_id: str | None = Field(default=None, max_length=200)
+    live_publishable_key: str | None = Field(default=None, max_length=200)
+    live_secret_key: str | None = Field(default=None, max_length=500)
+    live_webhook_secret: str | None = Field(default=None, max_length=500)
+    live_family_monthly_price_id: str | None = Field(default=None, max_length=200)
+    live_family_annual_price_id: str | None = Field(default=None, max_length=200)
+    live_ultimate_monthly_price_id: str | None = Field(default=None, max_length=200)
+    live_ultimate_annual_price_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("test_publishable_key", "live_publishable_key")
+    @classmethod
+    def validate_publishable_key(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_PUBLISHABLE_KEY_PATTERN, value):
+            raise ValueError("Does not look like a Stripe publishable key (pk_test_/pk_live_...)")
+        return value
+
+    @field_validator("test_secret_key", "live_secret_key")
+    @classmethod
+    def validate_secret_key(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_SECRET_KEY_PATTERN, value):
+            raise ValueError("Does not look like a Stripe secret key (sk_test_/sk_live_...)")
+        return value
+
+    @field_validator("test_webhook_secret", "live_webhook_secret")
+    @classmethod
+    def validate_webhook_secret(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_WEBHOOK_SECRET_PATTERN, value):
+            raise ValueError("Does not look like a Stripe webhook signing secret (whsec_...)")
+        return value
+
+    @field_validator(
+        "test_family_monthly_price_id",
+        "test_family_annual_price_id",
+        "test_ultimate_monthly_price_id",
+        "test_ultimate_annual_price_id",
+        "live_family_monthly_price_id",
+        "live_family_annual_price_id",
+        "live_ultimate_monthly_price_id",
+        "live_ultimate_annual_price_id",
+    )
+    @classmethod
+    def validate_price_id(cls, value: str | None) -> str | None:
+        if value and not re.match(_STRIPE_PRICE_ID_PATTERN, value):
+            raise ValueError("Does not look like a Stripe Price ID (price_...)")
+        return value
+
+    @field_validator(
+        "test_publishable_key",
+        "test_secret_key",
+        "test_webhook_secret",
+        "test_family_monthly_price_id",
+        "test_family_annual_price_id",
+        "test_ultimate_monthly_price_id",
+        "test_ultimate_annual_price_id",
+        "live_publishable_key",
+        "live_secret_key",
+        "live_webhook_secret",
+        "live_family_monthly_price_id",
+        "live_family_annual_price_id",
+        "live_ultimate_monthly_price_id",
+        "live_ultimate_annual_price_id",
+        mode="before",
+    )
+    @classmethod
+    def blank_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value.strip() if isinstance(value, str) else value
+
+
+class StripeSecretClearRequest(SensitiveActionRequest):
+    field: Literal[
+        "test_secret_key", "test_webhook_secret", "live_secret_key", "live_webhook_secret"
+    ]
+
+
+class StripeTestConnectionRequest(SensitiveActionRequest):
+    pass
+
+
+class StripeModeSettingsResponse(BaseModel):
+    publishable_key: str | None
+    secret_key_configured: bool
+    secret_key_last4: str | None
+    webhook_secret_configured: bool
+    webhook_secret_last4: str | None
+    family_monthly_price_id: str | None
+    family_annual_price_id: str | None
+    ultimate_monthly_price_id: str | None
+    ultimate_annual_price_id: str | None
+
+
+class StripeWebhookSummary(BaseModel):
+    """Compact webhook status embedded in the Payments settings page response —
+    the full drill-down list of recent events/failures lives on the Subscriptions
+    page's dedicated webhook-health endpoint, not duplicated here."""
+
+    configured: bool
+    state: str
+    reason: str | None
+    last_event_at: datetime | None
+    recent_failure_count: int
+    endpoint_url: str | None
+
+
+class StripeBillingDiagnosticResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    source: str
+    stripe_mode: str | None
+    stage: str
+    result: str
+    stripe_event_id: str | None
+    checkout_session_id: str | None
+    stripe_customer_id: str | None
+    stripe_subscription_id: str | None
+    group_id: uuid.UUID | None
+    stripe_subscription_status: str | None
+    stored_subscription_status: str | None
+    stored_plan: str | None
+    effective_plan: str | None
+    safe_error_code: str | None
+    safe_error_message: str | None
+
+
+class StripeBillingDiagnosticsResponse(BaseModel):
+    latest: StripeBillingDiagnosticResponse | None
+    latest_checkout: StripeBillingDiagnosticResponse | None
+    latest_webhook: StripeBillingDiagnosticResponse | None
+    latest_reconciliation: StripeBillingDiagnosticResponse | None
+    recent: list[StripeBillingDiagnosticResponse]
+
+
+class StripeCheckoutInspectionRequest(SensitiveActionRequest):
+    session_id: str = Field(min_length=10, max_length=200, pattern=r"^cs_[A-Za-z0-9_]+$")
+
+
+class StripeCheckoutInspectionResponse(BaseModel):
+    session_exists: bool
+    status: str | None
+    payment_status: str | None
+    mode: str | None
+    home_reference: str
+    customer_id: str | None
+    subscription_id: str | None
+    price_id: str | None
+    configured_price_matched: bool
+    subscription_status: str | None
+
+
+class StripeConfigurationResponse(BaseModel):
+    configured: bool
+    enabled: bool
+    acquisition_enabled: bool
+    family_signups_enabled: bool
+    ultimate_signups_enabled: bool
+    mode: Literal["test", "live"]
+    # "database" | "environment" | "unconfigured"
+    source: str
+    incomplete_reason: str | None
+    editable: bool
+    updated_at: datetime | None
+    test: StripeModeSettingsResponse
+    live: StripeModeSettingsResponse
+    webhook: StripeWebhookSummary
+    diagnostics: StripeBillingDiagnosticsResponse
+
+
+class StripeTestConnectionResponse(BaseModel):
+    # "connected" | "authentication_failed" | "stripe_unavailable" |
+    # "configuration_incomplete" | "network_failure"
+    result: str
+    detail: str
+    mode: Literal["test", "live"]
+
+
 class PushVapidSettingsUpdate(SensitiveActionRequest):
     enabled: bool
     subject: str | None = Field(default=None, max_length=320)
@@ -299,29 +614,68 @@ class PushTestRequest(SensitiveActionRequest):
     recipient: EmailStr
 
 
-class IncidentCreate(StrictModel):
+# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES's keys —
+# pydantic's Literal needs a statically-known value set, so this can't just
+# import the dict's keys directly.
+PublicServiceKey = Literal[
+    "web_application",
+    "authentication",
+    "api",
+    "email_delivery",
+    "notifications",
+    "background_processing",
+    "billing",
+]
+
+
+class IncidentServiceImpact(StrictModel):
+    service: PublicServiceKey
+    impact: ServiceState
+
+
+class IncidentCreate(SensitiveActionRequest):
     title: str = Field(min_length=3, max_length=160)
+    # The public text for this incident's first timeline update.
     message: str = Field(min_length=3, max_length=1000)
-    service: Literal[
-        "web_application",
-        "authentication",
-        "api",
-        "email_delivery",
-        "notifications",
-        "background_processing",
-    ]
-    state: ServiceState
+    services: list[IncidentServiceImpact] = Field(min_length=1, max_length=10)
+    lifecycle_state: IncidentLifecycleState = IncidentLifecycleState.investigating
     starts_at: datetime | None = None
-    reason: str = Field(min_length=10, max_length=500)
-    confirmed: Literal[True]
+    internal_notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("services")
+    @classmethod
+    def unique_services(cls, value: list[IncidentServiceImpact]) -> list[IncidentServiceImpact]:
+        seen = {row.service for row in value}
+        if len(seen) != len(value):
+            raise ValueError("Each affected service can only be listed once.")
+        return value
 
 
-class IncidentUpdate(StrictModel):
+class IncidentUpdateCreate(SensitiveActionRequest):
+    """Appends one entry to an incident's public timeline — see
+    StatusIncidentUpdate. Never overwrites a previous update; the append-only
+    history is what the public Recent history/Current incidents timeline is
+    built from."""
+
     message: str = Field(min_length=3, max_length=1000)
-    state: ServiceState
+    lifecycle_state: IncidentLifecycleState
+    occurred_at: datetime | None = None
+    # Optional: only services whose impact actually changed at this update
+    # need to be listed — omitted services keep their current impact.
+    service_impacts: list[IncidentServiceImpact] = Field(default_factory=list, max_length=10)
     resolved: bool = False
-    reason: str = Field(min_length=10, max_length=500)
-    confirmed: Literal[True]
+    internal_notes: str | None = Field(default=None, max_length=2000)
+
+
+class IncidentResolveCreate(SensitiveActionRequest):
+    """Completes an incident with one required final public timeline entry."""
+
+    message: str = Field(min_length=3, max_length=1000)
+    resolved_at: datetime | None = None
+
+
+class IncidentDeleteRequest(SensitiveActionRequest):
+    """Audited confirmation for permanently removing test/error incidents."""
 
 
 class PageResponse(BaseModel):
@@ -342,23 +696,38 @@ class FeatureMatrixResponse(BaseModel):
 
 class NotificationTemplateResponse(BaseModel):
     template_type: str
+    module: str
     channel: str
     description: str
     allowed_variables: list[str]
+    # Placeholders from allowed_variables that must remain present somewhere
+    # in subject+body for a save to be accepted — see
+    # TemplateDefault.required_variables and templates.validate_required_variables.
+    required_variables: list[str]
     default_subject: str
     default_body: str
     subject: str
     body: str
     is_override: bool
     enabled: bool
+    # False = this notification is required (account security, mandatory
+    # invitations, ...) and `enabled` can never be set to False for it — see
+    # TemplateDefault.disableable.
+    disableable: bool
+    security_critical: bool
     is_stale: bool
     updated_at: datetime | None
+    updated_by: str | None = None
 
 
 class NotificationTemplateUpdate(SensitiveActionRequest):
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=4000)
     enabled: bool = True
+
+
+class NotificationTemplateResetAllRequest(SensitiveActionRequest):
+    pass
 
 
 class NotificationTemplatePreviewRequest(StrictModel):
@@ -373,6 +742,17 @@ class NotificationTemplatePreviewResponse(BaseModel):
 
 class NotificationTemplateTestRequest(SensitiveActionRequest):
     recipient: EmailStr
+
+
+class NotificationTemplateTestSendRequest(SensitiveActionRequest):
+    """Test Centre: sends the real, current wording (default or override) to
+    a real MyKhaya user through the actual delivery pipeline for whichever
+    channel the template is registered on — see
+    routers.platform.test_send_notification. Distinct from
+    NotificationTemplateTestRequest (an arbitrary email address, useful for
+    checking SMTP configuration itself rather than a specific user)."""
+
+    recipient_user_id: uuid.UUID
 
 
 class ServiceStatusResponse(BaseModel):
@@ -434,3 +814,526 @@ class DiagnosticsEntryResponse(BaseModel):
 class DiagnosticsResponse(BaseModel):
     items: list[DiagnosticsEntryResponse]
     next_page: int | None
+
+
+class HomeSubscriptionResponse(BaseModel):
+    """Platform-Admin-only view of a Home's commercial state — everything
+    Phase 2's subscription management UI will need to display. Never
+    returned from any household-facing endpoint."""
+
+    plan: SubscriptionPlan
+    provider: SubscriptionProvider
+    status: SubscriptionStatus
+    billing_owner_user_id: uuid.UUID | None
+    external_customer_id: str | None
+    external_subscription_id: str | None
+    # The exact Stripe Price this subscription is actually billed against —
+    # never the currently-configured signup price (see "Price increases and
+    # grandfathering" in docs/architecture/commercial-entitlements.md).
+    external_price_id: str | None
+    billing_interval: BillingInterval | None
+    current_period_start: datetime | None
+    current_period_end: datetime | None
+    complimentary_reason: str | None
+    complimentary_note: str | None
+    complimentary_granted_by: uuid.UUID | None
+    complimentary_granted_by_display_name: str | None
+    complimentary_granted_at: datetime | None
+    complimentary_expires_at: datetime | None
+    effective_plan: SubscriptionPlan
+    # Populated only when effective_plan differs from plan — e.g. "Complimentary
+    # access expired". None when the effective plan matches the stored one.
+    effective_status_reason: str | None
+
+
+class GrantComplimentaryRequest(SensitiveActionRequest):
+    plan: SubscriptionPlan = SubscriptionPlan.family
+    complimentary_reason: str = Field(min_length=1, max_length=200)
+    complimentary_note: str | None = Field(default=None, max_length=1000)
+    expires_at: datetime | None = None
+
+
+class RevokeComplimentaryRequest(SensitiveActionRequest):
+    pass
+
+
+class MoveMemberRequest(SensitiveActionRequest):
+    """PCC → Users/Homes "Move member" — see routers.platform.move_member.
+    Only the fields an operator actually chooses; every other detail
+    (current role, member counts, entitlement limits, admin safety) is
+    resolved and validated server-side, never trusted from the client."""
+
+    source_group_id: uuid.UUID
+    destination_group_id: uuid.UUID
+    destination_relationship: HouseholdRelationship
+    # "archive_if_empty" uses the Archived lifecycle state (migration
+    # 0053_lifecycle_archived_state / routers.platform.home_state) — the
+    # right primitive for "this was an accidental duplicate Home, hide it
+    # but keep everything": nothing is destroyed, and it's clearly
+    # distinguishable from an operator having deliberately Disabled the
+    # Home. Slice 2 originally used a plain deactivate ("deactivate_if_
+    # empty") before Archive existed; renamed once Archive landed in Slice 3
+    # rather than keeping two confusing source-disposition options.
+    source_disposition: Literal["leave", "archive_if_empty"] = "leave"
+
+
+# Same cap the existing PCC list endpoints already use for page_size — a
+# familiar, already-reviewed ceiling rather than picking a new number, and
+# small enough that a single request can't trigger thousands of mutations
+# (Slice 4 §7).
+BULK_LIFECYCLE_MAX_TARGETS = 100
+
+
+class BulkLifecycleRequest(SensitiveActionRequest):
+    """PCC → Users/Homes cleanup — see routers.platform.bulk_user_lifecycle
+    / bulk_home_lifecycle. "disable" is the existing suspend transition;
+    "archive" is the Slice 3 Archived transition. Deliberately excludes
+    reactivate/restore — this tool is for cleanup, not mass restoration."""
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=BULK_LIFECYCLE_MAX_TARGETS)
+    action: Literal["disable", "archive"]
+
+
+class BulkLifecycleFailure(BaseModel):
+    id: uuid.UUID
+    code: str
+    message: str
+
+
+class BulkLifecycleResponse(BaseModel):
+    succeeded: list[uuid.UUID]
+    failed: list[BulkLifecycleFailure]
+
+
+class AnonymiseUserRequest(SensitiveActionRequest):
+    """PCC → User detail → "Anonymise user" — see
+    routers.platform.anonymise_user. `confirmation_text` must exactly match
+    the user's current email (checked server-side, never trusted from the
+    UI alone) — a stronger bar than the usual reason+confirmed pair, since
+    this is irreversible."""
+
+    confirmation_text: str = Field(min_length=1, max_length=320)
+
+
+class AnonymiseEligibilityResponse(BaseModel):
+    eligible: bool
+    blockers: list[str]
+
+
+class PermanentDeleteHomeRequest(SensitiveActionRequest):
+    """PCC → Home detail → "Permanently delete Home" — see
+    routers.platform.permanent_delete_home. `confirmation_text` must
+    exactly match the Home's current name."""
+
+    confirmation_text: str = Field(min_length=1, max_length=100)
+
+
+class HomeDeleteEligibilityResponse(BaseModel):
+    eligible: bool
+    blockers: list[str]
+
+
+class SubscriptionSummaryResponse(BaseModel):
+    """Backend-computed factual counts only. Still no MRR/ARR: with multiple
+    historical Stripe Prices, currencies and billing intervals possibly in
+    play, a single blended revenue figure would be non-trivial to compute
+    correctly — see "Platform summary metrics" in
+    docs/architecture/commercial-entitlements.md. Never calculated from a
+    hard-coded plan price."""
+
+    total_homes: int
+    free: int
+    family: int
+    complimentary: int
+    complimentary_expired: int
+    past_due: int
+    cancelled: int
+    stripe_total: int
+    stripe_active_family: int
+    stripe_monthly: int
+    stripe_annual: int
+    stripe_cancelling: int
+
+
+class SubscriptionListItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    stored_plan: SubscriptionPlan
+    provider: SubscriptionProvider
+    status: SubscriptionStatus
+    effective_plan: SubscriptionPlan
+    effective_status_reason: str | None
+    complimentary_expires_at: datetime | None
+    member_count: int
+    last_commercial_change: datetime | None
+
+
+class SubscriptionListResponse(BaseModel):
+    items: list[SubscriptionListItem]
+    page: int
+    page_size: int
+    total: int
+
+
+class EntitlementsResponse(BaseModel):
+    plan: SubscriptionPlan
+    booleans: dict[str, bool]
+    limits: dict[str, int | None]
+
+
+class SubscriptionEventResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    event_type: str
+    from_plan: SubscriptionPlan | None
+    to_plan: SubscriptionPlan | None
+    from_provider: SubscriptionProvider | None
+    to_provider: SubscriptionProvider | None
+    from_status: SubscriptionStatus | None
+    to_status: SubscriptionStatus | None
+    actor_administrator_id: uuid.UUID | None
+    actor_display_name: str | None
+    reason: str | None
+
+
+class HomeAdministratorSummary(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    email: str
+
+
+class WebhookEventSummary(BaseModel):
+    """A single recorded Stripe webhook delivery — never the raw payload,
+    only enough for an operator to answer "did this Home's payment webhook
+    arrive, and what happened." See
+    docs/architecture/commercial-entitlements.md#webhook-observability."""
+
+    id: uuid.UUID
+    stripe_event_id: str
+    event_type: str
+    received_at: datetime
+    outcome: str
+
+
+class WebhookFailureSummary(BaseModel):
+    id: uuid.UUID
+    stripe_event_id: str | None
+    event_type: str | None
+    error_message: str
+    occurred_at: datetime
+
+
+class StripeWebhookHealthResponse(BaseModel):
+    configured: bool
+    state: str
+    reason: str | None
+    last_event_at: datetime | None
+    recent_failure_count: int
+    recent_events: list[WebhookEventSummary]
+    recent_failures: list[WebhookFailureSummary]
+    # Surfaced so the Subscriptions page's compact Stripe status card and the
+    # Payments settings page agree on the active mode/source without a second
+    # round trip — never a secret value.
+    mode: str
+    source: str
+    paid_homes: int
+
+
+class StripePriceInfo(BaseModel):
+    """The actual amount this specific subscription is billed, resolved live
+    from Stripe — never a hard-coded figure. None when the Home has no
+    Stripe price on record, or Stripe couldn't be reached."""
+
+    currency: str
+    unit_amount: int
+    formatted_amount: str
+
+
+class SubscriptionDetailResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    member_count: int
+    administrators: list[HomeAdministratorSummary]
+    subscription: HomeSubscriptionResponse
+    entitlements: EntitlementsResponse
+    # Diagnostic only: lets an operator see "this Home has more event
+    # categories than its plan allows" without a manual query. Never a
+    # control — there is no unlock action here, only the existing
+    # Complimentary grant or a real Stripe upgrade change what a Home is
+    # entitled to.
+    calendar_usage: CalendarUsageResponse
+    member_usage: CalendarUsageResponse
+    # Informational aggregate only (personal routines are a per-person
+    # limit) — see mykhaya.entitlements.personal_routines_total.
+    personal_routines_total: int
+    # Support diagnostics for "I paid but I'm still on Free" (Phase 7) — the
+    # most recent webhook deliveries MyKhaya recorded for this specific
+    # Home, so an operator can see whether Stripe's webhook actually arrived
+    # without database access.
+    recent_webhook_events: list[WebhookEventSummary]
+    billing_diagnostics: list[StripeBillingDiagnosticResponse]
+    history: list[SubscriptionEventResponse]
+    stripe_price: StripePriceInfo | None = None
+    # Built from validated Stripe object IDs already stored on this Home —
+    # never round-tripped through a client-supplied value. Test-mode Stripe
+    # Dashboard links only, matching this phase's test-mode-only scope.
+    stripe_dashboard_customer_url: str | None = None
+    stripe_dashboard_subscription_url: str | None = None
+
+
+# --- Support tickets (PCC/admin side) ----------------------------------------
+# Deliberately separate from mykhaya.schemas' consumer-facing Support ticket
+# models, not a shared base — an admin response legitimately carries fields
+# (requester email/name, assigned admin, internal message authorship) that
+# must never appear in a consumer response, so keeping them in wholly
+# separate classes makes that boundary structural rather than a
+# field-by-field discipline.
+
+
+class PlatformSupportTicketMessageResponse(BaseModel):
+    id: uuid.UUID
+    author_user_id: uuid.UUID | None
+    author_admin_id: uuid.UUID | None
+    author_display_name: str
+    message: str
+    visibility: Literal["requester", "internal"]
+    created_at: datetime
+
+
+class PlatformSupportTicketAttachmentResponse(BaseModel):
+    id: uuid.UUID
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+class PlatformSupportTicketDiagnosticResponse(BaseModel):
+    app_version: str | None
+    build_number: str | None
+    platform: str | None
+    os_version: str | None
+    runtime: str | None
+    notification_permission: str | None
+    push_registration_state: str | None
+    api_connectivity: str | None
+    network_state: str | None
+    background_refresh_state: str | None
+    client_timestamp: datetime | None
+
+
+class PlatformSupportTicketSummaryResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    requester_display_name: str
+    requester_email: EmailStr
+    group_id: uuid.UUID | None
+    group_name: str | None
+    assigned_admin_id: uuid.UUID | None
+    assigned_admin_display_name: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlatformSupportTicketListResponse(BaseModel):
+    items: list[PlatformSupportTicketSummaryResponse]
+    next_page: int | None = None
+
+
+class PlatformSupportTicketDetailResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    description: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    requester_user_id: uuid.UUID
+    requester_display_name: str
+    requester_email: EmailStr
+    group_id: uuid.UUID | None
+    group_name: str | None
+    assigned_admin_id: uuid.UUID | None
+    assigned_admin_display_name: str | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+    messages: list[PlatformSupportTicketMessageResponse]
+    attachments: list[PlatformSupportTicketAttachmentResponse]
+    diagnostics: PlatformSupportTicketDiagnosticResponse | None
+
+
+class PlatformSupportTicketUpdate(StrictModel):
+    """All fields optional — a PATCH only ever changes what it includes.
+    Reused for status transitions, assignment, and priority changes alike
+    rather than three separate endpoints, matching this router's small,
+    single-purpose scope."""
+
+    status: SupportTicketStatus | None = None
+    priority: SupportTicketPriority | None = None
+    assigned_admin_id: uuid.UUID | None = None
+    # Reassigning to nobody is a distinct, deliberate action from "field
+    # omitted" — Pydantic's exclude_unset (used by the route) tells these
+    # apart, so `assigned_admin_id: null` unassigns rather than being
+    # ignored.
+
+
+class PlatformSupportTicketMessageCreate(StrictModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class PlatformSupportSettingsResponse(BaseModel):
+    """Read-only support-behaviour summary for PCC's Support Settings page.
+    Deliberately does NOT repeat `support_enabled` (see GET /platform/modules
+    — the FeatureFlag row is the one source of truth for that) or
+    `service_status_url` (see GET /platform/settings — the PlatformSetting
+    row is that value's one owner). This exists only for the one value
+    neither of those surfaces already exposes: the env-only, non-runtime-
+    editable support-team notification destination."""
+
+    support_notification_email: str | None
+
+
+class AcceptanceDocumentSummary(BaseModel):
+    key: str
+    display_name: str
+    action_verb: str
+    current_version: str | None
+    current_version_id: uuid.UUID | None
+    is_test: bool = False
+
+
+class AcceptanceUserRow(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    # This is an account identifier in the operational dashboard. Managed-child
+    # principals intentionally use an internal @managed.mykhaya.invalid value,
+    # which is not a deliverable email address.
+    email: str
+    account_type: Literal["adult", "managed_child"]
+    documents: list[dict[str, Any]]
+    last_action_at: datetime | None
+    last_action: str | None
+    status: Literal["up_to_date", "action_required", "no_applicable_documents"]
+
+
+class AcceptanceDashboardResponse(BaseModel):
+    active_users: int
+    up_to_date: int
+    action_required: int
+    pending_guardian_action: int
+    documents: list[AcceptanceDocumentSummary]
+    rows: list[AcceptanceUserRow]
+
+
+class AcceptanceHistoryItem(BaseModel):
+    id: uuid.UUID
+    document_key: str
+    document_id: uuid.UUID
+    display_name: str
+    version: str
+    version_id: uuid.UUID
+    record_type: str
+    context: str
+    platform: str
+    created_at: datetime
+    guardian_user_id: uuid.UUID | None = None
+    child_profile_id: uuid.UUID | None = None
+    is_test: bool = False
+
+
+class AcceptanceHistoryResponse(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    # As with AcceptanceUserRow.email, managed-child principals may have an
+    # internal non-deliverable account identifier rather than an email address.
+    email: str
+    account_type: Literal["adult", "managed_child"]
+    current_status: list[dict[str, Any]]
+    history: list[AcceptanceHistoryItem]
+
+
+class LegalTestModeUpdate(SensitiveActionRequest):
+    enabled: bool
+    test_user_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+
+
+class LegalTestModeResponse(BaseModel):
+    enabled: bool
+    test_user_ids: list[uuid.UUID]
+
+
+class PrivacyRequestCreate(StrictModel):
+    user_id: uuid.UUID | None = None
+    request_type: PrivacyRequestType
+    received_at: datetime | None = None
+    due_date: date
+    identity_status: PrivacyIdentityStatus = PrivacyIdentityStatus.pending
+    internal_notes: str | None = Field(default=None, max_length=10000)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class PrivacyRequestUpdate(StrictModel):
+    status: PrivacyRequestStatus | None = None
+    identity_status: PrivacyIdentityStatus | None = None
+    due_date: date | None = None
+    assigned_administrator_id: uuid.UUID | None = None
+    internal_notes: str | None = Field(default=None, max_length=10000)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]
+
+
+class PrivacyRequestResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    user_id: uuid.UUID | None
+    user_display_name: str | None
+    user_email: EmailStr | None
+    request_type: PrivacyRequestType
+    received_at: datetime
+    identity_status: PrivacyIdentityStatus
+    due_date: date
+    status: PrivacyRequestStatus
+    assigned_administrator_id: uuid.UUID | None
+    internal_notes: str | None
+    completed_at: datetime | None
+    declined_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    overdue: bool
+
+
+class SubprocessorCreate(StrictModel):
+    provider: str = Field(min_length=1, max_length=160)
+    category: str = Field(min_length=1, max_length=120)
+    purpose: str = Field(min_length=1, max_length=5000)
+    data_categories: list[str] = Field(default_factory=list, max_length=30)
+    processing_location: str | None = Field(default=None, max_length=160)
+    international_transfer: bool = False
+    transfer_mechanism: str | None = Field(default=None, max_length=300)
+    dpa_status: str | None = Field(default=None, max_length=80)
+    privacy_url: str | None = Field(default=None, max_length=500)
+    state: str = "configuration_dependent"
+    last_reviewed_at: date | None = None
+    internal_notes: str | None = Field(default=None, max_length=10000)
+
+
+class SubprocessorResponse(SubprocessorCreate):
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class SubprocessorMutation(SubprocessorCreate):
+    reason: str = Field(min_length=10, max_length=500)
+    confirmed: Literal[True]

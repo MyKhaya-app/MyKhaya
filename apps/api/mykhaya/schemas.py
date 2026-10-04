@@ -1,18 +1,33 @@
 import uuid
 from datetime import date, datetime
+from datetime import time as clock_time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from mykhaya.colour_palette import ColourToken
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken, HexColour
 from mykhaya.models import (
+    CalendarSharePermission,
+    CalendarShareStatus,
     ChildAgeBand,
     ChildTransitionStatus,
+    HomeJoinRequestStatus,
     HouseholdRelationship,
+    LegalPlatform,
+    MealSlot,
+    MealType,
     PermissionProfile,
     RecurrencePattern,
+    ReminderCadence,
+    ReminderRepeat,
     Role,
     RoutineReminderTiming,
+    RoutineScope,
+    SupportTicketAppArea,
+    SupportTicketPriority,
+    SupportTicketSource,
+    SupportTicketStatus,
+    SupportTicketType,
 )
 
 
@@ -20,11 +35,28 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SignupLegalAcceptanceItem(StrictModel):
+    """One document/version pair exactly as the signup screen displayed it
+    to the user — see mykhaya.legal.validate_signup_acceptances, which
+    checks each of these against the backend's actual current published
+    version rather than trusting the client's claim."""
+
+    document_key: str = Field(max_length=50)
+    document_version_id: uuid.UUID
+
+
 class RegisterRequest(StrictModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=12, max_length=128)
     invitation_token: str | None = Field(default=None, min_length=30, max_length=500)
+    # Empty by default so every existing caller (tests, invitation-accept
+    # flows predating this field) keeps working unchanged; enforcement in
+    # the register() handler only ever engages once an adult document is
+    # actually configured as acceptance_required — see
+    # mykhaya.legal.validate_signup_acceptances.
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: LegalPlatform = LegalPlatform.web
 
     @field_validator("display_name")
     @classmethod
@@ -34,6 +66,79 @@ class RegisterRequest(StrictModel):
 
 class LoginRequest(StrictModel):
     email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AuthContinuationResponse(BaseModel):
+    authentication_state: Literal["additional_auth_required"]
+    transaction_id: str
+    destination: str | None = None
+    onboarding: bool = False
+
+
+class MfaStartRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    method: Literal["totp", "email"]
+
+
+class MfaTotpVerifyRequest(StrictModel):
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def numeric_code(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Verification code must contain six digits")
+        return value
+
+
+class MfaVerifyRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    method: Literal["totp", "email"]
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def numeric_code(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Verification code must contain six digits")
+        return value
+
+
+class MfaOptionsResponse(BaseModel):
+    methods: list[Literal["totp", "email"]]
+    destination: str | None = None
+    onboarding: bool = False
+    policy: Literal["optional", "required"] = "required"
+    policy_source: str = "platform"
+    enrolment_required: bool = False
+    preferred_method: Literal["totp", "email"] | None = None
+
+
+class MfaStartResponse(BaseModel):
+    method: Literal["totp", "email"]
+    destination: str | None = None
+    provisioning_uri: str | None = None
+    manual_key: str | None = None
+    enrolling: bool = False
+
+
+class ConsumerMfaStatusResponse(BaseModel):
+    required: bool
+    allowed_methods: list[Literal["totp", "email"]]
+    email_available: bool
+    email_destination: str | None = None
+    totp_enabled: bool
+    can_disable_totp: bool
+    usable_methods: list[Literal["totp", "email"]] = Field(default_factory=list)
+    preferred_method: Literal["totp", "email"] | None = None
+
+
+class MfaPreferenceRequest(StrictModel):
+    method: Literal["totp", "email"] | None
+
+
+class ReauthenticateRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -112,6 +217,18 @@ class MobileSessionResponse(UserResponse):
     """Returned only by /auth/mobile/* endpoints - never by the browser /auth/* endpoints."""
 
     session_token: str
+    # The long-lived (settings.trusted_device_days) TrustedDevice renewal
+    # credential — the bearer-transport equivalent of the browser's mk_device
+    # cookie. Present at login (POST /mobile/login, /mobile/child/login) and
+    # after a successful POST /mobile/sessions/renew; null from
+    # POST /mobile/sessions/rotate, which only ever refreshes the short-lived
+    # session_token of an *already-valid* session and never touches the
+    # device credential, so there is nothing new for the client to persist.
+    device_token: str | None = None
+
+
+class MobileDeviceRenewRequest(StrictModel):
+    device_token: str = Field(min_length=30, max_length=500)
 
 
 class GroupCreate(StrictModel):
@@ -152,6 +269,8 @@ class MemberResponse(BaseModel):
     shared_resources: list[str]
     colour: ColourToken | None
     avatar_version: str | None = None
+    family_sponsored: bool = False
+    family_access: bool = False
 
 
 class MemberColourUpdate(StrictModel):
@@ -176,6 +295,7 @@ class InvitationCreate(StrictModel):
     shared_resources: list[str] = Field(default_factory=list, max_length=20)
     # Accepted during the compatibility window; authority is derived from relationship.
     role: Role | None = None
+    family_sponsorship: bool = False
 
 
 class InvitationResponse(BaseModel):
@@ -187,6 +307,7 @@ class InvitationResponse(BaseModel):
     permission_profile: PermissionProfile
     shared_resources: list[str]
     expires_at: datetime
+    family_sponsorship: bool = False
 
 
 class InvitationListItem(InvitationResponse):
@@ -204,6 +325,66 @@ class InvitationTokenPreview(BaseModel):
     role: Role
     relationship: HouseholdRelationship
     expires_at: datetime
+
+
+class HomeJoinCodeResponse(BaseModel):
+    # Present only when a code has been generated. Never re-derivable from
+    # join_code_hash alone — this is decrypt_home_join_code's output, and
+    # only ever returned to a Home Admin (see routers.groups' capability
+    # check on both the GET and the regenerate endpoint).
+    code: str | None
+    generated_at: datetime | None
+
+
+class HomeJoinCodeLookupRequest(StrictModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class HomeJoinCodeLookupResponse(BaseModel):
+    group_id: uuid.UUID
+    group_name: str
+
+
+class HomeJoinRequestCreate(StrictModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class HomeJoinRequestResponse(BaseModel):
+    id: uuid.UUID
+    group_id: uuid.UUID
+    status: HomeJoinRequestStatus
+    created_at: datetime
+
+
+class HomeJoinRequestListItem(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    display_name: str
+    email: str
+    status: HomeJoinRequestStatus
+    method: str
+    created_at: datetime
+
+
+class HomeJoinRequestApprove(StrictModel):
+    relationship: HouseholdRelationship
+    family_sponsorship: bool = False
+    # Optional: this is a routine household action, not an operator action —
+    # the Home Admin is never prompted to justify it. Matches
+    # MemberRelationshipUpdate's existing shape.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class FamilySponsorshipChange(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+    family_sponsorship: bool = False
+
+
+class HomeJoinRequestDecline(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
 
 
 class ChildCreate(StrictModel):
@@ -313,12 +494,29 @@ class HouseholdModuleResponse(BaseModel):
     description: str
     category: str
     release_state: str
+    # Effective: also accounts for commercial entitlement, not just platform/
+    # Home feature-flag state — a module the Home's plan doesn't include is
+    # never `enabled`, regardless of any Home FeatureOverride (Phase 2B).
     enabled: bool
     toggleable: bool
     introduced_version: str | None
     dependencies: list[str]
     permissions: list[str]
     route: str | None
+    # Whether the Home's current plan includes this module at all — True
+    # for core modules and any module with no boolean commercial
+    # entitlement key (e.g. Calendar, always included on both plans).
+    entitled: bool = True
+    # Why a non-core module currently resolves unavailable, from the Home
+    # Admin's point of view — "platform" outranks "plan" outranks "home"
+    # (matching the agreed authority hierarchy: PCC platform availability,
+    # then commercial entitlement, then Home Admin enablement). "home"
+    # means platform and plan both already allow it, but the Home's own
+    # FeatureOverride currently resolves it disabled — a real, actionable
+    # state (the Home Admin's own toggle controls it), never a genuine
+    # block the way "platform"/"plan" are. None when the module is
+    # currently enabled.
+    blocked_by: Literal["platform", "plan", "home"] | None = None
 
 
 class HouseholdFeatureUpdate(StrictModel):
@@ -339,6 +537,113 @@ class InvitationAccept(StrictModel):
     token: str = Field(min_length=30, max_length=500)
 
 
+class CalendarShareCreate(StrictModel):
+    calendar_id: uuid.UUID
+    recipient_email: EmailStr
+    permission: CalendarSharePermission = CalendarSharePermission.view
+    # Omitted/None = share the entire calendar (unchanged default). A list =
+    # only events carrying one of these CalendarEventLabel ids are exposed —
+    # a filter over the Home calendar's own events, never a second calendar.
+    # Rejected (422) for a Personal Calendar, which has no categories — see
+    # create_share.
+    category_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+
+
+class CalendarSharePermissionUpdate(StrictModel):
+    permission: CalendarSharePermission
+
+
+class CalendarShareCategoriesUpdate(StrictModel):
+    category_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+
+
+class CalendarSharePreferencesUpdate(StrictModel):
+    notification_preference: Literal["all", "important", "off"] | None = None
+    include_in_briefing: bool | None = None
+
+
+class CalendarShareAccept(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+    notification_preference: Literal["all", "important", "off"] = "all"
+    include_in_briefing: bool = True
+
+
+class CalendarShareDecline(StrictModel):
+    token: str = Field(min_length=30, max_length=500)
+
+
+class CalendarShareResponse(BaseModel):
+    id: uuid.UUID
+    calendar_id: uuid.UUID
+    calendar_name: str
+    # The shared calendar's own HomeCalendar.color — lets the recipient's
+    # "Shared with me" list and calendar selector render the same colour
+    # identity the source Home sees, without a second lookup. Null only if
+    # the source calendar has since been deleted (calendar_name falls back
+    # to "Deleted calendar" in that same case — see routers.calendar_sharing
+    # ._share_response).
+    calendar_color: HexColour | None
+    source_group_id: uuid.UUID
+    source_group_name: str
+    recipient_email: EmailStr
+    recipient_user_id: uuid.UUID | None
+    permission: CalendarSharePermission
+    status: CalendarShareStatus
+    expired: bool
+    requested_by_display_name: str
+    expires_at: datetime
+    accepted_at: datetime | None
+    declined_at: datetime | None
+    revoked_at: datetime | None
+    notification_preference: str
+    include_in_briefing: bool
+    category_ids: list[uuid.UUID] | None
+    created_at: datetime
+
+
+class CalendarSharePreview(BaseModel):
+    calendar_name: str
+    source_group_name: str
+    invited_by_display_name: str
+    permission: CalendarSharePermission
+    recipient_email: EmailStr
+    expires_at: datetime
+    # None = the entire calendar. Names, not ids — a preview is shown before
+    # the recipient has accepted, so this is deliberately the only place
+    # category identity leaks pre-acceptance, and only the human-readable
+    # name of what's being offered, nothing else about the source Home.
+    category_names: list[str] | None = None
+
+
+class CalendarShareListResponse(BaseModel):
+    items: list[CalendarShareResponse]
+
+
+class SharedEventCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=180)
+    start_at: datetime
+    end_at: datetime
+    timezone: str = Field(min_length=1, max_length=100)
+    is_all_day: bool = False
+    description: str | None = Field(default=None, max_length=2000)
+    location_text: str | None = Field(default=None, max_length=200)
+    reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
+    recurrence: RecurrencePattern = RecurrencePattern.none
+    recurrence_interval: int = Field(default=1, ge=1, le=365)
+    recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
+    recurrence_count: int | None = Field(default=None, ge=1, le=1000)
+
+    @field_validator("start_at", "end_at", "recurrence_until")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
+
+
+class SharedEventUpdate(SharedEventCreate):
+    expected_updated_at: datetime
+
+
 class SessionResponse(BaseModel):
     id: uuid.UUID
     created_at: datetime
@@ -346,6 +651,44 @@ class SessionResponse(BaseModel):
     expires_at: datetime
     user_agent: str
     current: bool
+
+
+class TrustedDeviceResponse(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime
+    device_name: str
+    platform: str
+    user_agent: str
+    current: bool
+
+
+class PasskeyOptionsResponse(BaseModel):
+    options_json: str
+
+
+class PasskeyRegistrationVerifyRequest(StrictModel):
+    credential_json: str = Field(min_length=2, max_length=100_000)
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class PasskeyAuthenticationVerifyRequest(StrictModel):
+    credential_json: str = Field(min_length=2, max_length=100_000)
+
+
+class PasskeyRenameRequest(StrictModel):
+    label: str = Field(min_length=1, max_length=100)
+
+
+class PasskeyResponse(BaseModel):
+    id: uuid.UUID
+    label: str
+    created_at: datetime
+    last_used_at: datetime | None
+    # "platform" | "cross-platform" | null (unknown/older credential) — see
+    # UserPasskey.authenticator_attachment. Informational only.
+    authenticator_attachment: str | None = None
 
 
 class MessageResponse(BaseModel):
@@ -356,9 +699,150 @@ class RegistrationResponse(MessageResponse):
     verification_required: bool
 
 
+class HomeCalendarCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+
+class HomeCalendarDeleteRequest(StrictModel):
+    # Optional — this is a routine household action, not an operator action.
+    # See MemberRelationshipUpdate.reason.
+    reason: str | None = Field(default=None, max_length=500)
+    confirmed: Literal[True]
+
+
+class HomeCalendarUpdate(StrictModel):
+    # Deliberately colour-only — a shared calendar's `name` (in particular
+    # the primary/system Home calendar's fixed "Home calendar" product
+    # identity) is not user-editable data. StrictModel's extra="forbid"
+    # means a client-supplied `name` is rejected outright (422), not merely
+    # ignored, so this is structural enforcement, not a convention.
+    color: HexColour
+
+
+class HomeCalendarResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    timezone: str
+    is_primary: bool
+    color: HexColour
+    # None for every shared/Home calendar in `items` below. Set only on the
+    # `personal_calendar` object — included here (rather than a separate
+    # response shape) so both cases share one type. See
+    # HomeCalendar.owner_user_id.
+    owner_user_id: uuid.UUID | None = None
+    # "normal": full create/edit/delete access on Free or Family alike.
+    # "read_only_due_to_plan": preserved after a downgrade left the Home with
+    # more calendars than its plan allows — viewable, but its events can't be
+    # created/edited/deleted, and no further calendar can be created, until
+    # either the Home returns to Family or enough calendars are voluntarily
+    # deleted to fall back within the limit. Derived fresh on every read from
+    # current entitlement + current calendar count — never a persisted flag.
+    # See docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture.
+    # A Personal Calendar is always "normal" — never entitlement-gated.
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
+    created_at: datetime
+
+
+class CalendarListResponse(BaseModel):
+    # Shared/Home calendars only (owner_user_id is always None here) — the
+    # resource /calendar/calendars manages and calendar.max_categories
+    # counts. A Personal Calendar deliberately never appears in this list:
+    # it isn't a Home-administered resource. See `personal_calendar` below.
+    items: list[HomeCalendarResponse]
+    limit: int | None
+    # The requesting user's own Personal Calendar within this Home —
+    # provisioned on demand if it doesn't exist yet (see
+    # calendar_provisioning.ensure_personal_calendar). Always present for an
+    # adult member; never another member's. None for a managed Child — see
+    # calendar_provisioning's module docstring on why that's left an open
+    # product decision rather than assumed either way.
+    personal_calendar: HomeCalendarResponse | None
+
+
+class HolidaySourceResponse(BaseModel):
+    id: uuid.UUID
+    country_code: str
+    country_name: str
+    flag_emoji: str
+    region_code: str | None
+    region_name: str
+    provider: str
+    source_url: str | None
+    enabled: bool
+    sync_status: str
+    last_successful_sync: datetime | None
+    next_scheduled_sync: datetime | None
+    last_sync_error: str | None
+    cached_holiday_count: int = 0
+
+
+class HomeHolidaySubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    source: HolidaySourceResponse
+    enabled: bool
+
+
+class CalendarHighlightsSettingsResponse(BaseModel):
+    birthdays_enabled: bool
+    subscriptions: list[HomeHolidaySubscriptionResponse]
+    available_sources: list[HolidaySourceResponse]
+
+
+class CalendarHighlightsBirthday(BaseModel):
+    kind: Literal["birthday"]
+    date: date
+    label: str
+    names: list[str]
+
+
+class CalendarHighlightsHoliday(BaseModel):
+    kind: Literal["holiday"]
+    date: date
+    label: str
+    country_code: str
+    flag_emoji: str
+    source_id: uuid.UUID
+
+
+class CalendarHighlightsResponse(BaseModel):
+    items: list[CalendarHighlightsBirthday | CalendarHighlightsHoliday]
+
+
+class HomeCalendarHighlightsUpdate(StrictModel):
+    birthdays_enabled: bool
+
+
+class HomeHolidaySubscriptionCreate(StrictModel):
+    source_id: uuid.UUID
+
+
+class HomeHolidaySubscriptionUpdate(StrictModel):
+    enabled: bool
+
+
+class CalendarUsageResponse(BaseModel):
+    """Generic current-usage-vs-plan-limit shape (count / limit / over_limit)
+    — originally built for calendar.max_categories, now reused as-is for any
+    numeric-limited resource (see mykhaya.entitlements.member_usage,
+    personal_routine_usage) rather than declaring a near-identical class per
+    resource. Used by both the Platform Control Centre's commercial-detail
+    diagnostics and the household Plan & Billing page's over-limit
+    messaging, so every surface computes usage the same way."""
+
+    count: int
+    limit: int | None
+    over_limit: bool
+
+
 class EventLabelCreate(StrictModel):
     name: str = Field(min_length=1, max_length=40)
-    color: ColourToken = ColourToken.teal
+    color: HexColour = DEFAULT_LABEL_COLOUR_HEX
 
     @field_validator("name")
     @classmethod
@@ -368,7 +852,7 @@ class EventLabelCreate(StrictModel):
 
 class EventLabelUpdate(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=40)
-    color: ColourToken | None = None
+    color: HexColour | None = None
     is_active: bool | None = None
 
     @field_validator("name")
@@ -380,9 +864,45 @@ class EventLabelUpdate(StrictModel):
 class EventLabelResponse(BaseModel):
     id: uuid.UUID
     name: str
-    color: ColourToken
+    color: HexColour
     is_active: bool
     sort_order: int
+    # This is the actual user-facing "event category" resource
+    # calendar.max_categories governs — see "Event categories are
+    # CalendarEventLabel, not HomeCalendar" in
+    # docs/architecture/commercial-entitlements.md. Same meaning as
+    # HomeCalendarResponse.commercial_access: "normal" means usable now
+    # (an active label within the plan's limit, or an inactive one that
+    # could still be activated); "read_only_due_to_plan" means an active
+    # label preserved past a downgrade beyond the limit, or an inactive
+    # label that can't currently be activated. Derived fresh on every read,
+    # never persisted. Only ever populated by the GET /event-labels listing
+    # (the management surface) — None when a label is embedded on an
+    # EventOccurrence or returned directly from create/update, neither of
+    # which needs it (the settings page always reloads the list after a
+    # mutation, which is where this is actually read).
+    commercial_access: Literal["normal", "read_only_due_to_plan"] | None = None
+
+
+class EventLabelUsageResponse(BaseModel):
+    """How many events currently carry a Calendar Tag — fetched on demand
+    for the delete-confirmation sheet, never bundled onto EventLabelResponse
+    itself (which is also returned on the hot event-creation-dropdown path,
+    where this count is never needed)."""
+
+    event_count: int
+
+
+def _require_tz_aware(value: datetime | None) -> datetime | None:
+    # A naive datetime (no UTC offset in the wire representation) is
+    # ambiguous about which instant it actually names — accepting one here
+    # would leave the caller's local-timezone assumption to be silently
+    # guessed by the DB driver rather than stated explicitly by the client.
+    # Every calendar timestamp boundary must be an unambiguous instant; reject
+    # naive values instead of guessing server/UTC intent.
+    if value is not None and value.tzinfo is None:
+        raise ValueError("must include a UTC offset (e.g. end in Z or +01:00)")
+    return value
 
 
 class EventCreate(StrictModel):
@@ -394,12 +914,31 @@ class EventCreate(StrictModel):
     description: str | None = Field(default=None, max_length=2000)
     location_text: str | None = Field(default=None, max_length=200)
     label_id: uuid.UUID | None = None
+    # Which HomeCalendar this event belongs to. Omitted (the common,
+    # single-calendar case) defaults to the Home's primary calendar, exactly
+    # as before this field existed. A Family Home with additional calendars
+    # may target one explicitly; targeting a calendar the plan has left
+    # read-only (see HomeCalendarResponse.commercial_access) is rejected.
+    calendar_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     reminder_minutes: int | None = Field(default=None, ge=0, le=10080)
     recurrence: RecurrencePattern = RecurrencePattern.none
     recurrence_interval: int = Field(default=1, ge=1, le=365)
     recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
+
+    @field_validator("start_at", "end_at", "recurrence_until")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
+
+
+# Which recurring occurrences a mutation applies to — "series" (the whole
+# recurring event, or the only sensible value for a non-recurring one) is
+# the default so every existing API caller (native/web builds predating
+# this feature) keeps its exact current behaviour with no request change.
+EventMutationScope = Literal["occurrence", "future", "series"]
 
 
 class EventUpdate(StrictModel):
@@ -416,13 +955,38 @@ class EventUpdate(StrictModel):
     recurrence: RecurrencePattern = RecurrencePattern.none
     recurrence_interval: int = Field(default=1, ge=1, le=365)
     recurrence_until: datetime | None = None
+    recurrence_end_date: date | None = None
     recurrence_count: int | None = Field(default=None, ge=1, le=1000)
     expected_updated_at: datetime
+    scope: EventMutationScope = "series"
+    # The CANONICAL occurrence_start (EventOccurrence.occurrence_start) the
+    # selected occurrence was generated at — required for scope in
+    # ("occurrence", "future"), ignored for "series". The server
+    # independently re-derives and validates this against the event's own
+    # recurrence rule (see routers.calendar.update_event) rather than
+    # trusting it — never treat this field as authoritative on its own.
+    occurrence_start: datetime | None = None
+
+    @field_validator("start_at", "end_at", "recurrence_until", "occurrence_start")
+    @classmethod
+    def tz_aware(cls, value: datetime | None) -> datetime | None:
+        return _require_tz_aware(value)
+
+    @model_validator(mode="after")
+    def occurrence_start_required_for_occurrence_scopes(self) -> "EventUpdate":
+        if self.scope in ("occurrence", "future") and self.occurrence_start is None:
+            raise ValueError("occurrence_start is required when scope is 'occurrence' or 'future'")
+        return self
+
+
+class EventAttendanceUpdate(StrictModel):
+    status: Literal["accepted", "declined"]
 
 
 class EventOccurrence(BaseModel):
     occurrence_id: str
     event_id: uuid.UUID
+    calendar_id: uuid.UUID
     title: str
     start_at: datetime
     end_at: datetime
@@ -431,11 +995,27 @@ class EventOccurrence(BaseModel):
     description: str | None
     location_text: str | None
     label: EventLabelResponse | None
+    # This event's calendar's own colour (HomeCalendar.color) — what it
+    # should render as when `label` is None. A category's colour (label.color)
+    # always takes precedence when a label is set; this is only the
+    # fallback, but always populated so the frontend never needs its own
+    # hardcoded default. Reused as-is for Personal Calendar events too
+    # (unaffected by this feature — no UI exposes changing it, so it stays
+    # whatever it always defaulted to).
+    calendar_color: HexColour
     member_ids: list[uuid.UUID]
     recurrence: RecurrencePattern
+    recurrence_end_date: date | None
     reminder_minutes: int | None
     created_by: uuid.UUID
     updated_at: datetime
+    # The CANONICAL occurrence identity — stable across a move/override
+    # (unlike `start_at`, which reflects the *effective*, possibly moved,
+    # time). Pass this back as EventUpdate.occurrence_start /
+    # DELETE's occurrence_start query param when acting on a single
+    # occurrence. Equal to `start_at` for a non-overridden occurrence.
+    occurrence_start: datetime
+    is_overridden: bool = False
 
 
 class EventActivityResponse(BaseModel):
@@ -464,23 +1044,47 @@ class HomeSummaryResponse(BaseModel):
     next_event: EventOccurrence | None
 
 
+class TodoCategoryResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
 class RoutineCreate(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
+    repeat_unit: Literal["daily", "weekly"] = "weekly"
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
     is_critical: bool = False
     pinned: bool = False
     start_date: date
     end_date: date | None = None
+    category_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "RoutineCreate":
+        # A personal routine's only recipient is its owner (inferred from the
+        # authenticated actor, never client input) — explicit member assignment is a
+        # household-routine concept and would be misleading here.
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal routine cannot have explicit members")
+        if self.repeat_unit == "daily" and self.interval_weeks != 1:
+            raise ValueError("Daily routines must use an interval of one")
+        return self
 
 
 class RoutineUpdate(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
     interval_weeks: int = Field(default=1, ge=1, le=52)
+    repeat_unit: Literal["daily", "weekly"] = "weekly"
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming = RoutineReminderTiming.evening_before
     is_critical: bool = False
@@ -488,15 +1092,27 @@ class RoutineUpdate(StrictModel):
     enabled: bool = True
     start_date: date
     end_date: date | None = None
+    category_id: uuid.UUID | None = None
     member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
     expected_updated_at: datetime
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "RoutineUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal routine cannot have explicit members")
+        if self.repeat_unit == "daily" and self.interval_weeks != 1:
+            raise ValueError("Daily routines must use an interval of one")
+        return self
 
 
 class RoutineResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
     interval_weeks: int
+    repeat_unit: Literal["daily", "weekly"]
     week_anchor_date: date
     reminder_timing: RoutineReminderTiming
     is_critical: bool
@@ -504,9 +1120,14 @@ class RoutineResponse(BaseModel):
     enabled: bool
     start_date: date
     end_date: date | None
+    category: TodoCategoryResponse | None = None
     member_ids: list[uuid.UUID]
     next_occurrence_date: date | None
     completed_today: bool
+    home_occurrence_date: date | None = None
+    home_completed_at: datetime | None = None
+    home_completed_by_user_id: uuid.UUID | None = None
+    home_completed_by_display_name: str | None = None
     created_by: uuid.UUID
     updated_at: datetime
 
@@ -519,18 +1140,572 @@ class RoutineCompletionRequest(StrictModel):
     occurrence_date: date
 
 
+class ReminderCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat = ReminderRepeat.never
+    cadence: ReminderCadence = ReminderCadence.once
+    category_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "ReminderCreate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal reminder cannot have explicit members")
+        return self
+
+
+class ReminderUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat = ReminderRepeat.never
+    cadence: ReminderCadence = ReminderCadence.once
+    category_id: uuid.UUID | None = None
+    enabled: bool = True
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "ReminderUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal reminder cannot have explicit members")
+        return self
+
+
+class ReminderResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
+    due_date: date
+    due_time: clock_time
+    repeat: ReminderRepeat
+    cadence: ReminderCadence
+    category: TodoCategoryResponse | None = None
+    enabled: bool
+    member_ids: list[uuid.UUID]
+    next_occurrence_date: date | None
+    completed_today: bool
+    home_occurrence_date: date | None = None
+    home_completed_at: datetime | None = None
+    home_completed_by_user_id: uuid.UUID | None = None
+    home_completed_by_display_name: str | None = None
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class ReminderListResponse(BaseModel):
+    items: list[ReminderResponse]
+
+
+class ReminderCompletionRequest(StrictModel):
+    occurrence_date: date
+
+
+class TodoCategoryCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class TodoCategoryUpdate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    expected_updated_at: datetime
+
+
+class TodoCategoryListResponse(BaseModel):
+    items: list[TodoCategoryResponse]
+
+
+class TodoCreate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    category_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "TodoCreate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal To-do cannot have explicit members")
+        return self
+
+
+class TodoUpdate(StrictModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: RoutineScope = RoutineScope.household
+    due_date: date
+    category_id: uuid.UUID | None = None
+    member_ids: list[uuid.UUID] = Field(default_factory=list, max_length=25)
+    expected_updated_at: datetime
+
+    @model_validator(mode="after")
+    def _personal_has_no_explicit_members(self) -> "TodoUpdate":
+        if self.scope == RoutineScope.personal and self.member_ids:
+            raise ValueError("A personal To-do cannot have explicit members")
+        return self
+
+
+class TodoResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID | None
+    category: TodoCategoryResponse | None
+    due_date: date
+    completed_at: datetime | None
+    completed_by: uuid.UUID | None
+    member_ids: list[uuid.UUID]
+    overdue: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class TodoListResponse(BaseModel):
+    items: list[TodoResponse]
+
+
+class TodoCompletionRequest(StrictModel):
+    completed: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Meal Plans (Family-only) — see docs/architecture/meal-plans.md.
+# ---------------------------------------------------------------------------
+
+
+class MealIngredientInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+    quantity: str | None = Field(default=None, max_length=40)
+    unit: str | None = Field(default=None, max_length=40)
+
+
+class RecipeImportRequest(StrictModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+
+class RecipeImportResponse(StrictModel):
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    instructions: str | None
+    source_url: str
+    ingredients: list[MealIngredientInput]
+
+
+class MealImageResponse(StrictModel):
+    image_url: str
+
+
+class MealIngredientResponse(BaseModel):
+    id: uuid.UUID
+    position: int
+    text: str
+    quantity: str | None
+    unit: str | None
+
+
+class MealCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    image_url: str | None = Field(default=None, max_length=2000)
+    meal_type: MealType = MealType.dinner
+    prep_minutes: int | None = Field(default=None, ge=0, le=1440)
+    cook_minutes: int | None = Field(default=None, ge=0, le=1440)
+    servings: int | None = Field(default=None, ge=1, le=100)
+    instructions: str | None = Field(default=None, max_length=8000)
+    is_favourite: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    source_url: str | None = Field(default=None, max_length=2000)
+    ingredients: list[MealIngredientInput] = Field(default_factory=list, max_length=100)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags_trimmed(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:40] for tag in value if tag.strip()]
+
+
+class MealUpdate(MealCreate):
+    expected_updated_at: datetime
+
+
+class MealResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    instructions: str | None
+    is_favourite: bool
+    tags: list[str]
+    source_url: str | None
+    ingredients: list[MealIngredientResponse]
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class MealSummaryResponse(BaseModel):
+    """The Meals library list view's shape — everything a meal card needs,
+    deliberately *without* the ingredient list, so browsing the library
+    never pulls every meal's full ingredient set over the wire. See
+    MealResponse for the full detail shape (get/create/update)."""
+
+    id: uuid.UUID
+    name: str
+    description: str | None
+    image_url: str | None
+    meal_type: MealType
+    prep_minutes: int | None
+    cook_minutes: int | None
+    servings: int | None
+    is_favourite: bool
+    tags: list[str]
+    ingredient_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class MealListResponse(BaseModel):
+    items: list[MealSummaryResponse]
+
+
+class RecentMealResponse(BaseModel):
+    meal: MealSummaryResponse
+    last_planned: date
+
+
+class RecentMealsResponse(BaseModel):
+    items: list[RecentMealResponse]
+
+
+class MealFavouriteRequest(StrictModel):
+    is_favourite: bool
+
+
+class MealPlanEntryCreate(StrictModel):
+    # Exactly one of meal_id/quick_meal_name — enforced in the router (a
+    # clearer 422 message than a generic model_validator failure).
+    meal_id: uuid.UUID | None = None
+    quick_meal_name: str | None = Field(default=None, min_length=1, max_length=160)
+    date: date
+    meal_slot: MealSlot
+    # `clock_time`, not `time`: a field literally named `time` typed as
+    # `time | None` collides with Python 3.13's deferred-annotation
+    # evaluation (PEP 649, get_type_hints included the class's own
+    # namespace) — by the time the annotation resolves, `time` has already
+    # been rebound to this field's own default value. Quoting the
+    # annotation does *not* fix this (pydantic's resolver still sees the
+    # class namespace) — the type import itself has to use a distinct
+    # name. See MealPlanEntry.time in models.py for the same fix.
+    time: clock_time | None = None
+    member_ids: list[uuid.UUID] | None = Field(default=None, max_length=25)
+    cook_member_id: uuid.UUID | None = None
+    makes_leftovers: bool = False
+
+    @model_validator(mode="after")
+    def _exactly_one_meal_reference(self) -> "MealPlanEntryCreate":
+        has_meal = self.meal_id is not None
+        has_quick = bool(self.quick_meal_name and self.quick_meal_name.strip())
+        if has_meal == has_quick:
+            raise ValueError("Provide either meal_id or quick_meal_name, not both")
+        return self
+
+
+class MealPlanEntryUpdate(MealPlanEntryCreate):
+    expected_updated_at: datetime
+
+
+class MealPlanEntryResponse(BaseModel):
+    id: uuid.UUID
+    meal_id: uuid.UUID | None
+    meal_name: str | None
+    quick_meal_name: str | None
+    meal_image_url: str | None
+    is_favourite: bool
+    date: date
+    meal_slot: MealSlot
+    time: clock_time | None
+    # Member ids only, same convention as EventOccurrence.member_ids — the
+    # frontend already loads the Home's member list once and cross-refers
+    # names/avatars locally rather than every response embedding them.
+    member_ids: list[uuid.UUID]
+    cook_member_id: uuid.UUID | None
+    makes_leftovers: bool
+    created_by: uuid.UUID
+    updated_at: datetime
+
+
+class MealPlanDayResponse(BaseModel):
+    date: date
+    entries: list[MealPlanEntryResponse]
+
+
+class MealPlanWeekResponse(BaseModel):
+    start_date: date
+    days: list[MealPlanDayResponse]
+
+
+class CopyWeekRequest(StrictModel):
+    source_start_date: date
+    target_start_date: date
+    # A preview pass: computes copied_count/skipped_count without writing
+    # anything, so the frontend can show "This will copy N meals..." before
+    # the user commits. See mykhaya.routers.meal_plans.copy_week.
+    dry_run: bool = False
+
+
+class CopyWeekResponse(BaseModel):
+    copied_count: int
+    skipped_count: int
+
+
+class AddIngredientsToListRequest(StrictModel):
+    list_id: uuid.UUID
+    # None means "every ingredient on the meal" — matches MealPlanEntryCreate's
+    # member_ids=None-means-Everyone convention.
+    ingredient_ids: list[uuid.UUID] | None = None
+    # First call omits this; if the chosen List already has exact-text
+    # duplicates, the response comes back with requires_confirmation=True
+    # and nothing is written yet. The frontend re-calls with confirm=True to
+    # actually add the non-duplicate items.
+    confirm: bool = False
+
+
+class AddIngredientsToListResponse(StrictModel):
+    requires_confirmation: bool
+    added_count: int
+    duplicate_count: int
+    duplicate_texts: list[str]
+    list_id: uuid.UUID
+
+
+# ---------------------------------------------------------------------------
+# Household Lists — see mykhaya.models.HouseholdList/HouseholdListItem and
+# docs/architecture/meal-plans.md "Lists integration".
+# ---------------------------------------------------------------------------
+
+
+LIST_ICONS = (
+    "groceries",
+    "shopping",
+    "packing",
+    "home",
+    "school",
+    "party",
+    "christmas",
+    "other",
+)
+
+
+class ListCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    icon: str | None = Field(default=None, max_length=20)
+    template_id: uuid.UUID | None = None
+    scope: RoutineScope = RoutineScope.household
+
+    @field_validator("icon")
+    @classmethod
+    def _icon_known(cls, value: str | None) -> str | None:
+        if value is not None and value not in LIST_ICONS:
+            raise ValueError(f"icon must be one of {', '.join(LIST_ICONS)}")
+        return value
+
+
+class ListRenameRequest(ListCreate):
+    expected_updated_at: datetime
+
+
+class ListScopeUpdateRequest(StrictModel):
+    scope: RoutineScope
+    expected_updated_at: datetime
+
+
+class ListItemInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+    section_id: uuid.UUID | None = None
+    quantity: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=500)
+    assigned_member_id: uuid.UUID | None = None
+
+
+class ListItemResponse(BaseModel):
+    id: uuid.UUID
+    position: int
+    section_id: uuid.UUID | None
+    text: str
+    quantity: str | None
+    note: str | None
+    assigned_member_id: uuid.UUID | None
+    is_checked: bool
+    completed_at: datetime | None
+    completed_by: uuid.UUID | None
+
+
+class ListItemUpdate(StrictModel):
+    """Every field optional — only the ones present in the request body are
+    applied (see `model_fields_set` in mykhaya.routers.lists), so a single
+    endpoint covers a quick checkbox toggle and a full edit alike without
+    a client needing to resend fields it isn't changing."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=200)
+    quantity: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=500)
+    assigned_member_id: uuid.UUID | None = None
+    section_id: uuid.UUID | None = None
+    is_checked: bool | None = None
+
+
+class ListItemReorderRequest(StrictModel):
+    # The full ordered set of item ids for this list — validated as an
+    # exact match against the list's current active items, then applied as
+    # position = index. See mykhaya.routers.lists.reorder_list_items.
+    item_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+
+
+class ListSectionCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class ListSectionRenameRequest(ListSectionCreate):
+    expected_updated_at: datetime
+
+
+class ListSectionReorderRequest(StrictModel):
+    section_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+
+
+class ListResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    icon: str | None
+    item_count: int
+    remaining_count: int
+    created_by: uuid.UUID
+    scope: RoutineScope
+    created_at: datetime
+    updated_at: datetime
+    # "normal" = usable now; "read_only_due_to_plan" = preserved but over
+    # the Home's current lists.max_lists allowance (almost always the
+    # result of a downgrade) — viewable, but create/rename/item-mutation
+    # endpoints reject it. Same shape/purpose as HomeCalendarResponse
+    # .commercial_access — see mykhaya.routers.lists._list_access.
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
+
+
+class ListDetailResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    icon: str | None
+    items: list[ListItemResponse]
+    item_count: int
+    remaining_count: int
+    created_by: uuid.UUID
+    scope: RoutineScope
+    created_at: datetime
+    updated_at: datetime
+    commercial_access: Literal["normal", "read_only_due_to_plan"]
+    sections: list["ListSectionResponse"] = Field(default_factory=list)
+    source_template_id: uuid.UUID | None = None
+    source_template_name: str | None = None
+
+
+class ListListResponse(BaseModel):
+    items: list[ListResponse]
+
+
+class TemplateItemInput(StrictModel):
+    text: str = Field(min_length=1, max_length=200)
+
+
+class TemplateSectionInput(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    items: list[TemplateItemInput] = Field(default_factory=list, max_length=500)
+
+
+class ListTemplateCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=500)
+    scope: RoutineScope = RoutineScope.personal
+    sections: list[TemplateSectionInput] = Field(default_factory=list, max_length=100)
+
+
+class ListTemplateUpdate(ListTemplateCreate):
+    expected_updated_at: datetime
+
+
+class ListTemplateItemResponse(BaseModel):
+    id: uuid.UUID
+    text: str
+    position: int
+
+
+class ListSectionResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    position: int
+    updated_at: datetime
+    items: list[ListTemplateItemResponse] = Field(default_factory=list)
+
+
+class ListTemplateResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    scope: RoutineScope
+    owner_user_id: uuid.UUID
+    group_id: uuid.UUID
+    archived: bool
+    created_at: datetime
+    updated_at: datetime
+    sections: list[ListSectionResponse]
+
+
+class ListTemplateListResponse(BaseModel):
+    items: list[ListTemplateResponse]
+
+
 class NotificationPreferencesResponse(BaseModel):
     push_enabled: bool
     in_app_enabled: bool
     email_enabled: bool
     event_reminders_enabled: bool
+    default_event_reminder_enabled: bool = False
+    default_event_reminder_minutes: int = 30
+    all_day_reminder_enabled: bool = False
+    all_day_reminder_time: str = "09:00"
+    default_calendar_id: uuid.UUID | None = None
+    week_starts_on: Literal["monday", "sunday"] = "monday"
+    show_declined_events: bool = False
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
+    list_assignments_enabled: bool = True
+    wishlist_sharing_enabled: bool = True
     daily_briefing_enabled: bool
     briefing_time: str
     briefing_days: str
     empty_day_briefing_enabled: bool
+    daily_nudge_summary_enabled: bool = True
+    daily_nudge_summary_time: str = "07:30"
+    nudges_evening_cleanup_enabled: bool
+    nudges_evening_time: str
+    nudges_day_complete_enabled: bool
     lock_screen_preview_level: str
     quiet_hours_start: str | None
     quiet_hours_end: str | None
@@ -542,13 +1717,32 @@ class NotificationPreferencesUpdate(StrictModel):
     in_app_enabled: bool
     email_enabled: bool
     event_reminders_enabled: bool
+    # Opt-in. A PUT that omits these (an older client) must not switch reminders on.
+    default_event_reminder_enabled: bool = False
+    default_event_reminder_minutes: int = Field(default=30, ge=15, le=120)
+    all_day_reminder_enabled: bool = False
+    all_day_reminder_time: str = Field(
+        default="09:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    default_calendar_id: uuid.UUID | None = None
+    week_starts_on: Literal["monday", "sunday"] = "monday"
+    show_declined_events: bool = False
     event_invitations_enabled: bool
     event_changes_enabled: bool
     household_reminders_enabled: bool
+    list_assignments_enabled: bool = True
+    wishlist_sharing_enabled: bool = True
     daily_briefing_enabled: bool
     briefing_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
     briefing_days: Literal["daily", "weekdays"]
     empty_day_briefing_enabled: bool
+    daily_nudge_summary_enabled: bool = True
+    daily_nudge_summary_time: str = Field(
+        default="07:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
+    )
+    nudges_evening_cleanup_enabled: bool = True
+    nudges_evening_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+    nudges_day_complete_enabled: bool = True
     lock_screen_preview_level: Literal["full", "title_only", "hidden"]
     quiet_hours_start: str | None = Field(
         default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$"
@@ -589,6 +1783,24 @@ class PushSubscriptionCreate(StrictModel):
     user_agent: str | None = Field(default=None, max_length=300)
 
 
+class NativePushDeviceCreate(StrictModel):
+    platform: Literal["ios", "android"]
+    token: str = Field(min_length=1, max_length=512)
+    installation_id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    device_label: str | None = Field(default=None, max_length=120)
+    apns_environment: Literal["sandbox", "production"] | None = None
+
+
+class NativePushDeviceResponse(BaseModel):
+    id: uuid.UUID
+    platform: Literal["ios", "android"]
+    device_label: str | None
+    created_at: datetime
+    last_seen_at: datetime | None
+    disabled_at: datetime | None
+    apns_environment: Literal["sandbox", "production"] | None
+
+
 class PushSubscriptionResponse(BaseModel):
     id: uuid.UUID
     device_label: str | None
@@ -601,3 +1813,140 @@ class PushSubscriptionResponse(BaseModel):
 class PushPublicKeyResponse(BaseModel):
     configured: bool
     public_key: str | None
+
+
+# --- Support tickets ---------------------------------------------------------
+# Consumer-facing support ticket schemas (Phase 2A backend foundation). See
+# mykhaya.platform_schemas for the PCC/admin-side equivalents — deliberately
+# separate models, not shared, so a field only ever exposed to admins (e.g.
+# requester email, internal notes) can never leak into a consumer response by
+# accident of a shared base class.
+
+
+class SupportTicketDiagnosticSubmit(StrictModel):
+    """Strict allowlist — StrictModel's `extra='forbid'` rejects any payload
+    carrying a field not listed here (Phase 2A: "Reject or strip unknown
+    diagnostic fields... must never accept arbitrary extra keys"). Every
+    field is optional since not every runtime can report every value."""
+
+    app_version: str | None = Field(default=None, max_length=40)
+    build_number: str | None = Field(default=None, max_length=40)
+    platform: str | None = Field(default=None, max_length=20)
+    os_version: str | None = Field(default=None, max_length=40)
+    runtime: str | None = Field(default=None, max_length=20)
+    notification_permission: str | None = Field(default=None, max_length=20)
+    push_registration_state: str | None = Field(default=None, max_length=20)
+    api_connectivity: str | None = Field(default=None, max_length=20)
+    network_state: str | None = Field(default=None, max_length=20)
+    background_refresh_state: str | None = Field(default=None, max_length=20)
+    client_timestamp: datetime | None = None
+
+
+class SupportTicketDiagnosticResponse(BaseModel):
+    app_version: str | None
+    build_number: str | None
+    platform: str | None
+    os_version: str | None
+    runtime: str | None
+    notification_permission: str | None
+    push_registration_state: str | None
+    api_connectivity: str | None
+    network_state: str | None
+    background_refresh_state: str | None
+    client_timestamp: datetime | None
+
+
+class SupportTicketCreate(StrictModel):
+    type: SupportTicketType
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=4000)
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None = None
+    # Phase 2D: the requester's own severity choice (Minor/Problematic/
+    # Blocking on the Report a bug form maps exactly to
+    # normal/elevated/blocking — see help-support-logic.ts's
+    # SEVERITY_TO_PRIORITY on the frontend). Absent Phase 2A had no field
+    # for this at all, silently defaulting every ticket to `normal`
+    # regardless of what was reported — added here rather than left
+    # unaddressed, since "backend remains authoritative" presumes a field
+    # exists for it to be authoritative over. The enum itself, and its
+    # default, are unchanged from Phase 2A.
+    priority: SupportTicketPriority = SupportTicketPriority.normal
+    # Contextual metadata only — never an access-control boundary. The
+    # server does not verify the caller is currently a member of this Home;
+    # it is simply recorded as "which Home the reporter was using," and a
+    # ticket is always visible only to its own requester regardless of this
+    # value (see routers.support and models.SupportTicket's docstring).
+    group_id: uuid.UUID | None = None
+    # Optional — the "Include diagnostics" toggle. Validated against the
+    # same strict allowlist as the standalone submission.
+    diagnostics: SupportTicketDiagnosticSubmit | None = None
+
+    @field_validator("subject")
+    @classmethod
+    def clean_subject(cls, value: str) -> str:
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            raise ValueError("Subject cannot be empty.")
+        return cleaned
+
+
+class SupportTicketMessageCreate(StrictModel):
+    # No `visibility` field, deliberately — a consumer can never create
+    # anything but a requester-visible message. See
+    # models.SupportTicketMessage's docstring.
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class SupportTicketMessageResponse(BaseModel):
+    id: uuid.UUID
+    author: Literal["requester", "admin"]
+    message: str
+    created_at: datetime
+
+
+class SupportTicketAttachmentResponse(BaseModel):
+    id: uuid.UUID
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+class SupportTicketResponse(BaseModel):
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    description: str
+    source: SupportTicketSource
+    app_area: SupportTicketAppArea | None
+    group_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+    messages: list[SupportTicketMessageResponse] = Field(default_factory=list)
+    attachments: list[SupportTicketAttachmentResponse] = Field(default_factory=list)
+    diagnostics: SupportTicketDiagnosticResponse | None = None
+
+
+class SupportTicketSummaryResponse(BaseModel):
+    """The list view — lighter than SupportTicketResponse (no messages/
+    attachments/diagnostics bodies), matching the existing list-vs-detail
+    response-shape convention used elsewhere in this codebase."""
+
+    id: uuid.UUID
+    reference: str
+    type: SupportTicketType
+    status: SupportTicketStatus
+    priority: SupportTicketPriority
+    subject: str
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+
+
+class SupportTicketListResponse(BaseModel):
+    items: list[SupportTicketSummaryResponse]

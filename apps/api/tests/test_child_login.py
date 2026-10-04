@@ -5,6 +5,7 @@ mykhaya.dependencies.require_adult_session.
 """
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -14,7 +15,10 @@ from httpx import ASGITransport, AsyncClient, Response
 from test_journey import ORIGIN, create_verified_user, unsafe
 
 from mykhaya.config import get_settings
+from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
+from mykhaya.models import SubscriptionPlan
 
 GENERIC_FAILURE = "Incorrect sign-in details."
 
@@ -37,15 +41,37 @@ async def new_client() -> AsyncClient:
     )
 
 
-async def _make_home_with_child(client: AsyncClient, suffix: str) -> tuple[str, str, str]:
+async def _make_home_with_child(
+    client: AsyncClient,
+    suffix: str,
+    *,
+    legal_acceptances: list[dict[str, Any]] | None = None,
+) -> tuple[str, str, str]:
     """Registers a Home Admin, creates a Home and a Child profile. Returns
     (group_id, membership_id, home_code)."""
-    await create_verified_user(client, f"admin-{suffix}@example.com", "Home Admin")
+    registration_fields = (
+        {"legal_acceptances": legal_acceptances} if legal_acceptances is not None else {}
+    )
+    await create_verified_user(
+        client,
+        f"admin-{suffix}@example.com",
+        "Home Admin",
+        **registration_fields,
+    )
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": f"Home {suffix}"})
     assert group.status_code == 201, group.text
     group_id = group.json()["id"]
     home_code = group.json()["child_login_code"]
     assert home_code
+
+    # A child gets a full Membership row (see routers.children.create_child)
+    # so it counts against home.max_members like any other member — this
+    # helper always adds one on top of the admin, so it needs Family.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(group_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     members = await client.get(f"/api/v1/groups/{group_id}/members")
     assert members.status_code == 200
@@ -416,7 +442,9 @@ async def test_child_session_can_still_reach_its_own_profile_and_home(
 
             home = await child_client.get(f"/api/v1/groups/{group_id}")
             assert home.status_code == 200
-            assert home.json()["capabilities"] == []
+            # A Child's read-only baseline is meals.view and nothing else (see
+            # PROFILE_CAPABILITIES[child_restricted]) — never any manage capability.
+            assert home.json()["capabilities"] == ["meals.view"]
         finally:
             app.dependency_overrides.pop(get_settings, None)
 

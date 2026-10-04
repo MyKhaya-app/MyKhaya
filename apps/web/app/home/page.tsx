@@ -1,19 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Bell, CalendarPlus, Gift, UserPlus } from "lucide-react";
+import { Children, useEffect, useState } from "react";
+import {
+  Bell,
+  CalendarPlus,
+  Car,
+  Check,
+  ChevronRight,
+  ClipboardList,
+  Gift,
+  ListChecks,
+  Lock,
+  UserPlus,
+  UtensilsCrossed,
+  WalletCards,
+} from "lucide-react";
 import type {
   BirthdayEntry,
   EventOccurrence,
   HomeSummary,
   Member,
+  Reminder,
+  Routine,
   User,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
-import { AppShell } from "@/components/app-shell";
-import { Avatar, memberColour } from "@/components/avatar";
+import { AppShellContent } from "@/components/app-shell";
+import { Avatar, AvatarStack, memberColour } from "@/components/avatar";
+import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { isStandalone } from "@/components/install-prompt";
+import { useDesktopShellActive } from "@/components/use-desktop-shell";
+import { canAddMember } from "@/components/member-entitlement-logic";
+import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
 import { subscribeToPush } from "@/components/push-subscribe";
 import { useActiveHome } from "@/components/use-active-home";
 import {
@@ -23,20 +42,114 @@ import {
   upcomingBirthdayIcon,
   upcomingBirthdayLabel,
 } from "./birthday-utils";
+import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
+import { HomeHeroDate } from "./home-hero-date";
+import {
+  FALLBACK_TIMEZONE,
+  calendarDateAfter,
+  dateKey,
+  eventDateBounds,
+  isEventStillUpcoming,
+  zonedTimeToUtc,
+  zonedToday,
+} from "../calendar/calendar-utils";
 
-function eventTime(value: string, timezone: string) {
+function eventClock(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
-    timeStyle: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
     timeZone: timezone,
   }).format(new Date(value));
 }
 
-function eventDateStack(value: string, timezone: string) {
+function eventTime(event: EventOccurrence) {
+  if (event.is_all_day) return "All day";
+  return eventClock(event.start_at, event.timezone);
+}
+
+function eventDateStack(value: string, timezone: string, isAllDay = false) {
   const date = new Date(value);
+  const dateTimeZone = isAllDay ? "UTC" : timezone;
   return {
-    weekday: new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: timezone }).format(date),
-    day: new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: timezone }).format(date),
-    month: new Intl.DateTimeFormat("en-GB", { month: "short", timeZone: timezone }).format(date),
+    weekday: new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: dateTimeZone }).format(date),
+    day: new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: dateTimeZone }).format(date),
+    month: new Intl.DateTimeFormat("en-GB", { month: "short", timeZone: dateTimeZone }).format(date),
+  };
+}
+
+// The backend answers "next N occurrences on/after a cursor" per source
+// (Home + each externally shared calendar) with no future-date horizon —
+// see calendar_occurrences.upcoming_candidate_filter/next_occurrence_on_or_after.
+// Home's cursor is the next local midnight in the primary Home calendar
+// timezone, so events represented by Today are not duplicated here.
+// UPCOMING_FETCH_LIMIT asks for more than the 3 ultimately shown so the
+// Home-specific date filter still has enough candidates.
+const UPCOMING_FETCH_LIMIT = 8;
+
+async function fetchUpcomingCandidates(homeId: string): Promise<EventOccurrence[]> {
+  const calendarRows = await api.listCalendars(homeId).catch(() => null);
+  const homeTimezone =
+    calendarRows?.items.find((calendar) => calendar.is_primary)?.timezone ?? FALLBACK_TIMEZONE;
+  const tomorrowKey = calendarDateAfter(dateKey(zonedToday(homeTimezone)), 1);
+  const [year, month, day] = tomorrowKey.split("-").map(Number);
+  const after = zonedTimeToUtc(year!, month!, day!, 0, 0, homeTimezone).toISOString();
+  const [homeUpcoming, shares] = await Promise.all([
+    api.listUpcomingEvents(homeId, { after, limit: UPCOMING_FETCH_LIMIT }),
+    api.sharedCalendars().catch(() => ({ items: [] })),
+  ]);
+  const sharedUpcomingLists = await Promise.all(
+    shares.items.map((share) =>
+      api
+        .listUpcomingSharedEvents(share.id, { after, limit: UPCOMING_FETCH_LIMIT })
+        .then((response) =>
+          response.items.map(
+            (item): EventOccurrence => ({
+              ...item,
+              share_id: share.id,
+              share_permission: share.permission,
+              shared_by_home_name: share.source_group_name,
+            }),
+          ),
+        )
+        .catch(() => []),
+    ),
+  );
+  return [...homeUpcoming.items, ...sharedUpcomingLists.flat()].filter(
+    (event) => eventDateBounds(event, homeTimezone).startKey >= tomorrowKey,
+  );
+}
+
+function compareUpcoming(left: EventOccurrence, right: EventOccurrence): number {
+  const startDifference = new Date(left.start_at).getTime() - new Date(right.start_at).getTime();
+  return (
+    startDifference ||
+    Number(right.is_all_day) - Number(left.is_all_day) ||
+    left.start_at.localeCompare(right.start_at) ||
+    left.title.localeCompare(right.title) ||
+    left.occurrence_id.localeCompare(right.occurrence_id)
+  );
+}
+
+function eventTiming(event: EventOccurrence) {
+  const bounds = eventDateBounds(event, event.timezone);
+  const multiDay = bounds.startKey !== bounds.endKey;
+  const startTime = eventTime(event);
+  const startsAtMidnight = startTime === "00:00";
+  const effectivelyAllDay = event.is_all_day || startsAtMidnight;
+  if (!multiDay) {
+    return {
+      leading: event.is_all_day ? "All day" : `${startTime}–${eventClock(event.end_at, event.timezone)}`,
+      ending: null,
+    };
+  }
+
+  const end = event.is_all_day
+    ? eventDateStack(`${bounds.endKey}T00:00:00.000Z`, "UTC", true)
+    : eventDateStack(event.end_at, event.timezone);
+  return {
+    leading: effectivelyAllDay ? "Multi-day" : `${startTime} →`,
+    ending: `Ends ${end.weekday} ${end.day} ${end.month}${effectivelyAllDay ? "" : ` · ${eventClock(event.end_at, event.timezone)}`}`,
   };
 }
 
@@ -88,19 +201,24 @@ function birthdayTodayPhrase(name: string) {
 
 function EventRow({
   event,
-  member,
+  members,
   leading,
+  ending,
 }: {
   event: EventOccurrence;
-  member: Member | null;
+  members: Member[];
   leading: React.ReactNode;
+  ending?: string | null;
 }) {
+  const [firstMember] = members;
   return (
     <Link className="home-event-row" href="/calendar">
       <span
         className="home-event-colour"
         style={{
-          background: member ? memberColour(member.user_id, member.colour) : "var(--colour-sage)",
+          background: firstMember
+            ? memberColour(firstMember.user_id, firstMember.colour)
+            : "var(--colour-sage)",
         }}
         aria-hidden="true"
       />
@@ -108,15 +226,10 @@ function EventRow({
       <span className="home-event-copy">
         <strong>{event.title}</strong>
         {event.location_text && <small>{event.location_text}</small>}
+        {ending && <small>{ending}</small>}
       </span>
-      {member ? (
-        <Avatar
-          id={member.user_id}
-          name={member.display_name}
-          colour={member.colour}
-          avatarVersion={member.avatar_version}
-          size="sm"
-        />
+      {members.length > 0 ? (
+        <AvatarStack people={members} size="sm" />
       ) : (
         <span className="home-event-avatar-placeholder" aria-hidden="true" />
       )}
@@ -124,13 +237,45 @@ function EventRow({
   );
 }
 
+// A row within "Around the house" that sizes its own columns to however
+// many shortcuts actually render into it (children are conditional on
+// entitlements/feature flags) — so a row never shows a blank placeholder
+// tile, and adding/removing a shortcut from either row doesn't require any
+// layout math elsewhere. Generic over the number of shortcuts, not tied to
+// any specific one.
+function QuickActionsRow({ children }: { children: React.ReactNode }) {
+  const items = Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
+  return <div className={`quick-actions-row quick-actions-row-${items.length}`}>{items}</div>;
+}
+
 export default function HomePage() {
+  // Around the House is a permanent Home capability presented on exactly
+  // one surface at a time: this Home card on mobile/native, or the
+  // persistent desktop Around the House dock (AroundHouseDock, mounted by
+  // AppShell) on the browser desktop/tablet shell — never both, to avoid
+  // duplicating the same shortcuts. See docs/design/layout-and-navigation.md.
+  const desktopShellActive = useDesktopShellActive();
   const [user, setUser] = useState<User | null>(null);
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
   const [calendarEnabled, setCalendarEnabled] = useState(false);
+  const [mealsFeatureOn, setMealsFeatureOn] = useState(false);
+  const [mealsEnabled, setMealsEnabled] = useState(false);
+  const [listsFeatureOn, setListsFeatureOn] = useState(false);
+  const [listsEnabled, setListsEnabled] = useState(false);
+  const [wishlistsFeatureOn, setWishlistsFeatureOn] = useState(false);
+  const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
+  const [nudgesFeatureOn, setNudgesFeatureOn] = useState(false);
+  const [nudgesEntitled, setNudgesEntitled] = useState(false);
+  const [budgetEnabled, setBudgetEnabled] = useState(false);
+  const [drivewayEnabled, setDrivewayEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [todoExpanded, setTodoExpanded] = useState(false);
+  const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
   const { activeHomeId, activeHome } = useActiveHome();
@@ -150,36 +295,117 @@ export default function HomePage() {
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
-    Promise.all([api.featureMatrix(activeHomeId), api.members(activeHomeId)])
-      .then(async ([matrix, memberRows]) => {
-        setMembers(memberRows);
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => {
+        setCanInviteMore(canAddMember(billing.member_usage));
+        setMealsEnabled(billing.meals_enabled);
+        setListsEnabled(billing.lists_enabled);
+        setWishlistsEnabled(billing.wishlists_enabled);
+        setNudgesEntitled(billing.nudges_enabled);
+        setBudgetEnabled(billing.budget_enabled);
+        setDrivewayEnabled(billing.driveway_enabled);
+      })
+      .catch(() => {
+        setCanInviteMore(false);
+        setMealsEnabled(false);
+        setListsEnabled(false);
+        setWishlistsEnabled(false);
+        setNudgesEntitled(false);
+        setBudgetEnabled(false);
+        setDrivewayEnabled(false);
+      });
+    // Member roster is only used for display (event participant avatars) —
+    // its own membership-gated read (Capability.members_view) isn't held by
+    // every relationship (e.g. a Child), and that must never block or
+    // error out the rest of the dashboard: fetched independently, degrading
+    // to an empty list rather than joining the featureMatrix chain below.
+    api
+      .members(activeHomeId)
+      .then(setMembers)
+      .catch(() => setMembers([]));
+    api
+      .featureMatrix(activeHomeId)
+      .then(async (matrix) => {
         const enabled = matrix.features.some(
           (feature) => feature.feature === "calendar" && feature.enabled,
         );
         setCalendarEnabled(enabled);
-        if (!enabled) {
+        setMealsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "meals" && feature.enabled),
+        );
+        setListsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "shopping" && feature.enabled),
+        );
+        setWishlistsFeatureOn(
+          matrix.features.some((feature) => feature.feature === "wish_lists" && feature.enabled),
+        );
+        const nudgesEnabled = matrix.features.some(
+          (feature) => feature.feature === "nudges" && feature.enabled,
+        );
+        setNudgesFeatureOn(nudgesEnabled);
+        if (!enabled && !nudgesEnabled) {
           setSummary(null);
           setUpcoming([]);
+          setRoutines([]);
           return;
         }
-        const [homeSummary, upcomingRows] = await Promise.all([
-          api.homeSummary(activeHomeId),
-          api.listEvents(activeHomeId, {
-            start_at: new Date(new Date().setUTCHours(24, 0, 0, 0)).toISOString(),
-            end_at: new Date(
-              new Date().setUTCDate(new Date().getUTCDate() + 14),
-            ).toISOString(),
-            page_size: 3,
-          }),
-        ]);
-        setSummary(homeSummary);
-        setUpcoming(upcomingRows.items.slice(0, 3));
+        // Calendar visibility (Capability.calendar_view) is parent-configured
+        // per Child and legitimately absent for some members — that is an
+        // expected, not-visible-to-me outcome, not a page-level failure, so
+        // it degrades this one section rather than rejecting into `error`.
+        const calendarData = enabled
+          ? await Promise.all([
+              api.homeSummary(activeHomeId),
+              fetchUpcomingCandidates(activeHomeId),
+            ]).catch(() => null)
+          : null;
+        if (calendarData) {
+          const [homeSummary, upcomingRows] = calendarData;
+          setSummary(homeSummary);
+          // Deliberately no "already shown in Today" exclusion here — Today
+          // and Coming Up answer different questions (Today: everything
+          // today, past and future; Coming Up: the next 3 events from this
+          // exact moment) and are expected to overlap on a day that still
+          // has events left to come. Filtering by isEventStillUpcoming alone
+          // is also what makes the two never disagree with each other:
+          // excluding "already in Today" previously hid every one of
+          // today's remaining events from Coming Up too, since Today lists
+          // the whole day, not just its past.
+          setUpcoming(
+            Array.from(
+              new Map(
+                upcomingRows
+                  .filter((event) => isEventStillUpcoming(event))
+                  .map((event) => [event.occurrence_id, event]),
+              ).values(),
+            )
+              .sort(compareUpcoming)
+              .slice(0, 3),
+          );
+        } else {
+          setSummary(null);
+          setUpcoming([]);
+        }
+        const [routineData, reminderData] = nudgesEnabled
+          ? await Promise.all([
+              api.routines(activeHomeId, { home: true }).catch(() => null),
+              api.reminders(activeHomeId, { home: true }).catch(() => null),
+            ])
+          : [null, null];
+        setRoutines(routineData?.items ?? []);
+        setReminders(reminderData?.items ?? []);
+        setTodoExpanded(false);
       })
       .catch((reason: Error) => setError(reason.message));
   }, [activeHomeId]);
 
-  function firstMember(memberIds: string[]) {
-    return members.find((member) => memberIds.includes(member.user_id)) ?? null;
+  // Reuses GET /groups/{id}/members' existing display_name ordering (members
+  // is already fetched once, in that order, for the whole Home) rather than
+  // inventing a new order — same list, just filtered per event, so it's
+  // always deterministic and never depends on event.member_ids' own order.
+  function membersForEvent(memberIds: string[]) {
+    return participantsForEvent(members, memberIds);
   }
 
   async function enableNotifications() {
@@ -191,24 +417,94 @@ export default function HomePage() {
     }
   }
 
+  async function completeRoutine(routine: Routine) {
+    if (!activeHomeId || !routine.home_occurrence_date || routine.home_completed_at) return;
+    const previous = routines;
+    const completedAt = new Date().toISOString();
+    setRoutines((current) =>
+      current.map((item) =>
+        item.id === routine.id
+          ? {
+              ...item,
+              home_completed_at: completedAt,
+              home_completed_by_user_id: user?.id ?? null,
+              home_completed_by_display_name: user?.display_name ?? "You",
+            }
+          : item,
+      ),
+    );
+    try {
+      await api.completeRoutine(activeHomeId, routine.id, routine.home_occurrence_date);
+    } catch (cause) {
+      setRoutines(previous);
+      setError((cause as Error).message);
+    }
+  }
+
+  async function completeReminder(reminder: Reminder) {
+    if (!activeHomeId || !reminder.home_occurrence_date || reminder.home_completed_at) return;
+    const previous = reminders;
+    const completedAt = new Date().toISOString();
+    setReminders((current) =>
+      current.map((item) =>
+        item.id === reminder.id
+          ? {
+              ...item,
+              home_completed_at: completedAt,
+              home_completed_by_user_id: user?.id ?? null,
+              home_completed_by_display_name: user?.display_name ?? "You",
+            }
+          : item,
+      ),
+    );
+    try {
+      await api.completeReminder(activeHomeId, reminder.id, reminder.home_occurrence_date);
+    } catch (cause) {
+      setReminders(previous);
+      setError((cause as Error).message);
+    }
+  }
+
   // Requesting push permission before the app is installed leads nowhere useful on
   // iOS Safari (Notification.requestPermission works, but there is no way to receive
   // push while the tab is closed) — so the prompt only appears once installed.
   const showNotificationPrompt =
     notificationsSupported() && notifPermission === "default" && isStandalone();
-  const showInstallFirstNotice =
-    notificationsSupported() && notifPermission === "default" && !isStandalone();
   const emptyState = todayEmptyState();
+  // Each of routines/reminders is already in its own Home priority order
+  // (overdue, due today, upcoming, then completed today) — see
+  // household_routines.list_routines and routers.reminders.list_reminders,
+  // both built on the same select_home_occurrence priority. Merging two
+  // separately-sorted lists needs its own combined sort key here, since
+  // neither response exposes its internal priority number — completed items
+  // always sort last, then by occurrence date, then title, so Routines and
+  // Reminders interleave sensibly on one shared list rather than routines
+  // always coming first.
+  type TodoItem =
+    | { kind: "routine"; id: string; data: Routine }
+    | { kind: "reminder"; id: string; data: Reminder };
+  const todoItems: TodoItem[] = [
+    ...routines.map((data): TodoItem => ({ kind: "routine", id: `routine:${data.id}`, data })),
+    ...reminders.map((data): TodoItem => ({ kind: "reminder", id: `reminder:${data.id}`, data })),
+  ].sort((a, b) => {
+    const aDone = Boolean(a.data.home_completed_at);
+    const bDone = Boolean(b.data.home_completed_at);
+    if (aDone !== bDone) return aDone ? 1 : -1;
+    const aDate = a.data.home_occurrence_date ?? "";
+    const bDate = b.data.home_occurrence_date ?? "";
+    if (aDate !== bDate) return aDate < bDate ? -1 : 1;
+    return a.data.title.localeCompare(b.data.title);
+  });
+  const visibleTodoItems = todoExpanded ? todoItems : todoItems.slice(0, 3);
 
   return (
-    <AppShell
-      hero={
+    <AppShellContent>
         <div className="home-hero">
           <p className="home-hero-eyebrow">🌿 {greeting()},</p>
           <h1>{user?.display_name?.split(" ")[0] ?? "there"}</h1>
           <p>
             {activeHome
-              ? `Here's what's happening in your home`
+              ? <HomeHeroDate />
               : "Select a Home to continue"}
           </p>
           {members.length > 0 && (
@@ -226,8 +522,7 @@ export default function HomePage() {
             </div>
           )}
         </div>
-      }
-    >
+
       <main className="home-page">
         {error && <p className="notice error">{error}</p>}
 
@@ -267,11 +562,13 @@ export default function HomePage() {
         })()}
 
         {calendarEnabled && (
-          <section className="card home-section home-section-overlap">
+          <section className="card home-section home-section-overlap home-summary-card home-today-card">
             <div className="section-heading">
+              <img className="home-card-image" src="/images/home-today.svg" alt="" aria-hidden="true" />
               <h2>Today</h2>
-              <Link className="tertiary" href="/calendar">
+              <Link className="tertiary home-card-action" href="/calendar">
                 See all
+                <ChevronRight size={20} aria-hidden="true" />
               </Link>
             </div>
             {!summary?.today_events?.length ? (
@@ -290,8 +587,8 @@ export default function HomePage() {
                   <EventRow
                     key={event.occurrence_id}
                     event={event}
-                    member={firstMember(event.member_ids)}
-                    leading={eventTime(event.start_at, event.timezone)}
+                    members={membersForEvent(event.member_ids)}
+                    leading={eventTime(event)}
                   />
                 ))}
               </div>
@@ -299,12 +596,91 @@ export default function HomePage() {
           </section>
         )}
 
-        {calendarEnabled && (
-          <section className="card home-section">
+        {todoItems.length > 0 && (
+          <section className="card home-section home-summary-card home-todo-section">
             <div className="section-heading">
-              <h2>Coming up</h2>
-              <Link className="tertiary" href="/calendar">
+              <img className="home-card-image" src="/images/home-nudges.png" alt="" aria-hidden="true" />
+              <h2>Nudges</h2>
+              <Link className="tertiary home-card-action" href="/settings/routines-reminders">
                 See all
+                <ChevronRight size={20} aria-hidden="true" />
+              </Link>
+            </div>
+            <div className="home-routine-list" id="home-routine-list">
+              {visibleTodoItems.map((item) => {
+                const { data } = item;
+                const completed = Boolean(data.home_completed_at);
+                const href =
+                  item.kind === "routine"
+                    ? "/settings/routines-reminders?type=routines"
+                    : "/settings/routines-reminders?type=reminders";
+                const scopeLabel = data.scope === "household" ? "Household" : "Personal";
+                const kindLabel = item.kind === "routine" ? "Routine" : "Reminder";
+                const dueSuffix = dueCountdownSuffix(data.home_occurrence_date);
+                return (
+                  <div className={`home-routine-row${completed ? " is-complete" : ""}`} key={item.id}>
+                    <button
+                      className="home-routine-check"
+                      type="button"
+                      aria-label={`${completed ? "Completed" : "Complete"} ${data.title}`}
+                      aria-pressed={completed}
+                      onClick={() =>
+                        item.kind === "routine" ? completeRoutine(item.data) : completeReminder(item.data)
+                      }
+                      disabled={completed}
+                    >
+                      <span className="home-routine-check-dot" aria-hidden="true">
+                        {completed && <Check size={10} />}
+                      </span>
+                    </button>
+                    <Link className="home-routine-copy" href={href}>
+                      <strong>{data.title}</strong>
+                      {completed ? (
+                        <small>
+                          {data.scope === "household" && data.home_completed_by_display_name
+                            ? `Done by ${data.home_completed_by_display_name} · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`
+                            : `Done · ${new Intl.DateTimeFormat("en-GB", { timeStyle: "short" }).format(new Date(data.home_completed_at!))}`}
+                        </small>
+                      ) : (
+                        <>
+                          <small className="home-nudge-date">
+                            {nudgeCardDateLabel(data.home_occurrence_date)}
+                            {dueSuffix && ` · ${dueSuffix}`}
+                          </small>
+                          <small className="home-todo-kind">
+                            {scopeLabel} · {kindLabel}
+                          </small>
+                        </>
+                      )}
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+            {todoItems.length > 3 && (
+              <button
+                className="home-routine-expand tertiary"
+                type="button"
+                aria-expanded={todoExpanded}
+                aria-controls="home-routine-list"
+                onClick={() => setTodoExpanded((expanded) => !expanded)}
+              >
+                {todoExpanded ? "Show less" : "Show more"}
+              </button>
+            )}
+          </section>
+        )}
+
+        {activeHomeId && <MealPlansTodayCard homeId={activeHomeId} members={members} />}
+
+        {calendarEnabled && (
+          <section className="card home-section home-summary-card home-coming-up-card">
+            <div className="section-heading">
+              <img className="home-card-image" src="/images/home-coming-up.svg" alt="" aria-hidden="true" />
+              <h2>Coming up</h2>
+              <Link className="tertiary home-card-action" href="/calendar">
+                See all
+                <ChevronRight size={20} aria-hidden="true" />
               </Link>
             </div>
             {!upcoming.length ? (
@@ -312,20 +688,23 @@ export default function HomePage() {
             ) : (
               <div className="home-event-list">
                 {upcoming.map((event) => {
-                  const stack = eventDateStack(event.start_at, event.timezone);
+                  const stack = eventDateStack(event.start_at, event.timezone, event.is_all_day);
+                  const timing = eventTiming(event);
                   return (
                     <EventRow
                       key={event.occurrence_id}
                       event={event}
-                      member={firstMember(event.member_ids)}
+                      members={membersForEvent(event.member_ids)}
                       leading={
                         <span className="home-event-date-stack">
                           <strong>
                             {stack.weekday} {stack.day}
                           </strong>
                           <small>{stack.month}</small>
+                          <small className="home-event-time">{timing.leading}</small>
                         </span>
                       }
+                      ending={timing.ending}
                     />
                   );
                 })}
@@ -334,23 +713,102 @@ export default function HomePage() {
           </section>
         )}
 
-        <section className="card home-section">
+        {!desktopShellActive && (
+        <section className="card home-section home-summary-card home-around-house-card">
           <div className="section-heading">
+            <img className="home-card-image" src="/images/home-around-house.svg" alt="" aria-hidden="true" />
             <h2>Around the house</h2>
           </div>
           <div className="quick-actions">
-            {calendarEnabled && (
-              <Link className="quick-action" href="/calendar">
-                <CalendarPlus size={20} aria-hidden="true" />
-                Add event
-              </Link>
-            )}
-            <Link className="quick-action" href="/people">
-              <UserPlus size={20} aria-hidden="true" />
-              Invite family
-            </Link>
+            <QuickActionsRow>
+              {calendarEnabled && (
+                <Link className="quick-action" href="/calendar">
+                  <CalendarPlus size={20} aria-hidden="true" />
+                  Add event
+                </Link>
+              )}
+              {canInviteMore && (activeHome?.capabilities ?? []).includes("members.invite") && (
+                <Link className="quick-action" href="/settings/members">
+                  <UserPlus size={20} aria-hidden="true" />
+                  Invite family
+                </Link>
+              )}
+            </QuickActionsRow>
+            <QuickActionsRow>
+              {nudgesFeatureOn && (
+                <Link
+                  className={`quick-action${nudgesEntitled ? "" : " quick-action-locked"}`}
+                  href="/settings/routines-reminders"
+                >
+                  {!nudgesEntitled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <ClipboardList size={20} aria-hidden="true" />
+                  Nudges
+                </Link>
+              )}
+              {mealsFeatureOn && (
+                <Link
+                  className={`quick-action${mealsEnabled ? "" : " quick-action-locked"}`}
+                  href="/meal-plans"
+                >
+                  {!mealsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <UtensilsCrossed size={20} aria-hidden="true" />
+                  Meal plans
+                </Link>
+              )}
+              {listsFeatureOn && (
+                <Link
+                  className={`quick-action${listsEnabled ? "" : " quick-action-locked"}`}
+                  href="/lists"
+                >
+                  {!listsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <ListChecks size={20} aria-hidden="true" />
+                  Lists
+                </Link>
+              )}
+              {wishlistsFeatureOn && (
+                <Link
+                  className={`quick-action${wishlistsEnabled ? "" : " quick-action-locked"}`}
+                  href="/wish-lists"
+                >
+                  {!wishlistsEnabled && (
+                    <span className="quick-action-lock" aria-hidden="true">
+                      <Lock size={11} />
+                    </span>
+                  )}
+                  <Gift size={20} aria-hidden="true" />
+                  Wishlists
+                </Link>
+              )}
+            </QuickActionsRow>
+            <QuickActionsRow>
+              {drivewayEnabled && (
+                <Link className="quick-action" href="/driveway">
+                  <Car size={20} aria-hidden="true" />
+                  Driveway
+                </Link>
+              )}
+              {budgetEnabled && (
+                <Link className="quick-action" href="/budget">
+                  <WalletCards size={20} aria-hidden="true" />
+                  Budget
+                </Link>
+              )}
+            </QuickActionsRow>
           </div>
         </section>
+        )}
 
         {showNotificationPrompt && (
           <section className="card notify-panel">
@@ -367,18 +825,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {showInstallFirstNotice && (
-          <section className="card notify-panel">
-            <span className="notify-icon" aria-hidden="true">
-              <Bell size={20} />
-            </span>
-            <div className="notify-copy">
-              <strong>Install MyKhaya first</strong>
-              <p>Add MyKhaya to your Home Screen to enable notifications.</p>
-            </div>
-          </section>
-        )}
       </main>
-    </AppShell>
+    </AppShellContent>
   );
 }

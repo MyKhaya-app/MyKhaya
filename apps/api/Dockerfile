@@ -11,6 +11,12 @@ RUN pip install --upgrade pip && pip install .
 FROM builder AS test
 RUN pip install '.[dev]'
 COPY apps/api/tests ./tests
+# Read-only, for test_migration_integrity.py: without this, the Alembic
+# revision graph is invisible to the test image and that check silently
+# passes over zero migrations instead of validating the real graph — see
+# the 0029_home_calendar_colour orphaned-revision incident this test exists
+# to catch.
+COPY apps/api/migrations ./migrations
 # Read-only, for test_colour_palette_consistency.py: it parses the TS/CSS palette
 # source directly to prove mykhaya.colour_palette never silently drifts from
 # packages/design-tokens, rather than trusting a hand-maintained comment.
@@ -42,9 +48,11 @@ COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
 # A fresh named volume mounted here inherits this directory's ownership on first
 # use (only api actually writes to it — see compose.yml) — without this, Docker
 # creates the volume owned by root and the non-root `mykhaya` user below can't
-# write avatars to it.
-RUN mkdir -p /data/avatars && chown mykhaya:mykhaya /data/avatars
+# write avatars to it. support-attachments mirrors the same need for its own
+# dedicated volume (mykhaya.attachments.storage).
+RUN mkdir -p /data/avatars /data/support-attachments /data/vehicle-photos /data/meal-images \
+	&& chown mykhaya:mykhaya /data/avatars /data/support-attachments /data/vehicle-photos /data/meal-images
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"
-CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000","--proxy-headers","--forwarded-allow-ips","10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
+CMD ["uvicorn","mykhaya.main:app","--host","0.0.0.0","--port","8000"]

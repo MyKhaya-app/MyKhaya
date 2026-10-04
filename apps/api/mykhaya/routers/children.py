@@ -2,18 +2,20 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.entitlements import require_user_entitlement, require_within_limit
 from mykhaya.household_permissions import (
     SAFE_CHILD_DEFAULTS,
     Capability,
     require_capability,
 )
+from mykhaya.legal import guardian_authorisation_satisfied
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ChildProfile,
@@ -24,6 +26,7 @@ from mykhaya.models import (
     PermissionProfile,
     Role,
     Session,
+    TrustedDevice,
     User,
 )
 from mykhaya.schemas import (
@@ -45,6 +48,20 @@ from mykhaya.security import (
 )
 
 router = APIRouter(prefix="/groups/{group_id}/children", tags=["children"])
+
+
+async def _revoke_user_access(db: AsyncSession, user_id: uuid.UUID) -> None:
+    now = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
 
 
 async def _child_response(db: AsyncSession, profile: ChildProfile) -> ChildResponse:
@@ -162,7 +179,25 @@ async def create_child(
     db: AsyncSession = Depends(get_db),
 ) -> ChildResponse:
     await require_capability(group_id, Capability.child_manage, auth, db)
+    await require_user_entitlement(db, auth.user.id, group_id, "family_plans.enabled")
     guardians = await _validate_guardians(db, group_id, body.guardian_membership_ids)
+    # A child gets a full Membership row like any other household member (see
+    # below), so this is a genuine member-add path and must respect
+    # home.max_members exactly like routers.invitations' invite()/accept() —
+    # same advisory-lock pattern, same lock key, so both paths serialise
+    # against each other for the same Home.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"members:{group_id}"}
+    )
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(db, group_id, "home.max_members", member_count)
     user_id = uuid.uuid4()
     user = User(
         id=user_id,
@@ -178,6 +213,7 @@ async def create_child(
         role=Role.member,
         relationship=HouseholdRelationship.child,
         permission_profile=PermissionProfile.child_restricted,
+        family_sponsorship_decided=False,
         colour=await assign_member_colour(db, group_id),
     )
     db.add(membership)
@@ -290,11 +326,7 @@ async def update_child_permissions(
     profile.permissions = SAFE_CHILD_DEFAULTS | body.permissions
     membership = await db.get(Membership, profile.membership_id)
     assert membership is not None
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
-    )
+    await _revoke_user_access(db, membership.user_id)
     changed = sorted(
         key for key in profile.permissions if previous[key] != profile.permissions[key]
     )
@@ -400,11 +432,7 @@ async def configure_child_login(
         profile.pin_hash = None
         profile.login_updated_at = datetime.now(UTC)
         if was_enabled:
-            await db.execute(
-                update(Session)
-                .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-                .values(revoked_at=datetime.now(UTC))
-            )
+            await _revoke_user_access(db, membership.user_id)
         audit(
             db, request, "child.login_disabled", auth.user.id, group_id, "membership", membership_id
         )
@@ -443,17 +471,24 @@ async def configure_child_login(
         )
 
     was_enabled = profile.login_enabled
+    if not was_enabled and not await guardian_authorisation_satisfied(db, profile.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "guardian_authorisation_required",
+                "message": (
+                    "Guardian authorisation is required before enabling sign-in for this "
+                    "child. Review the Children's Privacy Notice first."
+                ),
+            },
+        )
     profile.login_enabled = True
     profile.login_updated_at = datetime.now(UTC)
 
     # A username or PIN change invalidates any device signed in under the old
     # credential — matches the existing pattern for a permission change.
     if pin_changed or username_changed:
-        await db.execute(
-            update(Session)
-            .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
+        await _revoke_user_access(db, membership.user_id)
 
     audit(
         db,
@@ -493,11 +528,7 @@ async def revoke_child_sessions(
     profile = await _profile_for_group(db, group_id, membership_id)
     membership = await db.get(Membership, membership_id)
     assert membership is not None
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == membership.user_id, Session.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
-    )
+    await _revoke_user_access(db, membership.user_id)
     audit(
         db,
         request,
@@ -526,7 +557,7 @@ async def anonymise_child(
     assert membership is not None
     user = await db.get(User, membership.user_id)
     assert user is not None
-    await db.execute(delete(Session).where(Session.user_id == user.id))
+    await _revoke_user_access(db, user.id)
     await db.delete(profile)
     membership.removed_at = datetime.now(UTC)
     user.display_name = "Removed child"

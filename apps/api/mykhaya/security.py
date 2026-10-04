@@ -9,16 +9,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+import structlog
 from fastapi import HTTPException, Request, Response, status
 from pwdlib import PasswordHash
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import ActionToken, Session, TokenPurpose, User
+from mykhaya.models import ActionToken, Session, TokenPurpose, TrustedDevice, User
 
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("a-valid-dummy-password-value")
+auth_diag_log = structlog.get_logger("auth_diag")
 
 
 def normalise_email(email: str) -> str:
@@ -42,6 +44,28 @@ def generate_home_code() -> str:
 
 def normalise_home_code(value: str) -> str:
     return value.strip().upper()
+
+
+# The adult-facing Home *join* code (Group.join_code_hash/join_code_encrypted) —
+# reuses generate_home_code's alphabet/length (same no-0/O/1/I/L, phone-typeable
+# design already proven for child_login_code) but is a distinct value on a
+# distinct column, generated and stored separately. See models.Group's
+# join_code_* docstring for why this one is capability-bearing and the other
+# isn't, and why that changes how it's stored.
+def generate_home_join_code() -> str:
+    return generate_home_code()
+
+
+def format_home_join_code(raw: str) -> str:
+    """XXXX-XXXX display formatting for an 8-character join code."""
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def normalise_home_join_code(value: str) -> str:
+    """Undo format_home_join_code plus tolerate stray spaces/case — the exact
+    normalisation a submitted code goes through before hashing for lookup, so
+    "k7p4-x2rm", "K7P4 X2RM" and "K7P4X2RM" all resolve to the same digest."""
+    return "".join(ch for ch in value.strip().upper() if ch.isalnum())
 
 
 def normalise_child_username(value: str) -> str:
@@ -96,7 +120,17 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(48)
 
 
-def set_auth_cookies(response: Response, token: str, csrf: str, settings: Settings) -> None:
+def set_auth_cookies(
+    response: Response,
+    token: str,
+    csrf: str,
+    settings: Settings,
+    device_token: str | None = None,
+    device_csrf: str | None = None,
+) -> None:
+    now = datetime.now(UTC)
+    session_expires = now + timedelta(minutes=settings.session_minutes)
+    device_expires = now + timedelta(days=settings.trusted_device_days)
     response.set_cookie(
         "mk_session",
         token,
@@ -106,6 +140,7 @@ def set_auth_cookies(response: Response, token: str, csrf: str, settings: Settin
         domain=settings.cookie_domain,
         path="/",
         max_age=settings.session_minutes * 60,
+        expires=session_expires,
     )
     response.set_cookie(
         "mk_csrf",
@@ -116,12 +151,39 @@ def set_auth_cookies(response: Response, token: str, csrf: str, settings: Settin
         domain=settings.cookie_domain,
         path="/",
         max_age=settings.session_minutes * 60,
+        expires=session_expires,
     )
+    if device_token is not None and device_csrf is not None:
+        max_age = settings.trusted_device_days * 24 * 60 * 60
+        response.set_cookie(
+            "mk_device",
+            device_token,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            domain=settings.cookie_domain,
+            path="/",
+            max_age=max_age,
+            expires=device_expires,
+        )
+        response.set_cookie(
+            "mk_device_csrf",
+            device_csrf,
+            httponly=False,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            domain=settings.cookie_domain,
+            path="/",
+            max_age=max_age,
+            expires=device_expires,
+        )
 
 
 def clear_auth_cookies(response: Response, settings: Settings) -> None:
     response.delete_cookie("mk_session", path="/", domain=settings.cookie_domain)
     response.delete_cookie("mk_csrf", path="/", domain=settings.cookie_domain)
+    response.delete_cookie("mk_device", path="/", domain=settings.cookie_domain)
+    response.delete_cookie("mk_device_csrf", path="/", domain=settings.cookie_domain)
 
 
 def require_csrf(request: Request, settings: Settings) -> None:
@@ -131,6 +193,23 @@ def require_csrf(request: Request, settings: Settings) -> None:
     if origin is not None and origin not in settings.cors_origins:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Request origin is not allowed")
     cookie = request.cookies.get("mk_csrf", "")
+    header = request.headers.get("x-csrf-token", "")
+    if not cookie or not hmac.compare_digest(cookie, header):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Your secure session check failed. Refresh and try again."
+        )
+
+
+def require_device_csrf(request: Request, settings: Settings) -> None:
+    """CSRF protection for renewal, which intentionally runs without a valid
+    short-lived application session. SameSite is defense in depth; the explicit
+    origin and double-submit check are the authorization boundary."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in settings.cors_origins:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Request origin is not allowed")
+    cookie = request.cookies.get("mk_device_csrf", "")
     header = request.headers.get("x-csrf-token", "")
     if not cookie or not hmac.compare_digest(cookie, header):
         raise HTTPException(
@@ -181,23 +260,74 @@ EXPIRED_SESSION_MESSAGE = "Your session has ended. Please sign in again."
 
 
 async def _session_for_token(
-    db: AsyncSession, raw: str, settings: Settings, message: str
+    db: AsyncSession,
+    raw: str,
+    settings: Settings,
+    message: str,
+    request: Request | None = None,
 ) -> tuple[User, Session]:
     digest = hash_secret(raw, settings.secret_key.get_secret_value())
+    now = datetime.now(UTC)
     result = await db.execute(
-        select(User, Session)
+        select(User, Session, TrustedDevice)
         .join(Session, Session.user_id == User.id)
+        .outerjoin(TrustedDevice, Session.trusted_device_id == TrustedDevice.id)
         .where(
             Session.token_hash == digest,
             Session.revoked_at.is_(None),
-            Session.expires_at > datetime.now(UTC),
+            Session.expires_at > now,
+            or_(
+                Session.trusted_device_id.is_(None),
+                (TrustedDevice.revoked_at.is_(None) & (TrustedDevice.expires_at > now)),
+            ),
             User.is_active.is_(True),
         )
     )
     pair = result.one_or_none()
     if pair is None:
+        reason = "TOKEN_MISMATCH"
+        session_id = None
+        user_id = None
+        known = await db.execute(
+            select(User, Session, TrustedDevice)
+            .join(Session, Session.user_id == User.id)
+            .outerjoin(TrustedDevice, Session.trusted_device_id == TrustedDevice.id)
+            .where(Session.token_hash == digest)
+        )
+        known_pair = known.one_or_none()
+        if known_pair is not None:
+            known_user, known_session, known_device = known_pair
+            session_id = str(known_session.id)
+            user_id = str(known_user.id)
+            reason = (
+                "USER_INVALID"
+                if not known_user.is_active
+                else "SESSION_REVOKED"
+                if known_session.revoked_at is not None
+                else "SESSION_EXPIRED"
+                if known_session.expires_at <= now
+                else "DEVICE_REVOKED"
+                if known_device is not None and known_device.revoked_at is not None
+                else "DEVICE_EXPIRED"
+                if known_device is not None and known_device.expires_at <= now
+                else "SESSION_INVALID"
+            )
+        auth_diag_log.info(
+            "auth_diag",
+            auth_event="SESSION_LOOKUP_FAILED",
+            request_id=getattr(request.state, "request_id", None) if request else None,
+            route=request.url.path if request else None,
+            reason=reason,
+            session_id=session_id,
+            user_id=user_id,
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, message)
-    pair[1].last_seen_at = datetime.now(UTC)
+    pair[1].last_seen_at = now
+    if pair[2] is not None and now - pair[2].last_used_at >= timedelta(
+        hours=settings.trusted_device_activity_update_hours
+    ):
+        pair[2].last_used_at = now
+        pair[2].expires_at = now + timedelta(days=settings.trusted_device_days)
     return pair[0], pair[1]
 
 
@@ -206,8 +336,15 @@ async def current_user(
 ) -> tuple[User, Session]:
     raw = request.cookies.get("mk_session")
     if not raw:
+        auth_diag_log.info(
+            "auth_diag",
+            auth_event="SESSION_LOOKUP_FAILED",
+            request_id=getattr(request.state, "request_id", None),
+            route=request.url.path,
+            reason="SESSION_COOKIE_MISSING",
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
-    return await _session_for_token(db, raw, settings, EXPIRED_SESSION_MESSAGE)
+    return await _session_for_token(db, raw, settings, EXPIRED_SESSION_MESSAGE, request)
 
 
 @dataclass(frozen=True)
@@ -231,7 +368,9 @@ async def resolve_session(
         scheme, _, token = header.partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your session could not be verified.")
-        user, session = await _session_for_token(db, token, settings, EXPIRED_SESSION_MESSAGE)
+        user, session = await _session_for_token(
+            db, token, settings, EXPIRED_SESSION_MESSAGE, request
+        )
         return AuthenticatedSession(user, session, "bearer")
     user, session = await current_user(request, db, settings)
     return AuthenticatedSession(user, session, "cookie")
@@ -280,6 +419,46 @@ def resolve_client_ip(request: Request, settings: Settings) -> str:
             break
         current = candidate
     return str(current)
+
+
+def resolve_admin_client_ip(request: Request, settings: Settings) -> str | None:
+    """Resolve a PCC source address with a fail-closed policy.
+
+    Ordinary rate limiting may use the socket peer when no trusted proxy is
+    configured. PCC access is different: allowing the NetBird/Caddy peer as
+    the apparent operator would turn a missing or malformed forwarding chain
+    into an allowlist bypass. Every hop must therefore be parseable, the
+    direct peer must be trusted, and the resulting address must be outside the
+    proxy ranges.
+    """
+    peer_text = request.client.host if request.client else ""
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return None
+    if not settings.trusted_proxy_cidrs or not _in_any(peer, settings.trusted_proxy_cidrs):
+        return None
+    raw = request.headers.get("x-forwarded-for", "")
+    if not raw.strip():
+        return None
+    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            return None
+        try:
+            chain.append(ipaddress.ip_address(item))
+        except ValueError:
+            return None
+    current = peer
+    for index, candidate in enumerate(reversed(chain)):
+        if not _in_any(current, settings.trusted_proxy_cidrs):
+            # Once the first untrusted address is reached, it must be the
+            # left-most client address. Any remaining entries would describe
+            # an untrusted intermediate hop and are therefore ambiguous.
+            return str(current) if index == len(chain) else None
+        current = candidate
+    return None if _in_any(current, settings.trusted_proxy_cidrs) else str(current)
 
 
 def resolve_forwarded_proto(request: Request, settings: Settings) -> str:

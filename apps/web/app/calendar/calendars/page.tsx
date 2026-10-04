@@ -1,0 +1,614 @@
+"use client";
+
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Cake, Globe2, X } from "lucide-react";
+import type { CalendarHighlightSettings, CalendarShare, EventLabel, HomeCalendar } from "@mykhaya/shared-types";
+import { ApiError, api } from "@mykhaya/api-client";
+import { AppShellContent } from "@/components/app-shell";
+import { BottomSheet } from "@/components/bottom-sheet";
+import { FormStatus } from "@/components/form-status";
+import { useActiveHome } from "@/components/use-active-home";
+import {
+  atLimitMessage,
+  calendarBadgeLabel,
+  canCreateCalendar,
+  canShareCalendar,
+} from "@/components/calendar-entitlement-logic";
+
+const shareStatusLabels: Record<CalendarShare["status"], string> = {
+  pending_admin_approval: "Awaiting Home Admin approval",
+  pending_recipient: "Invitation sent",
+  accepted: "Active",
+  declined: "Declined",
+  revoked: "Revoked",
+};
+
+function shareCategorySummary(share: CalendarShare, labelsById: Map<string, EventLabel>): string {
+  if (share.category_ids === null) return "Entire calendar";
+  if (share.category_ids.length === 0) return "No Calendar Tags selected";
+  return share.category_ids.map((id) => labelsById.get(id)?.name ?? "Unknown Calendar Tag").join(", ");
+}
+
+// Calendar management — three distinct concepts, kept visually and
+// structurally separate (see docs on Home/Personal/Shared calendars vs
+// Calendar Tags): this Home's own calendar(s) and their sharing, the
+// signed-in user's Personal calendar, and calendars genuinely shared with
+// them by other Homes. Calendar Tags (CalendarEventLabel — Family, Megan,
+// Activity, ...) are managed on their own More destination, deliberately
+// not here: they colour/tag events within a calendar, they are never a
+// calendar of their own — see app/settings/calendar-tags.
+export default function CalendarsPage() {
+  const { activeHome, activeHomeId, loading: homeLoading } = useActiveHome();
+  const canEditHighlights = activeHome?.capabilities?.includes("calendar.edit_all") ?? false;
+  const [items, setItems] = useState<HomeCalendar[]>([]);
+  const [personalCalendar, setPersonalCalendar] = useState<HomeCalendar | null>(null);
+  const [limit, setLimit] = useState<number | null>(null);
+  const [labels, setLabels] = useState<EventLabel[]>([]);
+  const [sharedWithYou, setSharedWithYou] = useState<CalendarShare[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState("");
+  // Which calendar's "Manage sharing" sheet is open — a BottomSheet (see
+  // components/bottom-sheet.tsx), not an inline-expanding card: the sheet
+  // pattern is what the rest of this app already uses for a focused
+  // single-item management task (see e.g. the event editor, the Calendars
+  // visibility sheet), and keeps this page's own list simple and scannable
+  // rather than growing large, mostly-empty cards inline.
+  const [sharePanel, setSharePanel] = useState<string | null>(null);
+  const [shareEmail, setShareEmail] = useState("");
+  const [sharePermission, setSharePermission] = useState<"view" | "manage">("view");
+  const [shareScope, setShareScope] = useState<"entire" | "selected">("entire");
+  const [shareCategoryIds, setShareCategoryIds] = useState<Set<string>>(new Set());
+  const [shares, setShares] = useState<Record<string, CalendarShare[]>>({});
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [externalInvitesEnabled, setExternalInvitesEnabled] = useState(false);
+  const [highlights, setHighlights] = useState<CalendarHighlightSettings | null>(null);
+  const [highlightBusy, setHighlightBusy] = useState(false);
+
+  const labelsById = new Map(labels.map((label) => [label.id, label]));
+
+  useEffect(() => {
+    if (!activeHomeId) return;
+    api
+      .billingStatus(activeHomeId)
+      .then((billing) => setExternalInvitesEnabled(billing.external_invites_enabled))
+      .catch(() => setExternalInvitesEnabled(false));
+  }, [activeHomeId]);
+
+  const load = useCallback(async () => {
+    if (!activeHomeId) return;
+    try {
+      const [calendars, labelRows, shared, highlightRows] = await Promise.all([
+        api.listCalendars(activeHomeId),
+        api.listLabels(activeHomeId).catch(() => []),
+        api.sharedCalendars().catch(() => ({ items: [] })),
+        api.calendarHighlights(activeHomeId).catch(() => null),
+      ]);
+      setItems(calendars.items);
+      setLimit(calendars.limit);
+      setPersonalCalendar(calendars.personal_calendar);
+      setLabels(labelRows);
+      setSharedWithYou(shared.items);
+      setHighlights(highlightRows);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not load your calendars.");
+    } finally {
+      setLoaded(true);
+    }
+  }, [activeHomeId]);
+
+  async function setBirthdaysEnabled(enabled: boolean) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { setHighlights(await api.updateCalendarHighlights(activeHomeId, enabled)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not update calendar highlights."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function addHolidaySource(sourceId: string) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.addHolidayCalendar(activeHomeId, sourceId); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not add that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function toggleHolidaySource(subscriptionId: string, enabled: boolean) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.updateHolidayCalendar(activeHomeId, subscriptionId, enabled); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not update that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  async function removeHolidaySource(subscriptionId: string) {
+    if (!activeHomeId || highlightBusy) return;
+    setHighlightBusy(true);
+    try { await api.removeHolidayCalendar(activeHomeId, subscriptionId); setHighlights(await api.calendarHighlights(activeHomeId)); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Could not remove that holiday calendar."); }
+    finally { setHighlightBusy(false); }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const usage = { count: items.length, limit, over_limit: limit !== null && items.length > limit };
+  const atLimit = atLimitMessage(usage);
+
+  async function createCalendar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId || busy || !newName.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.createCalendar(activeHomeId, { name: newName.trim() });
+      setNewName("");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not create that calendar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadShares(calendarId: string) {
+    if (!activeHomeId) return;
+    try {
+      const result = await api.listSharesForCalendar(activeHomeId, calendarId);
+      setShares((current) => ({ ...current, [calendarId]: result.items }));
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not load calendar sharing.");
+    }
+  }
+
+  function openSharePanel(calendarId: string) {
+    setShareError("");
+    setShareEmail("");
+    setSharePermission("view");
+    setShareScope("entire");
+    setShareCategoryIds(new Set());
+    setSharePanel(calendarId);
+    void loadShares(calendarId);
+  }
+
+  function closeSharePanel() {
+    setSharePanel(null);
+  }
+
+  function toggleShareCategory(id: string) {
+    setShareCategoryIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // A raw "Not found" (the generic message require_feature/require_capability
+  // fall back to when a Home simply doesn't have this feature switched on
+  // yet) reads as a baffling, disconnected error next to an email field —
+  // this is the one place that translates it into something a Home Admin
+  // can actually act on. Every other failure (a genuinely malformed email,
+  // "already a member", "an active share already exists") already carries
+  // its own clear message from the backend and passes through unchanged.
+  function friendlyShareError(cause: unknown): string {
+    if (cause instanceof ApiError && cause.message === "Not found") {
+      return "Calendar sharing isn't turned on for this Home yet.";
+    }
+    return cause instanceof ApiError ? cause.message : "Could not share that calendar.";
+  }
+
+  async function shareCalendar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId || !sharePanel || shareBusy || !shareEmail.trim()) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.createCalendarShare(activeHomeId, {
+        calendar_id: sharePanel,
+        recipient_email: shareEmail.trim(),
+        permission: sharePermission,
+        category_ids: shareScope === "selected" ? [...shareCategoryIds] : undefined,
+      });
+      setShareEmail("");
+      setSharePermission("view");
+      setShareScope("entire");
+      setShareCategoryIds(new Set());
+      await loadShares(sharePanel);
+    } catch (cause) {
+      setShareError(friendlyShareError(cause));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function changeSharePermission(
+    calendarId: string,
+    shareId: string,
+    permission: "view" | "manage",
+  ) {
+    if (!activeHomeId || shareBusy) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.changeCalendarSharePermission(activeHomeId, shareId, permission);
+      await loadShares(calendarId);
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not change that permission.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeShare(calendarId: string, shareId: string) {
+    if (!activeHomeId || shareBusy) return;
+    if (!window.confirm("Turn off sharing for this person? They'll lose access immediately.")) {
+      return;
+    }
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.revokeCalendarShare(activeHomeId, shareId);
+      await loadShares(calendarId);
+    } catch (cause) {
+      setShareError(cause instanceof ApiError ? cause.message : "Could not revoke that share.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function deleteCalendar(calendarId: string) {
+    if (!activeHomeId || busy) return;
+    if (
+      !window.confirm("Delete this calendar? Its events are deleted too — this can't be undone.")
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.deleteCalendar(activeHomeId, calendarId, { confirmed: true });
+      closeSharePanel();
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not delete that calendar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const activeCalendar = items.find((calendar) => calendar.id === sharePanel) ?? null;
+  const activeShares = sharePanel ? (shares[sharePanel] ?? []) : [];
+
+  return (
+    <AppShellContent>
+      <main className="standard-page module-page">
+        <div className="page-heading">
+          <div>
+            <p className="eyebrow">Calendar</p>
+            <h1>Home calendars</h1>
+            <p className="muted">
+              Manage your Home calendars and sharing. Calendar Tags are managed separately in{" "}
+              <Link href="/settings/calendar-tags">Calendar tags</Link>.
+            </p>
+          </div>
+        </div>
+
+        <FormStatus error={error} />
+
+        {!loaded || homeLoading ? (
+          <p role="status">Loading your calendars…</p>
+        ) : (
+          <div className="card-stack">
+            <div className="settings-list">
+              {items.map((calendar) => {
+                const badge = calendarBadgeLabel(calendar);
+                return (
+                  <div className="card calendar-list-card" key={calendar.id}>
+                    <div>
+                      <h2>
+                        {calendar.name}
+                        {calendar.is_primary ? " · Primary" : ""}
+                      </h2>
+                      <p className="quiet-state">
+                        {badge
+                          ? `${badge} — events here can be viewed but not created, edited or deleted.`
+                          : "Home calendar"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => openSharePanel(calendar.id)}
+                    >
+                      Manage sharing
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <section className="card details calendar-highlights-settings">
+              <h2>Calendar highlights</h2>
+              <p className="muted">Show useful Home and holiday dates directly in your calendar.</p>
+              <label className="check-row calendar-highlight-setting-row">
+                <span className="calendar-highlight-setting-icon" aria-hidden="true"><Cake size={18} /></span>
+                <span className="calendar-highlight-setting-copy"><strong>Home birthdays</strong><small>Show birthdays saved for Home members.</small></span>
+                <input type="checkbox" checked={highlights?.birthdays_enabled ?? false} aria-label="Home birthdays" disabled={highlightBusy || !canEditHighlights} onChange={(event) => void setBirthdaysEnabled(event.target.checked)} />
+              </label>
+              <p className="quiet-state">Show Home members&rsquo; birthdays using the birthday saved on their account.</p>
+              {highlights && highlights.subscriptions.map((subscription) => (
+                <div className="calendar-highlight-subscription" key={subscription.id}>
+                  <span className="calendar-highlight-setting-icon" aria-hidden="true"><Globe2 size={18} /></span>
+                  <span className="calendar-highlight-setting-copy"><strong>{subscription.source.flag_emoji} {subscription.source.country_name}</strong><small>{subscription.source.region_name}</small></span>
+                  <input type="checkbox" aria-label={`${subscription.source.country_name} ${subscription.source.region_name}`} checked={subscription.enabled} disabled={highlightBusy || !canEditHighlights} onChange={(event) => void toggleHolidaySource(subscription.id, event.target.checked)} />
+                  <button type="button" className="icon-button secondary" aria-label={`Remove ${subscription.source.country_name} ${subscription.source.region_name}`} disabled={highlightBusy || !canEditHighlights} onClick={() => void removeHolidaySource(subscription.id)}><X size={17} aria-hidden="true" /></button>
+                </div>
+              ))}
+              {highlights && highlights.available_sources.filter((source) => !highlights.subscriptions.some((item) => item.source.id === source.id)).length > 0 && (
+                <label>
+                  Add holiday calendar
+                  <select defaultValue="" disabled={highlightBusy || !canEditHighlights} onChange={(event) => { if (event.target.value) void addHolidaySource(event.target.value); event.currentTarget.value = ""; }}>
+                    <option value="">Choose a country or region</option>
+                    {highlights.available_sources.filter((source) => !highlights.subscriptions.some((item) => item.source.id === source.id)).map((source) => <option key={source.id} value={source.id}>{source.flag_emoji} {source.country_name} — {source.region_name}</option>)}
+                  </select>
+                </label>
+              )}
+            </section>
+
+            <section className="card details">
+              <h2>Add a Home calendar</h2>
+              <p className="muted">
+                A second shared calendar for this Home — separate from Calendar Tags, which
+                colour and tag events within a calendar rather than containing their own.
+              </p>
+              {canCreateCalendar(usage) ? (
+                <form onSubmit={createCalendar}>
+                  <label>
+                    Calendar name
+                    <input
+                      value={newName}
+                      onChange={(event) => setNewName(event.target.value)}
+                      maxLength={80}
+                      required
+                    />
+                  </label>
+                  <button disabled={busy}>{busy ? "Adding…" : "Add calendar"}</button>
+                </form>
+              ) : (
+                <>
+                  <p>Multiple Home calendars are included with MyKhaya Family.</p>
+                  {atLimit && <p className="quiet-state">{atLimit}</p>}
+                  <Link className="button secondary" href="/settings/billing">
+                    Upgrade to Family
+                  </Link>
+                </>
+              )}
+            </section>
+
+            {personalCalendar && (
+              <section className="card details">
+                <h2>Personal calendar</h2>
+                <p className="muted">Only visible to you — never automatically shared with your Home.</p>
+                {calendarBadgeLabel(personalCalendar) && (
+                  <p className="quiet-state">
+                    {calendarBadgeLabel(personalCalendar)} — events here can be viewed but not
+                    created, edited or deleted.
+                  </p>
+                )}
+                <p>
+                  <Link href="/settings/calendar-tags">Calendar colour and settings</Link>
+                </p>
+              </section>
+            )}
+
+            <section className="card details">
+              <h2>Shared with you</h2>
+              {sharedWithYou.length === 0 ? (
+                <p className="quiet-state">
+                  No one has shared a calendar with you yet. When they do, it will appear here and
+                  overlay your normal Calendar automatically.
+                </p>
+              ) : (
+                <div className="calendar-share-list">
+                  {sharedWithYou.map((share) => (
+                    <div className="calendar-share-row" key={share.id}>
+                      <div>
+                        <strong>{share.calendar_name}</strong>
+                        <small>
+                          {share.source_group_name} ·{" "}
+                          {share.permission === "manage" ? "Can add & edit" : "Can view"}
+                        </small>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p>
+                <Link href="/calendar/shared">Manage notification &amp; briefing preferences</Link>
+              </p>
+            </section>
+          </div>
+        )}
+
+        {activeCalendar && (
+          <BottomSheet title={activeCalendar.name} onDismiss={closeSharePanel}>
+            <div className="calendar-sharing-sheet">
+              <section className="calendar-sharing-section">
+                <h3 className="eyebrow">Shared with</h3>
+                {activeShares.length === 0 ? (
+                  <p className="quiet-state">Not currently shared</p>
+                ) : (
+                  <div className="calendar-share-list">
+                    {activeShares.map((share) => (
+                      <div className="calendar-share-row" key={share.id}>
+                        <div>
+                          <strong>{share.recipient_email}</strong>
+                          <small>
+                            {share.permission === "manage" ? "Can add & edit" : "Can view"} ·{" "}
+                            {shareStatusLabels[share.status]} ·{" "}
+                            {shareCategorySummary(share, labelsById)}
+                            {share.accepted_at
+                              ? ` · Accepted ${new Date(share.accepted_at).toLocaleDateString(
+                                  "en-GB",
+                                  { day: "numeric", month: "long", year: "numeric" },
+                                )}`
+                              : ""}
+                          </small>
+                        </div>
+                        {share.status === "accepted" && (
+                          <div className="actions compact-actions">
+                            <select
+                              value={share.permission}
+                              disabled={shareBusy}
+                              aria-label={`Access for ${share.recipient_email}`}
+                              onChange={(event) =>
+                                changeSharePermission(
+                                  activeCalendar.id,
+                                  share.id,
+                                  event.target.value as "view" | "manage",
+                                )
+                              }
+                            >
+                              <option value="view">Can view</option>
+                              <option value="manage">Can add &amp; edit</option>
+                            </select>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={shareBusy}
+                              onClick={() => revokeShare(activeCalendar.id, share.id)}
+                            >
+                              Revoke
+                            </button>
+                          </div>
+                        )}
+                        {(share.status === "pending_recipient" ||
+                          share.status === "pending_admin_approval") && (
+                          <div className="actions compact-actions">
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={shareBusy}
+                              onClick={() => revokeShare(activeCalendar.id, share.id)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="calendar-sharing-section">
+                <h3 className="eyebrow">Invite someone</h3>
+                {canShareCalendar(externalInvitesEnabled) ? (
+                  <form className="calendar-share-form" onSubmit={shareCalendar}>
+                    <label>
+                      Email address
+                      <input
+                        type="email"
+                        value={shareEmail}
+                        onChange={(event) => setShareEmail(event.target.value)}
+                        placeholder="grandma@example.com"
+                        required
+                      />
+                    </label>
+                    {shareError ? (
+                      <p className="field-error">{shareError}</p>
+                    ) : (
+                      <p className="quiet-state">
+                        They don&rsquo;t need a MyKhaya account yet — we&rsquo;ll email them an
+                        invitation.
+                      </p>
+                    )}
+                    <label>
+                      Access
+                      <select
+                        value={sharePermission}
+                        onChange={(event) =>
+                          setSharePermission(event.target.value as "view" | "manage")
+                        }
+                      >
+                        <option value="view">Can view</option>
+                        <option value="manage">Can add &amp; edit</option>
+                      </select>
+                    </label>
+                    {labels.length > 0 && (
+                      <fieldset className="share-scope-fieldset">
+                        <legend>What to share</legend>
+                        <label className="check-row">
+                          <input
+                            type="radio"
+                            name={`scope-${activeCalendar.id}`}
+                            checked={shareScope === "entire"}
+                            onChange={() => setShareScope("entire")}
+                          />
+                          Entire calendar
+                        </label>
+                        <label className="check-row">
+                          <input
+                            type="radio"
+                            name={`scope-${activeCalendar.id}`}
+                            checked={shareScope === "selected"}
+                            onChange={() => setShareScope("selected")}
+                          />
+                          Selected Calendar Tags only
+                        </label>
+                        {shareScope === "selected" && (
+                          <fieldset className="share-category-list">
+                            <legend className="sr-only">Calendar Tags</legend>
+                            {labels.map((label) => (
+                              <label className="check-row" key={label.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={shareCategoryIds.has(label.id)}
+                                  onChange={() => toggleShareCategory(label.id)}
+                                />
+                                {label.name}
+                              </label>
+                            ))}
+                          </fieldset>
+                        )}
+                      </fieldset>
+                    )}
+                    <button disabled={shareBusy}>
+                      {shareBusy ? "Sending…" : "Send invitation"}
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <p>Sharing a calendar outside the Home is included with MyKhaya Family.</p>
+                    <Link className="button secondary" href="/settings/billing">
+                      Upgrade to Family
+                    </Link>
+                  </>
+                )}
+              </section>
+
+              {!activeCalendar.is_primary && (
+                <section className="calendar-sharing-section">
+                  <h3 className="eyebrow">Calendar settings</h3>
+                  <button
+                    type="button"
+                    className="danger-link"
+                    disabled={busy}
+                    onClick={() => deleteCalendar(activeCalendar.id)}
+                  >
+                    Delete calendar
+                  </button>
+                </section>
+              )}
+            </div>
+          </BottomSheet>
+        )}
+      </main>
+    </AppShellContent>
+  );
+}

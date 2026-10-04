@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import stripe
 import structlog
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
@@ -17,9 +18,48 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya.auth_providers import external_auth_provider_status, external_auth_provider_statuses
+from mykhaya.avatars.storage import get_avatar_storage
+from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
+from mykhaya.billing.config import resolve_stripe_config
+from mykhaya.billing.diagnostics import record_billing_diagnostic
+from mykhaya.billing.pricing import fetch_price_amount
+from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
+from mykhaya.billing.state import SubscriptionOwnershipMismatchError
+from mykhaya.calendar_highlights import sync_holiday_source
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
+from mykhaya.consumer_mfa_policy import (
+    CONSUMER_MFA_POLICY_SETTING_KEY,
+    ConsumerMfaPolicyError,
+    methods_value,
+    policy_value,
+    resolve_consumer_mfa_policy,
+)
 from mykhaya.db import get_db
+from mykhaya.driveway_providers import (
+    UKDVLAProvider,
+    VehicleLookupAuthFailed,
+    VehicleLookupNotFound,
+    VehicleLookupUnavailable,
+)
+from mykhaya.entitlements import (
+    calendar_usage,
+    complimentary_expired_sql_filter,
+    effective_plan_sql_filter,
+    get_home_subscription,
+    member_usage,
+    personal_routines_total,
+    plan_definition_for,
+    record_subscription_event,
+    require_within_limit,
+    resolve_effective_plan,
+    resolve_effective_state,
+)
+from mykhaya.household_permissions import default_profile, home_admin_count, legacy_role
 from mykhaya.mailer import resolve_smtp_config, send_email
+from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
+from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ActionToken,
     AdministrativeAuditEvent,
@@ -29,12 +69,32 @@ from mykhaya.models import (
     AuditEvent,
     AuthIdentity,
     BackupRun,
+    BillingInterval,
+    CalendarEvent,
+    CalendarEventLabel,
+    CalendarShare,
+    ChildProfile,
+    ConsumerMfaPolicy,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
     Group,
+    HomeJoinRequest,
+    HomeJoinRequestStatus,
+    HomeSubscription,
+    HomeSubscriptionEvent,
+    HouseholdList,
+    HouseholdRelationship,
+    HouseholdRoutine,
+    IncidentLifecycleState,
     Invitation,
+    ManagedDemoHome,
+    ManagedDemoType,
+    Meal,
+    MealPlanEntry,
     Membership,
+    NativePushDevice,
+    NativePushDisabledSource,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -44,35 +104,67 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformAdministrator,
     PlatformAdministratorInvitation,
+    PlatformHolidayDate,
+    PlatformHolidaySource,
     PlatformPushSettings,
     PlatformRole,
     PlatformSession,
     PlatformSessionStatus,
     PlatformSetting,
     PlatformSmtpSettings,
+    PlatformStripeSettings,
+    ProductUsageEvent,
     PublicIncident,
     PushSubscription,
+    Reminder,
     SecurityEvent,
     Session,
     SmtpConnectionSecurity,
+    StatusIncidentService,
+    StatusIncidentUpdate,
+    StripeBillingDiagnostic,
+    StripeMode,
+    StripeWebhookEvent,
+    StripeWebhookFailure,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
     TokenPurpose,
+    TrustedDevice,
     User,
+    UserMfaMethodRecord,
+    UserPasskey,
+    Wishlist,
     WorkerJobRecord,
 )
-from mykhaya.module_registry import ReleaseState, feature_modules, module_definition
+from mykhaya.module_registry import (
+    ReleaseState,
+    feature_modules,
+    household_modules,
+    module_definition,
+)
 from mykhaya.notifications.default_templates import (
     DEFAULT_TEMPLATE_VERSION,
     SAMPLE_VARIABLES,
     TEMPLATES,
 )
-from mykhaya.notifications.engine import notify
-from mykhaya.notifications.push import generate_vapid_keypair, resolve_push_config, send_push
+from mykhaya.notifications.engine import enqueue_native_push, notify
+from mykhaya.notifications.push import (
+    generate_vapid_keypair,
+    resolve_apns_config,
+    resolve_fcm_config,
+    resolve_push_config,
+    send_push,
+)
 from mykhaya.notifications.templates import (
+    MissingRequiredTemplateVariable,
     UnknownTemplateVariable,
     get_override,
     render_notification,
+    render_notification_email,
     substitute,
     validate_override_text,
+    validate_required_variables,
 )
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_health import current_platform_health
@@ -99,20 +191,44 @@ from mykhaya.platform_schemas import (
     AdministratorSecurityResponse,
     AdministratorSecuritySummaryResponse,
     AdministratorUpdate,
+    AnonymiseEligibilityResponse,
+    AnonymiseUserRequest,
+    BulkLifecycleFailure,
+    BulkLifecycleRequest,
+    BulkLifecycleResponse,
+    ConsumerMfaPolicyResponse,
+    ConsumerMfaPolicyUpdate,
+    DrivewayDvlaTestRequest,
+    EntitlementsResponse,
     FeatureFlagUpdate,
+    GrantComplimentaryRequest,
+    HolidaySourceUpdate,
+    HomeAdministratorSummary,
+    HomeDeleteEligibilityResponse,
+    HomeSubscriptionResponse,
     IncidentCreate,
-    IncidentUpdate,
+    IncidentDeleteRequest,
+    IncidentResolveCreate,
+    IncidentUpdateCreate,
     InvitationState,
+    ManagedDemoExpiryUpdate,
+    ManagedDemoHomeCreate,
+    ManagedDemoHomeResponse,
+    ManagedDemoPasswordReset,
     MfaPolicyResponse,
     MfaPolicyUpdate,
     ModuleUpdate,
+    MoveMemberRequest,
     NoteRequest,
     NotificationTemplatePreviewRequest,
     NotificationTemplatePreviewResponse,
+    NotificationTemplateResetAllRequest,
     NotificationTemplateResponse,
     NotificationTemplateTestRequest,
+    NotificationTemplateTestSendRequest,
     NotificationTemplateUpdate,
     PageResponse,
+    PermanentDeleteHomeRequest,
     PlatformActorResponse,
     PlatformLoginRequest,
     PlatformReauthenticateRequest,
@@ -122,9 +238,29 @@ from mykhaya.platform_schemas import (
     RecoveryCodesResponse,
     RecoveryCodeStatusResponse,
     RecoveryCodeVerifyRequest,
+    RevokeComplimentaryRequest,
     SensitiveActionRequest,
     SettingUpdate,
     SmtpSettingsUpdate,
+    StripeBillingDiagnosticResponse,
+    StripeBillingDiagnosticsResponse,
+    StripeCheckoutInspectionRequest,
+    StripeCheckoutInspectionResponse,
+    StripeConfigurationResponse,
+    StripeModeSettingsResponse,
+    StripePriceInfo,
+    StripeSecretClearRequest,
+    StripeSettingsUpdate,
+    StripeTestConnectionRequest,
+    StripeTestConnectionResponse,
+    StripeWebhookHealthResponse,
+    StripeWebhookSummary,
+    SubscriptionDetailResponse,
+    SubscriptionEventResponse,
+    SubscriptionListItem,
+    SubscriptionListResponse,
+    SubscriptionSummaryResponse,
+    SyslogSettingsUpdate,
     TestEmailRequest,
     TotpCodeRequest,
     TotpDisableRequest,
@@ -135,6 +271,8 @@ from mykhaya.platform_schemas import (
     WebAuthnCredentialResponse,
     WebAuthnRegistrationOptionsResponse,
     WebAuthnRegistrationVerifyRequest,
+    WebhookEventSummary,
+    WebhookFailureSummary,
 )
 from mykhaya.platform_security import (
     MFA_POLICY_SETTING_KEY,
@@ -151,8 +289,21 @@ from mykhaya.platform_security import (
     resolve_admin_mfa_required,
     set_admin_cookies,
 )
+from mykhaya.platform_settings import (
+    ENVIRONMENT_ONLY_KEYS,
+    SETTINGS_SCHEMA,
+    resolve_environment_fallback,
+    validate_setting_value,
+)
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.secrets_crypto import SecretDecryptionError, decrypt_secret, encrypt_secret
+from mykhaya.routers.features import module_state
+from mykhaya.secrets_crypto import (
+    SecretDecryptionError,
+    decrypt_secret,
+    decrypt_stripe_secret,
+    encrypt_secret,
+    encrypt_stripe_secret,
+)
 from mykhaya.security import (
     DUMMY_HASH,
     create_action_token,
@@ -162,12 +313,264 @@ from mykhaya.security import (
     password_hash,
     verify_password,
 )
+from mykhaya.status_aggregation import (
+    PUBLIC_SERVICES,
+    highest_severity,
+    is_incident_active,
+    overall_message,
+    service_states_from_impacts,
+)
+from mykhaya.syslog_forwarding import (
+    SyslogConfig,
+    current_dispatcher,
+    syslog_config_from_platform_value,
+)
 
 router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
 log = structlog.get_logger()
 ALL_ROLES = tuple(PlatformRole)
 OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
 SUPPORT = (*OPERATORS, PlatformRole.support)
+
+
+async def _managed_demo_response(
+    db: AsyncSession, row: ManagedDemoHome, owner: User
+) -> ManagedDemoHomeResponse:
+    # Computed from the Home's actual subscription, never assumed —
+    # Free Plan Demo resolves to the real Free plan through the normal
+    # entitlement path (see ManagedDemoService.create), so this must reflect
+    # that rather than hardcoding "family" for every template.
+    subscription = await get_home_subscription(db, row.home_id)
+    is_free = subscription is not None and subscription.plan == SubscriptionPlan.free
+    access: Literal["family", "free"] = "free" if is_free else "family"
+    return ManagedDemoHomeResponse(
+        id=row.id,
+        fixture_key=row.fixture_key,
+        display_name=row.display_name,
+        fixture_type=row.fixture_type.value,
+        home_id=row.home_id,
+        owner_user_id=row.owner_user_id,
+        status=row.status.value,
+        template_version=row.template_version,
+        expires_at=row.expires_at,
+        refreshed_at=row.refreshed_at,
+        created_at=row.created_at,
+        created_by=row.created_by,
+        disabled_at=row.disabled_at,
+        account_email=owner.email,
+        email_verified=owner.email_verified_at is not None,
+        access=access,
+    )
+
+
+@router.get("/demo-test-homes", response_model=list[ManagedDemoHomeResponse])
+async def managed_demo_homes(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ManagedDemoHomeResponse]:
+    rows = (await db.scalars(select(ManagedDemoHome).order_by(ManagedDemoHome.created_at))).all()
+    result: list[ManagedDemoHomeResponse] = []
+    for row in rows:
+        owner = await db.get(User, row.owner_user_id)
+        if owner is not None:
+            result.append(await _managed_demo_response(db, row, owner))
+    return result
+
+
+@router.post("/demo-test-homes", response_model=ManagedDemoHomeResponse, status_code=201)
+async def create_managed_demo_home(
+    body: ManagedDemoHomeCreate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    settings = get_settings()
+    require_recent_auth(context, settings)
+    try:
+        row = await ManagedDemoService.create(
+            db,
+            fixture_key=body.fixture_key,
+            display_name=body.display_name,
+            fixture_type=ManagedDemoType(body.fixture_type),
+            email=str(body.email),
+            password=body.password,
+            created_by=context.administrator.id,
+            expires_at=body.expires_at,
+            enabled=body.enabled,
+        )
+    except ManagedDemoError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        # Preflight checks and namespaced fixture identities handle normal
+        # cases. Keep concurrent genuine conflicts safe for PCC without
+        # exposing SQL or database constraint names.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A managed demo/test Home with that fixture key or account email already exists.",
+        ) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.created",
+        "managed_demo_home",
+        row.id,
+        new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value},
+    )
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return await _managed_demo_response(db, row, owner)
+
+
+@router.post("/demo-test-homes/{fixture_id}/enable", response_model=ManagedDemoHomeResponse)
+async def enable_managed_demo_home(
+    fixture_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    return await _set_managed_demo_enabled(fixture_id, True, request, context, db)
+
+
+@router.post("/demo-test-homes/{fixture_id}/disable", response_model=ManagedDemoHomeResponse)
+async def disable_managed_demo_home(
+    fixture_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    return await _set_managed_demo_enabled(fixture_id, False, request, context, db)
+
+
+async def _set_managed_demo_enabled(
+    fixture_id: uuid.UUID,
+    enabled: bool,
+    request: Request,
+    context: PlatformContext,
+    db: AsyncSession,
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.set_enabled(db, row, enabled)
+    platform_audit(
+        db,
+        request,
+        context,
+        f"managed_demo.{'enabled' if enabled else 'disabled'}",
+        "managed_demo_home",
+        row.id,
+    )
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return await _managed_demo_response(db, row, owner)
+
+
+@router.post("/demo-test-homes/{fixture_id}/password", status_code=204)
+async def reset_managed_demo_password(
+    fixture_id: uuid.UUID,
+    body: ManagedDemoPasswordReset,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.reset_password(db, row, body.password)
+    platform_audit(db, request, context, "managed_demo.password_reset", "managed_demo_home", row.id)
+    await db.commit()
+
+
+@router.post("/demo-test-homes/{fixture_id}/refresh", response_model=ManagedDemoHomeResponse)
+async def refresh_managed_demo_home(
+    fixture_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.refresh_template(db, row)
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.refreshed",
+        "managed_demo_home",
+        row.id,
+        reason=body.reason,
+    )
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return await _managed_demo_response(db, row, owner)
+
+
+@router.patch("/demo-test-homes/{fixture_id}/expiry", response_model=ManagedDemoHomeResponse)
+async def update_managed_demo_expiry(
+    fixture_id: uuid.UUID,
+    body: ManagedDemoExpiryUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    await ManagedDemoService.set_expiry(db, row, body.expires_at)
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.expiry_changed",
+        "managed_demo_home",
+        row.id,
+        new={"expires_at": body.expires_at.isoformat() if body.expires_at else None},
+    )
+    await db.commit()
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return await _managed_demo_response(db, row, owner)
+
+
+@router.delete("/demo-test-homes/{fixture_id}", status_code=204)
+async def delete_managed_demo_home(
+    fixture_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    require_recent_auth(context, get_settings())
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        return
+    try:
+        await ManagedDemoService.delete(db, row)
+    except ManagedDemoError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.deleted",
+        "managed_demo_home",
+        fixture_id,
+        reason=body.reason,
+    )
+    await db.commit()
+
+
 SECURITY = (PlatformRole.owner, PlatformRole.security)
 SETTINGS = (PlatformRole.owner,)
 # Arbitrary fixed key for the transaction-scoped advisory lock guarding the
@@ -176,7 +579,13 @@ SETTINGS = (PlatformRole.owner,)
 OWNER_MEMBERSHIP_LOCK_KEY = 0x4D794B68_4F776E72  # "MyKh" "Ownr" as hex, arbitrary
 
 
-def actor_response(admin: PlatformAdministrator, session_status: str) -> PlatformActorResponse:
+def actor_response(
+    admin: PlatformAdministrator,
+    session_status: str,
+    *,
+    available_factors: list[str] | None = None,
+    recovery_codes: list[str] | None = None,
+) -> PlatformActorResponse:
     return PlatformActorResponse(
         id=admin.id,
         email=admin.email,
@@ -184,7 +593,61 @@ def actor_response(admin: PlatformAdministrator, session_status: str) -> Platfor
         role=admin.role,
         mfa_enrolled=admin.mfa_enrolled,
         session_status=session_status,
+        available_factors=available_factors or [],
+        recovery_codes=recovery_codes,
     )
+
+
+async def _available_factors(db: AsyncSession, admin: PlatformAdministrator) -> list[str]:
+    factors: list[str] = []
+    if await db.scalar(
+        select(AdminWebAuthnCredential.id).where(
+            AdminWebAuthnCredential.administrator_id == admin.id
+        )
+    ):
+        factors.append("passkey")
+    if admin.totp_enabled:
+        factors.append("totp")
+    if await db.scalar(
+        select(AdminRecoveryCode.id).where(
+            AdminRecoveryCode.administrator_id == admin.id,
+            AdminRecoveryCode.used_at.is_(None),
+        )
+    ):
+        factors.append("recovery_code")
+    return factors
+
+
+async def _issue_recovery_codes_if_first_factor(
+    db: AsyncSession, settings: Settings, admin: PlatformAdministrator, was_enrolled: bool
+) -> list[str] | None:
+    """Generates this administrator's recovery codes in the same transaction
+    as their *first* completed MFA factor, rather than relying on a second,
+    separate frontend call after the fact — a passkey/TOTP registration that
+    completes here can never again leave an administrator with a "fully
+    enrolled" account and zero recovery codes, even if the browser tab closes
+    or the network drops immediately afterwards. Only fires once: an
+    administrator adding a second/third factor, or one who already holds
+    unused codes, is left untouched (regeneration is still available
+    separately via /auth/mfa/recovery-codes)."""
+    if was_enrolled:
+        return None
+    has_codes = await db.scalar(
+        select(AdminRecoveryCode.id).where(
+            AdminRecoveryCode.administrator_id == admin.id,
+            AdminRecoveryCode.used_at.is_(None),
+        )
+    )
+    if has_codes:
+        return None
+    codes = generate_recovery_codes()
+    for code in codes:
+        db.add(
+            AdminRecoveryCode(
+                administrator_id=admin.id, code_hash=hash_recovery_code(settings, code)
+            )
+        )
+    return codes
 
 
 @router.post("/auth/login", response_model=PlatformActorResponse)
@@ -242,7 +705,12 @@ async def login(
     )
     await db.commit()
     set_admin_cookies(response, raw, csrf, settings)
-    return actor_response(admin, session_status.value)
+    factors = (
+        await _available_factors(db, admin)
+        if session_status == PlatformSessionStatus.pending_mfa
+        else []
+    )
+    return actor_response(admin, session_status.value, available_factors=factors)
 
 
 @router.get("/auth/me", response_model=PlatformActorResponse)
@@ -509,6 +977,7 @@ async def verify_totp_setup(
     admin.totp_enabled = True
     admin.totp_verified_at = datetime.now(UTC)
     admin.mfa_enrolled = True
+    recovery_codes = await _issue_recovery_codes_if_first_factor(db, settings, admin, was_enrolled)
     new_context = await _complete_login_step(
         db,
         request,
@@ -517,7 +986,17 @@ async def verify_totp_setup(
         settings,
         "administrator.mfa_enrolled" if not was_enrolled else "administrator.totp_enabled",
     )
-    return actor_response(admin, new_context.session.status.value)
+    if recovery_codes is not None:
+        platform_audit(
+            db,
+            request,
+            new_context,
+            "administrator.recovery_codes_generated",
+            "administrator",
+            admin.id,
+        )
+        await db.commit()
+    return actor_response(admin, new_context.session.status.value, recovery_codes=recovery_codes)
 
 
 @router.post("/auth/mfa/totp/disable", status_code=status.HTTP_204_NO_CONTENT)
@@ -650,6 +1129,7 @@ async def webauthn_register_verify(
         )
     )
     admin.mfa_enrolled = True
+    recovery_codes = await _issue_recovery_codes_if_first_factor(db, settings, admin, was_enrolled)
     new_context = await _complete_login_step(
         db,
         request,
@@ -658,7 +1138,17 @@ async def webauthn_register_verify(
         settings,
         "administrator.mfa_enrolled" if not was_enrolled else "administrator.passkey_registered",
     )
-    return actor_response(admin, new_context.session.status.value)
+    if recovery_codes is not None:
+        platform_audit(
+            db,
+            request,
+            new_context,
+            "administrator.recovery_codes_generated",
+            "administrator",
+            admin.id,
+        )
+        await db.commit()
+    return actor_response(admin, new_context.session.status.value, recovery_codes=recovery_codes)
 
 
 @router.get("/auth/mfa/webauthn/credentials", response_model=list[WebAuthnCredentialResponse])
@@ -969,6 +1459,287 @@ async def update_mfa_policy(
     return MfaPolicyResponse(required=body.required, environment_enforced=False)
 
 
+def _consumer_policy_response(
+    *, configured: str, effective: str, source: str, methods: set[str], settings: Settings
+) -> ConsumerMfaPolicyResponse:
+    return ConsumerMfaPolicyResponse(
+        configured=configured,
+        effective=effective,
+        source=source,
+        allowed_methods=sorted(methods),
+        enforcement_enabled=settings.browser_mfa_handoff_enabled,
+    )
+
+
+async def _consumer_platform_values(db: AsyncSession) -> tuple[str, set[str]]:
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY)
+    )
+    value = row.value if row else {}
+    return str(value.get("policy", "optional")), set(
+        value.get("allowed_methods", ["totp", "email"])
+    )
+
+
+async def _validate_consumer_policy_users(
+    db: AsyncSession, settings: Settings, user_ids: list[uuid.UUID]
+) -> None:
+    """Validate effective policies after a pending policy change is flushed."""
+    for user_id in user_ids:
+        try:
+            await resolve_consumer_mfa_policy(db, user_id, settings)
+        except ConsumerMfaPolicyError:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This policy would leave some users without an available MFA method.",
+            ) from None
+
+
+@router.get("/auth/mfa/browser-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_platform_policy(
+    _: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    configured, methods = await _consumer_platform_values(db)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=configured,
+        source="platform",
+        methods=methods,
+        settings=settings,
+    )
+
+
+@router.put("/auth/mfa/browser-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_platform_policy(
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(PlatformRole.owner)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    configured = policy_value(body.policy)
+    if configured == "inherit":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Platform policy cannot inherit.")
+    methods = methods_value(body.allowed_methods)
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY)
+    )
+    previous = row.value if row else {"policy": "optional", "allowed_methods": ["totp", "email"]}
+    if row is None:
+        row = PlatformSetting(key=CONSUMER_MFA_POLICY_SETTING_KEY, value={})
+        db.add(row)
+    row.value = {"policy": configured, "allowed_methods": methods}
+    row.updated_by = context.administrator.id
+    await db.flush()
+    user_ids = list(await db.scalars(select(User.id).where(User.is_active.is_(True))))
+    try:
+        await _validate_consumer_policy_users(db, settings, user_ids)
+    except HTTPException:
+        await db.rollback()
+        raise
+    platform_audit(
+        db,
+        request,
+        context,
+        "MFA_PLATFORM_POLICY_CHANGED",
+        "platform_setting",
+        None,
+        reason=body.reason,
+        previous=previous,
+        new=row.value,
+    )
+    if configured == "required":
+        platform_audit(db, request, context, "MFA_ENFORCEMENT_ENABLED", "platform_setting", None)
+    elif previous.get("policy") == "required":
+        platform_audit(db, request, context, "MFA_ENFORCEMENT_DISABLED", "platform_setting", None)
+    await db.commit()
+    return _consumer_policy_response(
+        configured=configured,
+        effective=configured,
+        source="platform",
+        methods=set(methods),
+        settings=settings,
+    )
+
+
+@router.get("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_home_policy(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    platform_policy, methods = await _consumer_platform_values(db)
+    configured = group.mfa_policy.value
+    effective = (
+        "required" if configured == "required" or platform_policy == "required" else "optional"
+    )
+    source = "home" if configured == "required" else "platform"
+    if group.mfa_allowed_methods is not None:
+        methods &= set(group.mfa_allowed_methods)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=effective,
+        source=source,
+        methods=methods,
+        settings=settings,
+    )
+
+
+@router.put("/homes/{group_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_home_policy(
+    group_id: uuid.UUID,
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(PlatformRole.owner)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    group = await db.get(Group, group_id, with_for_update=True)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    configured = policy_value(body.policy)
+    methods = methods_value(body.allowed_methods)
+    platform_policy, platform_methods = await _consumer_platform_values(db)
+    if configured == "optional" and platform_policy == "required":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A Home cannot weaken the platform MFA requirement."
+        )
+    if not (set(methods) & platform_methods):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The Home must retain a method allowed by the platform."
+        )
+    previous = {"policy": group.mfa_policy.value, "allowed_methods": group.mfa_allowed_methods}
+    group.mfa_policy = ConsumerMfaPolicy(configured)
+    group.mfa_allowed_methods = None if set(methods) == platform_methods else methods
+    await db.flush()
+    member_ids = list(
+        await db.scalars(
+            select(Membership.user_id).where(
+                Membership.group_id == group.id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    )
+    try:
+        await _validate_consumer_policy_users(db, settings, member_ids)
+    except HTTPException:
+        await db.rollback()
+        raise
+    platform_audit(
+        db,
+        request,
+        context,
+        "MFA_HOME_POLICY_CHANGED",
+        "home",
+        group.id,
+        reason=body.reason,
+        previous=previous,
+        new={"policy": configured, "allowed_methods": group.mfa_allowed_methods},
+    )
+    await db.commit()
+    effective = (
+        "required" if configured == "required" or platform_policy == "required" else "optional"
+    )
+    return _consumer_policy_response(
+        configured=configured,
+        effective=effective,
+        source="home" if configured == "required" else "platform",
+        methods=set(methods) & platform_methods,
+        settings=settings,
+    )
+
+
+@router.get("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def consumer_mfa_user_policy(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    return _consumer_policy_response(
+        configured=user.mfa_policy.value,
+        effective=policy.effective,
+        source=policy.source,
+        methods=set(policy.allowed_methods),
+        settings=settings,
+    )
+
+
+@router.put("/users/{user_id}/auth/mfa-policy", response_model=ConsumerMfaPolicyResponse)
+async def update_consumer_mfa_user_policy(
+    user_id: uuid.UUID,
+    body: ConsumerMfaPolicyUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ConsumerMfaPolicyResponse:
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    configured = policy_value(body.policy)
+    methods = methods_value(body.allowed_methods)
+    current = await resolve_consumer_mfa_policy(db, user_id, settings)
+    if configured == "optional" and current.required and current.source != "user":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A User cannot weaken an inherited MFA requirement."
+        )
+    _, platform_methods = await _consumer_platform_values(db)
+    if not (set(methods) & platform_methods):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The User must retain a method allowed by the platform."
+        )
+    previous = {"policy": user.mfa_policy.value, "allowed_methods": user.mfa_allowed_methods}
+    user.mfa_policy = ConsumerMfaPolicy(configured)
+    user.mfa_allowed_methods = methods
+    await db.flush()
+    try:
+        await _validate_consumer_policy_users(db, settings, [user.id])
+    except HTTPException:
+        await db.rollback()
+        raise
+    event = (
+        "MFA_USER_FORCED"
+        if configured == "required"
+        else "MFA_USER_FORCE_REMOVED"
+        if previous["policy"] == "required"
+        else "MFA_USER_POLICY_CHANGED"
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        event,
+        "user",
+        user.id,
+        reason=body.reason,
+        previous=previous,
+        new={"policy": configured, "allowed_methods": methods},
+    )
+    await db.commit()
+    resolved = await resolve_consumer_mfa_policy(db, user_id, settings)
+    return _consumer_policy_response(
+        configured=configured,
+        effective=resolved.effective,
+        source=resolved.source,
+        methods=set(resolved.allowed_methods),
+        settings=settings,
+    )
+
+
 @router.get("/administrators/{administrator_id}/security")
 async def administrator_security(
     administrator_id: uuid.UUID,
@@ -1266,8 +2037,9 @@ async def _send_invitation_email(
     inviter_display_name: str,
     raw_token: str,
 ) -> None:
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "platform_administrator_invitation",
         {
             "inviter_display_name": inviter_display_name,
@@ -1284,6 +2056,7 @@ async def _send_invitation_email(
         title=subject,
         body=message,
         idempotency_key=f"platform_administrator_invitation:{row.id}:{row.token_hash}",
+        html_body=html,
     )
 
 
@@ -1688,6 +2461,18 @@ async def overview(
                 "href": "/mail",
             }
         )
+    stripe_webhook = current_health.stripe_webhook
+    if stripe_webhook.configured:
+        service_states.append({"service": "Stripe webhooks", "state": stripe_webhook.state.title()})
+        if stripe_webhook.reason:
+            actions.append(
+                {
+                    "severity": "warning",
+                    "title": "Stripe webhook processing is degraded",
+                    "detail": stripe_webhook.reason,
+                    "href": "/subscriptions",
+                }
+            )
 
     metadata_candidates = {
         "version": settings.version,
@@ -1813,12 +2598,137 @@ async def overview(
     }
 
 
+LifecycleState = Literal["active", "disabled", "archived", "all"]
+
+
+def _lifecycle_state(is_active: bool, archived_at: datetime | None) -> str:
+    if archived_at is not None:
+        return "archived"
+    return "active" if is_active else "disabled"
+
+
+def _user_presentation_lifecycle(user: User) -> str:
+    """PCC display only (Slice 5B §20) — never used for filtering/
+    notification-eligibility, which stay exactly Active/Disabled/Archived
+    via _lifecycle_state (an anonymised user is, operationally, still just
+    Archived: is_active=False, archived_at set). This exists solely so the
+    User detail/list responses can render "Anonymised" instead of
+    "Archived" once anonymised_at is set, per the explicit instruction not
+    to invent a fourth operational lifecycle state anywhere else."""
+    if user.anonymised_at is not None:
+        return "anonymised"
+    return _lifecycle_state(user.is_active, user.archived_at)
+
+
+def _lifecycle_filter(
+    model: type[User] | type[Group], lifecycle: LifecycleState | None
+) -> Any | None:
+    """Shared Active/Disabled/Archived/All filter for the PCC users/homes
+    list endpoints (migration 0053_lifecycle_archived_state). Deliberately a
+    new, explicit `lifecycle` param rather than changing what the existing
+    `active` bool param means — `active=false` still matches every non-Active
+    row exactly as it always has, now including Archived ones too, which
+    were never a distinct row shape before this migration."""
+    if lifecycle is None or lifecycle == "all":
+        return None
+    if lifecycle == "archived":
+        return model.archived_at.is_not(None)
+    if lifecycle == "active":
+        return and_(model.is_active.is_(True), model.archived_at.is_(None))
+    return and_(model.is_active.is_(False), model.archived_at.is_(None))  # disabled
+
+
+class LifecycleActionError(Exception):
+    """A per-target lifecycle transition that can't be applied — expected,
+    recoverable, and safe to surface verbatim (never wraps an unexpected
+    exception). Raised by the _apply_*_disable/archive/restore helpers below
+    and caught by both the single-entity endpoints (→ HTTPException) and the
+    Slice 4 bulk endpoints (→ one entry in the response's `failed` list),
+    so both call sites reject the same transitions for the same reasons."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+async def _apply_user_disable(db: AsyncSession, user: User) -> str:
+    """Mutates `user` toward Disabled and revokes its Sessions/TrustedDevices
+    — the single source of truth for user suspend_user (single-entity) and
+    bulk_user_lifecycle (Slice 4) share. Returns the previous lifecycle
+    label for the caller's audit event. Does not write audit or commit —
+    callers differ on batching, so they own that."""
+    if user.archived_at is not None:
+        raise LifecycleActionError("archived", "This user is archived. Restore the user instead.")
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+    user.is_active = False
+    user.suspended_at = now
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    return previous_lifecycle
+
+
+async def _apply_user_archive(db: AsyncSession, user: User) -> str:
+    """Shared by archive_user (single-entity) and bulk_user_lifecycle. Always
+    a safe idempotent success on an already-archived user, matching
+    archive_user's existing behaviour."""
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+    user.is_active = False
+    user.suspended_at = now
+    user.archived_at = now
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    return previous_lifecycle
+
+
+def _apply_home_disable(group: Group) -> str:
+    """Shared by home_state's suspend action and bulk_home_lifecycle."""
+    if group.archived_at is not None:
+        raise LifecycleActionError("archived", "This Home is archived. Restore the Home instead.")
+    previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
+    group.is_active = False
+    group.suspended_at = datetime.now(UTC)
+    return previous_lifecycle
+
+
+def _apply_home_archive(group: Group) -> str:
+    """Shared by home_state's archive action and bulk_home_lifecycle. Only
+    the Home's own row changes — member User accounts are never touched."""
+    previous_lifecycle = _lifecycle_state(group.is_active, group.archived_at)
+    now = datetime.now(UTC)
+    group.is_active = False
+    group.suspended_at = now
+    group.archived_at = now
+    return previous_lifecycle
+
+
 @router.get("/users", response_model=PageResponse)
 async def users(
     q: str | None = Query(default=None, max_length=100),
     verified: bool | None = None,
     active: bool | None = None,
-    sort: Literal["created_at", "email", "display_name", "last_login_at"] = "created_at",
+    lifecycle: LifecycleState | None = Query(default=None),
+    sort: Literal[
+        "created_at", "email", "display_name", "last_login_at", "last_activity_at"
+    ] = "created_at",
     direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -1833,7 +2743,10 @@ async def users(
         filters.append(
             User.email_verified_at.is_not(None) if verified else User.email_verified_at.is_(None)
         )
-    if active is not None:
+    lifecycle_filter = _lifecycle_filter(User, lifecycle)
+    if lifecycle_filter is not None:
+        filters.append(lifecycle_filter)
+    elif active is not None:
         filters.append(User.is_active.is_(active))
     where = and_(*filters)
     total = await db.scalar(select(func.count(User.id)).where(where)) or 0
@@ -1889,6 +2802,7 @@ async def users(
                 "display_name": row.display_name,
                 "verified": row.email_verified_at is not None,
                 "active": row.is_active,
+                "lifecycle": _user_presentation_lifecycle(row),
                 "created_at": row.created_at,
                 "last_login_at": row.last_login_at,
                 "last_activity_at": row.last_activity_at,
@@ -1908,6 +2822,7 @@ async def user_detail(
     user_id: uuid.UUID,
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     user = await db.get(User, user_id)
     if user is None:
@@ -1938,12 +2853,22 @@ async def user_detail(
             .limit(50)
         )
     ).all()
+    consumer_policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    mfa_methods = (
+        await db.execute(
+            select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled).where(
+                UserMfaMethodRecord.user_id == user_id
+            )
+        )
+    ).all()
     return {
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
         "verified": user.email_verified_at is not None,
         "active": user.is_active,
+        "lifecycle": _user_presentation_lifecycle(user),
+        "anonymised_at": user.anonymised_at,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
         "last_activity_at": user.last_activity_at,
@@ -1970,6 +2895,15 @@ async def user_detail(
             }
             for row in notes
         ],
+        "authentication_mfa": {
+            "configured": user.mfa_policy,
+            "effective": consumer_policy.effective,
+            "source": consumer_policy.source,
+            "allowed_methods": sorted(consumer_policy.allowed_methods),
+            "methods": [
+                {"method": method.value, "enabled": enabled} for method, enabled in mfa_methods
+            ],
+        },
     }
 
 
@@ -1986,15 +2920,20 @@ async def _user_state_action(
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
-    previous = user.is_active
-    user.is_active = active
-    user.suspended_at = None if active else datetime.now(UTC)
-    if not active:
-        await db.execute(
-            update(Session)
-            .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
+    if active:
+        if user.archived_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This user is archived. Restore the user instead."
+            )
+        previous = user.is_active
+        user.is_active = True
+        user.suspended_at = None
+    else:
+        try:
+            previous_lifecycle = await _apply_user_disable(db, user)
+        except LifecycleActionError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, error.message) from error
+        previous = previous_lifecycle == "active"
     platform_audit(
         db,
         request,
@@ -2034,6 +2973,597 @@ async def reactivate_user(
     return await _user_state_action(user_id, True, body, request, context, db, settings)
 
 
+@router.post("/users/{user_id}/archive")
+async def archive_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Retire a User account: distinct from Disabled (suspend_user) — see the
+    three-state model in migration 0053_lifecycle_archived_state. Archiving
+    an already-archived user is a safe idempotent success (re-stamps
+    archived_at), matching suspend_user's existing behaviour for an
+    already-suspended user rather than introducing a new error case."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    previous_lifecycle = await _apply_user_archive(db, user)
+    assert user.archived_at is not None  # _apply_user_archive always sets it
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.archived",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": previous_lifecycle},
+        new={"lifecycle": "archived", "archived_at": user.archived_at.isoformat()},
+    )
+    await db.commit()
+    return {"message": "User archived and sessions revoked."}
+
+
+@router.post("/users/{user_id}/restore")
+async def restore_user(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Restore an archived User to Active. Deliberately separate from
+    reactivate_user (which now refuses an archived user) so Disabled and
+    Archived never collapse back into one state. Sessions/trusted devices
+    revoked while archived stay revoked — the user must authenticate
+    normally again, the same as after a suspend."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if user.archived_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This user is not archived.")
+    if user.anonymised_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This user has been anonymised and cannot be restored.",
+        )
+    user.is_active = True
+    user.suspended_at = None
+    user.archived_at = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.restored",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": "archived"},
+        new={"lifecycle": "active"},
+    )
+    await db.commit()
+    return {"message": "User restored to Active."}
+
+
+_USER_ANONYMISE_BLOCKER_MESSAGES = {
+    "not_archived": "This user must be Archived before they can be anonymised.",
+    "already_anonymised": "This user has already been anonymised.",
+    "last_home_admin": "Assign another Home Admin before anonymising this user.",
+    "billing_owner_of_non_free_subscription": (
+        "This person is the billing owner of a paid subscription. "
+        "Reassign billing ownership before anonymising them."
+    ),
+}
+
+
+async def _user_anonymise_blockers(db: AsyncSession, user: User) -> list[str]:
+    """Slice 5B — every reason `anonymise_user` would refuse, computed
+    up front (rather than fail-fast) so both the mutation and the read-only
+    eligibility preflight report the exact same set. Mirrors Slice 2's
+    last-Home-Admin and billing-owner guards exactly, applied across every
+    Home the user currently belongs to rather than just one Move Member
+    source Home."""
+    blockers: list[str] = []
+    if user.archived_at is None:
+        blockers.append("not_archived")
+    if user.anonymised_at is not None:
+        blockers.append("already_anonymised")
+
+    active_memberships = (
+        await db.scalars(
+            select(Membership).where(Membership.user_id == user.id, Membership.removed_at.is_(None))
+        )
+    ).all()
+    for membership in active_memberships:
+        if membership.relationship != HouseholdRelationship.home_admin:
+            continue
+        other_active_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == membership.group_id,
+                    Membership.user_id != user.id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if other_active_members > 0 and await home_admin_count(db, membership.group_id) <= 1:
+            blockers.append("last_home_admin")
+            break
+
+    non_free_billing = await db.scalar(
+        select(HomeSubscription.id).where(
+            HomeSubscription.billing_owner_user_id == user.id,
+            HomeSubscription.plan != SubscriptionPlan.free,
+        )
+    )
+    if non_free_billing is not None:
+        blockers.append("billing_owner_of_non_free_subscription")
+
+    return blockers
+
+
+async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int, str | None]:
+    """Mutates `user` and its dependent rows in place. Returns
+    (previous_lifecycle, memberships_removed_count, previous_avatar_key —
+    the caller deletes the file itself, best-effort, after commit). Does
+    not write audit or commit — the caller owns both."""
+    previous_lifecycle = _lifecycle_state(user.is_active, user.archived_at)
+    now = datetime.now(UTC)
+
+    # Membership (Slice 5B §5 — amends Slice 5A): preserve every row, but an
+    # anonymised user must not remain an active member of anything.
+    active_memberships = (
+        await db.scalars(
+            select(Membership).where(Membership.user_id == user.id, Membership.removed_at.is_(None))
+        )
+    ).all()
+    for membership in active_memberships:
+        membership.removed_at = now
+
+    # Auth/session/device data — hard-deleted where there is no "revoke"
+    # concept at all (password hash, passkey, device token, one-time
+    # token), revoked using the existing suspend/archive mechanism where
+    # one already exists (Session/TrustedDevice) rather than inventing a
+    # second one.
+    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user.id))
+    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user.id))
+    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id))
+    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user.id))
+    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user.id))
+    await db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+
+    # PII — overwritten, never fabricated; the tombstone email format
+    # mirrors the existing mykhaya.routers.children.anonymise_child
+    # convention exactly.
+    previous_avatar_key = user.avatar_key
+    user.display_name = "Deleted user"
+    user.email = f"deleted-{user.id}@removed.mykhaya.invalid"
+    user.avatar_key = None
+    user.avatar_updated_at = None
+    user.birth_month = None
+    user.birth_day = None
+    user.birth_year = None
+
+    # Lifecycle: anonymised implies archived implies disabled — never set
+    # is_active=True with anonymised_at set.
+    user.is_active = False
+    if user.suspended_at is None:
+        user.suspended_at = now
+    if user.archived_at is None:
+        user.archived_at = now
+    user.anonymised_at = now
+
+    return previous_lifecycle, len(active_memberships), previous_avatar_key
+
+
+@router.get("/users/{user_id}/anonymise/eligibility", response_model=AnonymiseEligibilityResponse)
+async def user_anonymise_eligibility(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> AnonymiseEligibilityResponse:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    blockers = await _user_anonymise_blockers(db, user)
+    return AnonymiseEligibilityResponse(eligible=not blockers, blockers=blockers)
+
+
+@router.post("/users/{user_id}/anonymise")
+async def anonymise_user(
+    user_id: uuid.UUID,
+    body: AnonymiseUserRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """PCC "Anonymise user" (Slice 5B). Irreversible — see restore_user's
+    anonymised_at guard. Never records the pre-anonymisation email/display
+    name/avatar in the audit event (Slice 5B §11 — a deliberate amendment
+    to Slice 5A's snapshot-before-delete proposal, since that would
+    preserve exactly the PII this action exists to erase)."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if body.confirmation_text != user.email:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Confirmation text does not match this user's current email.",
+        )
+    blockers = await _user_anonymise_blockers(db, user)
+    if blockers:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            _USER_ANONYMISE_BLOCKER_MESSAGES.get(
+                blockers[0], "This user cannot be anonymised right now."
+            ),
+        )
+
+    previous_lifecycle, removed_membership_count, previous_avatar_key = await _apply_user_anonymise(
+        db, user
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": previous_lifecycle},
+        new={
+            "lifecycle": "anonymised",
+            "anonymised_at": user.anonymised_at.isoformat() if user.anonymised_at else None,
+            "fields_anonymised": [
+                "display_name",
+                "email",
+                "avatar_key",
+                "birth_month",
+                "birth_day",
+                "birth_year",
+            ],
+            "memberships_removed": removed_membership_count,
+        },
+    )
+    await db.commit()
+
+    if previous_avatar_key:
+        storage = get_avatar_storage(settings)
+        try:
+            await storage.delete(previous_avatar_key)
+        except OSError:  # cleanup best-effort, never fail the request
+            await log.awarning("avatar_cleanup_failed", user_id=str(user_id))
+
+    return {"message": "User anonymised."}
+
+
+@router.post("/users/bulk-lifecycle", response_model=BulkLifecycleResponse)
+async def bulk_user_lifecycle(
+    body: BulkLifecycleRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BulkLifecycleResponse:
+    """PCC → Account & Home Cleanup (Slice 4) — bulk Disable/Archive for
+    Users. Applies the exact same _apply_user_disable/_apply_user_archive
+    transitions suspend_user/archive_user use, once per target, each in its
+    own commit so one bad id can never roll back an already-succeeded one.
+    Every id is re-validated here regardless of what the cleanup UI already
+    filtered client-side. Deliberately excludes reactivate/restore — see
+    BulkLifecycleRequest's docstring."""
+    require_recent_auth(context, settings)
+    batch_id = uuid.uuid4()
+    succeeded: list[uuid.UUID] = []
+    failed: list[BulkLifecycleFailure] = []
+    seen: set[uuid.UUID] = set()
+    for user_id in body.ids:
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        user = await db.get(User, user_id, with_for_update=True)
+        if user is None:
+            failed.append(
+                BulkLifecycleFailure(
+                    id=user_id, code="not_found", message="That user could not be found."
+                )
+            )
+            continue
+        try:
+            if body.action == "disable":
+                previous_lifecycle = await _apply_user_disable(db, user)
+                new_lifecycle, audit_action = "disabled", "user.suspended"
+            else:
+                previous_lifecycle = await _apply_user_archive(db, user)
+                new_lifecycle, audit_action = "archived", "user.archived"
+        except LifecycleActionError as error:
+            # Nothing was mutated before the guard raised, so there is
+            # nothing to roll back — and rolling back here would expire
+            # context.administrator (loaded on this same session), breaking
+            # platform_audit() for every target processed afterwards.
+            failed.append(BulkLifecycleFailure(id=user_id, code=error.code, message=error.message))
+            continue
+        platform_audit(
+            db,
+            request,
+            context,
+            audit_action,
+            "user",
+            user.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": new_lifecycle, "batch_id": str(batch_id)},
+        )
+        await db.commit()
+        succeeded.append(user_id)
+    return BulkLifecycleResponse(succeeded=succeeded, failed=failed)
+
+
+_MOVE_MEMBER_ALLOWED_RELATIONSHIPS = {
+    HouseholdRelationship.home_admin,
+    HouseholdRelationship.partner,
+    HouseholdRelationship.adult,
+}
+
+
+@router.post("/users/{user_id}/move-home")
+async def move_member(
+    user_id: uuid.UUID,
+    body: MoveMemberRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Move an existing user's active membership from one Home to another —
+    the PCC recovery path for "User B independently created their own Home
+    when they should have joined User A's" (see Slice 2 of the Home
+    membership/lifecycle work). A *membership transfer*, never a Home-data
+    merge: calendars/events/lists/routines/reminders/invitations/audit
+    history all stay put on the source Home. Mirrors the same
+    membership-creation shape routers.invitations.accept() and
+    routers.groups.approve_join_request() already use (role/permission
+    derived from relationship, colour assignment, Personal Calendar
+    provisioning, reuse-if-historically-removed via Membership's
+    (group_id, user_id) unique constraint) — kept as its own explicit block
+    here rather than extracted into a shared helper, so this PCC-only path
+    stays independently reviewable from the two existing consumer-facing
+    ones it deliberately parallels."""
+    require_recent_auth(context, settings)
+
+    if body.source_group_id == body.destination_group_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Source and destination Home must be different."
+        )
+    if body.destination_relationship not in _MOVE_MEMBER_ALLOWED_RELATIONSHIPS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Choose Home Admin, Partner or Adult as the destination relationship.",
+        )
+
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    source_group = await db.get(Group, body.source_group_id, with_for_update=True)
+    if source_group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That source Home could not be found.")
+    destination_group = await db.get(Group, body.destination_group_id, with_for_update=True)
+    if destination_group is None or not destination_group.is_active:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The destination Home could not be found or is not active.",
+        )
+
+    source_membership = await db.scalar(
+        select(Membership)
+        .where(
+            Membership.group_id == body.source_group_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if source_membership is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That user is not an active member of the source Home."
+        )
+    if source_membership.relationship == HouseholdRelationship.child:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Managed Child accounts cannot be moved with this workflow.",
+        )
+    previous_relationship = source_membership.relationship
+    previous_role = source_membership.role
+
+    # Sole-Home-Admin protection — reuses the exact same primitive
+    # routers.groups.update_member/remove_member already use. Moving the
+    # sole admin of an otherwise-*empty* source Home is fine (there is no
+    # one left to be orphaned); moving them while other members remain is
+    # exactly the "silently remove them" case the task spec forbids.
+    if previous_relationship == HouseholdRelationship.home_admin:
+        other_active_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == body.source_group_id,
+                    Membership.user_id != user_id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if other_active_members > 0 and await home_admin_count(db, body.source_group_id) <= 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Assign another Home Admin in the source Home before moving this member.",
+            )
+
+    existing_destination_membership = await db.scalar(
+        select(Membership)
+        .where(Membership.group_id == body.destination_group_id, Membership.user_id == user_id)
+        .with_for_update()
+    )
+    destination_already_active = (
+        existing_destination_membership is not None
+        and existing_destination_membership.removed_at is None
+    )
+    if destination_already_active:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That user is already an active member of the destination Home.",
+        )
+
+    # Race-safe destination member-limit check — identical shape/lock bucket
+    # to invitations.accept() and routers.groups.approve_join_request().
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"members:{body.destination_group_id}"},
+    )
+    destination_member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == body.destination_group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(
+        db, body.destination_group_id, "home.max_members", destination_member_count
+    )
+
+    # Billing-owner safety: billing_owner_user_id is informational-only on
+    # Free (see HomeSubscription's own docstring) but real for a paid or
+    # complimentary Home — moving that person out without reassigning it
+    # first would leave the source Home's subscription pointing at a
+    # non-member. Never silently transferred/reassigned/cancelled here.
+    source_subscription = await get_home_subscription(db, body.source_group_id)
+    if (
+        source_subscription is not None
+        and source_subscription.billing_owner_user_id == user_id
+        and source_subscription.plan != SubscriptionPlan.free
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This person is the billing owner of the source Home's "
+            f"{source_subscription.plan.value} subscription. Reassign billing ownership "
+            "before moving them.",
+        )
+
+    role = legacy_role(body.destination_relationship)
+    permission_profile = default_profile(body.destination_relationship)
+    if existing_destination_membership is None:
+        destination_membership = Membership(
+            group_id=body.destination_group_id,
+            user_id=user_id,
+            role=role,
+            relationship=body.destination_relationship,
+            permission_profile=permission_profile,
+            colour=await assign_member_colour(db, body.destination_group_id),
+        )
+        db.add(destination_membership)
+    else:
+        destination_membership = existing_destination_membership
+        destination_membership.removed_at = None
+        destination_membership.role = role
+        destination_membership.relationship = body.destination_relationship
+        destination_membership.permission_profile = permission_profile
+        if destination_membership.colour is None:
+            destination_membership.colour = await assign_member_colour(
+                db, body.destination_group_id
+            )
+    await ensure_personal_calendar(db, body.destination_group_id, user_id)
+
+    source_membership.removed_at = datetime.now(UTC)
+
+    # A pending join-code request the user already had for the destination
+    # Home is now moot — the PCC move establishes membership directly. Only
+    # ever touches a request for *this* (destination, user) pair; unrelated
+    # invitations/requests for either Home are never touched (see task
+    # spec's "do not silently destroy unrelated invitations").
+    pending_destination_request = await db.scalar(
+        select(HomeJoinRequest).where(
+            HomeJoinRequest.group_id == body.destination_group_id,
+            HomeJoinRequest.user_id == user_id,
+            HomeJoinRequest.status == HomeJoinRequestStatus.pending,
+        )
+    )
+    if pending_destination_request is not None:
+        pending_destination_request.status = HomeJoinRequestStatus.cancelled
+        pending_destination_request.decided_at = datetime.now(UTC)
+
+    # Source disposition — "archive_if_empty" uses the Archived lifecycle
+    # state (the same transition /homes/{id}/archive performs: is_active,
+    # suspended_at and archived_at all set together). A Home that still has
+    # other active members is always left alone, regardless of what was
+    # requested.
+    await db.flush()
+    source_disposition_result = "left_unchanged"
+    if body.source_disposition == "archive_if_empty":
+        remaining_source_members = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == body.source_group_id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if remaining_source_members == 0:
+            now = datetime.now(UTC)
+            source_group.is_active = False
+            source_group.suspended_at = now
+            source_group.archived_at = now
+            source_disposition_result = "archived_empty"
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "member.moved",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={
+            "source_group_id": str(body.source_group_id),
+            "relationship": previous_relationship.value,
+            "role": previous_role.value,
+        },
+        new={
+            "destination_group_id": str(body.destination_group_id),
+            "relationship": body.destination_relationship.value,
+            "role": role.value,
+            "source_disposition": source_disposition_result,
+        },
+    )
+    await db.commit()
+    return {
+        "user_id": user.id,
+        "source_group_id": source_group.id,
+        "destination_group_id": destination_group.id,
+        "relationship": body.destination_relationship.value,
+        "role": role.value,
+        "source_disposition": source_disposition_result,
+    }
+
+
 @router.post("/users/{user_id}/revoke-sessions")
 async def revoke_user_sessions(
     user_id: uuid.UUID,
@@ -2049,6 +3579,11 @@ async def revoke_user_sessions(
     await db.execute(
         update(Session)
         .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
     platform_audit(
@@ -2091,7 +3626,9 @@ async def _enqueue_user_mail(
     else:
         notification_type = "password_reset"
         link = f"{settings.public_web_url}/reset-password?token={raw}"
-    subject, message = await render_notification(db, notification_type, {"link": link})
+    subject, message, html = await render_notification_email(
+        db, settings, notification_type, {"link": link}
+    )
     await notify(
         db,
         settings=settings,
@@ -2100,6 +3637,7 @@ async def _enqueue_user_mail(
         title=subject,
         body=message,
         idempotency_key=f"{notification_type}:{token.id}",
+        html_body=html,
     )
     platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
     await db.commit()
@@ -2175,6 +3713,7 @@ async def add_user_note(
 async def homes(
     q: str | None = Query(default=None, max_length=100),
     active: bool | None = None,
+    lifecycle: LifecycleState | None = Query(default=None),
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=25, ge=1, le=100),
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -2183,7 +3722,10 @@ async def homes(
     filters: list[Any] = []
     if q:
         filters.append(Group.name.ilike(f"%{q.strip()}%"))
-    if active is not None:
+    lifecycle_filter = _lifecycle_filter(Group, lifecycle)
+    if lifecycle_filter is not None:
+        filters.append(lifecycle_filter)
+    elif active is not None:
         filters.append(Group.is_active.is_(active))
     where = and_(*filters)
     total = await db.scalar(select(func.count(Group.id)).where(where)) or 0
@@ -2240,9 +3782,45 @@ async def homes(
                 "member_count": member_count,
                 "invitation_count": invitation_count,
                 "active": group.is_active,
+                "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
             }
         )
     return PageResponse(items=items, page=page, page_size=page_size, total=total)
+
+
+async def _subscription_response(
+    db: AsyncSession, subscription: HomeSubscription | None
+) -> HomeSubscriptionResponse:
+    """The one place a HomeSubscription row (or its absence) is turned into
+    the Platform-Admin-facing response shape — used by home_detail,
+    grant/revoke complimentary, and the Phase 2 subscription detail endpoint,
+    so the effective-state resolution and the granted-by lookup can never
+    drift between them."""
+    granted_by_name: str | None = None
+    if subscription is not None and subscription.complimentary_granted_by is not None:
+        granter = await db.get(PlatformAdministrator, subscription.complimentary_granted_by)
+        granted_by_name = granter.display_name if granter else None
+    resolution = resolve_effective_state(subscription)
+    return HomeSubscriptionResponse(
+        plan=subscription.plan if subscription else SubscriptionPlan.free,
+        provider=subscription.provider if subscription else SubscriptionProvider.free,
+        status=subscription.status if subscription else SubscriptionStatus.active,
+        billing_owner_user_id=subscription.billing_owner_user_id if subscription else None,
+        external_customer_id=subscription.external_customer_id if subscription else None,
+        external_subscription_id=subscription.external_subscription_id if subscription else None,
+        external_price_id=subscription.external_price_id if subscription else None,
+        billing_interval=subscription.billing_interval if subscription else None,
+        current_period_start=subscription.current_period_start if subscription else None,
+        current_period_end=subscription.current_period_end if subscription else None,
+        complimentary_reason=subscription.complimentary_reason if subscription else None,
+        complimentary_note=subscription.complimentary_note if subscription else None,
+        complimentary_granted_by=subscription.complimentary_granted_by if subscription else None,
+        complimentary_granted_by_display_name=granted_by_name,
+        complimentary_granted_at=subscription.complimentary_granted_at if subscription else None,
+        complimentary_expires_at=subscription.complimentary_expires_at if subscription else None,
+        effective_plan=resolution.plan,
+        effective_status_reason=resolution.reason,
+    )
 
 
 @router.get("/homes/{group_id}")
@@ -2276,6 +3854,40 @@ async def home_detail(
     overrides = (
         await db.scalars(select(FeatureOverride).where(FeatureOverride.group_id == group_id))
     ).all()
+    override_by_feature = {row.feature_key.value: row.enabled for row in overrides}
+    # PCC Polish Phase 1: the current optional Home modules only — the exact
+    # same home_admin_manageable filter the Home Admin Module Management
+    # screen itself uses (mykhaya.routers.features.feature_management), so
+    # Notifications (core platform infrastructure) and External sharing (a
+    # Calendar capability, not a standalone module) never appear here as if
+    # they were ordinary Home modules; household_modules() already excludes
+    # hidden modules (Tasks, Plans) on its own. Reuses module_state — the
+    # same platform/plan/Home resolver the Home Admin screen and consumer
+    # navigation listing already share — rather than a second, parallel
+    # computation.
+    modules = []
+    for definition in household_modules():
+        if not definition.home_admin_manageable or definition.release_state == ReleaseState.core:
+            continue
+        platform_ok, entitled, effective_enabled, blocked_by = await module_state(
+            db, group_id, definition
+        )
+        modules.append(
+            {
+                "id": definition.id,
+                "name": definition.name,
+                "platform_enabled": platform_ok,
+                "entitled": entitled,
+                # None = no Home override row (inherits platform/plan) —
+                # distinct from a row that explicitly says enabled=False,
+                # even though both can currently resolve to the same
+                # effective_enabled. See mykhaya.features.is_feature_enabled.
+                "home_override": override_by_feature.get(definition.id),
+                "effective_enabled": effective_enabled,
+                "blocked_by": blocked_by,
+                "toggleable": definition.household_toggleable,
+            }
+        )
     notes = (
         await db.scalars(
             select(AdministrativeNote)
@@ -2287,12 +3899,33 @@ async def home_detail(
             .limit(50)
         )
     ).all()
+    subscription = await get_home_subscription(db, group_id)
+    platform_policy, platform_methods = await _consumer_platform_values(db)
+    home_policy = group.mfa_policy.value
+    home_effective = (
+        "required" if home_policy == "required" or platform_policy == "required" else "optional"
+    )
     return {
         "id": group.id,
         "name": group.name,
         "created_at": group.created_at,
         "last_activity_at": group.last_activity_at,
         "active": group.is_active,
+        "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
+        "subscription": await _subscription_response(db, subscription),
+        "authentication_mfa": {
+            "configured": home_policy,
+            "effective": home_effective,
+            "source": "home" if home_policy == "required" else "platform",
+            "allowed_methods": sorted(
+                platform_methods
+                & (
+                    set(group.mfa_allowed_methods)
+                    if group.mfa_allowed_methods is not None
+                    else platform_methods
+                )
+            ),
+        },
         "members": [
             {
                 "user_id": user.id,
@@ -2309,8 +3942,666 @@ async def home_detail(
         "feature_overrides": [
             {"feature": row.feature_key, "enabled": row.enabled} for row in overrides
         ],
+        "modules": modules,
         "notes": [{"id": row.id, "body": row.body, "created_at": row.created_at} for row in notes],
     }
+
+
+@router.put("/homes/{group_id}/subscription/complimentary", response_model=HomeSubscriptionResponse)
+async def grant_complimentary(
+    group_id: uuid.UUID,
+    body: GrantComplimentaryRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """The only pathway that can ever set provider=complimentary — never
+    reachable from any household-facing API. Complimentary access is a
+    first-class MyKhaya concept (Plan: Family, Provider: Complimentary), not
+    a disguised/free Stripe subscription."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None:
+        subscription = HomeSubscription(group_id=group_id)
+        db.add(subscription)
+        await db.flush()
+    # A Home paying through Stripe must never silently become Complimentary
+    # underneath a still-live billing relationship — that would leave the
+    # customer being billed while MyKhaya says their provider is
+    # Complimentary. The Stripe subscription must be genuinely cancelled
+    # first (status=cancelled) before complimentary access can be granted.
+    # See "Paid to complimentary transition" in
+    # docs/architecture/commercial-entitlements.md.
+    is_live_stripe_subscription = (
+        subscription.provider == SubscriptionProvider.stripe
+        and subscription.status != SubscriptionStatus.cancelled
+    )
+    if is_live_stripe_subscription:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Home has an active Stripe subscription. Cancel it in Stripe (or via the "
+            "Customer Portal) before granting complimentary access.",
+        )
+    previous = {
+        "plan": subscription.plan.value,
+        "provider": subscription.provider.value,
+        "status": subscription.status.value,
+    }
+    from_plan, from_provider, from_status = (
+        subscription.plan,
+        subscription.provider,
+        subscription.status,
+    )
+    subscription.plan = body.plan
+    subscription.provider = SubscriptionProvider.complimentary
+    # external_customer_id/external_subscription_id/external_price_id are
+    # deliberately left as-is even when they belonged to a now-cancelled
+    # Stripe subscription — they remain useful reconciliation history (a
+    # cancelled subscription id is never reused by Stripe), and
+    # billing_interval/current_period_* are cleared since they no longer
+    # describe anything live.
+    subscription.billing_interval = None
+    subscription.current_period_start = None
+    subscription.current_period_end = None
+    subscription.status = SubscriptionStatus.active
+    subscription.complimentary_reason = body.complimentary_reason
+    subscription.complimentary_note = body.complimentary_note
+    subscription.complimentary_granted_by = context.administrator.id
+    subscription.complimentary_granted_at = datetime.now(UTC)
+    subscription.complimentary_expires_at = body.expires_at
+    await record_subscription_event(
+        db,
+        group_id,
+        event_type="complimentary_granted",
+        from_plan=from_plan,
+        to_plan=subscription.plan,
+        from_provider=from_provider,
+        to_provider=subscription.provider,
+        from_status=from_status,
+        to_status=subscription.status,
+        actor_administrator_id=context.administrator.id,
+        reason=body.reason,
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.complimentary_granted",
+        "home",
+        group_id,
+        reason=body.reason,
+        previous=previous,
+        new={
+            "plan": subscription.plan.value,
+            "provider": subscription.provider.value,
+            "complimentary_reason": subscription.complimentary_reason,
+            "complimentary_expires_at": subscription.complimentary_expires_at.isoformat()
+            if subscription.complimentary_expires_at
+            else None,
+        },
+    )
+    await db.commit()
+    return await _subscription_response(db, subscription)
+
+
+@router.delete(
+    "/homes/{group_id}/subscription/complimentary", response_model=HomeSubscriptionResponse
+)
+async def revoke_complimentary(
+    group_id: uuid.UUID,
+    body: RevokeComplimentaryRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """Returns the Home to Free/free — does not delete any Home data (see
+    "Safe downgrade principles" in docs/architecture/commercial-entitlements.md)."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None or subscription.provider != SubscriptionProvider.complimentary:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Home does not have complimentary access."
+        )
+    from_plan, from_provider, from_status = (
+        subscription.plan,
+        subscription.provider,
+        subscription.status,
+    )
+    # This row represents complimentary-only access. Paid Stripe Homes are
+    # rejected above and therefore retain their commercial state unchanged.
+    subscription.plan = SubscriptionPlan.free
+    subscription.provider = SubscriptionProvider.free
+    subscription.status = SubscriptionStatus.active
+    subscription.complimentary_reason = None
+    subscription.complimentary_note = None
+    subscription.complimentary_expires_at = None
+    await record_subscription_event(
+        db,
+        group_id,
+        event_type="downgraded",
+        from_plan=from_plan,
+        to_plan=subscription.plan,
+        from_provider=from_provider,
+        to_provider=subscription.provider,
+        from_status=from_status,
+        to_status=subscription.status,
+        actor_administrator_id=context.administrator.id,
+        reason=body.reason,
+    )
+    platform_audit(
+        db, request, context, "home.complimentary_revoked", "home", group_id, reason=body.reason
+    )
+    await db.commit()
+    return await _subscription_response(db, subscription)
+
+
+@router.get("/subscriptions/webhook-health", response_model=StripeWebhookHealthResponse)
+async def subscriptions_webhook_health(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookHealthResponse:
+    """Operational visibility into Stripe webhook processing (Phase 7) —
+    never the raw payload, only enough for an operator to answer "are
+    webhooks flowing, and what's failed recently." See
+    docs/architecture/commercial-entitlements.md#webhook-observability."""
+    snapshot = await current_platform_health(db, settings)
+    webhook = snapshot.stripe_webhook
+    recent_events = (
+        await db.scalars(
+            select(StripeWebhookEvent).order_by(StripeWebhookEvent.received_at.desc()).limit(20)
+        )
+    ).all()
+    recent_failures = (
+        await db.scalars(
+            select(StripeWebhookFailure).order_by(StripeWebhookFailure.occurred_at.desc()).limit(20)
+        )
+    ).all()
+    paid_homes = int(
+        await db.scalar(
+            select(func.count(HomeSubscription.id)).where(
+                HomeSubscription.provider == SubscriptionProvider.stripe,
+                HomeSubscription.status.in_(
+                    (SubscriptionStatus.active, SubscriptionStatus.cancel_at_period_end)
+                ),
+            )
+        )
+        or 0
+    )
+    return StripeWebhookHealthResponse(
+        configured=webhook.configured,
+        state=webhook.state,
+        reason=webhook.reason,
+        last_event_at=webhook.last_event_at,
+        recent_failure_count=webhook.recent_failure_count,
+        mode=webhook.mode,
+        source=webhook.source,
+        paid_homes=paid_homes,
+        recent_events=[
+            WebhookEventSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                received_at=row.received_at,
+                outcome=row.outcome,
+            )
+            for row in recent_events
+        ],
+        recent_failures=[
+            WebhookFailureSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                error_message=row.error_message,
+                occurred_at=row.occurred_at,
+            )
+            for row in recent_failures
+        ],
+    )
+
+
+@router.get("/subscriptions/summary", response_model=SubscriptionSummaryResponse)
+async def subscriptions_summary(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionSummaryResponse:
+    """One aggregate query — every count is a SQL FILTER over a single outer
+    join, not N queries or a full row fetch, so this scales as Home count
+    grows. No revenue/MRR/ARR: with multiple historical Stripe Prices,
+    currencies and billing intervals possibly in play, see
+    SubscriptionSummaryResponse's docstring for why that figure is deferred
+    rather than approximated."""
+    is_stripe = HomeSubscription.provider == SubscriptionProvider.stripe
+    row = (
+        await db.execute(
+            select(
+                func.count(Group.id),
+                func.count(Group.id).filter(effective_plan_sql_filter(SubscriptionPlan.free)),
+                func.count(Group.id).filter(effective_plan_sql_filter(SubscriptionPlan.family)),
+                func.count(Group.id).filter(
+                    HomeSubscription.provider == SubscriptionProvider.complimentary
+                ),
+                func.count(Group.id).filter(complimentary_expired_sql_filter()),
+                func.count(Group.id).filter(HomeSubscription.status == SubscriptionStatus.past_due),
+                func.count(Group.id).filter(
+                    HomeSubscription.status == SubscriptionStatus.cancelled
+                ),
+                func.count(Group.id).filter(is_stripe),
+                func.count(Group.id).filter(
+                    is_stripe & effective_plan_sql_filter(SubscriptionPlan.family)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe
+                    & (HomeSubscription.billing_interval == BillingInterval.month)
+                    & (HomeSubscription.status != SubscriptionStatus.cancelled)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe
+                    & (HomeSubscription.billing_interval == BillingInterval.year)
+                    & (HomeSubscription.status != SubscriptionStatus.cancelled)
+                ),
+                func.count(Group.id).filter(
+                    is_stripe & (HomeSubscription.status == SubscriptionStatus.cancel_at_period_end)
+                ),
+            )
+            .select_from(Group)
+            .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+        )
+    ).one()
+    counts: tuple[int, int, int, int, int, int, int, int, int, int, int, int] = tuple(row)
+    (
+        total,
+        free,
+        family,
+        complimentary,
+        complimentary_expired,
+        past_due,
+        cancelled,
+        stripe_total,
+        stripe_active_family,
+        stripe_monthly,
+        stripe_annual,
+        stripe_cancelling,
+    ) = counts
+    return SubscriptionSummaryResponse(
+        total_homes=total,
+        free=free,
+        family=family,
+        complimentary=complimentary,
+        complimentary_expired=complimentary_expired,
+        past_due=past_due,
+        cancelled=cancelled,
+        stripe_total=stripe_total,
+        stripe_active_family=stripe_active_family,
+        stripe_monthly=stripe_monthly,
+        stripe_annual=stripe_annual,
+        stripe_cancelling=stripe_cancelling,
+    )
+
+
+@router.get("/subscriptions", response_model=SubscriptionListResponse)
+async def subscriptions(
+    q: str | None = Query(default=None, max_length=100),
+    effective: SubscriptionPlan | None = None,
+    provider: SubscriptionProvider | None = None,
+    status_filter: SubscriptionStatus | None = Query(default=None, alias="status"),
+    expired_complimentary: bool | None = None,
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionListResponse:
+    """Searchable, filterable, paginated Home listing with commercial state —
+    a dedicated endpoint rather than N per-Home detail requests, since a
+    Platform Control Centre operator needs to scan every Home, and MyKhaya is
+    expected to hold significantly more Homes than the existing generic
+    /homes listing was built to browse commercially."""
+    member_counts = (
+        select(Membership.group_id, func.count(Membership.id).label("member_count"))
+        .where(Membership.removed_at.is_(None))
+        .group_by(Membership.group_id)
+        .subquery()
+    )
+    filters: list[Any] = []
+    if q:
+        filters.append(Group.name.ilike(f"%{q.strip()}%"))
+    if effective is not None:
+        filters.append(effective_plan_sql_filter(effective))
+    if provider is not None:
+        filters.append(HomeSubscription.provider == provider)
+    if status_filter is not None:
+        filters.append(HomeSubscription.status == status_filter)
+    if expired_complimentary:
+        filters.append(complimentary_expired_sql_filter())
+    where = and_(*filters)
+    base = (
+        select(Group, HomeSubscription, func.coalesce(member_counts.c.member_count, 0))
+        .select_from(Group)
+        .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+        .outerjoin(member_counts, member_counts.c.group_id == Group.id)
+        .where(where)
+    )
+    total = (
+        await db.scalar(
+            select(func.count(Group.id))
+            .select_from(Group)
+            .outerjoin(HomeSubscription, HomeSubscription.group_id == Group.id)
+            .where(where)
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            base.order_by(Group.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+    ).all()
+    items = [
+        SubscriptionListItem(
+            id=group.id,
+            name=group.name,
+            stored_plan=subscription.plan if subscription else SubscriptionPlan.free,
+            provider=subscription.provider if subscription else SubscriptionProvider.free,
+            status=subscription.status if subscription else SubscriptionStatus.active,
+            effective_plan=resolve_effective_plan(subscription),
+            effective_status_reason=resolve_effective_state(subscription).reason,
+            complimentary_expires_at=subscription.complimentary_expires_at
+            if subscription
+            else None,
+            member_count=member_count,
+            last_commercial_change=subscription.updated_at if subscription else group.created_at,
+        )
+        for group, subscription, member_count in rows
+    ]
+    return SubscriptionListResponse(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get("/subscriptions/{group_id}", response_model=SubscriptionDetailResponse)
+async def subscription_detail(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SubscriptionDetailResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    subscription = await get_home_subscription(db, group_id)
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    admin_rows = (
+        await db.execute(
+            select(User.id, User.display_name, User.email)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                Membership.group_id == group_id,
+                Membership.removed_at.is_(None),
+                Membership.relationship == HouseholdRelationship.home_admin,
+            )
+            .limit(10)
+        )
+    ).all()
+    history_rows = (
+        await db.scalars(
+            select(HomeSubscriptionEvent)
+            .where(HomeSubscriptionEvent.group_id == group_id)
+            .order_by(HomeSubscriptionEvent.created_at.desc())
+            .limit(100)
+        )
+    ).all()
+    actor_ids = {row.actor_administrator_id for row in history_rows if row.actor_administrator_id}
+    actor_names: dict[uuid.UUID, str] = {}
+    if actor_ids:
+        actors = (
+            await db.scalars(
+                select(PlatformAdministrator).where(PlatformAdministrator.id.in_(actor_ids))
+            )
+        ).all()
+        actor_names = {actor.id: actor.display_name for actor in actors}
+    definition = plan_definition_for(resolve_effective_plan(subscription))
+    webhook_rows = (
+        await db.scalars(
+            select(StripeWebhookEvent)
+            .where(StripeWebhookEvent.group_id == group_id)
+            .order_by(StripeWebhookEvent.received_at.desc())
+            .limit(10)
+        )
+    ).all()
+    diagnostic_rows = (
+        await db.scalars(
+            select(StripeBillingDiagnostic)
+            .where(StripeBillingDiagnostic.group_id == group_id)
+            .order_by(StripeBillingDiagnostic.created_at.desc())
+            .limit(20)
+        )
+    ).all()
+
+    stripe_price: StripePriceInfo | None = None
+    dashboard_customer_url: str | None = None
+    dashboard_subscription_url: str | None = None
+    if subscription is not None and subscription.provider == SubscriptionProvider.stripe:
+        stripe_config = await resolve_stripe_config(settings, db)
+        is_test_mode = bool(
+            stripe_config.secret_key and stripe_config.secret_key.startswith("sk_test_")
+        )
+        dashboard_root = (
+            "https://dashboard.stripe.com/test" if is_test_mode else "https://dashboard.stripe.com"
+        )
+        if subscription.external_customer_id:
+            dashboard_customer_url = (
+                f"{dashboard_root}/customers/{subscription.external_customer_id}"
+            )
+        if subscription.external_subscription_id:
+            dashboard_subscription_url = (
+                f"{dashboard_root}/subscriptions/{subscription.external_subscription_id}"
+            )
+        if stripe_config.configured and stripe_config.secret_key and subscription.external_price_id:
+            price_option = await fetch_price_amount(
+                stripe_config.secret_key, subscription.external_price_id
+            )
+            if price_option is not None:
+                stripe_price = StripePriceInfo(
+                    currency=price_option.currency,
+                    unit_amount=price_option.unit_amount,
+                    formatted_amount=price_option.formatted_amount,
+                )
+
+    return SubscriptionDetailResponse(
+        id=group.id,
+        name=group.name,
+        created_at=group.created_at,
+        member_count=member_count,
+        administrators=[
+            HomeAdministratorSummary(user_id=row.id, display_name=row.display_name, email=row.email)
+            for row in admin_rows
+        ],
+        subscription=await _subscription_response(db, subscription),
+        entitlements=EntitlementsResponse(
+            plan=definition.plan, booleans=definition.booleans, limits=definition.limits
+        ),
+        calendar_usage=await calendar_usage(db, group_id),
+        member_usage=await member_usage(db, group_id),
+        personal_routines_total=await personal_routines_total(db, group_id),
+        recent_webhook_events=[
+            WebhookEventSummary(
+                id=row.id,
+                stripe_event_id=row.stripe_event_id,
+                event_type=row.event_type,
+                received_at=row.received_at,
+                outcome=row.outcome,
+            )
+            for row in webhook_rows
+        ],
+        billing_diagnostics=[
+            StripeBillingDiagnosticResponse(
+                id=row.id,
+                created_at=row.created_at,
+                source=row.source,
+                stripe_mode=row.stripe_mode,
+                stage=row.stage,
+                result=row.result,
+                stripe_event_id=row.stripe_event_id,
+                checkout_session_id=row.checkout_session_id,
+                stripe_customer_id=row.stripe_customer_id,
+                stripe_subscription_id=row.stripe_subscription_id,
+                group_id=row.group_id,
+                stripe_subscription_status=row.stripe_subscription_status,
+                stored_subscription_status=row.stored_subscription_status,
+                stored_plan=row.stored_plan,
+                effective_plan=row.effective_plan,
+                safe_error_code=row.safe_error_code,
+                safe_error_message=row.safe_error_message,
+            )
+            for row in diagnostic_rows
+        ],
+        history=[
+            SubscriptionEventResponse(
+                id=event.id,
+                created_at=event.created_at,
+                event_type=event.event_type,
+                from_plan=event.from_plan,
+                to_plan=event.to_plan,
+                from_provider=event.from_provider,
+                to_provider=event.to_provider,
+                from_status=event.from_status,
+                to_status=event.to_status,
+                actor_administrator_id=event.actor_administrator_id,
+                actor_display_name=actor_names.get(event.actor_administrator_id)
+                if event.actor_administrator_id
+                else None,
+                reason=event.reason,
+            )
+            for event in history_rows
+        ],
+        stripe_price=stripe_price,
+        stripe_dashboard_customer_url=dashboard_customer_url,
+        stripe_dashboard_subscription_url=dashboard_subscription_url,
+    )
+
+
+@router.post(
+    "/homes/{group_id}/subscription/reconcile-stripe", response_model=HomeSubscriptionResponse
+)
+async def reconcile_stripe_subscription(
+    group_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HomeSubscriptionResponse:
+    """Support/operations action: re-fetches this Home's Stripe Subscription
+    directly from Stripe and re-applies it through the exact same normalized
+    transition logic the webhook handler uses — never a manual field editor.
+    See "Reconciliation / repair" in docs/architecture/commercial-entitlements.md."""
+    require_recent_auth(context, settings)
+    if await db.get(Group, group_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    stripe_config = await resolve_stripe_config(settings, db)
+    if not stripe_config.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    subscription_before = await get_home_subscription(db, group_id)
+    previous = (
+        {
+            "plan": subscription_before.plan.value,
+            "provider": subscription_before.provider.value,
+            "status": subscription_before.status.value,
+        }
+        if subscription_before
+        else None
+    )
+    try:
+        await reconcile_home_subscription(
+            db, stripe_config, group_id, actor_administrator_id=context.administrator.id
+        )
+    except NoStripeSubscriptionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except SubscriptionOwnershipMismatchError as exc:
+        # Never silently attach another Home's Stripe object — surface this
+        # as a support/security exception for an operator to investigate,
+        # not a normal reconciliation outcome.
+        await db.rollback()
+        await log.aerror(
+            "stripe_reconciliation_ownership_mismatch", group_id=str(group_id), detail=str(exc)
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Home's Stripe subscription reference does not match Stripe's own record. "
+            "Contact engineering before retrying.",
+        ) from exc
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror("stripe_reconciliation_error", group_id=str(group_id), detail=str(exc))
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from exc
+    subscription_after = await get_home_subscription(db, group_id)
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.subscription_reconciled",
+        "home",
+        group_id,
+        reason=body.reason,
+        previous=previous,
+        new={
+            "plan": subscription_after.plan.value,
+            "provider": subscription_after.provider.value,
+            "status": subscription_after.status.value,
+        }
+        if subscription_after
+        else None,
+    )
+    await db.commit()
+    db.expire_all()
+    subscription_after = await get_home_subscription(db, group_id)
+    await record_billing_diagnostic(
+        db,
+        source="manual_reconciliation",
+        stage="completed",
+        result=(
+            "mismatch"
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else "completed"
+        ),
+        stripe_mode=stripe_config.mode,
+        stripe_customer_id=(
+            subscription_after.external_customer_id if subscription_after else None
+        ),
+        stripe_subscription_id=(
+            subscription_after.external_subscription_id if subscription_after else None
+        ),
+        group_id=group_id,
+        stripe_subscription_status=subscription_after.status.value if subscription_after else None,
+        safe_error_code=(
+            "entitlement_mismatch"
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else None
+        ),
+        safe_error_message=(
+            "Stripe reports an active subscription but MyKhaya resolves Free."
+            if subscription_after
+            and subscription_after.status.value in {"active", "trialing"}
+            and resolve_effective_plan(subscription_after).value != "family"
+            else None
+        ),
+    )
+    return await _subscription_response(db, subscription_after)
 
 
 @router.post("/homes/{group_id}/notes", status_code=status.HTTP_201_CREATED)
@@ -2383,36 +4674,504 @@ async def update_home_feature_flag(
     return {"key": key, "home_id": group_id, "enabled": body.enabled}
 
 
+_HOME_DELETE_BLOCKER_MESSAGES = {
+    "not_archived": "This Home must be Archived before it can be permanently deleted.",
+    "has_active_members": "This Home still has active members.",
+    "has_membership_history": (
+        "This Home has been used by more than one member historically and cannot be "
+        "permanently deleted."
+    ),
+    "has_calendar_events": "This Home has calendar events and cannot be permanently deleted.",
+    "has_custom_labels": (
+        "This Home has custom calendar categories and cannot be permanently deleted."
+    ),
+    "has_calendar_shares": (
+        "This Home has external calendar shares and cannot be permanently deleted."
+    ),
+    "has_routines": "This Home has household routines and cannot be permanently deleted.",
+    "has_reminders": "This Home has reminders and cannot be permanently deleted.",
+    "has_meals": "This Home has meal plan data and cannot be permanently deleted.",
+    "has_lists": "This Home has lists and cannot be permanently deleted.",
+    "has_wishlists": "This Home has wishlist data and cannot be permanently deleted.",
+    "has_invitations": "This Home has invitation history and cannot be permanently deleted.",
+    "has_join_requests": "This Home has join-request history and cannot be permanently deleted.",
+    "has_children": "This Home has managed child profiles and cannot be permanently deleted.",
+    "has_active_subscription": (
+        "This Home has a paid subscription and cannot be permanently deleted."
+    ),
+    "has_billing_history": "This Home has billing history and cannot be permanently deleted.",
+    "is_managed_demo_home": (
+        "This Home is a managed demo/test Home — use the Demo & Test Homes tool to delete "
+        "it instead."
+    ),
+}
+
+
+async def _home_delete_blockers(db: AsyncSession, group: Group) -> list[str]:
+    """Slice 5B §13-17 — every reason permanent_delete_home would refuse,
+    computed up front so both the mutation and the read-only eligibility
+    preflight report the same set. "Meaningful content" (§14) is defined as
+    any row at all in any of these tables — the only rows a genuinely
+    untouched Home is allowed to have are the ones create_group itself
+    always creates (the creator's own Membership, the 2 scaffold
+    HomeCalendars, the 7 system CalendarEventLabel rows, the Free
+    HomeSubscription and its "created" HomeSubscriptionEvent) — none of
+    which this function checks, by design, since none of them indicate the
+    Home was ever actually used."""
+    blockers: list[str] = []
+    if group.archived_at is None:
+        blockers.append("not_archived")
+
+    active_membership_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group.id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    if active_membership_count > 0:
+        blockers.append("has_active_members")
+
+    # §15: at most one Membership row, ever (the creator's own scaffold
+    # row) — a second row, active or historical, means a real second
+    # person was genuinely a member at some point.
+    total_membership_count = (
+        await db.scalar(select(func.count(Membership.id)).where(Membership.group_id == group.id))
+        or 0
+    )
+    if total_membership_count > 1:
+        blockers.append("has_membership_history")
+
+    if await db.scalar(select(CalendarEvent.id).where(CalendarEvent.group_id == group.id).limit(1)):
+        blockers.append("has_calendar_events")
+    # is_system=True labels are the 7 seeded on every Home creation — only
+    # an operator/household-created label indicates real use.
+    if await db.scalar(
+        select(CalendarEventLabel.id)
+        .where(CalendarEventLabel.group_id == group.id, CalendarEventLabel.is_system.is_(False))
+        .limit(1)
+    ):
+        blockers.append("has_custom_labels")
+    if await db.scalar(
+        select(CalendarShare.id).where(CalendarShare.source_group_id == group.id).limit(1)
+    ):
+        blockers.append("has_calendar_shares")
+    if await db.scalar(
+        select(HouseholdRoutine.id).where(HouseholdRoutine.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_routines")
+    if await db.scalar(select(Reminder.id).where(Reminder.group_id == group.id).limit(1)):
+        blockers.append("has_reminders")
+    if await db.scalar(
+        select(Meal.id).where(Meal.group_id == group.id).limit(1)
+    ) or await db.scalar(
+        select(MealPlanEntry.id).where(MealPlanEntry.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_meals")
+    if await db.scalar(select(HouseholdList.id).where(HouseholdList.group_id == group.id).limit(1)):
+        blockers.append("has_lists")
+    if await db.scalar(select(Wishlist.id).where(Wishlist.home_id == group.id).limit(1)):
+        blockers.append("has_wishlists")
+    if await db.scalar(select(Invitation.id).where(Invitation.group_id == group.id).limit(1)):
+        blockers.append("has_invitations")
+    if await db.scalar(
+        select(HomeJoinRequest.id).where(HomeJoinRequest.group_id == group.id).limit(1)
+    ):
+        blockers.append("has_join_requests")
+    if await db.scalar(select(ChildProfile.id).where(ChildProfile.group_id == group.id).limit(1)):
+        blockers.append("has_children")
+
+    subscription = await get_home_subscription(db, group.id)
+    if subscription is not None and subscription.plan != SubscriptionPlan.free:
+        blockers.append("has_active_subscription")
+    # §16: any HISTORICAL non-free billing event blocks too, not just the
+    # current plan — protects local billing/audit history from the
+    # HomeSubscriptionEvent CASCADE a Group delete would otherwise trigger.
+    if await db.scalar(
+        select(HomeSubscriptionEvent.id)
+        .where(
+            HomeSubscriptionEvent.group_id == group.id,
+            HomeSubscriptionEvent.to_plan != SubscriptionPlan.free,
+        )
+        .limit(1)
+    ):
+        blockers.append("has_billing_history")
+
+    if await db.scalar(
+        select(ManagedDemoHome.id).where(ManagedDemoHome.home_id == group.id).limit(1)
+    ):
+        blockers.append("is_managed_demo_home")
+
+    return blockers
+
+
+@router.get(
+    "/homes/{group_id}/permanent-delete/eligibility",
+    response_model=HomeDeleteEligibilityResponse,
+)
+async def home_delete_eligibility(
+    group_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> HomeDeleteEligibilityResponse:
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    blockers = await _home_delete_blockers(db, group)
+    return HomeDeleteEligibilityResponse(eligible=not blockers, blockers=blockers)
+
+
+@router.post("/homes/{group_id}/permanent-delete")
+async def permanent_delete_home(
+    group_id: uuid.UUID,
+    body: PermanentDeleteHomeRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """PCC "Permanently delete Home" (Slice 5B). Only ever reachable for a
+    genuinely empty, disposable Archived Home — see _home_delete_blockers.
+    Registered before home_state's `/homes/{group_id}/{action}` catch-all
+    so this more specific path is matched first (FastAPI/Starlette resolve
+    routes in registration order, not by specificity)."""
+    require_recent_auth(context, settings)
+    group = await db.get(Group, group_id, with_for_update=True)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    if body.confirmation_text != group.name:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Confirmation text does not match this Home's current name.",
+        )
+    blockers = await _home_delete_blockers(db, group)
+    if blockers:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            _HOME_DELETE_BLOCKER_MESSAGES.get(
+                blockers[0], "This Home cannot be permanently deleted right now."
+            ),
+        )
+
+    # Snapshot before deleting (Slice 5B §18 — Home-name retention is
+    # permitted here, unlike User anonymisation's PII, since this is an
+    # operational record of an administrative action, not the erasure of a
+    # person's identity). AdministrativeAuditEvent.target_id has no FK
+    # constraint, so this row survives the Group's deletion untouched.
+    platform_audit(
+        db,
+        request,
+        context,
+        "home.permanently_deleted",
+        "home",
+        group.id,
+        reason=body.reason,
+        previous={"lifecycle": "archived", "name": group.name},
+        new={"lifecycle": "deleted"},
+    )
+    # A bulk statement, not `db.delete()` on loaded objects — Group.memberships
+    # has no cascade="all, delete-orphan"/passive_deletes configured at the
+    # ORM relationship level (only the DB-level FK is ondelete=CASCADE), so
+    # letting SQLAlchemy manage this itself would try to NULL out group_id
+    # on the up-to-one allowed historical Membership row (§15) before
+    # deleting the Group, which fails outright since group_id is NOT NULL.
+    # Deleting it explicitly first sidesteps the ORM relationship entirely;
+    # every other CASCADE (calendars, events, subscription, etc. — none of
+    # which _home_delete_blockers permits to have any rows anyway) is left
+    # to the database itself.
+    await db.execute(delete(Membership).where(Membership.group_id == group.id))
+    await db.delete(group)
+    await db.commit()
+    return {"message": "Home permanently deleted."}
+
+
 @router.post("/homes/{group_id}/{action}")
 async def home_state(
     group_id: uuid.UUID,
-    action: Literal["suspend", "reactivate"],
+    action: Literal["suspend", "reactivate", "archive", "restore"],
     body: SensitiveActionRequest,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    """suspend/reactivate are Disabled-state transitions; archive/restore are
+    the separate Archived-state ones (migration 0053_lifecycle_archived_
+    state) — kept on this one dynamic-action endpoint rather than splitting
+    into new routes, matching how this endpoint already owned suspend and
+    reactivate together."""
     require_recent_auth(context, settings)
     group = await db.get(Group, group_id, with_for_update=True)
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
-    previous = group.is_active
-    group.is_active = action == "reactivate"
-    group.suspended_at = None if group.is_active else datetime.now(UTC)
+
+    if action in ("suspend", "reactivate"):
+        if action == "suspend":
+            try:
+                previous_lifecycle = _apply_home_disable(group)
+            except LifecycleActionError as error:
+                raise HTTPException(status.HTTP_409_CONFLICT, error.message) from error
+            previous = previous_lifecycle == "active"
+        else:
+            if group.archived_at is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "This Home is archived. Restore the Home instead."
+                )
+            previous = group.is_active
+            group.is_active = True
+            group.suspended_at = None
+        platform_audit(
+            db,
+            request,
+            context,
+            f"home.{action}d" if action == "suspend" else "home.reactivated",
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"active": previous},
+            new={"active": group.is_active},
+        )
+        await db.commit()
+        return {"message": f"Home {action}d." if action == "suspend" else "Home reactivated."}
+
+    if action == "archive":
+        # Only this Home's own row changes — member User accounts are never
+        # touched, so users belonging to other active Homes keep working
+        # normally (item 6 of the Slice 3 spec).
+        previous_lifecycle = _apply_home_archive(group)
+        assert group.archived_at is not None  # _apply_home_archive always sets it
+        now = group.archived_at
+        platform_audit(
+            db,
+            request,
+            context,
+            "home.archived",
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": "archived", "archived_at": now.isoformat()},
+        )
+        await db.commit()
+        return {"message": "Home archived."}
+
+    # action == "restore"
+    if group.archived_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Home is not archived.")
+    # Section 7: validate a Home Admin still exists before restoring to
+    # normal use — a Home archived while its sole admin was later moved out
+    # (Slice 2) or otherwise removed must not silently come back with no one
+    # able to manage it. No billing-policy invention: HomeSubscription state
+    # isn't blocked here since Slice 2 established billing_owner_user_id is
+    # informational-only and never a gate on Home usability.
+    if await home_admin_count(db, group_id) < 1:
+        active_member_count = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == group_id, Membership.removed_at.is_(None)
+                )
+            )
+            or 0
+        )
+        if active_member_count > 0:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This Home has no Home Admin. Assign one before restoring it.",
+            )
+    group.is_active = True
+    group.suspended_at = None
+    group.archived_at = None
     platform_audit(
         db,
         request,
         context,
-        f"home.{action}d" if action == "suspend" else "home.reactivated",
+        "home.restored",
         "home",
         group.id,
         reason=body.reason,
-        previous={"active": previous},
-        new={"active": group.is_active},
+        previous={"lifecycle": "archived"},
+        new={"lifecycle": "active"},
     )
     await db.commit()
-    return {"message": f"Home {action}d." if action == "suspend" else "Home reactivated."}
+    return {"message": "Home restored to Active."}
+
+
+@router.post("/homes/bulk-lifecycle", response_model=BulkLifecycleResponse)
+async def bulk_home_lifecycle(
+    body: BulkLifecycleRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BulkLifecycleResponse:
+    """PCC → Account & Home Cleanup (Slice 4) — bulk Disable/Archive for
+    Homes. Same _apply_home_disable/_apply_home_archive transitions
+    home_state's suspend/archive actions use, once per target, each in its
+    own commit. Member User accounts are never touched — only each Home's
+    own row changes."""
+    require_recent_auth(context, settings)
+    batch_id = uuid.uuid4()
+    succeeded: list[uuid.UUID] = []
+    failed: list[BulkLifecycleFailure] = []
+    seen: set[uuid.UUID] = set()
+    for group_id in body.ids:
+        if group_id in seen:
+            continue
+        seen.add(group_id)
+        group = await db.get(Group, group_id, with_for_update=True)
+        if group is None:
+            failed.append(
+                BulkLifecycleFailure(
+                    id=group_id, code="not_found", message="That Home could not be found."
+                )
+            )
+            continue
+        try:
+            if body.action == "disable":
+                previous_lifecycle = _apply_home_disable(group)
+                new_lifecycle, audit_action = "disabled", "home.suspended"
+            else:
+                previous_lifecycle = _apply_home_archive(group)
+                new_lifecycle, audit_action = "archived", "home.archived"
+        except LifecycleActionError as error:
+            # See the equivalent comment in bulk_user_lifecycle — no
+            # rollback needed (nothing was mutated), and rolling back here
+            # would expire context.administrator for the rest of the loop.
+            failed.append(BulkLifecycleFailure(id=group_id, code=error.code, message=error.message))
+            continue
+        platform_audit(
+            db,
+            request,
+            context,
+            audit_action,
+            "home",
+            group.id,
+            reason=body.reason,
+            previous={"lifecycle": previous_lifecycle},
+            new={"lifecycle": new_lifecycle, "batch_id": str(batch_id)},
+        )
+        await db.commit()
+        succeeded.append(group_id)
+    return BulkLifecycleResponse(succeeded=succeeded, failed=failed)
+
+
+_NATIVE_PUSH_HEALTH_BUCKETS = ("production_apns", "sandbox_apns", "android_fcm", "legacy_ios")
+
+
+def _native_push_health_bucket(platform: str, apns_environment: str | None) -> str:
+    """Same classification already used by the PCC push summary's
+    native_registrations_by_environment, applied here to delivery rows
+    instead of device counts. Android has no APNs-environment concept at
+    all (always NULL) so platform is checked first; "legacy_ios" is a
+    pre-migration-0075 iOS row awaiting natural promotion on its own next
+    re-registration, not a production-provider failure — see the PCC Push
+    Health audit's classification findings. Never inferred from server
+    hostname/deployment environment — only the device's own stored,
+    entitlement-derived apns_environment."""
+    if platform == "android":
+        return "android_fcm"
+    if apns_environment == "production":
+        return "production_apns"
+    if apns_environment == "sandbox":
+        return "sandbox_apns"
+    return "legacy_ios"
+
+
+async def _native_push_health_components(
+    db: AsyncSession, window_start: datetime
+) -> dict[str, dict[str, int]]:
+    """Per-component success/failure/distinct-failing-device counts within
+    the given window. Failed rows are excluded when their device is
+    *currently* disabled: a stale/rejected registration's already-logged
+    failures should not keep Health looking unhealthy once it can no
+    longer generate new ones (disabled devices are already excluded from
+    the engine's own fan-out) — a read-time interpretation only, no
+    historical NotificationDelivery row is altered. See the native-push-
+    device-lifecycle audit's "Device-lifecycle interaction" finding."""
+    components: dict[str, dict[str, int]] = {
+        bucket: {"successes": 0, "failures": 0, "failing_devices": 0}
+        for bucket in _NATIVE_PUSH_HEALTH_BUCKETS
+    }
+    success_rows = await db.execute(
+        select(NativePushDevice.platform, NativePushDevice.apns_environment, func.count())
+        .select_from(NotificationDelivery)
+        .join(NativePushDevice, NativePushDevice.id == NotificationDelivery.native_push_device_id)
+        .where(
+            NotificationDelivery.status == NotificationDeliveryStatus.sent,
+            NotificationDelivery.attempted_at > window_start,
+        )
+        .group_by(NativePushDevice.platform, NativePushDevice.apns_environment)
+    )
+    for platform, apns_environment, count in success_rows.all():
+        components[_native_push_health_bucket(platform, apns_environment)]["successes"] += count
+
+    failure_rows = await db.execute(
+        select(
+            NativePushDevice.platform,
+            NativePushDevice.apns_environment,
+            func.count(),
+            func.count(func.distinct(NotificationDelivery.native_push_device_id)),
+        )
+        .select_from(NotificationDelivery)
+        .join(NativePushDevice, NativePushDevice.id == NotificationDelivery.native_push_device_id)
+        .where(
+            NotificationDelivery.status == NotificationDeliveryStatus.failed,
+            NotificationDelivery.attempted_at > window_start,
+            NativePushDevice.disabled_at.is_(None),
+        )
+        .group_by(NativePushDevice.platform, NativePushDevice.apns_environment)
+    )
+    for platform, apns_environment, count, failing_devices in failure_rows.all():
+        bucket = components[_native_push_health_bucket(platform, apns_environment)]
+        bucket["failures"] += count
+        bucket["failing_devices"] += failing_devices
+
+    return components
+
+
+async def _web_push_health_component(db: AsyncSession, window_start: datetime) -> dict[str, int]:
+    """Mirrors _native_push_health_components' shape for the one channel
+    that isn't a NativePushDevice at all — a PushSubscription (browser)
+    row. No disabled-row exclusion is needed here: this phase's exclusion
+    rule is specific to native registrations (see that function's own
+    docstring); Web Push subscriptions were not part of the audited
+    device-lifecycle interaction and this phase does not extend it."""
+    successes = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NotificationDelivery)
+            .where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.sent,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    failures = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NotificationDelivery)
+            .where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.failed,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    failing_subscriptions = (
+        await db.scalar(
+            select(func.count(func.distinct(NotificationDelivery.push_subscription_id))).where(
+                NotificationDelivery.push_subscription_id.is_not(None),
+                NotificationDelivery.status == NotificationDeliveryStatus.failed,
+                NotificationDelivery.attempted_at > window_start,
+            )
+        )
+        or 0
+    )
+    return {"successes": successes, "failures": failures, "failing_devices": failing_subscriptions}
 
 
 def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:
@@ -2445,18 +5204,26 @@ async def internal_health(
         last_success: datetime | None = None,
         last_failure: datetime | None = None,
         action: str | None = None,
+        components: list[dict[str, Any]] | None = None,
     ) -> None:
-        services.append(
-            {
-                "service": service,
-                "state": state,
-                "explanation": explanation,
-                "last_checked": checked,
-                "last_success": last_success,
-                "last_failure": last_failure,
-                "recommended_action": action,
-            }
-        )
+        row: dict[str, Any] = {
+            "service": service,
+            "state": state,
+            "explanation": explanation,
+            "last_checked": checked,
+            "last_success": last_success,
+            "last_failure": last_failure,
+            "recommended_action": action,
+        }
+        # Additive/optional — every other card omits this key entirely, so
+        # existing consumers (PCC Health page's flat table, other tests) see
+        # no shape change. Only "Push notifications" currently populates it,
+        # to break an otherwise undifferentiated pass/fail verdict into its
+        # real components (production APNs / sandbox APNs / Android FCM /
+        # Web Push / legacy iOS) — see the PCC Push Health audit.
+        if components is not None:
+            row["components"] = components
+        services.append(row)
 
     observation(
         "Application process",
@@ -2636,7 +5403,19 @@ async def internal_health(
         action=None if email_configured else "Configure the deployment email transport.",
     )
 
+    # Push notifications — see docs/architecture/notification-engine.md and
+    # the PCC Push Health audit this replaces. Deliberately computed as
+    # separate components rather than one undifferentiated pass/fail count:
+    # a single stale sandbox/Xcode registration must never read the same as
+    # a real production-provider outage (Web Push, production APNs, and FCM
+    # are the "production-relevant" set below; sandbox APNs and legacy iOS
+    # are surfaced but never alone degrade the top-level state).
     push_config = await resolve_push_config(settings, db)
+    apns_config = resolve_apns_config(settings)
+    fcm_config = resolve_fcm_config(settings)
+    any_push_provider_configured = (
+        push_config.configured or apns_config.configured or fcm_config.configured
+    )
     active_subscriptions = (
         await db.scalar(
             select(func.count())
@@ -2645,6 +5424,10 @@ async def internal_health(
         )
         or 0
     )
+    # Unwindowed all-time max, unchanged from before this phase — still
+    # mixes every channel, kept only as a coarse "has this ever worked /
+    # ever failed at all" timestamp pair; the per-component counts below are
+    # what now drives the actual verdict.
     last_push_success = await db.scalar(
         select(func.max(NotificationDelivery.attempted_at)).where(
             NotificationDelivery.channel == NotificationChannel.push,
@@ -2657,34 +5440,88 @@ async def internal_health(
             NotificationDelivery.status == NotificationDeliveryStatus.failed,
         )
     )
-    recent_push_failures = (
-        await db.scalar(
-            select(func.count())
-            .select_from(NotificationDelivery)
-            .where(
-                NotificationDelivery.channel == NotificationChannel.push,
-                NotificationDelivery.status == NotificationDeliveryStatus.failed,
-                NotificationDelivery.attempted_at > checked - timedelta(hours=24),
-            )
+
+    push_window_start = checked - timedelta(hours=24)
+    native_push_components = await _native_push_health_components(db, push_window_start)
+    web_push_component = await _web_push_health_component(db, push_window_start)
+
+    def push_component_state(bucket_key: str, failures: int) -> str:
+        if failures == 0:
+            return "Healthy"
+        # Legacy iOS rows are pre-migration registrations awaiting natural
+        # promotion, not a production-provider failure — "Warning" says so
+        # without hiding that failures exist. Every other bucket (including
+        # sandbox, which still must not degrade the *top-level* card) uses
+        # "Degraded" for a genuine, visible failure at the component level.
+        return "Warning" if bucket_key == "legacy_ios" else "Degraded"
+
+    push_component_definitions = [
+        ("Production APNs", "production_apns", native_push_components["production_apns"]),
+        ("Sandbox APNs", "sandbox_apns", native_push_components["sandbox_apns"]),
+        ("Android FCM", "android_fcm", native_push_components["android_fcm"]),
+        ("Web Push", "web_push", web_push_component),
+        ("Legacy iOS", "legacy_ios", native_push_components["legacy_ios"]),
+    ]
+    push_components_payload = [
+        {
+            "name": name,
+            "state": push_component_state(key, data["failures"]),
+            "successes_24h": data["successes"],
+            "failures_24h": data["failures"],
+            "failing_devices": data["failing_devices"],
+        }
+        for name, key, data in push_component_definitions
+    ]
+
+    # The only three components allowed to degrade the top-level card —
+    # sandbox APNs and legacy iOS are deliberately excluded from this set.
+    production_relevant_keys = {"production_apns", "android_fcm", "web_push"}
+    failing_production_components = [
+        name
+        for name, key, data in push_component_definitions
+        if key in production_relevant_keys and data["failures"] > 0
+    ]
+    non_production_issues = [
+        name
+        for name, key, data in push_component_definitions
+        if key not in production_relevant_keys and data["failures"] > 0
+    ]
+
+    if not any_push_provider_configured:
+        push_state = "Not configured"
+        push_explanation = "No push provider is configured."
+        push_action = "Configure a push provider on the Push page."
+    elif failing_production_components:
+        push_state = "Degraded"
+        push_explanation = (
+            f"{', '.join(failing_production_components)} "
+            f"{'is' if len(failing_production_components) == 1 else 'are'} failing "
+            "in the last 24 hours. See the Push page for details."
         )
-        or 0
-    )
+        push_action = "Review the failing component(s) on the Push page."
+    else:
+        push_state = "Healthy"
+        push_explanation = (
+            f"{active_subscriptions} active web subscription"
+            f"{'s' if active_subscriptions != 1 else ''}. "
+            "All production-relevant push components are healthy."
+        )
+        if non_production_issues:
+            push_explanation += (
+                f" {', '.join(non_production_issues)} "
+                f"{'has' if len(non_production_issues) == 1 else 'have'} recent failures — "
+                "visible in the components below, not a production outage."
+            )
+        push_action = None
+
     observation(
         "Push notifications",
-        "Not configured"
-        if not push_config.configured
-        else ("Degraded" if recent_push_failures > 0 else "Healthy"),
-        "No push provider is configured."
-        if not push_config.configured
-        else (
-            f"{active_subscriptions} active subscription"
-            f"{'s' if active_subscriptions != 1 else ''}, "
-            f"{recent_push_failures} failure{'s' if recent_push_failures != 1 else ''} "
-            "in the last 24 hours."
-        ),
+        push_state,
+        push_explanation,
         last_success=last_push_success,
         last_failure=last_push_failure,
-        action=None if push_config.configured else "Configure a push provider on the Push page.",
+        action=push_action,
+        components=push_components_payload,
     )
 
     storage_dir = Path(settings.avatar_storage_dir)
@@ -2935,24 +5772,6 @@ async def retry_job(
     return {"id": job.id, "state": "queued"}
 
 
-SETTING_RULES: dict[str, tuple[type[Any], str]] = {
-    "platform_display_name": (str, "safe_live"),
-    "support_contact_address": (str, "safe_live"),
-    "registration_enabled": (bool, "sensitive_live"),
-    "invite_only_mode": (bool, "sensitive_live"),
-    "email_verification_required": (bool, "sensitive_live"),
-    "allowed_registration_domains": (list, "sensitive_live"),
-    "maximum_homes_per_user": (int, "safe_live"),
-    "maximum_members_per_home": (int, "safe_live"),
-    "invitation_expiry_days": (int, "safe_live"),
-    "maintenance_mode": (bool, "sensitive_live"),
-    "default_locale": (str, "safe_live"),
-    "default_timezone": (str, "safe_live"),
-    "privacy_notice_version": (str, "safe_live"),
-    "terms_version": (str, "safe_live"),
-}
-
-
 @router.get("/settings")
 async def settings_list(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
@@ -2960,16 +5779,32 @@ async def settings_list(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     rows = {row.key: row for row in (await db.scalars(select(PlatformSetting))).all()}
-    return {
-        "settings": [
+    items = []
+    for key, definition in SETTINGS_SCHEMA.items():
+        if key in rows:
+            value = rows[key].value.get("value")
+            state = "configured"
+        else:
+            fallback = resolve_environment_fallback(key, settings)
+            value = fallback
+            state = "default" if fallback is not None else "unset"
+        items.append(
             {
                 "key": key,
-                "value": rows[key].value.get("value") if key in rows else None,
-                "category": category,
+                "label": definition.label,
+                "description": definition.description,
+                "section": definition.section,
+                "value_type": definition.value_type,
+                "risk": definition.risk,
+                "runtime_effect": definition.runtime_effect,
+                "consumer_visible": definition.consumer_visible,
                 "editable": True,
+                "value": value,
+                "state": state,
             }
-            for key, (_, category) in SETTING_RULES.items()
-        ],
+        )
+    return {
+        "settings": items,
         "environment": [
             {
                 "key": "public_url",
@@ -2993,6 +5828,270 @@ async def settings_list(
     }
 
 
+async def _syslog_row(db: AsyncSession) -> PlatformSetting | None:
+    return await db.scalar(select(PlatformSetting).where(PlatformSetting.key == "central_syslog"))
+
+
+@router.get("/logging/syslog")
+async def syslog_settings(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = await _syslog_row(db)
+    config = syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+    dispatcher = current_dispatcher()
+    return config.public_dict(
+        last_success=dispatcher.last_successful_delivery if dispatcher else None,
+        last_error=dispatcher.last_error if dispatcher else None,
+        dropped_count=dispatcher.dropped_count if dispatcher else 0,
+    )
+
+
+@router.get("/logging/syslog/diagnostics")
+async def syslog_diagnostics(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+) -> dict[str, Any]:
+    dispatcher = current_dispatcher()
+    if dispatcher is None:
+        return {
+            "enabled": False,
+            "dispatcher_running": False,
+            "config_loaded": False,
+            "queue_size": 0,
+            "queue_capacity": 1000,
+            "events_seen": 0,
+            "events_queued": 0,
+            "events_sent": 0,
+            "events_filtered": 0,
+            "events_category_filtered": 0,
+            "events_dropped": 0,
+            "transport_failures": 0,
+            "last_dispatch_attempt": None,
+            "last_successful_delivery": None,
+            "last_error": None,
+        }
+    return dispatcher.diagnostics()
+
+
+@router.put("/logging/syslog")
+async def update_syslog_settings(
+    body: SyslogSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    value = body.model_dump(exclude={"reason", "confirmed"})
+    config = SyslogConfig.from_value(value, settings.environment)
+    row = await _syslog_row(db)
+    previous = row.value.get("value") if row else {"enabled": False}
+    if row is None:
+        row = PlatformSetting(
+            key="central_syslog", value={"value": value}, updated_by=context.administrator.id
+        )
+        db.add(row)
+    else:
+        row.value = {"value": value}
+        row.updated_by = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "central_logging.syslog_settings_changed",
+        "platform_setting",
+        reason=body.reason,
+        previous=previous,
+        new=config.public_dict(),
+    )
+    await db.commit()
+    return config.public_dict()
+
+
+@router.post("/logging/syslog/test")
+async def test_syslog_settings(
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    row = await _syslog_row(db)
+    config = syslog_config_from_platform_value(row.value if row else {}, settings.environment)
+    if not config.enabled or not config.host:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Remote syslog is not enabled and configured."
+        )
+    dispatcher = current_dispatcher()
+    if dispatcher is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Central logging is not running.")
+    event = {
+        "event": "MyKhaya remote syslog test",
+        "event_type": "syslog_test",
+        "level": "info",
+        "request_id": getattr(request.state, "request_id", None),
+    }
+    try:
+        delivered = await dispatcher.enqueue_and_wait(event, bypass_filters=True)
+    except TimeoutError as exc:
+        platform_audit(
+            db,
+            request,
+            context,
+            "central_logging.syslog_test_failed",
+            "platform_setting",
+            reason=body.reason,
+            outcome="failure",
+            failure_category=type(exc).__name__,
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached."
+        ) from exc
+    if not delivered:
+        platform_audit(
+            db,
+            request,
+            context,
+            "central_logging.syslog_test_failed",
+            "platform_setting",
+            reason=body.reason,
+            outcome="failure",
+            failure_category="dispatcher_delivery_failed",
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "The remote syslog destination could not be reached."
+        )
+    platform_audit(
+        db,
+        request,
+        context,
+        "central_logging.syslog_test_succeeded",
+        "platform_setting",
+        reason=body.reason,
+        new={"event_type": "syslog_test"},
+    )
+    await db.commit()
+    return {"message": "Syslog test message sent."}
+
+
+def _holiday_source_payload(source: PlatformHolidaySource, cached_count: int) -> dict[str, Any]:
+    return {
+        "id": source.id,
+        "country_code": source.country_code,
+        "country_name": source.country_name,
+        "flag_emoji": source.flag_emoji,
+        "region_code": source.region_code,
+        "region_name": source.region_name,
+        "provider": source.provider,
+        "source_url": source.source_url,
+        "enabled": source.enabled,
+        "sync_status": source.sync_status,
+        "last_successful_sync": source.last_successful_sync,
+        "next_scheduled_sync": source.next_scheduled_sync,
+        "last_sync_error": source.last_sync_error,
+        "cached_holiday_count": cached_count,
+    }
+
+
+@router.get("/calendar/holiday-calendars")
+async def holiday_calendars(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
+) -> list[dict[str, Any]]:
+    sources = (
+        await db.scalars(
+            select(PlatformHolidaySource).order_by(
+                PlatformHolidaySource.country_name, PlatformHolidaySource.region_name
+            )
+        )
+    ).all()
+    counts = dict(
+        (
+            await db.execute(
+                select(PlatformHolidayDate.source_id, func.count()).group_by(
+                    PlatformHolidayDate.source_id
+                )
+            )
+        ).all()
+    )
+    return [_holiday_source_payload(source, counts.get(source.id, 0)) for source in sources]
+
+
+@router.put("/calendar/holiday-calendars/{source_id}")
+async def update_holiday_calendar_source(
+    source_id: uuid.UUID,
+    body: HolidaySourceUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SETTINGS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    source = await db.scalar(
+        select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update()
+    )
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
+    previous = source.enabled
+    source.enabled = body.enabled
+    platform_audit(
+        db,
+        request,
+        context,
+        "calendar_holiday_source.updated",
+        "holiday_source",
+        source.id,
+        reason=body.reason,
+        previous={"enabled": previous},
+        new={"enabled": body.enabled},
+    )
+    await db.commit()
+    count = await db.scalar(
+        select(func.count())
+        .select_from(PlatformHolidayDate)
+        .where(PlatformHolidayDate.source_id == source.id)
+    )
+    return _holiday_source_payload(source, count or 0)
+
+
+@router.post("/calendar/holiday-calendars/{source_id}/sync")
+async def sync_holiday_calendar_source(
+    source_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    source = await db.scalar(
+        select(PlatformHolidaySource).where(PlatformHolidaySource.id == source_id).with_for_update()
+    )
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That holiday source could not be found.")
+    count = await sync_holiday_source(db, source)
+    platform_audit(
+        db,
+        request,
+        context,
+        "calendar_holiday_source.sync_requested",
+        "holiday_source",
+        source.id,
+        reason=body.reason,
+        new={"status": source.sync_status, "count": count},
+    )
+    await db.commit()
+    cached = await db.scalar(
+        select(func.count())
+        .select_from(PlatformHolidayDate)
+        .where(PlatformHolidayDate.source_id == source.id)
+    )
+    return _holiday_source_payload(source, cached or 0)
+
+
 @router.put("/settings/{key}")
 async def update_setting(
     key: str,
@@ -3003,30 +6102,42 @@ async def update_setting(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    rule = SETTING_RULES.get(key)
-    if (
-        rule is None
-        or not isinstance(body.value, rule[0])
-        or (rule[0] is int and isinstance(body.value, bool))
-    ):
+    if key in ENVIRONMENT_ONLY_KEYS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "That setting or value is not valid."
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This setting is managed by the deployment environment and cannot be changed here.",
         )
-    if isinstance(body.value, int) and not 1 <= body.value <= 10_000:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "That numeric value is outside the allowed range."
-        )
+    definition = SETTINGS_SCHEMA.get(key)
+    if definition is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That setting does not exist.")
+    try:
+        validate_setting_value(definition, body.value)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     row = await db.scalar(
         select(PlatformSetting).where(PlatformSetting.key == key).with_for_update()
     )
-    previous = row.value.get("value") if row else None
     if row is None:
+        effective_previous = resolve_environment_fallback(key, settings)
+        previous_payload: dict[str, Any] = {
+            key: None,
+            "previous_effective_value": effective_previous,
+            "previous_source": "environment_default" if effective_previous is not None else "unset",
+        }
         row = PlatformSetting(
             key=key, value={"value": body.value}, updated_by=context.administrator.id
         )
         db.add(row)
     else:
-        row.value = {"value": body.value}
+        previous_payload = {key: row.value.get("value"), "previous_source": "platform_admin"}
+        row.value = {
+            "value": body.value,
+            **(
+                {"health": row.value.get("health")}
+                if key == "driveway_dvla_enabled" and row.value.get("health")
+                else {}
+            ),
+        }
         row.updated_by = context.administrator.id
     platform_audit(
         db,
@@ -3035,11 +6146,106 @@ async def update_setting(
         "setting.updated",
         "setting",
         reason=body.reason,
-        previous={key: previous},
+        previous=previous_payload,
         new={key: body.value},
     )
     await db.commit()
-    return {"key": key, "value": body.value, "category": rule[1]}
+    return {"key": key, "value": body.value, "risk": definition.risk}
+
+
+@router.get("/integrations/dvla")
+async def driveway_dvla_status(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "driveway_dvla_enabled")
+    )
+    value = row.value if row else {}
+    enabled = value.get("value") is True
+    configured = settings.dvla_configured
+    stored_health = dict(value.get("health") or {})
+    # State always reflects live configuration/toggle state, never a stale
+    # value left over from before a credential was removed or the provider
+    # was disabled — only the last-success/last-failure history below is
+    # allowed to be historical.
+    if not configured:
+        state = "Not configured"
+    elif not enabled:
+        state = "Disabled"
+    else:
+        state = stored_health.get("state", "Unknown")
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "environment": settings.dvla_environment_label,
+        "endpoint": settings.dvla_active_endpoint,
+        "health": {"state": state},
+        "last_success_at": stored_health.get("last_success_at"),
+        "last_success_summary": stored_health.get("last_success_summary"),
+        "last_failure_at": stored_health.get("last_failure_at"),
+        "last_failure_summary": stored_health.get("last_failure_summary"),
+    }
+
+
+@router.post("/integrations/dvla/test")
+async def driveway_dvla_test(
+    body: DrivewayDvlaTestRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    if not settings.dvla_configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DVLA is not configured.")
+    assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
+    environment_label = settings.dvla_environment_label or "DVLA"
+    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
+    try:
+        await provider.lookup(body.registration)
+        result = {"state": "Healthy", "message": f"DVLA {environment_label} connection successful."}
+    except VehicleLookupNotFound:
+        result = {
+            "state": "Healthy",
+            "message": "Vehicle registration was not found, but the DVLA connection is working.",
+        }
+    except VehicleLookupAuthFailed:
+        result = {"state": "Unavailable", "message": "DVLA authentication failed."}
+    except VehicleLookupUnavailable:
+        result = {"state": "Unavailable", "message": "DVLA service is unavailable."}
+    row = await db.scalar(
+        select(PlatformSetting)
+        .where(PlatformSetting.key == "driveway_dvla_enabled")
+        .with_for_update()
+    )
+    if row is None:
+        row = PlatformSetting(
+            key="driveway_dvla_enabled", value={"value": False}, updated_by=context.administrator.id
+        )
+        db.add(row)
+    health = dict(row.value.get("health") or {})
+    now = datetime.now(UTC).isoformat()
+    health["state"] = result["state"]
+    if result["state"] == "Healthy":
+        health["last_success_at"] = now
+        health["last_success_summary"] = result["message"]
+    else:
+        health["last_failure_at"] = now
+        health["last_failure_summary"] = result["message"]
+    row.value = {**row.value, "health": health}
+    platform_audit(
+        db,
+        request,
+        context,
+        "driveway.dvla.test_connection",
+        "integration",
+        reason=body.reason,
+        new={"state": result["state"]},
+    )
+    await db.commit()
+    return result
 
 
 @router.get("/modules")
@@ -3077,6 +6283,19 @@ async def update_module(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    # Phase 3A: a hidden module (Tasks, Plans — retired/not-yet-built) must
+    # stay unavailable unless deliberately promoted through code/release
+    # governance, never through this lifecycle control — see
+    # module_registry.feature_modules' matching read-side exclusion from
+    # PCC's global catalogue. This is enforced against the module's static
+    # registry release_state, never the FeatureFlag row's own stored one
+    # (which an earlier write could already have drifted) — the registry is
+    # the actual authority is_feature_enabled consults for the hidden check.
+    if module_definition(key.value).release_state == ReleaseState.hidden:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{key.value} is not a released module and cannot be managed here.",
+        )
     row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == key).with_for_update())
     previous = row.enabled if row else False
     previous_state = (
@@ -3112,6 +6331,47 @@ async def update_module(
     )
     await db.commit()
     return {"key": key, "enabled": body.enabled, "release_state": body.release_state}
+
+
+@router.get("/auth/providers")
+async def authentication_provider_configuration(
+    _: PlatformContext = Depends(require_roles(*OPERATORS)),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """PCC-safe provider state; credentials are deployment-managed."""
+    return {"providers": [item.public_dict() for item in external_auth_provider_statuses(settings)]}
+
+
+@router.post("/auth/providers/{provider}/test")
+async def test_authentication_provider_configuration(
+    provider: str,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object | None]:
+    """Validate deployment configuration without contacting a provider.
+
+    A real Apple OAuth test requires provider credentials and callback
+    configuration that are not present in this environment. This endpoint is
+    deliberately limited to safe local completeness checks and is protected by
+    the existing recent-auth and audit controls.
+    """
+    if provider not in {"apple", "google"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That sign-in provider is not supported.")
+    require_recent_auth(context, settings)
+    result = external_auth_provider_status(settings, "apple" if provider == "apple" else "google")
+    platform_audit(
+        db,
+        request,
+        context,
+        "APPLE_PROVIDER_CONFIG_TESTED",
+        "auth_provider",
+        reason=f"Validated {provider} deployment configuration.",
+        new={"provider": provider, "state": result.state, "configured": result.configured},
+    )
+    await db.commit()
+    return result.public_dict()
 
 
 @router.get("/security", response_model=PageResponse)
@@ -3342,7 +6602,7 @@ async def mail_configuration(
             "reply_to": row.reply_to if row else None,
             "timeout_seconds": row.timeout_seconds if row else 10,
             "updated_at": row.updated_at if row else None,
-            "editable": config.source != "environment",
+            "editable": True,
         },
     }
 
@@ -3356,11 +6616,6 @@ async def update_smtp_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
-    if settings.email_delivery_configured:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "SMTP is managed by the deployment environment and cannot be changed here.",
-        )
     row = await _get_smtp_settings_row(db)
     was_enabled = row.enabled if row else False
     had_password = bool(row.encrypted_password) if row else False
@@ -3499,6 +6754,27 @@ async def _get_push_settings_row(db: AsyncSession) -> PlatformPushSettings | Non
     return row
 
 
+async def _native_push_environment_breakdown(db: AsyncSession) -> dict[str, int]:
+    """Buckets every currently-active (non-disabled) NativePushDevice row by
+    its APNs environment. `apns_environment IS NULL` predates per-device
+    provenance (migration 0075) and is reported as "legacy" — see
+    push.send_apns's own comment on why NULL has always meant production for
+    delivery purposes; that delivery behaviour is unchanged here, this is
+    read-only reporting. Any value other than the two the check constraint
+    allows is defensively folded into "legacy" too, rather than raising."""
+    rows = (
+        await db.execute(
+            select(NativePushDevice.apns_environment, func.count(NativePushDevice.id))
+            .where(NativePushDevice.disabled_at.is_(None))
+            .group_by(NativePushDevice.apns_environment)
+        )
+    ).all()
+    counts = {"production": 0, "sandbox": 0, "legacy": 0}
+    for environment, count in rows:
+        counts[environment if environment in ("production", "sandbox") else "legacy"] += count
+    return counts
+
+
 @router.get("/push")
 async def push_configuration(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -3507,12 +6783,32 @@ async def push_configuration(
 ) -> dict[str, Any]:
     config = await resolve_push_config(settings, db)
     row = await _get_push_settings_row(db)
-    active_subscriptions = (
+    # Deliberately named `active_subscriptions` (kept) and
+    # `active_web_subscriptions` (new, explicit) for the exact same value —
+    # this has only ever counted Web Push (VAPID) subscriptions, never
+    # NativePushDevice rows. See docs/architecture/notification-engine.md
+    # "Native push (APNs / FCM)" and the PCC push audit this corrects.
+    active_web_subscriptions = (
         await db.scalar(
             select(func.count(PushSubscription.id)).where(PushSubscription.disabled_at.is_(None))
         )
         or 0
     )
+    active_native_registrations = (
+        await db.scalar(
+            select(func.count(NativePushDevice.id)).where(NativePushDevice.disabled_at.is_(None))
+        )
+        or 0
+    )
+    users_with_active_native_push = (
+        await db.scalar(
+            select(func.count(func.distinct(NativePushDevice.user_id))).where(
+                NativePushDevice.disabled_at.is_(None)
+            )
+        )
+        or 0
+    )
+    native_environment_breakdown = await _native_push_environment_breakdown(db)
     failures = (
         await db.scalars(
             select(NotificationDelivery)
@@ -3524,17 +6820,60 @@ async def push_configuration(
             .limit(10)
         )
     ).all()
+    # One extra lookup to describe *which* native device failed (platform,
+    # APNs environment) — the failure query's own WHERE clause (channel/
+    # status) is unchanged; this only enriches what's already selected.
+    failed_native_device_ids = [
+        row.native_push_device_id for row in failures if row.native_push_device_id
+    ]
+    native_devices_by_id: dict[uuid.UUID, NativePushDevice] = (
+        {
+            device.id: device
+            for device in (
+                await db.scalars(
+                    select(NativePushDevice).where(
+                        NativePushDevice.id.in_(failed_native_device_ids)
+                    )
+                )
+            ).all()
+        }
+        if failed_native_device_ids
+        else {}
+    )
     return {
         "configured": config.configured,
         "managed_by": config.source,
         "public_key": config.public_key,
-        "active_subscriptions": active_subscriptions,
+        "active_subscriptions": active_web_subscriptions,
+        "active_web_subscriptions": active_web_subscriptions,
+        "active_native_registrations": active_native_registrations,
+        "users_with_active_native_push": users_with_active_native_push,
+        "native_registrations_by_environment": native_environment_breakdown,
         "recent_failures": [
             {
                 "id": row.id,
                 "notification_type": row.notification_type,
                 "failed_at": row.attempted_at,
                 "safe_failure_message": row.sanitised_failure_reason,
+                # A failure row is always exactly one device's delivery
+                # attempt, never "the whole notification" or "the whole
+                # user" — these fields exist so the UI can say so explicitly
+                # rather than implying a total failure. See the PCC push
+                # audit ("Recent failures audit") this corrects.
+                "channel": "native" if row.native_push_device_id else "web",
+                "platform": (
+                    native_devices_by_id[row.native_push_device_id].platform
+                    if row.native_push_device_id in native_devices_by_id
+                    else None
+                ),
+                "apns_environment": (
+                    native_devices_by_id[row.native_push_device_id].apns_environment
+                    if row.native_push_device_id in native_devices_by_id
+                    else None
+                ),
+                "recipient_user_id": row.recipient_user_id,
+                "native_push_device_id": row.native_push_device_id,
+                "push_subscription_id": row.push_subscription_id,
             }
             for row in failures
         ],
@@ -3547,6 +6886,157 @@ async def push_configuration(
             "editable": config.source != "environment",
         },
     }
+
+
+@router.get("/push/native-devices", response_model=PageResponse)
+async def native_push_device_list(
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=25, ge=1, le=100),
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+) -> PageResponse:
+    """Read-only drill-down for `native_push_devices` — the PCC push audit
+    found there was previously no way to browse these at all except as a
+    side effect of sending one named user a test push. Deliberately never
+    selects/returns `NativePushDevice.token` (raw APNs/FCM device token) or
+    any provider credential — same "never return a secret" rule as every
+    other PCC read endpoint. Includes disabled rows (Status distinguishes
+    them) so an operator can see a device's full history, not just the
+    currently-active set already summarised on `GET /push`."""
+    total = await db.scalar(select(func.count(NativePushDevice.id))) or 0
+    rows = (
+        await db.scalars(
+            select(NativePushDevice)
+            .order_by(NativePushDevice.created_at.desc(), NativePushDevice.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    user_ids = [row.user_id for row in rows]
+    users_by_id: dict[uuid.UUID, User] = (
+        {
+            user.id: user
+            for user in (await db.scalars(select(User).where(User.id.in_(user_ids)))).all()
+        }
+        if user_ids
+        else {}
+    )
+    return PageResponse(
+        items=[
+            {
+                "id": row.id,
+                "user_id": row.user_id,
+                "display_name": (
+                    users_by_id[row.user_id].display_name if row.user_id in users_by_id else None
+                ),
+                "email": users_by_id[row.user_id].email if row.user_id in users_by_id else None,
+                "platform": row.platform,
+                "device_label": row.device_label,
+                "installation_id": row.installation_id,
+                "apns_environment": row.apns_environment,
+                "last_seen_at": row.last_seen_at,
+                "disabled_at": row.disabled_at,
+                "disabled_reason": row.disabled_reason,
+                "disabled_source": row.disabled_source,
+            }
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+PLATFORM_ADMIN_DISABLE_REASON = "Disabled by Platform Admin"
+
+
+async def _get_native_push_device_or_404(
+    db: AsyncSession, device_id: uuid.UUID
+) -> NativePushDevice:
+    device = await db.get(NativePushDevice, device_id)
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Native push registration not found.")
+    return device
+
+
+@router.post("/push/native-devices/{device_id}/disable")
+async def disable_native_push_device(
+    device_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Disables one MyKhaya server-side push registration only — never the
+    device's OS notification permission. Sets `disabled_source =
+    platform_admin`, the one value register_native_device()'s upsert treats
+    as non-reactivating: if the app is still installed and OS permission
+    remains granted, it may still call the registration endpoint again, but
+    that call will refresh technical fields (token/device_label/last_seen_at)
+    without clearing the disabled state. See mykhaya.models.
+    NativePushDisabledSource and routers.notifications.register_native_device.
+    """
+    require_recent_auth(context, settings)
+    device = await _get_native_push_device_or_404(db, device_id)
+    previous = {
+        "disabled_at": device.disabled_at.isoformat() if device.disabled_at else None,
+        "disabled_source": device.disabled_source.value if device.disabled_source else None,
+    }
+    device.disabled_at = datetime.now(UTC)
+    device.disabled_reason = PLATFORM_ADMIN_DISABLE_REASON
+    device.disabled_source = NativePushDisabledSource.platform_admin
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.native_device_disabled",
+        "native_push_device",
+        device_id,
+        reason=body.reason,
+        previous=previous,
+        new={"disabled_source": NativePushDisabledSource.platform_admin.value},
+    )
+    await db.commit()
+    return {"message": "Native push registration disabled."}
+
+
+@router.post("/push/native-devices/{device_id}/enable")
+async def enable_native_push_device(
+    device_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """The only way back for a Platform-Admin-disabled registration — the
+    app's own natural re-registration deliberately cannot clear this state
+    (see disable_native_push_device above), so restoring delivery
+    eligibility is always an explicit, audited operator action."""
+    require_recent_auth(context, settings)
+    device = await _get_native_push_device_or_404(db, device_id)
+    previous = {
+        "disabled_at": device.disabled_at.isoformat() if device.disabled_at else None,
+        "disabled_reason": device.disabled_reason,
+        "disabled_source": device.disabled_source.value if device.disabled_source else None,
+    }
+    device.disabled_at = None
+    device.disabled_reason = None
+    device.disabled_source = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "push.native_device_enabled",
+        "native_push_device",
+        device_id,
+        reason=body.reason,
+        previous=previous,
+        new={"disabled_source": None},
+    )
+    await db.commit()
+    return {"message": "Native push registration re-enabled."}
 
 
 @router.put("/push/vapid-settings")
@@ -3647,8 +7137,6 @@ async def send_test_push(
     require_recent_auth(context, settings)
     await enforce_rate_limit(request, settings, "platform-test-push", 3, 300)
     config = await resolve_push_config(settings, db)
-    if not config.configured:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
     recipient = await db.scalar(select(User).where(User.email == normalise_email(body.recipient)))
     if recipient is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No household member has that email.")
@@ -3659,7 +7147,17 @@ async def send_test_push(
             )
         )
     ).all()
-    if not subscriptions:
+    native_devices = (
+        await db.scalars(
+            select(NativePushDevice).where(
+                NativePushDevice.user_id == recipient.id,
+                NativePushDevice.disabled_at.is_(None),
+            )
+        )
+    ).all()
+    if not config.configured and not native_devices:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Push is not configured.")
+    if not subscriptions and not native_devices:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That member has no registered devices to test."
         )
@@ -3677,19 +7175,72 @@ async def send_test_push(
                     "notification_type": "test_push",
                 },
             )
-            results.append({"device_label": subscription.device_label, "result": "accepted"})
+            results.append(
+                {"channel": "web", "device_label": subscription.device_label, "result": "accepted"}
+            )
         except Exception as exc:
             # Covers both WebPushException (the push service rejected/failed the
             # request) and lower-level encoding errors from a malformed subscription
             # (e.g. corrupted or truncated keys) — either way this is a per-device
             # delivery failure, not a reason to fail the whole admin request.
             results.append(
-                {"device_label": subscription.device_label, "result": type(exc).__name__}
+                {
+                    "channel": "web",
+                    "device_label": subscription.device_label,
+                    "result": type(exc).__name__,
+                }
             )
             await log.awarning(
                 "platform_test_push_device_failed",
+                channel="web",
                 error=type(exc).__name__,
                 subscription_id=str(subscription.id),
+            )
+    for device in native_devices:
+        try:
+            delivery = await enqueue_native_push(
+                db,
+                device=device,
+                recipient_user_id=recipient.id,
+                notification_type="test_push",
+                title="MyKhaya test notification",
+                body="This confirms push notifications are working.",
+                idempotency_key=f"platform-test:{uuid.uuid4()}:native:{device.id}",
+                deep_link={"type": "settings"},
+            )
+            results.append(
+                {
+                    "channel": "native",
+                    "platform": device.platform,
+                    "device_label": device.device_label,
+                    "result": "queued",
+                    "delivery_id": str(delivery.id),
+                    "device_id": str(device.id),
+                    # APNs environment only means anything for iOS devices —
+                    # FCM has no sandbox/production split, so this key stays
+                    # `None` for Android rather than a misleading default.
+                    # NULL on a legacy iOS row predates per-device provenance
+                    # and has always meant production (see push.send_apns).
+                    "environment": (
+                        (device.apns_environment or "production")
+                        if device.platform == "ios"
+                        else None
+                    ),
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "channel": "native",
+                    "device_label": device.device_label,
+                    "result": type(exc).__name__,
+                }
+            )
+            await log.awarning(
+                "platform_test_push_device_failed",
+                channel="native",
+                error=type(exc).__name__,
+                device_id=str(device.id),
             )
     any_accepted = any(r["result"] == "accepted" for r in results)
     platform_audit(
@@ -3709,25 +7260,573 @@ async def send_test_push(
     return {"results": results}
 
 
+async def _get_stripe_settings_row(db: AsyncSession) -> PlatformStripeSettings | None:
+    row: PlatformStripeSettings | None = await db.scalar(select(PlatformStripeSettings).limit(1))
+    return row
+
+
+def _last4(secret: str | None) -> str | None:
+    return secret[-4:] if secret and len(secret) >= 4 else None
+
+
+def _stripe_id(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        raw_id = value.get("id")
+        return str(raw_id) if raw_id else None
+    return None
+
+
+def _stripe_mode_settings_response(
+    row: PlatformStripeSettings | None, settings: Settings, mode: Literal["test", "live"]
+) -> StripeModeSettingsResponse:
+    """Metadata only — configured/last4, never the decrypted secret value.
+    See docs/security/platform-administration-security.md#stripe-settings."""
+    if row is None:
+        return StripeModeSettingsResponse(
+            publishable_key=None,
+            secret_key_configured=False,
+            secret_key_last4=None,
+            webhook_secret_configured=False,
+            webhook_secret_last4=None,
+            family_monthly_price_id=None,
+            family_annual_price_id=None,
+            ultimate_monthly_price_id=None,
+            ultimate_annual_price_id=None,
+        )
+    if mode == "test":
+        publishable_key = row.test_publishable_key
+        encrypted_secret_key = row.encrypted_test_secret_key
+        encrypted_webhook_secret = row.encrypted_test_webhook_secret
+        monthly_price_id = row.test_family_monthly_price_id
+        annual_price_id = row.test_family_annual_price_id
+        ultimate_monthly_price_id = row.test_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.test_ultimate_annual_price_id
+    else:
+        publishable_key = row.live_publishable_key
+        encrypted_secret_key = row.encrypted_live_secret_key
+        encrypted_webhook_secret = row.encrypted_live_webhook_secret
+        monthly_price_id = row.live_family_monthly_price_id
+        annual_price_id = row.live_family_annual_price_id
+        ultimate_monthly_price_id = row.live_ultimate_monthly_price_id
+        ultimate_annual_price_id = row.live_ultimate_annual_price_id
+
+    def _decrypted_last4(ciphertext: str | None) -> str | None:
+        if not ciphertext:
+            return None
+        try:
+            return _last4(decrypt_stripe_secret(settings, ciphertext))
+        except SecretDecryptionError:
+            return None
+
+    return StripeModeSettingsResponse(
+        publishable_key=publishable_key,
+        secret_key_configured=bool(encrypted_secret_key),
+        secret_key_last4=_decrypted_last4(encrypted_secret_key),
+        webhook_secret_configured=bool(encrypted_webhook_secret),
+        webhook_secret_last4=_decrypted_last4(encrypted_webhook_secret),
+        family_monthly_price_id=monthly_price_id,
+        family_annual_price_id=annual_price_id,
+        ultimate_monthly_price_id=ultimate_monthly_price_id,
+        ultimate_annual_price_id=ultimate_annual_price_id,
+    )
+
+
+@router.get("/payments/stripe", response_model=StripeConfigurationResponse)
+async def stripe_configuration(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeConfigurationResponse:
+    """Read-only Stripe configuration + webhook health for the Payments settings
+    page. Never returns a decrypted secret — only *_configured/*_last4 metadata,
+    the same convention as the Email/Push settings endpoints. See
+    docs/architecture/platform-control-centre.md#stripe-configuration-precedence."""
+    config = await resolve_stripe_config(settings, db)
+    row = await _get_stripe_settings_row(db)
+    webhook = (await current_platform_health(db, settings)).stripe_webhook
+    diagnostic_rows = (
+        await db.scalars(
+            select(StripeBillingDiagnostic)
+            .order_by(StripeBillingDiagnostic.created_at.desc())
+            .limit(50)
+        )
+    ).all()
+
+    def diagnostic_response(row: StripeBillingDiagnostic) -> StripeBillingDiagnosticResponse:
+        return StripeBillingDiagnosticResponse(
+            id=row.id,
+            created_at=row.created_at,
+            source=row.source,
+            stripe_mode=row.stripe_mode,
+            stage=row.stage,
+            result=row.result,
+            stripe_event_id=row.stripe_event_id,
+            checkout_session_id=row.checkout_session_id,
+            stripe_customer_id=row.stripe_customer_id,
+            stripe_subscription_id=row.stripe_subscription_id,
+            group_id=row.group_id,
+            stripe_subscription_status=row.stripe_subscription_status,
+            stored_subscription_status=row.stored_subscription_status,
+            stored_plan=row.stored_plan,
+            effective_plan=row.effective_plan,
+            safe_error_code=row.safe_error_code,
+            safe_error_message=row.safe_error_message,
+        )
+
+    latest_checkout = next(
+        (row for row in diagnostic_rows if row.source == "checkout_confirmation"), None
+    )
+    latest_webhook = next((row for row in diagnostic_rows if row.source == "webhook"), None)
+    latest_reconciliation = next(
+        (row for row in diagnostic_rows if row.source == "manual_reconciliation"), None
+    )
+    return StripeConfigurationResponse(
+        configured=config.configured,
+        enabled=row.enabled if row else False,
+        acquisition_enabled=row.acquisition_enabled if row else config.acquisition_enabled,
+        family_signups_enabled=row.family_signups_enabled if row else config.family_signups_enabled,
+        ultimate_signups_enabled=row.ultimate_signups_enabled
+        if row
+        else config.ultimate_signups_enabled,
+        mode=row.mode.value if row else config.mode,
+        source=config.source,
+        incomplete_reason=config.incomplete_reason,
+        editable=config.source != "environment",
+        updated_at=row.updated_at if row else None,
+        test=_stripe_mode_settings_response(row, settings, "test"),
+        live=_stripe_mode_settings_response(row, settings, "live"),
+        webhook=StripeWebhookSummary(
+            configured=webhook.configured,
+            state=webhook.state,
+            reason=webhook.reason,
+            last_event_at=webhook.last_event_at,
+            recent_failure_count=webhook.recent_failure_count,
+            # No canonical public API base URL setting exists yet — this is the
+            # fixed route path an operator combines with their API hostname when
+            # registering the endpoint in the Stripe Dashboard.
+            endpoint_url="/billing/stripe/webhook",
+        ),
+        diagnostics=StripeBillingDiagnosticsResponse(
+            latest=diagnostic_response(diagnostic_rows[0]) if diagnostic_rows else None,
+            latest_checkout=diagnostic_response(latest_checkout) if latest_checkout else None,
+            latest_webhook=diagnostic_response(latest_webhook) if latest_webhook else None,
+            latest_reconciliation=(
+                diagnostic_response(latest_reconciliation) if latest_reconciliation else None
+            ),
+            recent=[diagnostic_response(row) for row in diagnostic_rows],
+        ),
+    )
+
+
+@router.post(
+    "/payments/stripe/inspect-checkout",
+    response_model=StripeCheckoutInspectionResponse,
+)
+async def inspect_stripe_checkout(
+    body: StripeCheckoutInspectionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeCheckoutInspectionResponse:
+    """Read-only operator inspection of a Stripe Checkout Session."""
+    require_recent_auth(context, settings)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured or not config.secret_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available.")
+    try:
+        session = await call_stripe(
+            lambda: stripe.checkout.Session.retrieve(
+                body.session_id,
+                expand=["subscription", "customer"],
+                api_key=config.secret_key,
+            )
+        )
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror(
+            "stripe_checkout_inspection_failed", session_id=body.session_id, detail=str(exc)
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not inspect that Checkout Session right now.",
+        ) from None
+
+    subscription = session.get("subscription")
+    subscription_id = _stripe_id(subscription)
+    customer_id = _stripe_id(session.get("customer"))
+    price_id = None
+    subscription_status = None
+    if isinstance(subscription, dict):
+        subscription_status = subscription.get("status")
+        items = (subscription.get("items") or {}).get("data") or []
+        if items:
+            price_id = (items[0].get("price") or {}).get("id")
+    elif subscription_id:
+        try:
+            stripe_subscription = await call_stripe(
+                lambda: stripe.Subscription.retrieve(subscription_id, api_key=config.secret_key)
+            )
+        except (StripeUnavailableError, StripeRequestError) as exc:
+            await log.aerror(
+                "stripe_checkout_inspection_subscription_failed",
+                session_id=body.session_id,
+                subscription_id=subscription_id,
+                detail=str(exc),
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Could not inspect the Checkout subscription right now.",
+            ) from None
+        subscription_status = stripe_subscription.get("status")
+        items = (stripe_subscription.get("items") or {}).get("data") or []
+        if items:
+            price_id = (items[0].get("price") or {}).get("id")
+    configured_prices = {
+        config.family_monthly_price_id,
+        config.family_annual_price_id,
+        config.ultimate_monthly_price_id,
+        config.ultimate_annual_price_id,
+    }
+    metadata_group = (session.get("metadata") or {}).get("mykhaya_group_id")
+    reference_group = session.get("client_reference_id")
+    home_reference = "matches" if metadata_group or reference_group else "missing"
+    if metadata_group and reference_group and str(metadata_group) != str(reference_group):
+        home_reference = "mismatch"
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.checkout_inspected",
+        "stripe_settings",
+        reason=body.reason,
+        new={"checkout_session_id": body.session_id, "home_reference": home_reference},
+    )
+    await db.commit()
+    return StripeCheckoutInspectionResponse(
+        session_exists=True,
+        status=session.get("status"),
+        payment_status=session.get("payment_status"),
+        mode=session.get("mode"),
+        home_reference=home_reference,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        price_id=price_id,
+        configured_price_matched=price_id in configured_prices,
+        subscription_status=subscription_status,
+    )
+
+
+@router.put("/payments/stripe/settings")
+async def update_stripe_settings(
+    body: StripeSettingsUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = await _get_stripe_settings_row(db)
+    previous_mode = row.mode.value if row else None
+    was_enabled = row.enabled if row else False
+    was_acquisition_enabled = row.acquisition_enabled if row else False
+    if row is None:
+        row = PlatformStripeSettings()
+        db.add(row)
+
+    new_mode = StripeMode(body.mode)
+    if (body.family_signups_enabled or body.ultimate_signups_enabled) and not body.enabled:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Enable the Stripe integration before allowing new subscriptions.",
+        )
+    if body.enabled and (body.family_signups_enabled or body.ultimate_signups_enabled):
+        active_publishable = (
+            body.test_publishable_key if body.mode == "test" else body.live_publishable_key
+        )
+        active_monthly = (
+            body.test_family_monthly_price_id
+            if body.mode == "test"
+            else body.live_family_monthly_price_id
+        )
+        active_annual = (
+            body.test_family_annual_price_id
+            if body.mode == "test"
+            else body.live_family_annual_price_id
+        )
+        active_secret_provided = bool(
+            body.test_secret_key if body.mode == "test" else body.live_secret_key
+        )
+        active_secret_exists = bool(
+            row.encrypted_test_secret_key if body.mode == "test" else row.encrypted_live_secret_key
+        )
+        active_webhook_provided = bool(
+            body.test_webhook_secret if body.mode == "test" else body.live_webhook_secret
+        )
+        active_webhook_exists = bool(
+            row.encrypted_test_webhook_secret
+            if body.mode == "test"
+            else row.encrypted_live_webhook_secret
+        )
+        missing = []
+        if not active_publishable:
+            missing.append("publishable key")
+        if not (active_secret_provided or active_secret_exists):
+            missing.append("secret key")
+        if not (active_webhook_provided or active_webhook_exists):
+            missing.append("webhook signing secret")
+        if body.family_signups_enabled:
+            if not active_monthly:
+                missing.append("Family monthly Price ID")
+            if not active_annual:
+                missing.append("Family annual Price ID")
+        if body.ultimate_signups_enabled:
+            ultimate_monthly = (
+                body.test_ultimate_monthly_price_id
+                if body.mode == "test"
+                else body.live_ultimate_monthly_price_id
+            )
+            ultimate_annual = (
+                body.test_ultimate_annual_price_id
+                if body.mode == "test"
+                else body.live_ultimate_annual_price_id
+            )
+            if not ultimate_monthly:
+                missing.append("Ultimate monthly Price ID")
+            if not ultimate_annual:
+                missing.append("Ultimate annual Price ID")
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{body.mode.capitalize()} mode is missing: {', '.join(missing)}.",
+            )
+
+    row.enabled = body.enabled
+    row.acquisition_enabled = body.acquisition_enabled
+    row.family_signups_enabled = body.family_signups_enabled
+    row.ultimate_signups_enabled = body.ultimate_signups_enabled
+    row.mode = new_mode
+    row.test_publishable_key = body.test_publishable_key
+    row.test_family_monthly_price_id = body.test_family_monthly_price_id
+    row.test_family_annual_price_id = body.test_family_annual_price_id
+    row.test_ultimate_monthly_price_id = body.test_ultimate_monthly_price_id
+    row.test_ultimate_annual_price_id = body.test_ultimate_annual_price_id
+    row.live_publishable_key = body.live_publishable_key
+    row.live_family_monthly_price_id = body.live_family_monthly_price_id
+    row.live_family_annual_price_id = body.live_family_annual_price_id
+    row.live_ultimate_monthly_price_id = body.live_ultimate_monthly_price_id
+    row.live_ultimate_annual_price_id = body.live_ultimate_annual_price_id
+    row.updated_by_administrator_id = context.administrator.id
+
+    secrets_replaced: list[str] = []
+    if body.test_secret_key:
+        row.encrypted_test_secret_key = encrypt_stripe_secret(settings, body.test_secret_key)
+        secrets_replaced.append("stripe.test_secret_key_replaced")
+    if body.test_webhook_secret:
+        row.encrypted_test_webhook_secret = encrypt_stripe_secret(
+            settings, body.test_webhook_secret
+        )
+        secrets_replaced.append("stripe.test_webhook_secret_replaced")
+    if body.live_secret_key:
+        row.encrypted_live_secret_key = encrypt_stripe_secret(settings, body.live_secret_key)
+        secrets_replaced.append("stripe.live_secret_key_replaced")
+    if body.live_webhook_secret:
+        row.encrypted_live_webhook_secret = encrypt_stripe_secret(
+            settings, body.live_webhook_secret
+        )
+        secrets_replaced.append("stripe.live_webhook_secret_replaced")
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.settings_changed",
+        "stripe_settings",
+        reason=body.reason,
+        new={
+            "enabled": row.enabled,
+            "acquisition_enabled": row.acquisition_enabled,
+            "mode": row.mode.value,
+            "test_publishable_key": row.test_publishable_key,
+            "test_family_monthly_price_id": row.test_family_monthly_price_id,
+            "test_family_annual_price_id": row.test_family_annual_price_id,
+            "test_ultimate_monthly_price_id": row.test_ultimate_monthly_price_id,
+            "test_ultimate_annual_price_id": row.test_ultimate_annual_price_id,
+            "live_publishable_key": row.live_publishable_key,
+            "live_family_monthly_price_id": row.live_family_monthly_price_id,
+            "live_family_annual_price_id": row.live_family_annual_price_id,
+            "live_ultimate_monthly_price_id": row.live_ultimate_monthly_price_id,
+            "live_ultimate_annual_price_id": row.live_ultimate_annual_price_id,
+        },
+    )
+    if previous_mode is not None and previous_mode != row.mode.value:
+        platform_audit(
+            db,
+            request,
+            context,
+            "stripe.mode_changed",
+            "stripe_settings",
+            reason=body.reason,
+            previous={"mode": previous_mode},
+            new={"mode": row.mode.value},
+        )
+    for action in secrets_replaced:
+        # Action only — never the secret value itself, per
+        # docs/security/logging-and-monitoring.md.
+        platform_audit(db, request, context, action, "stripe_settings", reason=body.reason)
+    if was_enabled != row.enabled:
+        platform_audit(
+            db,
+            request,
+            context,
+            "stripe.enabled" if row.enabled else "stripe.disabled",
+            "stripe_settings",
+            reason=body.reason,
+        )
+    if was_acquisition_enabled != row.acquisition_enabled:
+        platform_audit(
+            db,
+            request,
+            context,
+            (
+                "stripe.acquisition_enabled"
+                if row.acquisition_enabled
+                else "stripe.acquisition_disabled"
+            ),
+            "stripe_settings",
+            reason=body.reason,
+            previous={"acquisition_enabled": was_acquisition_enabled},
+            new={"acquisition_enabled": row.acquisition_enabled},
+        )
+
+    await db.commit()
+    return {"message": "Stripe settings saved."}
+
+
+@router.post("/payments/stripe/settings/clear-secret")
+async def clear_stripe_secret(
+    body: StripeSecretClearRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    row = await _get_stripe_settings_row(db)
+    column = {
+        "test_secret_key": "encrypted_test_secret_key",
+        "test_webhook_secret": "encrypted_test_webhook_secret",
+        "live_secret_key": "encrypted_live_secret_key",
+        "live_webhook_secret": "encrypted_live_webhook_secret",
+    }[body.field]
+    if row is None or not getattr(row, column):
+        raise HTTPException(status.HTTP_409_CONFLICT, "No stored value to clear.")
+    setattr(row, column, None)
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db, request, context, f"stripe.{body.field}_removed", "stripe_settings", reason=body.reason
+    )
+    await db.commit()
+    return {"message": "Stored Stripe credential cleared."}
+
+
+@router.post("/payments/stripe/test-connection", response_model=StripeTestConnectionResponse)
+async def test_stripe_connection(
+    body: StripeTestConnectionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeTestConnectionResponse:
+    """A single safe, read-only Stripe API call (account retrieval) against the
+    currently effective configuration — never creates a charge, customer or
+    subscription. See docs/security/platform-administration-security.md#stripe-settings."""
+    require_recent_auth(context, settings)
+    await enforce_rate_limit(request, settings, "platform-stripe-test-connection", 3, 300)
+    config = await resolve_stripe_config(settings, db)
+    if not config.configured or not config.secret_key:
+        result, detail = (
+            "configuration_incomplete",
+            config.incomplete_reason or "Stripe is not configured.",
+        )
+    else:
+        try:
+            await call_stripe(lambda: stripe.Account.retrieve(api_key=config.secret_key))
+        except StripeUnavailableError as exc:
+            # call_stripe already classifies stripe.AuthenticationError as
+            # StripeUnavailableError (a configuration problem, not a per-request
+            # one) — re-derive the more specific "authentication_failed" result
+            # here so the admin gets a useful diagnostic rather than a generic
+            # "unavailable", without ever inspecting/logging exc's raw detail.
+            is_auth_failure = isinstance(exc.__cause__, stripe.AuthenticationError)
+            result = "authentication_failed" if is_auth_failure else "stripe_unavailable"
+            detail = (
+                "Stripe rejected the secret key for this mode."
+                if is_auth_failure
+                else "Stripe could not be reached. Try again shortly."
+            )
+        except StripeRequestError:
+            result, detail = "stripe_unavailable", "Stripe returned an unexpected error."
+        except Exception:
+            result, detail = "network_failure", "A network error prevented reaching Stripe."
+        else:
+            result, detail = "connected", "Stripe connection succeeded."
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe.connection_test",
+        "stripe_settings",
+        reason=body.reason,
+        new={"result": result, "mode": config.mode},
+        outcome="succeeded" if result == "connected" else "failure",
+        failure_category=result if result != "connected" else None,
+    )
+    await db.commit()
+    return StripeTestConnectionResponse(result=result, detail=detail, mode=config.mode)
+
+
 def _template_response(
-    template_type: str, override: NotificationTemplate | None
+    template_type: str,
+    override: NotificationTemplate | None,
+    updated_by_name: str | None = None,
 ) -> NotificationTemplateResponse:
     default = TEMPLATES[template_type]
     is_override = override is not None
     return NotificationTemplateResponse(
         template_type=template_type,
-        channel=NotificationChannel.email.value,
+        module=default.module,
+        channel=default.channel.value,
         description=default.description,
         allowed_variables=sorted(default.allowed_variables),
+        required_variables=sorted(default.required_variables),
         default_subject=default.subject,
         default_body=default.body,
         subject=(override.subject if override and override.subject else default.subject),
         body=(override.body_text if override and override.body_text else default.body),
         is_override=is_override,
         enabled=override.enabled if override else True,
+        disableable=default.disableable,
+        security_critical=default.security_critical,
         is_stale=bool(override and override.based_on_default_version < DEFAULT_TEMPLATE_VERSION),
         updated_at=override.updated_at if override else None,
+        updated_by=updated_by_name,
     )
+
+
+async def _administrator_names(
+    db: AsyncSession, administrator_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not administrator_ids:
+        return {}
+    rows = (
+        await db.scalars(
+            select(PlatformAdministrator).where(PlatformAdministrator.id.in_(administrator_ids))
+        )
+    ).all()
+    return {row.id: row.display_name for row in rows}
 
 
 @router.get("/notification-templates")
@@ -3735,18 +7834,33 @@ async def list_notification_templates(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationTemplateResponse]:
+    # Every template_type is only ever stored under its own registered
+    # channel (TEMPLATES[type].channel) — the (template_type, channel)
+    # unique constraint means keying purely by template_type here is
+    # unambiguous even across a mix of email/in-app-registered types.
     overrides = {
-        row.template_type: row
-        for row in (
-            await db.scalars(
-                select(NotificationTemplate).where(
-                    NotificationTemplate.channel == NotificationChannel.email
-                )
-            )
-        ).all()
+        row.template_type: row for row in (await db.scalars(select(NotificationTemplate))).all()
     }
+    names = await _administrator_names(
+        db,
+        {
+            row.updated_by_administrator_id
+            for row in overrides.values()
+            if row.updated_by_administrator_id is not None
+        },
+    )
+
+    def _updated_by(override: NotificationTemplate | None) -> str | None:
+        if override is None or override.updated_by_administrator_id is None:
+            return None
+        return names.get(override.updated_by_administrator_id)
+
     return [
-        _template_response(template_type, overrides.get(template_type))
+        _template_response(
+            template_type,
+            overrides.get(template_type),
+            _updated_by(overrides.get(template_type)),
+        )
         for template_type in sorted(TEMPLATES)
     ]
 
@@ -3757,10 +7871,15 @@ async def get_notification_template(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationTemplateResponse:
-    if template_type not in TEMPLATES:
+    default = TEMPLATES.get(template_type)
+    if default is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
-    override = await get_override(db, template_type)
-    return _template_response(template_type, override)
+    override = await get_override(db, template_type, default.channel)
+    updated_by = None
+    if override and override.updated_by_administrator_id:
+        names = await _administrator_names(db, {override.updated_by_administrator_id})
+        updated_by = names.get(override.updated_by_administrator_id)
+    return _template_response(template_type, override, updated_by)
 
 
 @router.put("/notification-templates/{template_type}")
@@ -3785,12 +7904,28 @@ async def update_notification_template(
             f"Unknown template variable: {{{{{exc}}}}}. Allowed: "
             f"{', '.join(sorted(default.allowed_variables))}.",
         ) from exc
-
-    override = await get_override(db, template_type)
-    if override is None:
-        override = NotificationTemplate(
-            template_type=template_type, channel=NotificationChannel.email
+    try:
+        validate_required_variables(body.subject, body.body, default.required_variables)
+    except MissingRequiredTemplateVariable as exc:
+        placeholders = ", ".join(f"{{{{{name}}}}}" for name in exc.missing)
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Template must include required placeholder(s): {placeholders}.",
+        ) from exc
+    # Some templates (account security, mandatory household/calendar-share
+    # invitations) must always reach their recipient — see
+    # TemplateDefault.disableable and notifications.engine.MANDATORY_EMAIL_TYPES.
+    # Enforced here, not just hidden in the UI: a request that slips past a
+    # stale/tampered frontend must still be rejected.
+    if not default.disableable and not body.enabled:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This notification is required and cannot be disabled.",
         )
+
+    override = await get_override(db, template_type, default.channel)
+    if override is None:
+        override = NotificationTemplate(template_type=template_type, channel=default.channel)
         db.add(override)
     else:
         db.add(
@@ -3830,9 +7965,10 @@ async def reset_notification_template(
     settings: Settings = Depends(get_settings),
 ) -> NotificationTemplateResponse:
     require_recent_auth(context, settings)
-    if template_type not in TEMPLATES:
+    default = TEMPLATES.get(template_type)
+    if default is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
-    override = await get_override(db, template_type)
+    override = await get_override(db, template_type, default.channel)
     if override is not None:
         await db.delete(override)
         platform_audit(
@@ -3846,6 +7982,37 @@ async def reset_notification_template(
         )
         await db.commit()
     return _template_response(template_type, None)
+
+
+@router.post("/notification-templates/reset-all")
+async def reset_all_notification_templates(
+    body: NotificationTemplateResetAllRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[NotificationTemplateResponse]:
+    """Restores every notification template to its built-in default —
+    deletes every override row (their revisions cascade with them). The
+    explicit `confirmed: true` requirement (SensitiveActionRequest) is the
+    "explicit confirmation" the bulk reset action needs; the frontend also
+    asks a second time via a confirmation dialog before ever sending this."""
+    require_recent_auth(context, settings)
+    overrides = (await db.scalars(select(NotificationTemplate))).all()
+    reset_count = len(overrides)
+    for override in overrides:
+        await db.delete(override)
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.reset_all",
+        "notification_template",
+        reason=body.reason,
+        new={"reset_count": reset_count},
+    )
+    await db.commit()
+    return [_template_response(template_type, None) for template_type in sorted(TEMPLATES)]
 
 
 @router.post("/notification-templates/{template_type}/preview")
@@ -3886,9 +8053,11 @@ async def test_notification_template(
     config = await resolve_smtp_config(settings, db)
     if not config.configured:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
-    subject, message = await render_notification(db, template_type, SAMPLE_VARIABLES[template_type])
+    subject, message, html = await render_notification_email(
+        db, settings, template_type, SAMPLE_VARIABLES[template_type]
+    )
     try:
-        await asyncio.to_thread(send_email, config, str(body.recipient), subject, message)
+        await asyncio.to_thread(send_email, config, str(body.recipient), subject, message, html)
     except Exception as exc:
         platform_audit(
             db,
@@ -3915,27 +8084,221 @@ async def test_notification_template(
     return {"message": "Test email sent."}
 
 
+@router.post("/notification-templates/{template_type}/test-send")
+async def test_send_notification(
+    template_type: str,
+    body: NotificationTemplateTestSendRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Test Centre: renders the template's real current wording (override if
+    one exists, else the built-in default) against sample data and sends it
+    to a real MyKhaya user the administrator picks, through the same
+    delivery pipeline (notify()/email) production notifications use —
+    distinct from /test above, which targets an arbitrary email address to
+    check SMTP configuration rather than a specific user's experience.
+
+    A test send never triggers a genuine account/security effect (no real
+    verification/reset/invitation is created) and is clearly marked "[Test]"
+    so it can never be mistaken for the real thing."""
+    require_recent_auth(context, settings)
+    default = TEMPLATES.get(template_type)
+    if default is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That template does not exist.")
+    await enforce_rate_limit(request, settings, "platform-test-template", 3, 300)
+    target_user = await db.get(User, body.recipient_user_id)
+    if target_user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+
+    try:
+        if default.channel == NotificationChannel.email:
+            if not target_user.email:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "That user has no email address."
+                )
+            config = await resolve_smtp_config(settings, db)
+            if not config.configured:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Email is not configured.")
+            subject, message, html = await render_notification_email(
+                db, settings, template_type, SAMPLE_VARIABLES[template_type]
+            )
+            await asyncio.to_thread(
+                send_email, config, target_user.email, f"[Test] {subject}", message, html
+            )
+        else:
+            subject, message = await render_notification(
+                db, template_type, SAMPLE_VARIABLES[template_type]
+            )
+            # A dedicated, non-gated type (never in PREFERENCE_GATES/
+            # MANDATORY_EMAIL_TYPES) — respects the target's real in-app/push
+            # channel toggles (the actual pipeline), but is never itself
+            # subject to a category opt-out, and allow_email=False keeps a
+            # channel test from also firing an unrelated email.
+            await notify(
+                db,
+                settings=settings,
+                recipient_user_id=target_user.id,
+                notification_type="platform_test_notification",
+                title=f"[Test] {subject}",
+                body=message,
+                idempotency_key=f"platform_test:{template_type}:{uuid.uuid4()}",
+                allow_email=False,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        platform_audit(
+            db,
+            request,
+            context,
+            "notification_template.test_failed",
+            "notification_template",
+            reason=body.reason,
+            new={"template_type": template_type, "channel": default.channel.value},
+            outcome="failure",
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The test send failed.") from exc
+
+    platform_audit(
+        db,
+        request,
+        context,
+        "notification_template.test_sent",
+        "notification_template",
+        reason=body.reason,
+        new={"template_type": template_type, "channel": default.channel.value},
+    )
+    await db.commit()
+    return {
+        "message": f"Test {default.channel.value} notification sent to {target_user.display_name}."
+    }
+
+
+async def _incident_services_and_updates(
+    db: AsyncSession, incident_ids: list[uuid.UUID]
+) -> tuple[
+    dict[uuid.UUID, list[StatusIncidentService]], dict[uuid.UUID, list[StatusIncidentUpdate]]
+]:
+    services: dict[uuid.UUID, list[StatusIncidentService]] = {row_id: [] for row_id in incident_ids}
+    updates: dict[uuid.UUID, list[StatusIncidentUpdate]] = {row_id: [] for row_id in incident_ids}
+    if not incident_ids:
+        return services, updates
+    for service_row in await db.scalars(
+        select(StatusIncidentService).where(StatusIncidentService.incident_id.in_(incident_ids))
+    ):
+        services[service_row.incident_id].append(service_row)
+    for update_row in await db.scalars(
+        select(StatusIncidentUpdate)
+        .where(StatusIncidentUpdate.incident_id.in_(incident_ids))
+        .order_by(StatusIncidentUpdate.occurred_at)
+    ):
+        updates[update_row.incident_id].append(update_row)
+    return services, updates
+
+
+def _incident_list_item(
+    row: PublicIncident, services: list[StatusIncidentService], updates: list[StatusIncidentUpdate]
+) -> dict[str, Any]:
+    latest = updates[-1] if updates else None
+    return {
+        "id": row.id,
+        "title": row.title,
+        "lifecycle_state": row.lifecycle_state,
+        "services": [{"service": entry.service, "impact": entry.impact} for entry in services],
+        "starts_at": row.starts_at,
+        "resolved_at": row.resolved_at,
+        "latest_update_message": latest.message if latest else row.message,
+        "latest_update_at": latest.occurred_at if latest else row.starts_at,
+    }
+
+
 @router.get("/incidents")
 async def incidents(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)), db: AsyncSession = Depends(get_db)
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     rows = (
         await db.scalars(
             select(PublicIncident).order_by(PublicIncident.starts_at.desc()).limit(100)
         )
     ).all()
-    return [
-        {
-            "id": row.id,
-            "title": row.title,
-            "message": row.message,
-            "service": row.service,
-            "state": row.state,
-            "starts_at": row.starts_at,
-            "resolved_at": row.resolved_at,
-        }
+    services_by_incident, updates_by_incident = await _incident_services_and_updates(
+        db, [row.id for row in rows]
+    )
+    now = datetime.now(UTC)
+    active_impacts = [
+        (entry.service, entry.impact)
         for row in rows
+        if is_incident_active(
+            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
+        )
+        for entry in services_by_incident[row.id]
     ]
+    service_states = service_states_from_impacts(active_impacts)
+    overall = highest_severity(list(service_states.values()))
+    return {
+        "overall": overall,
+        "overall_message": overall_message(overall),
+        "services": [
+            {"key": key, "name": label, "state": service_states[key]}
+            for key, label in PUBLIC_SERVICES.items()
+        ],
+        "incidents": [
+            _incident_list_item(row, services_by_incident[row.id], updates_by_incident[row.id])
+            for row in rows
+        ],
+    }
+
+
+@router.get("/incidents/{incident_id}")
+async def incident_detail(
+    incident_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    row = await db.get(PublicIncident, incident_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    services_by_incident, updates_by_incident = await _incident_services_and_updates(db, [row.id])
+    updates = updates_by_incident[row.id]
+    authors = (
+        {
+            admin.id: admin.display_name
+            for admin in await db.scalars(
+                select(PlatformAdministrator).where(
+                    PlatformAdministrator.id.in_({update.created_by for update in updates})
+                )
+            )
+        }
+        if updates
+        else {}
+    )
+    return {
+        "id": row.id,
+        "title": row.title,
+        "lifecycle_state": row.lifecycle_state,
+        "services": [
+            {"service": entry.service, "impact": entry.impact}
+            for entry in services_by_incident[row.id]
+        ],
+        "starts_at": row.starts_at,
+        "resolved_at": row.resolved_at,
+        "internal_notes": row.internal_notes,
+        "created_at": row.created_at,
+        "updates": [
+            {
+                "id": update.id,
+                "lifecycle_state": update.lifecycle_state,
+                "message": update.message,
+                "occurred_at": update.occurred_at,
+                "created_by_display_name": authors.get(update.created_by),
+                "created_at": update.created_at,
+            }
+            for update in updates
+        ],
+    }
 
 
 @router.post("/incidents", status_code=status.HTTP_201_CREATED)
@@ -3947,16 +8310,38 @@ async def create_incident(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     require_recent_auth(context, settings)
+    starts_at = body.starts_at or datetime.now(UTC)
+    # The legacy single-service `service`/`state` columns are populated from
+    # the first affected service purely so any code still reading them
+    # (e.g. an older PCC build mid-deploy) sees a sane value — the real,
+    # authoritative multi-service data lives in StatusIncidentService.
+    primary = body.services[0]
     row = PublicIncident(
         title=body.title.strip(),
         message=body.message.strip(),
-        service=body.service,
-        state=body.state,
-        starts_at=body.starts_at or datetime.now(UTC),
+        service=primary.service,
+        state=primary.impact,
+        lifecycle_state=body.lifecycle_state,
+        starts_at=starts_at,
+        resolved_at=starts_at if body.lifecycle_state == IncidentLifecycleState.resolved else None,
+        internal_notes=body.internal_notes.strip() if body.internal_notes else None,
         created_by=context.administrator.id,
     )
     db.add(row)
     await db.flush()
+    for entry in body.services:
+        db.add(
+            StatusIncidentService(incident_id=row.id, service=entry.service, impact=entry.impact)
+        )
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=body.lifecycle_state,
+            message=row.message,
+            occurred_at=starts_at,
+            created_by=context.administrator.id,
+        )
+    )
     platform_audit(
         db,
         request,
@@ -3965,16 +8350,110 @@ async def create_incident(
         "incident",
         row.id,
         reason=body.reason,
-        new={"title": row.title, "service": row.service, "state": row.state.value},
+        new={
+            "title": row.title,
+            "lifecycle_state": row.lifecycle_state.value,
+            "services": [
+                {"service": entry.service, "impact": entry.impact.value} for entry in body.services
+            ],
+        },
     )
     await db.commit()
-    return {"id": row.id, "title": row.title, "state": row.state}
+    return {"id": row.id, "title": row.title, "lifecycle_state": row.lifecycle_state}
 
 
-@router.patch("/incidents/{incident_id}")
-async def update_incident(
+@router.post("/incidents/{incident_id}/resolve")
+async def resolve_incident(
     incident_id: uuid.UUID,
-    body: IncidentUpdate,
+    body: IncidentResolveCreate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    require_recent_auth(context, settings)
+    row = await db.get(PublicIncident, incident_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    if row.lifecycle_state == IncidentLifecycleState.resolved or row.resolved_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That incident is already resolved.")
+    resolved_at = body.resolved_at or datetime.now(UTC)
+    if resolved_at.tzinfo is None:
+        resolved_at = resolved_at.replace(tzinfo=UTC)
+    if resolved_at < row.starts_at:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Resolved time cannot precede start time."
+        )
+    previous = {"lifecycle_state": row.lifecycle_state.value, "resolved": False}
+    row.lifecycle_state = IncidentLifecycleState.resolved
+    row.resolved_at = resolved_at
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=IncidentLifecycleState.resolved,
+            message=body.message.strip(),
+            occurred_at=resolved_at,
+            created_by=context.administrator.id,
+        )
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_resolved",
+        "incident",
+        row.id,
+        reason=body.reason,
+        previous=previous,
+        new={"title": row.title, "resolved_at": resolved_at.isoformat()},
+    )
+    await db.commit()
+    return {"id": row.id, "lifecycle_state": row.lifecycle_state, "resolved_at": row.resolved_at}
+
+
+@router.delete("/incidents/{incident_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_incident(
+    incident_id: uuid.UUID,
+    body: IncidentDeleteRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    require_recent_auth(context, settings)
+    row = await db.get(PublicIncident, incident_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
+    services = [
+        {"service": entry.service, "impact": entry.impact.value}
+        for entry in await db.scalars(
+            select(StatusIncidentService).where(StatusIncidentService.incident_id == row.id)
+        )
+    ]
+    platform_audit(
+        db,
+        request,
+        context,
+        "status.incident_deleted",
+        "incident",
+        row.id,
+        reason=body.reason,
+        previous={
+            "title": row.title,
+            "lifecycle_state": row.lifecycle_state.value,
+            "services": services,
+        },
+        new={"deleted_at": datetime.now(UTC).isoformat()},
+    )
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/incidents/{incident_id}/updates", status_code=status.HTTP_201_CREATED)
+async def create_incident_update(
+    incident_id: uuid.UUID,
+    body: IncidentUpdateCreate,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
@@ -3985,23 +8464,78 @@ async def update_incident(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That incident could not be found.")
     previous = {
-        "message": row.message,
-        "state": row.state.value,
+        "lifecycle_state": row.lifecycle_state.value,
         "resolved": row.resolved_at is not None,
     }
-    row.message = body.message.strip()
-    row.state = body.state
-    row.resolved_at = datetime.now(UTC) if body.resolved else None
+    occurred_at = body.occurred_at or datetime.now(UTC)
+    row.lifecycle_state = body.lifecycle_state
+    if body.internal_notes is not None:
+        row.internal_notes = body.internal_notes.strip() or None
+    resolving = body.resolved or body.lifecycle_state == IncidentLifecycleState.resolved
+    newly_resolved = resolving and row.resolved_at is None
+    if resolving:
+        row.resolved_at = row.resolved_at or datetime.now(UTC)
+    else:
+        row.resolved_at = None
+    db.add(
+        StatusIncidentUpdate(
+            incident_id=row.id,
+            lifecycle_state=body.lifecycle_state,
+            message=body.message.strip(),
+            occurred_at=occurred_at,
+            created_by=context.administrator.id,
+        )
+    )
+    for impact_entry in body.service_impacts:
+        existing = await db.scalar(
+            select(StatusIncidentService).where(
+                StatusIncidentService.incident_id == row.id,
+                StatusIncidentService.service == impact_entry.service,
+            )
+        )
+        if existing is not None:
+            existing.impact = impact_entry.impact
+        else:
+            db.add(
+                StatusIncidentService(
+                    incident_id=row.id, service=impact_entry.service, impact=impact_entry.impact
+                )
+            )
+    # When an incident resolves, the services it affected return to their
+    # appropriate current state automatically — status_aggregation only
+    # ever derives a service's public state from *active* incidents (see
+    # is_incident_active), so simply setting resolved_at above is what
+    # takes this incident's impact out of the calculation. If another
+    # active incident still affects the same service, that incident's
+    # impact continues to apply — see status_aggregation.
     platform_audit(
         db,
         request,
         context,
-        "status.incident_updated",
+        "status.incident_update_created",
         "incident",
         row.id,
         reason=body.reason,
         previous=previous,
-        new={"message": row.message, "state": row.state.value, "resolved": body.resolved},
+        new={
+            "lifecycle_state": row.lifecycle_state.value,
+            "resolved": body.resolved,
+            "service_impacts": [
+                {"service": entry.service, "impact": entry.impact.value}
+                for entry in body.service_impacts
+            ],
+        },
     )
+    if newly_resolved:
+        platform_audit(
+            db,
+            request,
+            context,
+            "status.incident_resolved",
+            "incident",
+            row.id,
+            reason=body.reason,
+            new={"resolved_at": row.resolved_at.isoformat() if row.resolved_at else None},
+        )
     await db.commit()
-    return {"id": row.id, "state": row.state, "resolved_at": row.resolved_at}
+    return {"id": row.id, "lifecycle_state": row.lifecycle_state, "resolved_at": row.resolved_at}

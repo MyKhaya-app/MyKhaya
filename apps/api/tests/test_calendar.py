@@ -1,24 +1,35 @@
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from mykhaya.calendar_occurrences import (
+    EffectiveOccurrence,
+    all_day_occurrence_covers_date,
+    expand_occurrences,
+    next_occurrence_on_or_after,
+)
+from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    CalendarEvent,
     FeatureKey,
     FeatureOverride,
     HouseholdRelationship,
     Invitation,
     Membership,
     PermissionProfile,
+    RecurrencePattern,
     Role,
+    SubscriptionPlan,
     TokenPurpose,
     User,
 )
@@ -26,6 +37,26 @@ from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
+
+
+def test_all_day_occurrence_uses_exclusive_utc_date_boundary() -> None:
+    occurrence = EffectiveOccurrence(
+        occurrence_start=datetime(2026, 9, 22, tzinfo=UTC),
+        start_at=datetime(2026, 9, 22, tzinfo=UTC),
+        end_at=datetime(2026, 9, 23, tzinfo=UTC),
+        title="Test whole day",
+        description=None,
+        is_all_day=True,
+        location_text=None,
+        calendar_id=uuid.uuid4(),
+        label_id=None,
+        reminder_minutes=None,
+        member_ids_override=None,
+        is_overridden=False,
+    )
+
+    assert all_day_occurrence_covers_date(occurrence, date(2026, 9, 22))
+    assert not all_day_occurrence_covers_date(occurrence, date(2026, 9, 23))
 
 
 @pytest.fixture
@@ -88,16 +119,31 @@ async def test_calendar_crud_and_conflict(client: AsyncClient) -> None:
     assert group.status_code == 201
     home_id = group.json()["id"]
 
-    disabled = await client.get(f"/api/v1/homes/{home_id}/event-labels")
-    assert disabled.status_code == 404
+    # Calendar is globally released (0063_feature_flag_backfill), so a fresh
+    # Home inherits it enabled by default — explicitly disable it for this
+    # one Home via a FeatureOverride to exercise the "feature gate is
+    # reachable and independent" path, rather than relying on an absent
+    # override to mean disabled.
     async with SessionFactory() as db:
         db.add(
             FeatureOverride(
                 feature_key=FeatureKey.calendar,
                 group_id=uuid.UUID(home_id),
-                enabled=True,
+                enabled=False,
             )
         )
+        await db.commit()
+    disabled = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert disabled.status_code == 404
+    async with SessionFactory() as db:
+        override = await db.scalar(
+            select(FeatureOverride).where(
+                FeatureOverride.group_id == uuid.UUID(home_id),
+                FeatureOverride.feature_key == FeatureKey.calendar,
+            )
+        )
+        assert override is not None
+        override.enabled = True
         await db.commit()
     evaluation = await client.get(f"/api/v1/features/{home_id}/calendar")
     assert evaluation.status_code == 200
@@ -214,6 +260,14 @@ async def test_invitation_only_registration_mode_requires_valid_invitation(
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Invitation Home"})
     assert group.status_code == 201
     home_id = group.json()["id"]
+    # home.max_members restricts Free to a single person — this test is
+    # about registration-mode validation, not commercial gating, so upgrade
+    # to Family to be able to invite at all.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     invitation = await unsafe(
         client,
@@ -328,6 +382,394 @@ async def test_weekly_recurrence_survives_dst_transition(client: AsyncClient) ->
     )
 
 
+def test_recurrence_end_date_is_inclusive() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 8, 21, 9, tzinfo=UTC),
+        end_at=datetime(2026, 8, 21, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+        recurrence_end_date=date(2026, 9, 18),
+    )
+    occurrences = expand_occurrences(
+        event,
+        datetime(2026, 8, 20, tzinfo=UTC),
+        datetime(2026, 9, 26, tzinfo=UTC),
+    )
+    assert [occurrence.start_at.date() for occurrence in occurrences] == [
+        date(2026, 8, 21),
+        date(2026, 8, 28),
+        date(2026, 9, 4),
+        date(2026, 9, 11),
+        date(2026, 9, 18),
+    ]
+
+
+def test_next_occurrence_on_or_after_one_off_event_in_the_past_has_none() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.none,
+        recurrence_interval=1,
+    )
+    assert next_occurrence_on_or_after(event, datetime(2026, 6, 1, tzinfo=UTC)) is None
+
+
+def test_next_occurrence_on_or_after_finds_a_weekly_occurrence_months_out() -> None:
+    """No arbitrary future horizon: a weekly series' next occurrence, found by
+    stepping in memory rather than expanding a bounded date range, must
+    resolve correctly even many months past MAX_RANGE_DAYS (93 days)."""
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 6, 9, tzinfo=UTC),  # a Tuesday
+        end_at=datetime(2026, 1, 6, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+    )
+    cursor = datetime(2026, 9, 1, tzinfo=UTC)  # ~8 months after start_at
+    result = next_occurrence_on_or_after(event, cursor)
+    assert result is not None
+    start, end = result.start_at, result.end_at
+    assert start >= cursor
+    assert start.weekday() == 1  # still a Tuesday
+    assert (start - datetime(2026, 1, 6, 9, tzinfo=UTC)).days % 7 == 0
+    assert end - start == timedelta(hours=1)
+
+
+def test_next_occurrence_on_or_after_respects_recurrence_until() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.monthly,
+        recurrence_interval=1,
+        recurrence_until=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    # The series ends before ever reaching a cursor this far out.
+    assert next_occurrence_on_or_after(event, datetime(2026, 6, 1, tzinfo=UTC)) is None
+    # But a cursor within the series' lifetime finds the right occurrence.
+    found = next_occurrence_on_or_after(event, datetime(2026, 2, 1, tzinfo=UTC))
+    assert found is not None
+    assert found.start_at.date() == date(2026, 2, 1)
+
+
+def test_recurrence_until_boundary_is_exact_not_off_by_one() -> None:
+    """expand_occurrences/next_occurrence_on_or_after used to check
+    recurrence_until only AFTER already using/appending the current
+    candidate, letting exactly one occurrence past the intended boundary
+    through. recurrence_until here is set to exactly the 3rd weekly
+    occurrence's start (Jan 1, 8, 15) — the boundary is inclusive, so that
+    3rd occurrence must still appear, but the 4th (Jan 22, which the bug
+    used to leak through) must not."""
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+        recurrence_until=datetime(2026, 1, 15, 9, tzinfo=UTC),
+    )
+    occurrences = expand_occurrences(
+        event, datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)
+    )
+    starts = [occ.start_at.date() for occ in occurrences]
+    assert starts == [date(2026, 1, 1), date(2026, 1, 8), date(2026, 1, 15)]
+
+    # The same boundary, walked via next_occurrence_on_or_after: a cursor
+    # sitting exactly on the 4th (excluded) occurrence's date must find
+    # nothing, not the leaked-through Jan 22 occurrence.
+    assert next_occurrence_on_or_after(event, datetime(2026, 1, 16, tzinfo=UTC)) is None
+
+
+def test_next_occurrence_on_or_after_respects_recurrence_count() -> None:
+    event = CalendarEvent(
+        start_at=datetime(2026, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.daily,
+        recurrence_interval=1,
+        recurrence_count=3,
+    )
+    # Occurrences exist for Jan 1/2/3 only — a cursor past that has none.
+    assert next_occurrence_on_or_after(event, datetime(2026, 1, 4, tzinfo=UTC)) is None
+    found = next_occurrence_on_or_after(event, datetime(2026, 1, 2, 12, tzinfo=UTC))
+    assert found is not None
+    assert found.start_at.date() == date(2026, 1, 3)
+
+
+def test_next_occurrence_on_or_after_parent_start_date_does_not_win_ordering() -> None:
+    """Regression: the parent CalendarEvent row's own start_at (its very
+    first occurrence, possibly long past) must never be mistaken for "the
+    next occurrence" — callers that sort candidates by the returned
+    occurrence's start must see the actual next one, not the series' origin
+    date."""
+    event = CalendarEvent(
+        start_at=datetime(2020, 1, 1, 9, tzinfo=UTC),
+        end_at=datetime(2020, 1, 1, 10, tzinfo=UTC),
+        timezone="UTC",
+        recurrence=RecurrencePattern.yearly,
+        recurrence_interval=1,
+    )
+    cursor = datetime(2026, 6, 1, tzinfo=UTC)
+    found = next_occurrence_on_or_after(event, cursor)
+    assert found is not None
+    assert found.start_at.date() == date(2027, 1, 1)
+    assert found.start_at > event.start_at
+
+
+async def _enable_calendar(home_id: str) -> None:
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
+            )
+        )
+        await db.commit()
+
+
+async def _create_home(client: AsyncClient, name: str) -> str:
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": name})
+    assert group.status_code == 201, group.text
+    home_id = group.json()["id"]
+    await _enable_calendar(home_id)
+    return home_id
+
+
+async def _create_upcoming_event(
+    client: AsyncClient,
+    home_id: str,
+    title: str,
+    start: datetime,
+    *,
+    is_all_day: bool = False,
+    recurrence: str = "none",
+) -> None:
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": title,
+            "start_at": start.isoformat(),
+            "end_at": (start + timedelta(hours=1)).isoformat(),
+            "timezone": "UTC",
+            "is_all_day": is_all_day,
+            "member_ids": [],
+            "recurrence": recurrence,
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_shows_next_three_events_tomorrow(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming1-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home One")
+    now = datetime.now(UTC)
+    await _create_upcoming_event(client, home_id, "Breakfast", now + timedelta(days=1, hours=1))
+    await _create_upcoming_event(client, home_id, "Lunch", now + timedelta(days=1, hours=5))
+    await _create_upcoming_event(client, home_id, "Dinner", now + timedelta(days=1, hours=9))
+
+    response = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming",
+        params={"after": (now - timedelta(hours=1)).isoformat(), "limit": 3},
+    )
+    assert response.status_code == 200
+    titles = [item["title"] for item in response.json()["items"]]
+    assert titles == ["Breakfast", "Lunch", "Dinner"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_has_no_future_horizon_and_trims_to_limit(
+    client: AsyncClient,
+) -> None:
+    """Unlike list_events (capped at MAX_RANGE_DAYS = 93 days), the upcoming
+    endpoint must find an occurrence 8 months out with no fixed window, while
+    still trimming a larger candidate set down to `limit`, earliest first."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming2-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Two")
+    now = datetime.now(UTC)
+    await _create_upcoming_event(client, home_id, "Yesterday", now - timedelta(days=1))
+    await _create_upcoming_event(client, home_id, "Tomorrow", now + timedelta(days=1))
+    await _create_upcoming_event(client, home_id, "Five days", now + timedelta(days=5))
+    await _create_upcoming_event(client, home_id, "Fourteen days", now + timedelta(days=14))
+    await _create_upcoming_event(client, home_id, "Eight months", now + timedelta(days=240))
+
+    after = (now - timedelta(hours=1)).isoformat()
+    limited = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert limited.status_code == 200
+    assert [item["title"] for item in limited.json()["items"]] == [
+        "Tomorrow",
+        "Five days",
+        "Fourteen days",
+    ]
+
+    unlimited = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 10}
+    )
+    assert unlimited.status_code == 200
+    assert [item["title"] for item in unlimited.json()["items"]] == [
+        "Tomorrow",
+        "Five days",
+        "Fourteen days",
+        "Eight months",
+    ]
+    # The Yesterday event never appears — the endpoint only ever returns
+    # occurrences on/after `after`.
+    assert "Yesterday" not in [item["title"] for item in unlimited.json()["items"]]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_single_and_zero_future_events(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming3-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Three")
+    now = datetime.now(UTC)
+    after = (now - timedelta(hours=1)).isoformat()
+
+    # No future events at all yet.
+    empty = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert empty.status_code == 200
+    assert empty.json()["items"] == []
+
+    await _create_upcoming_event(client, home_id, "Only one", now + timedelta(days=2))
+    single = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming", params={"after": after, "limit": 3}
+    )
+    assert single.status_code == 200
+    assert [item["title"] for item in single.json()["items"]] == ["Only one"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_events_endpoint_recurring_and_all_day_ordering(
+    client: AsyncClient,
+) -> None:
+    """A recurring event's long-past parent start_at must never win ordering
+    over its actual next occurrence (see the pure-function regression above),
+    and an all-day event must still take part in the same ordering as timed
+    events."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"upcoming4-{suffix}@example.com", "Owner")
+    home_id = await _create_home(client, "Upcoming Home Four")
+    now = datetime.now(UTC)
+
+    # A weekly series that started long ago — its next real occurrence must
+    # sort by that actual date, never by its 400-day-old parent start_at.
+    old_start = (now - timedelta(days=400)).replace(hour=9, minute=0, second=0, microsecond=0)
+    one_off_start = now + timedelta(days=3)
+    all_day_start = (now + timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+    await _create_upcoming_event(client, home_id, "Weekly standup", old_start, recurrence="weekly")
+    await _create_upcoming_event(client, home_id, "One-off soon", one_off_start)
+    await _create_upcoming_event(client, home_id, "All-day trip", all_day_start, is_all_day=True)
+
+    after = now - timedelta(hours=1)
+    response = await client.get(
+        f"/api/v1/homes/{home_id}/events/upcoming",
+        params={"after": after.isoformat(), "limit": 3},
+    )
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {item["title"] for item in items} == {"Weekly standup", "One-off soon", "All-day trip"}
+    for item in items:
+        assert datetime.fromisoformat(item["start_at"]) >= after
+
+    # The response is sorted by each occurrence's actual (computed) start —
+    # verify independently against the pure recurrence math rather than
+    # hardcoding which title lands first, since that depends on exactly
+    # where `now` falls in the weekly cycle.
+    weekly_event = CalendarEvent(
+        start_at=old_start,
+        end_at=old_start + timedelta(hours=1),
+        timezone="UTC",
+        recurrence=RecurrencePattern.weekly,
+        recurrence_interval=1,
+    )
+    weekly_next = next_occurrence_on_or_after(weekly_event, after)
+    assert weekly_next is not None
+    starts_by_title = {
+        "Weekly standup": weekly_next.start_at,
+        "One-off soon": one_off_start,
+        "All-day trip": all_day_start,
+    }
+    expected_order = [
+        title for title, _ in sorted(starts_by_title.items(), key=lambda pair: pair[1])
+    ]
+    assert [item["title"] for item in items] == expected_order
+
+
+@pytest.mark.asyncio
+async def test_event_recurrence_end_date_create_update_remove_and_validation(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"recur-end-{suffix}@example.com", "Recurrence Owner")
+    home_id = await _home_with_calendar(client, "Recurrence End Home")
+    start = datetime(2026, 8, 21, 9, tzinfo=UTC)
+    end = datetime(2026, 8, 21, 10, tzinfo=UTC)
+    body = {
+        "title": "Weekly series",
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat(),
+        "timezone": "UTC",
+        "recurrence": "weekly",
+        "recurrence_interval": 1,
+        "recurrence_end_date": "2026-09-18",
+    }
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()["recurrence_end_date"] == "2026-09-18"
+
+    updated_body = {
+        **body,
+        "recurrence_end_date": "2026-09-25",
+        "expected_updated_at": created.json()["updated_at"],
+    }
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{created.json()['event_id']}",
+        json=updated_body,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["recurrence_end_date"] == "2026-09-25"
+
+    cleared_body = {
+        **updated_body,
+        "recurrence": "none",
+        "recurrence_end_date": None,
+        "expected_updated_at": updated.json()["updated_at"],
+    }
+    cleared = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{created.json()['event_id']}",
+        json=cleared_body,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["recurrence"] == "none"
+    assert cleared.json()["recurrence_end_date"] is None
+
+    invalid = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={**body, "recurrence_end_date": "2026-08-20"},
+    )
+    assert invalid.status_code == 422
+
+
 async def _home_with_calendar(client: AsyncClient, name: str) -> str:
     group = await unsafe(client, "POST", "/api/v1/groups", json={"name": name})
     assert group.status_code == 201
@@ -338,6 +780,13 @@ async def _home_with_calendar(client: AsyncClient, name: str) -> str:
                 feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
             )
         )
+        # The label-management tests using this helper create a second
+        # event-category label (calendar.max_categories) — Free seeds only
+        # one active by default (see routers.groups' DEFAULT_LABELS
+        # seeding), so this needs Family.
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
         await db.commit()
     return home_id
 
@@ -362,7 +811,7 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     )
     assert created.status_code == 201
     label = created.json()
-    assert label["color"] == "emerald"
+    assert label["color"] == PALETTE_HEX[ColourToken.emerald]
     assert label["is_active"] is True
 
     # An unrecognised colour token is rejected at the schema, not stored.
@@ -393,7 +842,8 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     )
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Football"
-    assert renamed.json()["color"] == "emerald"  # unchanged by a name-only update
+    # unchanged by a name-only update
+    assert renamed.json()["color"] == PALETTE_HEX[ColourToken.emerald]
 
     recoloured = await unsafe(
         client,
@@ -402,7 +852,7 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
         json={"color": "sky"},
     )
     assert recoloured.status_code == 200
-    assert recoloured.json()["color"] == "sky"
+    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.sky]
     assert recoloured.json()["name"] == "Football"  # unchanged by a colour-only update
 
     # Two different labels may share the same colour — not blocked.
@@ -425,6 +875,193 @@ async def test_event_label_create_update_rename_recolour_and_duplicate_name(
     assert disabled.json()["is_active"] is False
     listed = await client.get(f"/api/v1/homes/{home_id}/event-labels")
     assert label["id"] not in {row["id"] for row in listed.json()}
+
+
+@pytest.mark.asyncio
+async def test_event_label_accepts_a_custom_hex_colour(client: AsyncClient) -> None:
+    """A custom colour never has to correspond to a predefined palette
+    identifier — any valid 6-digit hex value is accepted, persisted exactly
+    as given (normalised to uppercase), and reloads correctly. Two different
+    labels may use the exact same custom colour; nothing enforces uniqueness."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"customcolour-{suffix}@example.com", "Custom Colour")
+    home_id = await _home_with_calendar(client, "Custom Colour Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Custom One", "color": "#e27658"},
+    )
+    assert created.status_code == 201, created.text
+    # Normalised to uppercase on the way in.
+    assert created.json()["color"] == "#E27658"
+
+    # A second, different label may use the exact same custom colour — colours
+    # are a visual preference, not an identity, so no uniqueness is enforced.
+    second = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Custom Two", "color": "#E27658"},
+    )
+    assert second.status_code == 201
+    assert second.json()["color"] == "#E27658"
+
+    # Reloads correctly from the listing endpoint, not just the create response.
+    listed = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    listed_colours = {row["name"]: row["color"] for row in listed.json()}
+    assert listed_colours["Custom One"] == "#E27658"
+    assert listed_colours["Custom Two"] == "#E27658"
+
+    # A PATCH-only recolour to a different custom hex also works.
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/event-labels/{created.json()['id']}",
+        json={"color": "#1a2b3c"},
+    )
+    assert recoloured.status_code == 200
+    assert recoloured.json()["color"] == "#1A2B3C"
+
+
+@pytest.mark.asyncio
+async def test_event_label_rejects_invalid_custom_colours(client: AsyncClient) -> None:
+    """Only a preset palette name or a genuine 6-digit hex value is
+    accepted — never arbitrary CSS colour syntax (named colours, rgb(),
+    3-digit shorthand, or a malformed hex string)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"badcolour-{suffix}@example.com", "Bad Colour")
+    home_id = await _home_with_calendar(client, "Bad Colour Home")
+
+    for bad_colour in ["#fff", "rebeccapurple", "rgb(1,2,3)", "#GGGGGG", "#12345", "E27658"]:
+        response = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/event-labels",
+            json={"name": f"Bad {bad_colour}", "color": bad_colour},
+        )
+        assert response.status_code == 422, f"{bad_colour!r} should have been rejected"
+
+
+@pytest.mark.asyncio
+async def test_event_on_a_secondary_home_calendar_can_carry_a_calendar_tag(
+    client: AsyncClient,
+) -> None:
+    """The acceptance scenario for Calendar vs Calendar Tag: an event on a
+    secondary Home calendar (e.g. "GFOAT") follows *that* calendar's
+    identity/sharing, while its Calendar Tag (CalendarEventLabel, e.g.
+    "Activity") is a fully independent colour/classification concept — two
+    orthogonal fields on the same CalendarEvent row (calendar_id, label_id),
+    never a second calendar-like resource."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"gfoat-{suffix}@example.com", "GFOAT Owner")
+    home_id = await _home_with_calendar(client, "GFOAT Home")
+
+    gfoat = await unsafe(
+        client, "POST", f"/api/v1/homes/{home_id}/calendars", json={"name": "GFOAT"}
+    )
+    assert gfoat.status_code == 201, gfoat.text
+    gfoat_id = gfoat.json()["id"]
+
+    activity = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Hobby", "color": "emerald"},
+    )
+    assert activity.status_code == 201, activity.text
+    activity_id = activity.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=2)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Football practice",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "calendar_id": gfoat_id,
+            "label_id": activity_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event = created.json()
+    assert event["calendar_id"] == gfoat_id
+    assert event["label"]["id"] == activity_id
+    assert event["label"]["name"] == "Hobby"
+    # The colour on the wire is the Calendar Tag's, not GFOAT's own colour —
+    # see _occurrence/_calendar_color_map: a label always wins.
+    assert event["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    listed_event = next(
+        item for item in listed.json()["items"] if item["event_id"] == event["event_id"]
+    )
+    assert listed_event["calendar_id"] == gfoat_id
+    assert listed_event["label"]["name"] == "Hobby"
+
+
+@pytest.mark.asyncio
+async def test_personal_calendar_event_can_carry_a_calendar_tag(client: AsyncClient) -> None:
+    """A Personal Calendar event is never shareable with other members (see
+    create_event's Personal-Calendar member check), but that restriction is
+    about *membership*, not Calendar Tags — a Calendar Tag never grants or
+    withholds calendar access, so a Personal Calendar event can carry one
+    exactly like any other event."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"personaltag-{suffix}@example.com", "Personal Tag Owner")
+    home_id = await _home_with_calendar(client, "Personal Tag Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    personal_id = calendars.json()["personal_calendar"]["id"]
+
+    other_tag = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Misc", "color": "sky"},
+    )
+    assert other_tag.status_code == 201, other_tag.text
+    other_tag_id = other_tag.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=3)
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Doctor's appointment",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "calendar_id": personal_id,
+            "label_id": other_tag_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    event = created.json()
+    assert event["calendar_id"] == personal_id
+    assert event["label"]["id"] == other_tag_id
+    assert event["label"]["name"] == "Misc"
 
 
 @pytest.mark.asyncio
@@ -474,7 +1111,521 @@ async def test_event_label_update_requires_calendar_edit_all(client: AsyncClient
         assert blocked.status_code == 403
 
     unchanged = await client.get(f"/api/v1/homes/{home_id}/event-labels")
-    assert next(row for row in unchanged.json() if row["id"] == label_id)["color"] == "coral"
+    assert (
+        next(row for row in unchanged.json() if row["id"] == label_id)["color"]
+        == (PALETTE_HEX[ColourToken.coral])
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorised_user_can_delete_a_calendar_tag(client: AsyncClient) -> None:
+    """The basic happy path: calendar.edit_all (the same capability that
+    already gates create/rename/recolour) can delete an optional Calendar
+    Tag, and it's gone from the listing afterwards."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagdelete-{suffix}@example.com", "Tag Deleter")
+    home_id = await _home_with_calendar(client, "Tag Delete Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Throwaway", "color": "coral"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
+    assert deleted.status_code == 204
+
+    listed = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert label_id not in {row["id"] for row in listed.json()}
+
+
+@pytest.mark.asyncio
+async def test_unauthorised_user_cannot_delete_a_calendar_tag(client: AsyncClient) -> None:
+    """Same permission boundary as create/rename/recolour — deletion must be
+    backend-authorised, not merely a hidden button in the frontend."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagdelowner-{suffix}@example.com", "Tag Owner")
+    home_id = await _home_with_calendar(client, "Tag Delete Perms Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Protected From Friend", "color": "coral"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        friend_email = f"tagdelfriend-{suffix}@example.com"
+        await create_verified_user(friend_client, friend_email, "Tag Friend")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == friend_email))
+            assert user is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=user.id,
+                    role=Role.guest,
+                    relationship=HouseholdRelationship.friend,
+                    permission_profile=PermissionProfile.explicit_sharing,
+                )
+            )
+            await db.commit()
+
+        blocked = await unsafe(
+            friend_client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}"
+        )
+        assert blocked.status_code == 403
+
+    still_there = await client.get(f"/api/v1/homes/{home_id}/event-labels")
+    assert label_id in {row["id"] for row in still_there.json()}
+
+
+@pytest.mark.asyncio
+async def test_label_usage_endpoint_reports_affected_event_count(client: AsyncClient) -> None:
+    """Backs the delete-confirmation sheet's "used by N events" copy —
+    counts base CalendarEvent rows (not expanded recurring occurrences)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagusage-{suffix}@example.com", "Tag Usage Owner")
+    home_id = await _home_with_calendar(client, "Tag Usage Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Hobby", "color": "emerald"},
+    )
+    assert created.status_code == 201
+    label_id = created.json()["id"]
+
+    zero_usage = await client.get(f"/api/v1/homes/{home_id}/event-labels/{label_id}/usage")
+    assert zero_usage.status_code == 200
+    assert zero_usage.json()["event_count"] == 0
+
+    future_start = datetime.now(UTC) + timedelta(hours=1)
+    for i in range(3):
+        made = await unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/events",
+            json={
+                "title": f"Tagged event {i}",
+                "start_at": (future_start + timedelta(days=i)).isoformat(),
+                "end_at": (future_start + timedelta(days=i, hours=1)).isoformat(),
+                "timezone": "Europe/London",
+                "is_all_day": False,
+                "member_ids": [],
+                "recurrence": "none",
+                "recurrence_interval": 1,
+                "label_id": label_id,
+            },
+        )
+        assert made.status_code == 201, made.text
+
+    usage = await client.get(f"/api/v1/homes/{home_id}/event-labels/{label_id}/usage")
+    assert usage.status_code == 200
+    assert usage.json()["event_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_calendar_tag_untags_its_events_without_touching_anything_else(
+    client: AsyncClient,
+) -> None:
+    """The core safety contract: deleting a Calendar Tag must never delete
+    an event, never touch calendar_id, and must leave title/dates/
+    participants untouched — only label_id changes, to null. Also proves
+    there is no FK-cascade path that could delete events through tag
+    deletion (calendar_events.label_id is ON DELETE SET NULL, never
+    CASCADE — see models.CalendarEvent.label_id)."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"taguntag-{suffix}@example.com", "Untag Owner")
+    home_id = await _home_with_calendar(client, "Untag Home")
+
+    created_label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Hobby", "color": "violet"},
+    )
+    assert created_label.status_code == 201
+    label_id = created_label.json()["id"]
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    future_start = datetime.now(UTC) + timedelta(hours=2)
+    created_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Football practice",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "location_text": "The park",
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "label_id": label_id,
+        },
+    )
+    assert created_event.status_code == 201, created_event.text
+    event = created_event.json()
+    assert event["label"]["id"] == label_id
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
+    assert deleted.status_code == 204
+
+    # The label itself is gone.
+    labels_after = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert label_id not in {row["id"] for row in labels_after.json()}
+
+    # The event still exists — untouched apart from label_id — and now
+    # falls back to the calendar's own colour, exactly like any other
+    # never-tagged event (event.label?.color ?? event.calendar_color).
+    fetched = await client.get(f"/api/v1/homes/{home_id}/events/{event['event_id']}")
+    assert fetched.status_code == 200
+    after = fetched.json()["event"]
+    assert after["label"] is None
+    assert after["calendar_id"] == primary["id"]
+    assert after["calendar_color"] == primary["color"]
+    assert after["title"] == "Football practice"
+    assert after["location_text"] == "The park"
+    assert after["start_at"] == event["start_at"]
+    assert after["end_at"] == event["end_at"]
+    assert after["member_ids"] == event["member_ids"]
+    assert after["recurrence"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_calendar_tag_leaves_a_recurring_event_intact(
+    client: AsyncClient,
+) -> None:
+    """Recurring-event information (pattern/interval/occurrences) must
+    survive a Calendar Tag deletion exactly like any other event field —
+    only label_id is affected."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagrecur-{suffix}@example.com", "Recurring Tag Owner")
+    home_id = await _home_with_calendar(client, "Recurring Tag Home")
+
+    created_label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Hobby", "color": "violet"},
+    )
+    assert created_label.status_code == 201
+    label_id = created_label.json()["id"]
+
+    future_start = datetime.now(UTC) + timedelta(hours=1)
+    created_event = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Weekly swim",
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(hours=1)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "weekly",
+            "recurrence_interval": 1,
+            "label_id": label_id,
+        },
+    )
+    assert created_event.status_code == 201, created_event.text
+    event_id = created_event.json()["event_id"]
+
+    deleted = await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{label_id}")
+    assert deleted.status_code == 204
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": future_start.isoformat(),
+            "end_at": (future_start + timedelta(days=21)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    occurrences = [item for item in listed.json()["items"] if item["event_id"] == event_id]
+    # Still a genuinely weekly series producing multiple occurrences, now
+    # simply untagged.
+    assert len(occurrences) >= 3
+    for occurrence in occurrences:
+        assert occurrence["recurrence"] == "weekly"
+        assert occurrence["label"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_system_seeded_default_calendar_tag_can_still_be_deleted(
+    client: AsyncClient,
+) -> None:
+    """No CalendarEventLabel is currently "protected": is_system marks the
+    Home's seeded defaults (Family/Megan/Activity/...) for information only
+    and is never read to block anything — see delete_label's docstring. If a
+    genuinely protected tag is ever introduced, this test should be updated
+    to assert the new restriction instead."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagsystem-{suffix}@example.com", "System Tag Owner")
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "System Tag Home"})
+    assert group.status_code == 201
+    home_id = group.json()["id"]
+    async with SessionFactory() as db:
+        db.add(
+            FeatureOverride(
+                feature_key=FeatureKey.calendar, group_id=uuid.UUID(home_id), enabled=True
+            )
+        )
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
+
+    seeded = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert seeded.status_code == 200
+    seeded_labels = seeded.json()
+    assert len(seeded_labels) > 0, "expected the Home to have seeded default Calendar Tags"
+    system_label_id = seeded_labels[0]["id"]
+
+    deleted = await unsafe(
+        client, "DELETE", f"/api/v1/homes/{home_id}/event-labels/{system_label_id}"
+    )
+    assert deleted.status_code == 204
+
+    remaining = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert system_label_id not in {row["id"] for row in remaining.json()}
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_nonexistent_calendar_tag_changes_nothing(client: AsyncClient) -> None:
+    """A 404 on an already-deleted/foreign-Home label id must leave every
+    other label completely untouched — no partial cleanup, matching the
+    all-or-nothing (single-statement, DB-enforced) delete."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"tagatomic-{suffix}@example.com", "Atomic Tag Owner")
+    home_id = await _home_with_calendar(client, "Atomic Tag Home")
+
+    before = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert before.status_code == 200
+    before_ids = {row["id"] for row in before.json()}
+
+    missing = await unsafe(
+        client,
+        "DELETE",
+        f"/api/v1/homes/{home_id}/event-labels/{uuid.uuid4()}",
+    )
+    assert missing.status_code == 404
+
+    after = await client.get(f"/api/v1/homes/{home_id}/event-labels?include_inactive=true")
+    assert {row["id"] for row in after.json()} == before_ids
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_colour_can_be_changed_but_never_its_name(client: AsyncClient) -> None:
+    """The synthetic `label_id: null` option is presented to users as "Home
+    calendar" — a fixed product concept, never user-renamable, but its
+    colour (the fallback uncategorised events render with) is. StrictModel's
+    extra="forbid" on HomeCalendarUpdate means a client-supplied `name` is
+    rejected outright (422), not merely ignored."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"homecolour-{suffix}@example.com", "Home Colour Owner")
+    home_id = await _home_with_calendar(client, "Home Colour Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    assert calendars.status_code == 200
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+    assert primary["name"] == "Home Calendar"
+    assert primary["color"] == PALETTE_HEX[ColourToken.teal]
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "amber"},
+    )
+    assert recoloured.status_code == 200, recoloured.text
+    assert recoloured.json()["color"] == PALETTE_HEX[ColourToken.amber]
+    assert recoloured.json()["name"] == "Home Calendar"  # unchanged
+
+    # A client-supplied `name` is rejected structurally, not just ignored.
+    rename_attempt = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"name": "Renamed Calendar", "color": "sky"},
+    )
+    assert rename_attempt.status_code == 422
+
+    unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
+    assert persisted["name"] == "Home Calendar"
+    # the earlier colour-only update still stands
+    assert persisted["color"] == PALETTE_HEX[ColourToken.amber]
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_colour_accepts_a_custom_hex_colour(client: AsyncClient) -> None:
+    """The Home calendar's colour uses the same HexColour validation as a
+    Calendar Tag's — a custom colour works here too, not just for tags."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"homecustom-{suffix}@example.com", "Home Custom Colour")
+    home_id = await _home_with_calendar(client, "Home Custom Colour")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "#4b9c7a"},
+    )
+    assert recoloured.status_code == 200, recoloured.text
+    assert recoloured.json()["color"] == "#4B9C7A"
+
+    invalid = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "not-a-real-colour"},
+    )
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_colour_update_requires_calendar_edit_all(client: AsyncClient) -> None:
+    """Same capability as event-category rename/recolour — a shared
+    calendar's colour is Home-administered structure, not any one member's
+    content."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"calcolourowner-{suffix}@example.com", "Cal Colour Owner")
+    home_id = await _home_with_calendar(client, "Cal Colour Perms Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        friend_email = f"calcolourfriend-{suffix}@example.com"
+        await create_verified_user(friend_client, friend_email, "Cal Colour Friend")
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == friend_email))
+            assert user is not None
+            db.add(
+                Membership(
+                    group_id=uuid.UUID(home_id),
+                    user_id=user.id,
+                    role=Role.guest,
+                    relationship=HouseholdRelationship.friend,
+                    permission_profile=PermissionProfile.explicit_sharing,
+                )
+            )
+            await db.commit()
+
+        blocked = await unsafe(
+            friend_client,
+            "PATCH",
+            f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+            json={"color": "rose"},
+        )
+        assert blocked.status_code == 403
+
+    unchanged = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    persisted = next(row for row in unchanged.json()["items"] if row["is_primary"])
+    assert persisted["color"] == PALETTE_HEX[ColourToken.teal]  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_uncategorised_events_use_home_calendar_colour_and_category_still_overrides(
+    client: AsyncClient,
+) -> None:
+    """`calendar_color` (the Home calendar's own colour) is what a
+    `label_id: null` event should render as; a category's own colour always
+    takes precedence once one is assigned."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"rendercolour-{suffix}@example.com", "Render Colour")
+    home_id = await _home_with_calendar(client, "Render Colour Home")
+
+    calendars = await client.get(f"/api/v1/homes/{home_id}/calendars")
+    primary = next(row for row in calendars.json()["items"] if row["is_primary"])
+    recoloured = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/calendars/{primary['id']}",
+        json={"color": "violet"},
+    )
+    assert recoloured.status_code == 200
+
+    label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Chores", "color": "emerald"},
+    )
+    assert label.status_code == 201
+    label_id = label.json()["id"]
+
+    uncategorised = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "No category",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+        },
+    )
+    assert uncategorised.status_code == 201
+    assert uncategorised.json()["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert uncategorised.json()["label"] is None
+
+    categorised = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "With category",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "label_id": label_id,
+        },
+    )
+    assert categorised.status_code == 201
+    # The Home calendar colour is still populated for a categorised event
+    # (uniform shape for the frontend) but its label colour takes precedence.
+    assert categorised.json()["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert categorised.json()["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
+
+    listed = await client.get(
+        f"/api/v1/homes/{home_id}/events",
+        params={
+            "start_at": datetime.now(UTC).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert listed.status_code == 200
+    items = {row["title"]: row for row in listed.json()["items"]}
+    assert items["No category"]["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert items["With category"]["calendar_color"] == PALETTE_HEX[ColourToken.violet]
+    assert items["With category"]["label"]["color"] == PALETTE_HEX[ColourToken.emerald]
 
 
 @pytest.mark.asyncio
@@ -527,5 +1678,396 @@ async def test_recurring_event_occurrences_keep_consistent_label_colour(
     assert listed.status_code == 200
     items = listed.json()["items"]
     assert len(items) >= 4, "expected multiple weekly occurrences in a 5-week window"
-    assert all(item["label"]["color"] == "violet" for item in items)
+    assert all(item["label"]["color"] == PALETTE_HEX[ColourToken.violet] for item in items)
     assert all(item["label"]["id"] == label_id for item in items)
+
+
+@pytest.mark.asyncio
+async def test_create_event_rejects_naive_datetime(client: AsyncClient) -> None:
+    """A start_at/end_at with no UTC offset is ambiguous about which instant
+    it names — the API must reject it (422) rather than silently guessing
+    server-local or UTC intent. Regression test for the calendar timezone
+    architecture fix: every timed boundary must be an explicit instant."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"naive-{suffix}@example.com", "Naive Owner")
+    home_id = await _home_with_calendar(client, "Naive Home")
+
+    naive_start = (datetime.now(UTC) + timedelta(hours=2)).replace(tzinfo=None)
+    naive_end = (datetime.now(UTC) + timedelta(hours=3)).replace(tzinfo=None)
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Ambiguous event",
+            "start_at": naive_start.isoformat(),
+            "end_at": naive_end.isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_all_day_event_normalized_to_utc_midnight_on_create(client: AsyncClient) -> None:
+    """An all-day event names calendar dates, not a wall-clock instant — even
+    if a client submits a non-midnight start/end (e.g. a stray time-of-day
+    left over from a timed picker), the stored instant must be normalized to
+    literal UTC midnight so the exclusive-end-date contract every calendar
+    view relies on always holds. Regression test for all-day events silently
+    landing on the wrong day when converted through a non-UTC timezone."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"allday-{suffix}@example.com", "All Day Owner")
+    home_id = await _home_with_calendar(client, "All Day Home")
+
+    # Deliberately submit a non-midnight time-of-day and a same-day end (as
+    # the old frontend picker used to for a "same day" all-day event) to
+    # prove the backend normalizes regardless of what was sent.
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Sports Day",
+            "start_at": "2026-08-14T09:00:00+01:00",
+            "end_at": "2026-08-14T10:00:00+01:00",
+            "timezone": "Europe/London",
+            "is_all_day": True,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+    event = created.json()
+    assert event["start_at"] in ("2026-08-14T00:00:00Z", "2026-08-14T00:00:00+00:00")
+    # Exclusive end: the day *after* the single covered calendar date.
+    assert event["end_at"] in ("2026-08-15T00:00:00Z", "2026-08-15T00:00:00+00:00")
+
+
+@pytest.mark.asyncio
+async def test_all_day_event_normalized_to_utc_midnight_on_update(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"alldayedit-{suffix}@example.com", "All Day Editor")
+    home_id = await _home_with_calendar(client, "All Day Edit Home")
+
+    created = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/events",
+        json={
+            "title": "Bank Holiday",
+            "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            "timezone": "Europe/London",
+            "is_all_day": False,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+        },
+    )
+    assert created.status_code == 201
+    event = created.json()
+
+    updated = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json={
+            "title": "Bank Holiday",
+            # A three-day all-day event (28-30 Aug inclusive), submitted with
+            # a stray afternoon time-of-day on both ends. end_at is the
+            # exclusive boundary (the day after the last covered date, per
+            # the existing convention), same as Month/Schedule already
+            # expect and the same as the frontend picker now constructs.
+            "start_at": "2026-08-28T14:30:00+01:00",
+            "end_at": "2026-08-31T14:30:00+01:00",
+            "timezone": "Europe/London",
+            "is_all_day": True,
+            "member_ids": [],
+            "recurrence": "none",
+            "recurrence_interval": 1,
+            "expected_updated_at": event["updated_at"],
+        },
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["start_at"] in ("2026-08-28T00:00:00Z", "2026-08-28T00:00:00+00:00")
+    # Exclusive end: the day after the last covered date (30 Aug).
+    assert body["end_at"] in ("2026-08-31T00:00:00Z", "2026-08-31T00:00:00+00:00")
+
+
+# ---------------------------------------------------------------------------
+# Regression: editing an event 422ing on every field (calendar_id in the
+# PATCH body) — the frontend's EventForm builds one payload shape shared by
+# create and edit, but EventUpdate (unlike EventCreate) has no `calendar_id`
+# field: an event's calendar assignment is fixed at creation and always
+# resolved server-side from the existing row (see update_event). StrictModel
+# rejects any unrecognised field with 422 `extra_forbidden`, so sending
+# `calendar_id` (even null) broke *every* edit, regardless of what changed.
+# ---------------------------------------------------------------------------
+
+
+def _update_body(event: dict, **overrides: object) -> dict:
+    """A full EventUpdate body seeded from an existing event's own current
+    values — mirrors what the frontend's EventForm actually submits (every
+    schema field present, since EventUpdate is not a partial/PATCH-semantics
+    schema), deliberately excluding `calendar_id`."""
+    body = {
+        "title": event["title"],
+        "start_at": event["start_at"],
+        "end_at": event["end_at"],
+        "timezone": event["timezone"],
+        "is_all_day": event["is_all_day"],
+        "member_ids": list(event.get("member_ids", [])),
+        "label_id": event["label"]["id"] if event.get("label") else None,
+        "location_text": event.get("location_text"),
+        "reminder_minutes": event.get("reminder_minutes"),
+        "recurrence": event.get("recurrence", "none"),
+        "recurrence_interval": 1,
+        "recurrence_until": None,
+        "recurrence_count": None,
+        "expected_updated_at": event["updated_at"],
+    }
+    body.update(overrides)
+    return body
+
+
+async def _create_event(client: AsyncClient, home_id: str, **overrides: object) -> dict:
+    body = {
+        "title": "Original title",
+        "start_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+        "timezone": "Europe/London",
+        "is_all_day": False,
+        "member_ids": [],
+        "recurrence": "none",
+    }
+    body.update(overrides)
+    created = await unsafe(client, "POST", f"/api/v1/homes/{home_id}/events", json=body)
+    assert created.status_code == 201, created.text
+    return created.json()
+
+
+@pytest.mark.asyncio
+async def test_editing_only_the_title_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edittitle-{suffix}@example.com", "Edit Title")
+    home_id = await _home_with_calendar(client, "Edit Title Home")
+    event = await _create_event(client, home_id)
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, title="Updated title"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Updated title"
+
+
+@pytest.mark.asyncio
+async def test_editing_start_and_end_time_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edittime-{suffix}@example.com", "Edit Time")
+    home_id = await _home_with_calendar(client, "Edit Time Home")
+    event = await _create_event(client, home_id)
+
+    new_start = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    new_end = (datetime.now(UTC) + timedelta(days=1, hours=1)).isoformat()
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, start_at=new_start, end_at=new_end),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Compare as instants rather than string formats (the API may normalise offset notation).
+    assert datetime.fromisoformat(body["start_at"]) == datetime.fromisoformat(new_start)
+    assert datetime.fromisoformat(body["end_at"]) == datetime.fromisoformat(new_end)
+
+
+@pytest.mark.asyncio
+async def test_changing_category_on_an_existing_event_succeeds(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editcat-{suffix}@example.com", "Edit Category")
+    home_id = await _home_with_calendar(client, "Edit Category Home")
+    event = await _create_event(client, home_id)
+
+    label = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/homes/{home_id}/event-labels",
+        json={"name": "Sport", "color": "emerald"},
+    )
+    assert label.status_code == 201
+    label_id = label.json()["id"]
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, label_id=label_id),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["label"]["id"] == label_id
+
+
+@pytest.mark.asyncio
+async def test_changing_participants_succeeds_where_entitled(client: AsyncClient) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    owner_email = f"editmembers-{suffix}@example.com"
+    await create_verified_user(client, owner_email, "Edit Members Owner")
+    home_id = await _home_with_calendar(client, "Edit Members Home")
+    event = await _create_event(client, home_id)
+
+    friend_email = f"editmembersfriend-{suffix}@example.com"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as friend_client:
+        await create_verified_user(friend_client, friend_email, "Edit Members Friend")
+    async with SessionFactory() as db:
+        owner = await db.scalar(select(User).where(User.email == owner_email))
+        friend = await db.scalar(select(User).where(User.email == friend_email))
+        assert owner is not None
+        assert friend is not None
+        db.add(
+            Membership(
+                group_id=uuid.UUID(home_id),
+                user_id=friend.id,
+                role=Role.adult_member,
+                relationship=HouseholdRelationship.partner,
+                permission_profile=PermissionProfile.standard_partner,
+            )
+        )
+        await db.commit()
+        owner_id, friend_id = owner.id, friend.id
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, member_ids=[str(friend_id)]),
+    )
+    assert response.status_code == 200, response.text
+    assert str(friend_id) in response.json()["member_ids"]
+    assert str(owner_id) in response.json()["member_ids"]  # creator is always kept
+
+
+@pytest.mark.asyncio
+async def test_event_can_be_edited_without_setting_every_optional_field(
+    client: AsyncClient,
+) -> None:
+    """EventUpdate is not a partial/PATCH-semantics schema — but every field
+    beyond the handful of true requireds (title/start/end/timezone/is_all_day/
+    expected_updated_at) is still optional with a sensible default, so a
+    minimal body omitting description/location/label/members/reminder/
+    recurrence entirely must still succeed."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editminimal-{suffix}@example.com", "Edit Minimal")
+    home_id = await _home_with_calendar(client, "Edit Minimal Home")
+    event = await _create_event(
+        client, home_id, location_text="Kitchen", description="Weekly catch-up"
+    )
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json={
+            "title": "Still weekly catch-up",
+            "start_at": event["start_at"],
+            "end_at": event["end_at"],
+            "timezone": event["timezone"],
+            "is_all_day": False,
+            "expected_updated_at": event["updated_at"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Still weekly catch-up"
+
+
+@pytest.mark.asyncio
+async def test_home_calendar_event_label_id_null_can_be_edited(client: AsyncClient) -> None:
+    """An uncategorised event (label_id null — presented to users as "Home
+    calendar") must be editable exactly like a categorised one."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"edithomecal-{suffix}@example.com", "Edit Home Cal")
+    home_id = await _home_with_calendar(client, "Edit Home Cal Home")
+    event = await _create_event(client, home_id)
+    assert event["label"] is None
+    assert event["calendar_color"]  # always populated
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, location_text="Living room"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["label"] is None
+    assert response.json()["location_text"] == "Living room"
+
+
+@pytest.mark.asyncio
+async def test_legacy_event_created_before_recent_calendar_changes_can_still_be_updated(
+    client: AsyncClient,
+) -> None:
+    """Simulates an event whose row predates the newer optional fields ever
+    being touched (reminder_minutes/recurrence_until/recurrence_count all
+    left at their original None/default) — editing it must not require the
+    caller to first "upgrade" it by supplying values for fields it never had."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editlegacy-{suffix}@example.com", "Edit Legacy")
+    home_id = await _home_with_calendar(client, "Edit Legacy Home")
+    event = await _create_event(client, home_id)
+    assert event["reminder_minutes"] is None
+
+    response = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, title="Legacy event, updated"),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "Legacy event, updated"
+    assert response.json()["reminder_minutes"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_still_rejects_a_calendar_id_field_and_other_invalid_input(
+    client: AsyncClient,
+) -> None:
+    """Confirms the fix was made on the frontend contract, not by loosening
+    backend validation: `calendar_id` (an event's calendar is fixed at
+    creation, never editable) and a nonsensical end-before-start range must
+    both still be rejected."""
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"editinvalid-{suffix}@example.com", "Edit Invalid")
+    home_id = await _home_with_calendar(client, "Edit Invalid Home")
+    event = await _create_event(client, home_id)
+
+    with_calendar_id = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, calendar_id=None),
+    )
+    assert with_calendar_id.status_code == 422
+    detail = with_calendar_id.json()["detail"]
+    assert detail[0]["type"] == "extra_forbidden"
+    assert detail[0]["loc"] == ["body", "calendar_id"]
+
+    end_before_start = await unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/events/{event['event_id']}",
+        json=_update_body(event, end_at=event["start_at"], start_at=event["end_at"]),
+    )
+    assert end_before_start.status_code == 422
+    assert end_before_start.json()["detail"] == "End must be after start"

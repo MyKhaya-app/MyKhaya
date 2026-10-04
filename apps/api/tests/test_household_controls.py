@@ -1,3 +1,4 @@
+import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -7,7 +8,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from test_journey import ORIGIN, create_verified_user, unsafe
 
+from mykhaya.colour_palette import MEMBER_COLOUR_CYCLE
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
     AuditEvent,
@@ -15,6 +18,7 @@ from mykhaya.models import (
     Membership,
     PermissionProfile,
     Role,
+    SubscriptionPlan,
     User,
 )
 
@@ -37,6 +41,11 @@ async def test_home_admin_features_relationships_and_managed_child(
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Control Home"})
     assert created.status_code == 201
     home_id = created.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
     assert created.json()["relationship"] == "home_admin"
     assert "features.manage" in created.json()["capabilities"]
 
@@ -56,14 +65,48 @@ async def test_home_admin_features_relationships_and_managed_child(
             "confirmed": True,
         },
     )
-    assert final_admin.status_code == 409
+    # A member cannot change their own Home role; this authorization guard
+    # runs before the final-Home-Admin protection check.
+    assert final_admin.status_code == 403
 
     management = await client.get(f"/api/v1/features/{home_id}/modules/management")
     assert management.status_code == 200
     module_ids = {row["id"] for row in management.json()}
     assert "calendar" in module_ids
     assert "tasks" not in module_ids
-    assert "shopping" not in module_ids
+    # "shopping" is now the released Lists module (mykhaya.routers.lists) —
+    # see docs/architecture/meal-plans.md "Lists integration".
+    assert "shopping" in module_ids
+    # Notifications is core platform delivery infrastructure, never a
+    # user-disableable Home module; External sharing is a Calendar
+    # capability, not a standalone module. Neither is offered as a Module
+    # Management toggle, even though both remain real, released features
+    # with their own FeatureFlag/FeatureOverride rows evaluated normally
+    # everywhere else (mykhaya.module_registry.ModuleDefinition
+    # .home_admin_manageable).
+    assert "notifications" not in module_ids
+    assert "external_sharing" not in module_ids
+    # Nudges (Routines + Reminders + To-dos) is a genuine, independently
+    # governed Home module — see test_feature_precedence.py for its full
+    # authorization/precedence coverage.
+    assert "nudges" in module_ids
+
+    # Phase 3A: /modules/navigation is a *consumer* navigation listing — it
+    # must never emit Notifications or External sharing as if they were
+    # navigable modules in their own right, and (via household_modules'
+    # own exclusion) never Tasks/Plans either. See routers.features.
+    # navigation_modules.
+    navigation = await client.get(f"/api/v1/features/{home_id}/modules/navigation")
+    assert navigation.status_code == 200
+    nav_ids = {row["id"] for row in navigation.json()}
+    assert "notifications" not in nav_ids
+    assert "external_sharing" not in nav_ids
+    assert "tasks" not in nav_ids
+    assert "plans" not in nav_ids
+    # Calendar is enabled (globally released) and the caller holds
+    # calendar_view — it's a real, currently-usable consumer module.
+    assert "calendar" in nav_ids
+    assert all(row["enabled"] is True for row in navigation.json())
 
     hidden_update = await unsafe(
         client,
@@ -178,22 +221,29 @@ async def test_member_colours_are_assigned_and_collision_free(
     """Colour belongs to the person's membership, assigned server-side, and
     must never collide with another active member of the same home while
     the palette has spare colours — see docs/design/visual-identity.md and
-    mykhaya.member_colours. The palette has 18 tokens (mykhaya.colour_palette
-    .ColourToken); this creates one more member than that to exercise both
+    mykhaya.member_colours. The palette size is read from the palette itself
+    (mykhaya.colour_palette.MEMBER_COLOUR_CYCLE) so it cannot go stale as
+    tokens are added; this creates one more member than that to exercise both
     "everyone distinct while there's room" and "cycles once exhausted"."""
+    palette_size = len(MEMBER_COLOUR_CYCLE)
     client = api_client
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"colour-{suffix}@example.com", "Colour Owner")
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Colour Home"})
     assert created.status_code == 201
     home_id = created.json()["id"]
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(home_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
 
     members = await client.get(f"/api/v1/groups/{home_id}/members")
     admin = members.json()[0]
     assert admin["colour"] is not None
     guardian_id = admin["membership_id"]
 
-    for index in range(18):
+    for index in range(palette_size):
         child = await unsafe(
             client,
             "POST",
@@ -209,16 +259,16 @@ async def test_member_colours_are_assigned_and_collision_free(
     all_members = await client.get(f"/api/v1/groups/{home_id}/members")
     assert all_members.status_code == 200
     rows = all_members.json()
-    assert len(rows) == 19
+    assert len(rows) == palette_size + 1
     member_colours = [row["colour"] for row in rows]
     assert all(colour is not None for colour in member_colours)
-    # Every one of the 18 palette colours gets used at least once — nobody is
-    # left without a colour and nothing is skipped while there's still room.
-    assert len(set(member_colours)) == 18
-    # The 19th member, past the palette's capacity, cycles back to a colour
-    # already in use rather than staying blank.
+    # Every palette colour gets used at least once — nobody is left without a
+    # colour and nothing is skipped while there's still room.
+    assert len(set(member_colours)) == palette_size
+    # The member past the palette's capacity cycles back to a colour already in
+    # use rather than staying blank.
     duplicate_counts = Counter(member_colours)
-    assert sum(duplicate_counts.values()) == 19
+    assert sum(duplicate_counts.values()) == palette_size + 1
     assert max(duplicate_counts.values()) == 2
 
 
@@ -242,8 +292,8 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
     admin = members.json()[0]
     admin_id = admin["user_id"]
 
-    # A second, non-admin household member — a "partner" profile, which has
-    # no members.manage_relationships capability (only home_admin does).
+    # A second household member — standard_partner intentionally has the
+    # members.manage_relationships capability; adult does not.
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
     ) as partner_client:
@@ -294,14 +344,15 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
         assert partner_self_update.status_code == 200
         assert partner_self_update.json()["colour"] == "cyan"
 
-        # Partner attempts to recolour the admin — blocked.
+        # Partner may recolour another member under the established
+        # members.manage_relationships capability.
         partner_recolours_admin = await unsafe(
             partner_client,
             "PATCH",
             f"/api/v1/groups/{home_id}/members/{admin_id}/colour",
             json={"colour": "lime"},
         )
-        assert partner_recolours_admin.status_code == 403
+        assert partner_recolours_admin.status_code == 200
 
     # An unrecognised colour token is rejected, not silently accepted.
     invalid = await unsafe(
@@ -312,8 +363,7 @@ async def test_member_colour_self_update_admin_update_and_unauthorized(
     )
     assert invalid.status_code == 422
 
-    # The admin's colour reflects only the successful self-update, never the
-    # blocked attempt from the partner.
+    # The admin's colour reflects the later successful partner update.
     final = await client.get(f"/api/v1/groups/{home_id}/members")
     final_admin = next(row for row in final.json() if row["user_id"] == admin_id)
-    assert final_admin["colour"] == "rose"
+    assert final_admin["colour"] == "lime"

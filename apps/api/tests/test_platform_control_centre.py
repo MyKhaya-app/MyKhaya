@@ -14,6 +14,8 @@ from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
     AdministrativeNote,
+    FeatureFlag,
+    FeatureKey,
     Group,
     OutboxEvent,
     PlatformAdministrator,
@@ -26,18 +28,20 @@ from mykhaya.models import (
 )
 from mykhaya.platform_audit import safe_values
 from mykhaya.platform_security import resolve_client_ip
-from mykhaya.security import password_hash
+from mykhaya.security import password_hash, resolve_forwarded_proto
 
-ADMIN_ORIGIN = "http://admin.localhost:8080"
+ADMIN_ORIGIN = get_settings().admin_url
 PASSWORD = "A separate operator password!"
+TEST_PROXY_PEER = "172.16.0.2"
+TEST_CLIENT_IP = "127.0.0.1"
 
 
 @pytest.fixture
 async def admin_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
-        transport=ASGITransport(app=app, client=("127.0.0.1", 44000)),
+        transport=ASGITransport(app=app, client=(TEST_PROXY_PEER, 44000)),
         base_url=ADMIN_ORIGIN,
-        headers={"Origin": ADMIN_ORIGIN},
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": TEST_CLIENT_IP},
     ) as value:
         yield value
 
@@ -354,14 +358,61 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
 ) -> None:
+    # Capture Calendar's real FeatureFlag state before this test mutates it,
+    # so it can be restored exactly afterwards — including the "no row
+    # exists at all" case, not just hardcoding a guessed default. See
+    # migration 0063_feature_flag_backfill for what the row's actual
+    # steady-state should be; this test must never assume or leave a
+    # different one, or it leaks state into whatever Calendar test runs
+    # next in the same session (see mykhaya.features.platform_feature_
+    # enabled/is_feature_enabled, which reads this row directly).
+    async with SessionFactory() as db:
+        original = await db.scalar(
+            select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar)
+        )
+        original_existed = original is not None
+        original_enabled = original.enabled if original else None
+        original_release_state = original.release_state if original else None
+
+    try:
+        await _run_calendar_module_lifecycle(admin_client, admin_factory)
+    finally:
+        async with SessionFactory() as db:
+            row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.calendar))
+            if original_existed:
+                assert original_enabled is not None
+                if row is None:
+                    db.add(
+                        FeatureFlag(
+                            key=FeatureKey.calendar,
+                            enabled=original_enabled,
+                            release_state=original_release_state,
+                        )
+                    )
+                else:
+                    row.enabled = original_enabled
+                    row.release_state = original_release_state
+            elif row is not None:
+                await db.delete(row)
+            await db.commit()
+
+
+async def _run_calendar_module_lifecycle(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
     readonly = await admin_factory(PlatformRole.readonly)
     await login(admin_client, readonly)
     listed = await admin_client.get("/api/v1/platform/modules")
     assert listed.status_code == 200
-    assert {item["key"] for item in listed.json()} >= {"calendar", "tasks"}
-    assert (
-        next(item for item in listed.json() if item["key"] == "tasks")["release_state"] == "hidden"
-    )
+    # Phase 3A: hidden modules (Tasks, Plans) are structurally excluded from
+    # PCC's global live catalogue — see mykhaya.module_registry.
+    # feature_modules(). Only operationally controllable modules/capability
+    # flags appear here.
+    keys = {item["key"] for item in listed.json()}
+    assert "calendar" in keys
+    assert "tasks" not in keys
+    assert "plans" not in keys
     denied = await unsafe(
         admin_client,
         "PUT",
@@ -414,6 +465,11 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
         assert event is not None
         assert event.reason == "Enable the Calendar pilot safely."
 
+    # Exercises the disable transition itself (coverage this test already
+    # wanted) — this is no longer what restores Calendar's real global
+    # state afterwards; the caller's try/finally does that from the
+    # snapshot taken before this function ran, regardless of what state
+    # this leaves things in or whether an assertion above already failed.
     disabled = await unsafe(
         admin_client,
         "PUT",
@@ -421,11 +477,82 @@ async def test_module_lifecycle_requires_operator_confirmation_and_is_audited(
         json={
             "enabled": False,
             "release_state": "released",
-            "reason": "Restore the default after this test.",
+            "reason": "Exercise the disable transition.",
             "confirmed": True,
         },
     )
     assert disabled.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_global_module_catalogue_shows_real_operational_entries_only(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """Phase 3A. The current approved module/capability set: Calendar,
+    Lists, Meal Plans, Wishlists and Nudges (Home-Admin-toggleable
+    modules), plus Notifications and External sharing (infrastructure/Beta
+    capability flags PCC still legitimately controls at the platform level,
+    even though neither is a Home-Admin-toggleable module — see
+    module_registry.ModuleDefinition.home_admin_manageable). Hidden modules
+    (Tasks, Plans) must never appear as live editable entries."""
+    admin = await admin_factory(PlatformRole.readonly)
+    await login(admin_client, admin)
+    listed = await admin_client.get("/api/v1/platform/modules")
+    assert listed.status_code == 200
+    keys = {item["key"] for item in listed.json()}
+    expected_keys = (
+        "nudges",
+        "calendar",
+        "shopping",
+        "meals",
+        "wish_lists",
+        "notifications",
+        "external_sharing",
+    )
+    for expected in expected_keys:
+        assert expected in keys, f"{expected} should still be in PCC's global catalogue"
+    for hidden in ("tasks", "plans"):
+        assert hidden not in keys, f"{hidden} is hidden and must not be an editable catalogue entry"
+
+
+@pytest.mark.asyncio
+async def test_hidden_module_write_is_rejected_even_with_a_stale_feature_flag_row(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    """A hidden module must remain fail-closed and unavailable unless
+    deliberately promoted through code/release governance — never through
+    this lifecycle control, and never merely because a stale database row
+    claims otherwise (see routers.platform.update_module's guard, checked
+    against the static registry, never the FeatureFlag row's own value)."""
+    async with SessionFactory() as db:
+        row = await db.scalar(select(FeatureFlag).where(FeatureFlag.key == FeatureKey.tasks))
+        if row is None:
+            db.add(FeatureFlag(key=FeatureKey.tasks, enabled=True, release_state="released"))
+        else:
+            row.enabled = True
+            row.release_state = "released"
+        await db.commit()
+
+    owner = await admin_factory(PlatformRole.owner)
+    await login(admin_client, owner)
+    rejected = await unsafe(
+        admin_client,
+        "PUT",
+        "/api/v1/platform/modules/tasks",
+        json={
+            "enabled": True,
+            "release_state": "released",
+            "reason": "Attempting to promote a hidden module.",
+            "confirmed": True,
+        },
+    )
+    assert rejected.status_code == 409
+
+    # Still absent from the global catalogue despite the stale row above.
+    listed = await admin_client.get("/api/v1/platform/modules")
+    assert "tasks" not in {item["key"] for item in listed.json()}
 
 
 @pytest.mark.asyncio
@@ -487,8 +614,18 @@ async def test_public_status_contains_only_customer_facing_keys() -> None:
         assert forbidden not in serialised
 
 
-def make_request(peer: str, forwarded: str | None = None) -> Request:
-    headers = Headers({"x-forwarded-for": forwarded} if forwarded else {})
+def make_request(
+    peer: str,
+    forwarded: str | None = None,
+    forwarded_proto: str | None = None,
+    scheme: str = "https",
+) -> Request:
+    raw_headers = {}
+    if forwarded:
+        raw_headers["x-forwarded-for"] = forwarded
+    if forwarded_proto:
+        raw_headers["x-forwarded-proto"] = forwarded_proto
+    headers = Headers(raw_headers)
     return Request(
         {
             "type": "http",
@@ -496,7 +633,7 @@ def make_request(peer: str, forwarded: str | None = None) -> Request:
             "path": "/",
             "headers": headers.raw,
             "client": (peer, 443),
-            "scheme": "https",
+            "scheme": scheme,
             "server": ("admin.mykhaya.app", 443),
             "query_string": b"",
         }
@@ -507,6 +644,99 @@ def test_untrusted_proxy_header_cannot_change_client_address() -> None:
     settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
     assert resolve_client_ip(make_request("203.0.113.9", "127.0.0.1"), settings) == "203.0.113.9"
     assert resolve_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings) == "198.51.100.3"
+
+
+def test_trusting_a_whole_subnet_lets_a_forged_chain_walk_past_a_gateway_address() -> None:
+    """Characterises the exact regression the local-dev Compose trusted-proxy
+    fix was written to avoid (see docs/architecture/deployment-model.md's
+    "Trusted-proxy boundary" section, and
+    infrastructure/scripts/check_trusted_proxy_cidrs_narrow.py, which fails
+    CI if MYKHAYA_TRUSTED_PROXY_CIDRS is ever widened back to a subnet for
+    local development). resolve_client_ip's right-to-left chain walk is
+    intentionally "trust every hop inside trusted_proxy_cidrs" — that is
+    correct for a real multi-hop proxy chain, but it means any address inside
+    a *subnet-wide* trusted range (not just the actual proxy's own address)
+    is treated as just another trusted hop, including a Docker bridge
+    network's own gateway address — which is what every host-published-port
+    request appears to come from after Docker's NAT. A narrower, host-only
+    trusted_proxy_cidrs (a /32 per proxy, as local dev now uses) closes this
+    by construction: the gateway address is simply never inside it.
+    """
+    # Proxy (Caddy) itself at .5; the network's own gateway at .1 forwarded
+    # the request onward with an attacker-supplied value further left in the
+    # chain — exactly Docker's own X-Forwarded-For append behaviour for a
+    # request that arrived at the gateway already carrying a forged header.
+    forwarded_chain = "203.0.113.99, 10.77.0.1"
+
+    subnet_trust = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.77.0.0/24"]})
+    assert (
+        resolve_client_ip(make_request("10.77.0.5", forwarded_chain), subnet_trust)
+        == "203.0.113.99"
+    ), "documents the vulnerable behaviour a subnet-wide trust range produces"
+
+    host_only_trust = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.77.0.5/32"]})
+    assert (
+        resolve_client_ip(make_request("10.77.0.5", forwarded_chain), host_only_trust)
+        == "10.77.0.1"
+    ), "a host-only trusted_proxy_cidrs stops at the first untrusted hop, never the forged value"
+
+
+def test_admin_client_ip_requires_trusted_proxy_and_valid_chain() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert (
+        resolve_admin_client_ip(make_request("10.0.0.2", "198.51.100.3"), settings)
+        == "198.51.100.3"
+    )
+    assert resolve_admin_client_ip(make_request("203.0.113.2", "198.51.100.3"), settings) is None
+    assert resolve_admin_client_ip(make_request("10.0.0.2", "not-an-ip"), settings) is None
+    assert resolve_admin_client_ip(make_request("10.0.0.2"), settings) is None
+
+
+def test_trusted_proxy_resolution_keeps_the_direct_peer_and_trusts_forwarded_proto() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["172.16.0.0/12"]})
+    request = make_request(
+        "172.16.0.2",
+        "185.241.225.58",
+        forwarded_proto="https",
+        scheme="http",
+    )
+
+    assert request.client is not None
+    assert request.client.host == "172.16.0.2"
+    assert resolve_admin_client_ip(request, settings) == "185.241.225.58"
+    assert resolve_forwarded_proto(request, settings) == "https"
+
+    untrusted = make_request(
+        "203.0.113.9",
+        "185.241.225.58",
+        forwarded_proto="https",
+        scheme="http",
+    )
+    assert resolve_admin_client_ip(untrusted, settings) is None
+    assert resolve_forwarded_proto(untrusted, settings) == "http"
+
+
+def test_admin_client_ip_rejects_an_untrusted_intermediate_hop() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert (
+        resolve_admin_client_ip(
+            make_request("10.0.0.2", "198.51.100.3, 203.0.113.9, 10.0.0.3"), settings
+        )
+        is None
+    )
+
+
+def test_admin_client_ip_never_returns_proxy_address() -> None:
+    from mykhaya.security import resolve_admin_client_ip
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+    assert resolve_admin_client_ip(make_request("10.0.0.2", "10.0.0.3"), settings) is None
 
 
 def test_admin_audit_redacts_secret_shaped_values() -> None:

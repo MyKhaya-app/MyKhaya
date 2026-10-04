@@ -1,4 +1,5 @@
 import os
+from email.utils import parseaddr
 from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from ipaddress import ip_network
@@ -8,6 +9,8 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from mykhaya.url_validation import is_valid_http_url
 
 _DISTRIBUTION_NAME = "mykhaya-api"
 
@@ -54,6 +57,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
+    legal_test_mode_production_allowed: bool = False
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
@@ -62,32 +66,151 @@ class Settings(BaseSettings):
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"
+    # The direct-to-API origin for native/bearer clients (ADR 0010) — never
+    # proxied through the Next.js web app the way public_web_url/admin_url
+    # are. Its host must be listed in trusted_hosts (validated below) but
+    # this value itself — the API's own origin — never needs to appear in
+    # cors_origins, which lists allowed *caller* origins, not the API's own.
+    #
+    # The caller origin that DOES need to be in cors_origins is
+    # public_web_url (dev.mykhaya.app / mykhaya.app): the Capacitor iOS
+    # shell is a *live-frontend* WKWebView (apps/ios-shell) that loads that
+    # exact real web page and runs its JS in it, so a native login/session
+    # request is a genuine cross-origin fetch from a loaded web page —
+    # exactly as CORS-subject as any browser tab, complete with a real
+    # Origin header and preflight for non-simple requests (see
+    # NativeMyKhayaClient in packages/api-client/src/native-client.ts). It
+    # is NOT a raw native HTTP client outside a web-page context, which is
+    # the (false, for this architecture) assumption a previous version of
+    # this comment made — that mistaken assumption was the root cause of
+    # native iOS login failing silently (CORS preflight rejected, before
+    # the request ever reached an endpoint).
+    native_api_url: str = "http://api.localhost:8080"
     cors_origins: list[str] = ["http://localhost:8080"]
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "api", "api.mykhaya.app"]
-    cookie_secure: bool = False
+    cookie_secure: bool = True
     cookie_domain: str | None = None
     session_minutes: int = Field(default=60 * 24 * 14, ge=15, le=60 * 24 * 30)
+    browser_mfa_handoff_enabled: bool = False
+    trusted_device_days: int = Field(default=90, ge=7, le=365)
+    trusted_device_activity_update_hours: int = Field(default=24, ge=1, le=168)
     smtp_host: str = "mailpit"
     smtp_port: int = 1025
     smtp_username: str | None = None
     smtp_password: SecretStr | None = None
-    smtp_starttls: bool = False
+    # Mirrors PlatformSmtpSettings.connection_security's values (mykhaya.models) exactly
+    # — same three options as the Platform-Admin-managed SMTP path, including implicit
+    # TLS (typically port 465), not just STARTTLS. Kept as a plain Literal rather than
+    # importing that enum: mykhaya.models imports mykhaya.db, which imports
+    # mykhaya.config, so importing mykhaya.models here would be circular.
+    smtp_connection_security: Literal["none", "starttls", "tls"] = "none"
+    # How long to wait on the SMTP connection/handshake before giving up — the worker
+    # already retries with backoff on failure, so this only bounds a single attempt.
+    smtp_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    # Distinct from email_from's address so a bounce/reply mailbox can differ from the
+    # sending identity without a Home/Reply-To workaround at the notify() call sites.
+    smtp_reply_to: str | None = None
     email_delivery_configured: bool = False
     email_from: str = "MyKhaya <hello@mykhaya.local>"
+    support_notification_email: str | None = None
     email_verification_enabled: bool = True
     vapid_public_key: str | None = None
     vapid_private_key: SecretStr | None = None
     vapid_subject: str | None = None
     push_delivery_configured: bool = False
+    apns_team_id: str | None = None
+    apns_key_id: str | None = None
+    apns_bundle_id: str = "app.mykhaya.mobile"
+    apns_private_key: SecretStr | None = None
+    apns_delivery_configured: bool = False
+    # Firebase Cloud Messaging (Android native push, Phase 5) — mirrors the
+    # APNs fields above exactly: three plain values taken directly from a
+    # Firebase service-account JSON (`project_id`, `client_email`,
+    # `private_key`), never the JSON file itself. Env-only, like APNs — no
+    # Platform-Admin-managed path exists for either native provider (unlike
+    # Web Push's VAPID keys, which also support platform_settings storage).
+    fcm_project_id: str | None = None
+    fcm_client_email: str | None = None
+    fcm_private_key: SecretStr | None = None
+    fcm_delivery_configured: bool = False
+    # Deployment-managed external sign-in configuration. Secrets never enter
+    # platform_settings or API responses; explicit enablement does not itself
+    # implement a provider ceremony.
+    apple_sign_in_enabled: bool = False
+    apple_client_id: str | None = None
+    apple_service_id: str | None = None
+    apple_team_id: str | None = None
+    apple_key_id: str | None = None
+    apple_private_key: SecretStr | None = None
+    apple_redirect_uri: str | None = None
+    apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
+    apple_token_url: str = "https://appleid.apple.com/auth/token"  # noqa: S105 — a URL
+    apple_jwks_url: str = "https://appleid.apple.com/auth/keys"
+    google_sign_in_enabled: bool = False
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
+    # which also support a Platform-Admin-managed DB override. A payment
+    # provider's credentials are rotated through infrastructure, not typed into
+    # an admin text field, and Stripe secrets never touch the database — see
+    # docs/architecture/commercial-entitlements.md#stripe-provider-boundary.
+    stripe_secret_key: SecretStr | None = None
+    stripe_webhook_secret: SecretStr | None = None
+    stripe_publishable_key: str | None = None
+    # Price IDs, never monetary amounts — the actual sellable price is always
+    # read from Stripe at request time (mykhaya.billing.pricing), so a price
+    # change is "update these two IDs", never a code or migration change.
+    stripe_family_monthly_price_id: str | None = None
+    stripe_family_annual_price_id: str | None = None
+    stripe_ultimate_monthly_price_id: str | None = None
+    stripe_ultimate_annual_price_id: str | None = None
+    stripe_billing_configured: bool = False
+    # Phase 7's deliberate go-live gate — deployment configuration, not a
+    # Platform Control Centre toggle (see "Do not implement a remote live
+    # toggle casually" in docs/architecture/commercial-entitlements.md). A
+    # conscious operator action, separate from Stripe merely being
+    # configured: existing Stripe-backed Homes, webhooks, renewals,
+    # cancellations, the Customer Portal and reconciliation all keep working
+    # regardless of this flag — it only gates *new* Checkout Session
+    # creation. Defaults false everywhere, including production, so
+    # deploying code never itself enables paid acquisition.
+    stripe_billing_acquisition_enabled: bool = False
+    stripe_ultimate_acquisition_enabled: bool = False
+    # Driveway / DVLA Vehicle Enquiry Service. A single active environment
+    # selector (never inferred from endpoint URL shape) picks between two
+    # fully separate credential/endpoint pairs — there is no fallback from a
+    # misconfigured UAT to production, and an unset environment is a valid,
+    # fully-supported "Not configured" state (manual vehicle entry keeps
+    # working). See docs/operations/deployment.md#driveway-dvla-integration-uat.
+    dvla_environment: Literal["uat", "production"] | None = None
+    dvla_uat_endpoint: str | None = None
+    dvla_uat_api_key: SecretStr | None = None
+    dvla_production_endpoint: str = (
+        "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles"
+    )
+    dvla_production_api_key: SecretStr | None = None
+    driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
+    vehicle_photo_storage_dir: str = "/data/vehicle-photos"
+    vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
     avatar_storage_dir: str = "/data/avatars"
-    avatar_max_upload_bytes: int = Field(default=5_242_880, ge=1024, le=10_485_760)
+    # The transport ceiling protects the API from unbounded multipart bodies;
+    # decoded pixel limits in avatars.processing protect memory separately.
+    avatar_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
+    support_attachment_storage_dir: str = "/data/support-attachments"
+    # ~10 MB ceiling per Phase 2A's agreed attachment controls — a separate
+    # setting from avatar_max_upload_bytes since these are different upload
+    # surfaces with different size expectations (a bug-report screenshot vs
+    # a profile photo).
+    support_attachment_max_upload_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
+    meal_image_storage_dir: str = "/data/meal-images"
+    meal_image_max_upload_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments
-    # can raise the value if genuinely needed. The defaults above (10/5) are the
-    # actual production-appropriate values and are deliberately low; nothing about
-    # this field implies 1000 is a sane production setting.
+    # can raise the value if genuinely needed. This is deliberately independent
+    # of the 512x512 stored output size: normal phone originals are processed on
+    # the server before storage.
     rate_limit_login: int = Field(default=10, ge=1, le=1000)
     rate_limit_register: int = Field(default=5, ge=1, le=1000)
     trusted_proxy_cidrs: list[str] = []
@@ -118,9 +241,36 @@ class Settings(BaseSettings):
         is concerned, so without this it silently overrides the default_factory
         with "", and FastAPI(version="") fails its own non-empty assertion at
         startup. Blank is treated as unset, not as an explicit empty override.
+
+        The literal string "unknown" gets the same treatment, and for the
+        same reason: compose.yml's `${MYKHAYA_VERSION:-unknown}` substitution
+        and the Dockerfiles' `ARG MYKHAYA_VERSION=unknown` both put a real,
+        present "unknown" env var in front of this field so a build/run never
+        fails for lacking one — not to assert "the version really is unknown"
+        over resolve_app_version()'s better sources (package metadata, the
+        repository VERSION file). Without this, pydantic-settings uses that
+        env var as the field's explicit value and default_factory —
+        resolve_app_version() itself, which already has this exact "unknown
+        env var isn't meaningful" rule for its *own* os.environ read — never
+        runs at all, which is why About's Version card was showing the raw
+        word "unknown" instead of the real version (see apps/web/app/about).
+        """
+        if isinstance(value, str) and (not value.strip() or value.strip() == "unknown"):
+            return resolve_app_version()
+        return value
+
+    @field_validator("dvla_environment", mode="before")
+    @classmethod
+    def resolve_blank_dvla_environment(cls, value: object) -> object:
+        """Same present-but-empty-env-var trap as resolve_blank_version above:
+        .env.example ships MYKHAYA_DVLA_ENVIRONMENT= (blank) to mean "Not
+        configured" (see the field's own docstring), but pydantic-settings
+        treats a present, empty env var as the explicit value "" — which
+        isn't a valid Literal["uat", "production"] member — rather than as
+        unset. Blank must resolve to this field's real unset state, None.
         """
         if isinstance(value, str) and not value.strip():
-            return resolve_app_version()
+            return None
         return value
 
     @field_validator(
@@ -176,6 +326,126 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def secure_shared_development_defaults(self) -> "Settings":
+        """Externally reachable development must retain its security defaults."""
+        if self.environment == "development":
+            public_host = (urlsplit(self.public_web_url).hostname or "").casefold()
+            admin_host = (urlsplit(self.admin_url).hostname or "").casefold()
+            local_only = public_host in {"localhost", "127.0.0.1"} and admin_host in {
+                "localhost",
+                "admin.localhost",
+            }
+            if not self.cookie_secure and not local_only:
+                raise ValueError(
+                    "MYKHAYA_COOKIE_SECURE may be false only for pure localhost development."
+                )
+            if not self.admin_mfa_required and not local_only:
+                raise ValueError(
+                    "MYKHAYA_ADMIN_MFA_REQUIRED may be false only for pure localhost development."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def reject_placeholder_production_email_configuration(self) -> "Settings":
+        """Only fires once email is actually turned on
+        (MYKHAYA_EMAIL_DELIVERY_CONFIGURED=true) — an unconfigured production
+        deployment isn't lying about its mail setup, it just hasn't set one up
+        yet. Once configured, catches exactly the values this repo ships as
+        development-only defaults (Mailpit's service name, the .local
+        placeholder domain) so a production deployment can't silently inherit
+        them by omission — a real SMTP relay's own hostname/domain will never
+        collide with these."""
+        if self.environment != "production" or not self.email_delivery_configured:
+            return self
+        host = self.smtp_host.strip().lower()
+        if host in {"mailpit", "localhost", "127.0.0.1", ""} or host.endswith(".local"):
+            raise ValueError(
+                f"MYKHAYA_SMTP_HOST ({self.smtp_host!r}) looks like a development-only "
+                "value and must not be used in production."
+            )
+        from_email = parseaddr(self.email_from)[1].lower()
+        if not from_email or from_email.endswith("@mykhaya.local"):
+            raise ValueError(
+                f"MYKHAYA_EMAIL_FROM ({self.email_from!r}) must be a real, deliverable "
+                "MyKhaya-owned address in production, not the mykhaya.local placeholder."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_stripe_configuration(self) -> "Settings":
+        """MYKHAYA_STRIPE_BILLING_CONFIGURED=true is an explicit assertion that
+        every piece Stripe billing needs is present — a half-configured
+        deployment (flag on, one Price ID missing) fails startup loudly here
+        rather than silently misbehaving the first time a Home tries to check
+        out. Unconfigured (the default) is a fully supported, valid state:
+        Free and Complimentary Homes work with no Stripe setup at all.
+        """
+        if not self.stripe_billing_configured:
+            if self.stripe_billing_acquisition_enabled:
+                raise ValueError(
+                    "MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED is true but "
+                    "MYKHAYA_STRIPE_BILLING_CONFIGURED is false — billing must be fully "
+                    "configured before new paid acquisition can be enabled."
+                )
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("MYKHAYA_STRIPE_SECRET_KEY", self.stripe_secret_key),
+                ("MYKHAYA_STRIPE_WEBHOOK_SECRET", self.stripe_webhook_secret),
+                ("MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID", self.stripe_family_monthly_price_id),
+                ("MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID", self.stripe_family_annual_price_id),
+            )
+            if not value
+        ]
+        if self.stripe_ultimate_acquisition_enabled:
+            missing.extend(
+                name
+                for name, value in (
+                    (
+                        "MYKHAYA_STRIPE_ULTIMATE_MONTHLY_PRICE_ID",
+                        self.stripe_ultimate_monthly_price_id,
+                    ),
+                    (
+                        "MYKHAYA_STRIPE_ULTIMATE_ANNUAL_PRICE_ID",
+                        self.stripe_ultimate_annual_price_id,
+                    ),
+                )
+                if not value
+            )
+        if missing:
+            raise ValueError(
+                "MYKHAYA_STRIPE_BILLING_CONFIGURED is true but required settings are "
+                f"missing: {', '.join(missing)}."
+            )
+        secret_value = self.stripe_secret_key.get_secret_value() if self.stripe_secret_key else ""
+        is_live_key = secret_value.startswith("sk_live_")
+        is_test_key = secret_value.startswith("sk_test_")
+        if not is_live_key and not is_test_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY does not look like a Stripe secret key "
+                "(expected it to start with sk_test_ or sk_live_)."
+            )
+        # Phase 3 is test-mode only (see docs/operations/dev-deployment.md#stripe-sandbox) —
+        # a live key anywhere outside production is almost certainly a mistake, and a test
+        # key in production would silently take no real payments. Both directions are
+        # rejected rather than just the production one, since "wrong environment" is the
+        # actual risk, not "which specific environment".
+        if self.environment == "production" and is_test_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY is a test-mode key (sk_test_...) but "
+                "MYKHAYA_ENVIRONMENT is production. Live billing is out of scope for this "
+                "phase — see docs/operations/dev-deployment.md#stripe-sandbox."
+            )
+        if self.environment != "production" and is_live_key:
+            raise ValueError(
+                "MYKHAYA_STRIPE_SECRET_KEY is a live-mode key (sk_live_...) but "
+                f"MYKHAYA_ENVIRONMENT is {self.environment!r}. Live Stripe keys must never "
+                "be used outside production."
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_admin_and_status_url_configuration(self) -> "Settings":
         """Catches exactly the class of bug found during Control Centre MFA
         verification: MYKHAYA_ADMIN_URL/MYKHAYA_STATUS_URL silently drifting
@@ -196,12 +466,14 @@ class Settings(BaseSettings):
             ("admin_url", self.admin_url),
             ("status_url", self.status_url),
             ("public_web_url", self.public_web_url),
+            ("native_api_url", self.native_api_url),
         ):
-            parts = urlsplit(url)
-            if parts.scheme not in ("http", "https") or not parts.hostname:
+            if not is_valid_http_url(url):
                 raise ValueError(
                     f"MYKHAYA_{field_name.upper()} ({url!r}) is not a valid http(s) URL."
                 )
+            parts = urlsplit(url)
+            assert parts.hostname is not None  # guaranteed by is_valid_http_url above
             if self.environment == "production" and parts.scheme != "https":
                 raise ValueError(
                     f"MYKHAYA_{field_name.upper()} must use https in production "
@@ -237,6 +509,55 @@ class Settings(BaseSettings):
         the RP ID, this is the full origin, not just the hostname."""
         parts = urlsplit(self.admin_url)
         return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def family_webauthn_rp_id(self) -> str:
+        """The family app's RP ID, derived from the public web origin."""
+        return urlsplit(self.public_web_url).hostname or "localhost"
+
+    @property
+    def family_webauthn_origin(self) -> str:
+        """Exact browser origin used by the family web/PWA ceremony."""
+        parts = urlsplit(self.public_web_url)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def dvla_environment_label(self) -> str | None:
+        """Friendly PCC label for `dvla_environment` — never the raw internal
+        enum value (PCC must never show "uat"/"production" verbatim)."""
+        if self.dvla_environment is None:
+            return None
+        return {"uat": "UAT", "production": "Production"}[self.dvla_environment]
+
+    @property
+    def dvla_active_endpoint(self) -> str | None:
+        """The endpoint for the selected `dvla_environment`, or None if no
+        environment is selected. Deliberately does not fall back to the other
+        environment's endpoint under any circumstance."""
+        if self.dvla_environment == "uat":
+            return self.dvla_uat_endpoint or None
+        if self.dvla_environment == "production":
+            return self.dvla_production_endpoint or None
+        return None
+
+    @property
+    def dvla_active_api_key(self) -> SecretStr | None:
+        """The API key for the selected `dvla_environment`, or None if no
+        environment is selected or that environment's key is unset/blank.
+        Never falls back to the other environment's key."""
+        if self.dvla_environment == "uat":
+            return self.dvla_uat_api_key if self.dvla_uat_api_key else None
+        if self.dvla_environment == "production":
+            return self.dvla_production_api_key if self.dvla_production_api_key else None
+        return None
+
+    @property
+    def dvla_configured(self) -> bool:
+        """True only when an environment is selected and that environment's
+        endpoint and API key are both present. An unset environment, or a
+        selected environment missing either value, is "Not configured" — the
+        provider must never guess or partially operate."""
+        return bool(self.dvla_active_endpoint) and self.dvla_active_api_key is not None
 
 
 @lru_cache

@@ -1,6 +1,8 @@
 import secrets
 import uuid
 from datetime import date, datetime, time
+from datetime import time as clock_time
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -14,16 +16,18 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
-from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR, ColourToken
+from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken
 from mykhaya.db import Base
 from mykhaya.ids import uuid7
 
@@ -60,6 +64,15 @@ class Role(StrEnum):
 class HouseholdRelationship(StrEnum):
     home_admin = "home_admin"
     partner = "partner"
+    # A genuine adult household member who isn't the Home Admin's partner —
+    # an older child living at home, a housemate, a sibling, another adult
+    # relative. Reuses Partner's default PermissionProfile/Role (see
+    # household_permissions.default_profile/legacy_role) since relationship
+    # only describes *who someone is*; what they can do stays governed by
+    # permission_profile/permission_overrides, same as every other
+    # relationship. Deliberately its own enum value, not merged into
+    # partner — see migration 0038_household_adult.
+    adult = "adult"
     child = "child"
     extended_family = "extended_family"
     friend = "friend"
@@ -91,6 +104,36 @@ class TokenPurpose(StrEnum):
     reset_password = "reset_password"
 
 
+class ExternalIdentityProvider(StrEnum):
+    """External identity providers supported by the provider-neutral identity layer.
+
+    The provider subject, not the provider email address, is the stable identity
+    supplied by the provider.  Sign-in and linking ceremonies are deliberately
+    implemented in later phases.
+    """
+
+    apple = "apple"
+    google = "google"
+
+
+class CalendarSharePermission(StrEnum):
+    view = "view"
+    manage = "manage"
+
+
+class CalendarShareStatus(StrEnum):
+    # A non-admin, non-owner Home member requested this share; a Home Admin
+    # (or, for a Personal Calendar, its owner — see CalendarShare's
+    # docstring) must approve before any invitation is sent.
+    pending_admin_approval = "pending_admin_approval"
+    # Approved (or Home-Admin/owner-initiated, where approval is implicit) —
+    # an invitation has been sent and awaits the recipient's decision.
+    pending_recipient = "pending_recipient"
+    accepted = "accepted"
+    declined = "declined"
+    revoked = "revoked"
+
+
 class SessionKind(StrEnum):
     """What kind of principal a Session authenticates — never inferred from the
     User row itself (a managed Child has a perfectly normal User row; the
@@ -98,6 +141,28 @@ class SessionKind(StrEnum):
 
     adult = "adult"
     managed_child = "managed_child"
+
+
+class UserMfaMethod(StrEnum):
+    totp = "totp"
+    email = "email"
+
+
+class ConsumerMfaPolicy(StrEnum):
+    inherit = "inherit"
+    optional = "optional"
+    required = "required"
+
+
+class HolidaySyncStatus(StrEnum):
+    healthy = "healthy"
+    warning = "warning"
+    failed = "failed"
+
+
+class CalendarHighlightKind(StrEnum):
+    holiday = "holiday"
+    birthday = "birthday"
 
 
 class PlatformRole(StrEnum):
@@ -144,6 +209,103 @@ class FeatureKey(StrEnum):
     wish_lists = "wish_lists"
     notifications = "notifications"
     external_sharing = "external_sharing"
+    nudges = "nudges"
+    budget = "budget"
+    support = "support"
+    driveway = "driveway"
+
+
+class SupportTicketType(StrEnum):
+    bug = "bug"
+    support = "support"
+    feedback = "feedback"
+
+
+class SupportTicketStatus(StrEnum):
+    open = "open"
+    in_progress = "in_progress"
+    waiting_for_user = "waiting_for_user"
+    resolved = "resolved"
+    closed = "closed"
+
+
+class SupportTicketPriority(StrEnum):
+    normal = "normal"
+    elevated = "elevated"
+    blocking = "blocking"
+
+
+class SupportTicketSource(StrEnum):
+    ios = "ios"
+    android = "android"
+    web = "web"
+    desktop_web = "desktop_web"
+
+
+class SupportTicketAppArea(StrEnum):
+    """Deliberately its own enum, not hard-coded string literals scattered
+    across schemas/routers/frontend — a new module registering a new app
+    area only ever means adding one value here (and to the frontend's
+    mirrored list, same as WidgetEvent/CalendarLayout's hand-mirrored-TS
+    convention elsewhere in this codebase)."""
+
+    home = "home"
+    calendar = "calendar"
+    family = "family"
+    nudges = "nudges"
+    lists = "lists"
+    meals = "meals"
+    budget = "budget"
+    account = "account"
+    notifications = "notifications"
+    more = "more"
+    other = "other"
+
+
+class SupportMessageVisibility(StrEnum):
+    # Shown to the ticket's own requester — the only visibility a consumer
+    # route can ever read or write (see schemas.SupportTicketMessageCreate,
+    # which has no visibility field, and routers.support's message list,
+    # which filters this value unconditionally).
+    requester = "requester"
+    # Admin-only internal note. Modelled now for structural completeness
+    # (PHASE 2A instructions) but no consumer-facing route can create or
+    # read a message at this visibility — see routers.support.
+    internal = "internal"
+
+
+class ProductUsagePlatform(StrEnum):
+    web = "web"
+    ios = "ios"
+    android = "android"
+
+
+class ProductUsageModule(StrEnum):
+    app = "app"
+    calendar = "calendar"
+    nudges = "nudges"
+    lists = "lists"
+    meals = "meals"
+    notifications = "notifications"
+    family = "family"
+    home = "home"
+    settings = "settings"
+
+
+class ProductUsageEventName(StrEnum):
+    app_open = "app_open"
+    calendar_viewed = "calendar_viewed"
+    calendar_event_created = "calendar_event_created"
+    nudges_viewed = "nudges_viewed"
+    nudge_completed = "nudge_completed"
+    lists_viewed = "lists_viewed"
+    list_created = "list_created"
+    list_item_completed = "list_item_completed"
+    meal_plan_viewed = "meal_plan_viewed"
+    meal_added = "meal_added"
+    notification_opened = "notification_opened"
+    home_viewed = "home_viewed"
+    family_viewed = "family_viewed"
 
 
 class UuidTimeMixin:
@@ -163,6 +325,27 @@ class User(UuidTimeMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Retired/hidden lifecycle state, distinct from a Disabled (suspended_at
+    # set, archived_at NULL) account — see mykhaya.routers.platform.
+    # archive_user/restore_user. Always paired with is_active=False; never
+    # set while is_active=True (enforced in the archive/restore/reactivate
+    # endpoints, not the schema).
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Slice 5B — distinct from archived_at. Archive is reversible (Restore
+    # clears it); anonymisation is permanent (Restore refuses once this is
+    # set — see routers.platform.restore_user/anonymise_user). Always
+    # implies archived_at is also set and is_active=False, but not the
+    # reverse: an Archived user is not necessarily anonymised.
+    anonymised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_policy: Mapped[ConsumerMfaPolicy] = mapped_column(
+        Enum(ConsumerMfaPolicy, name="consumer_mfa_policy"),
+        default=ConsumerMfaPolicy.inherit,
+        server_default=ConsumerMfaPolicy.inherit.value,
+    )
+    mfa_allowed_methods: Mapped[list[str] | None] = mapped_column(JSON)
+    # A nullable preference is deliberately separate from policy: it is only
+    # honoured when the method remains allowed and usable for this user.
+    preferred_mfa_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
     timezone: Mapped[str | None] = mapped_column(String(100))
     birth_month: Mapped[int | None] = mapped_column(Integer)
     birth_day: Mapped[int | None] = mapped_column(Integer)
@@ -174,6 +357,12 @@ class User(UuidTimeMixin, Base):
     avatar_key: Mapped[str | None] = mapped_column(String(64))
     avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="user")
+    external_identities: Mapped[list["ExternalIdentity"]] = orm_relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    mfa_methods: Mapped[list["UserMfaMethodRecord"]] = orm_relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class AuthIdentity(UuidTimeMixin, Base):
@@ -189,16 +378,136 @@ class AuthIdentity(UuidTimeMixin, Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class UserMfaMethodRecord(UuidTimeMixin, Base):
+    """Explicitly enrolled consumer MFA methods.
+
+    TOTP material is encrypted with the application secret and is never exposed
+    through a response. Email is represented as an enrolled method only after a
+    successful challenge.
+    """
+
+    __tablename__ = "user_mfa_methods"
+    __table_args__ = (
+        UniqueConstraint("user_id", "method", name="uq_user_mfa_method"),
+        Index("ix_user_mfa_methods_user_active", "user_id", "enabled"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    method: Mapped[UserMfaMethod] = mapped_column(
+        Enum(UserMfaMethod, name="user_mfa_method"), nullable=False
+    )
+    encrypted_secret: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user: Mapped[User] = orm_relationship(back_populates="mfa_methods")
+
+
+class MfaEmailChallenge(UuidTimeMixin, Base):
+    """Hashed, bounded, single-use email MFA challenge state."""
+
+    __tablename__ = "mfa_email_challenges"
+    __table_args__ = (
+        Index("ix_mfa_email_challenges_transaction", "transaction_reference_hash"),
+        Index("ix_mfa_email_challenges_user_created", "user_id", "created_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    transaction_reference_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExternalIdentity(UuidTimeMixin, Base):
+    """A provider identity linked to one canonical MyKhaya user.
+
+    ``provider_email`` is informational provider metadata only.  It is nullable
+    because Apple may withhold it after the first authorisation and may provide a
+    private-relay address.  It is never part of the identity key or used for
+    implicit account linking.
+    """
+
+    __tablename__ = "external_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "provider_subject", name="uq_external_identity_provider_subject"
+        ),
+        Index("ix_external_identities_user_id", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[ExternalIdentityProvider] = mapped_column(
+        Enum(ExternalIdentityProvider, name="external_identity_provider"), nullable=False
+    )
+    provider_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    provider_email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user: Mapped[User] = orm_relationship(back_populates="external_identities")
+
+
+class TrustedDevice(UuidTimeMixin, Base):
+    """A long-lived, independently revocable family-app device credential.
+
+    The raw credential is issued only in the HttpOnly cookie and is never stored;
+    token_hash is the HMAC digest used for lookup. Platform-admin sessions do not
+    use this table.
+    """
+
+    __tablename__ = "trusted_devices"
+    __table_args__ = (
+        Index("ix_trusted_devices_user_active", "user_id", "revoked_at", "expires_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    kind: Mapped[SessionKind] = mapped_column(
+        Enum(SessionKind, name="session_kind"),
+        default=SessionKind.adult,
+        server_default=SessionKind.adult.value,
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    device_name: Mapped[str] = mapped_column(String(120), default="MyKhaya device")
+    platform: Mapped[str] = mapped_column(String(80), default="Unknown platform")
+    user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
+    ip_created: Mapped[str | None] = mapped_column(String(80))
+    ip_last_seen: Mapped[str | None] = mapped_column(String(80))
+
+
 class Session(UuidTimeMixin, Base):
     __tablename__ = "sessions"
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    trusted_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("trusted_devices.id", ondelete="SET NULL"), index=True
     )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Set only by a password/passkey ceremony (never by silent trusted-device
+    # renewal), so sensitive security actions can require fresh authentication.
+    fresh_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_agent: Mapped[str] = mapped_column(String(300), default="Unknown device")
     ip_prefix: Mapped[str | None] = mapped_column(String(80))
@@ -231,6 +540,15 @@ class Group(UuidTimeMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Same Disabled-vs-Archived distinction as User.archived_at — see
+    # mykhaya.routers.platform.archive_home/restore_home.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_policy: Mapped[ConsumerMfaPolicy] = mapped_column(
+        Enum(ConsumerMfaPolicy, name="consumer_mfa_policy", create_type=False),
+        default=ConsumerMfaPolicy.inherit,
+        server_default=ConsumerMfaPolicy.inherit.value,
+    )
+    mfa_allowed_methods: Mapped[list[str] | None] = mapped_column(JSON)
     # A short, random, non-sequential code — never the Home name or id — that a
     # managed Child types in alongside their username/PIN to identify which Home
     # they belong to at sign-in, without exposing membership or enumerating real
@@ -241,7 +559,66 @@ class Group(UuidTimeMixin, Base):
     child_login_code: Mapped[str] = mapped_column(
         String(10), unique=True, index=True, default=_default_child_login_code
     )
+    # The adult-facing "Home join code" (Part 2 of the membership/lifecycle
+    # work) — deliberately a *separate* code from child_login_code above,
+    # not a reuse of it: this one is capability-bearing (possession lets a
+    # stranger submit a join request an Admin must approve), whereas
+    # child_login_code is not a secret at all. Looked up via join_code_hash
+    # (an HMAC digest — see mykhaya.security.hash_secret, the same pattern
+    # Invitation.token_hash already uses) so the raw code is never
+    # recoverable by reading the database. join_code_encrypted holds the
+    # same raw code again, but reversibly (mykhaya.secrets_crypto, the
+    # existing PCC-secret-at-rest mechanism) — needed only so a Home Admin
+    # can re-view/re-share a code they generated earlier without forcing a
+    # regenerate every time, something a one-way hash alone can't support.
+    # NULL until a Home Admin first generates one.
+    join_code_hash: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    join_code_encrypted: Mapped[str | None] = mapped_column(Text)
+    join_code_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memberships: Mapped[list["Membership"]] = orm_relationship(back_populates="group")
+
+
+class ManagedDemoType(StrEnum):
+    apple_review = "apple_review"
+    demo = "demo"
+    qa_test = "qa_test"
+    free_demo = "free_demo"
+
+
+class ManagedDemoStatus(StrEnum):
+    enabled = "enabled"
+    disabled = "disabled"
+    expired = "expired"
+
+
+class ManagedDemoHome(UuidTimeMixin, Base):
+    """PCC-owned identity for an explicitly provisioned non-customer Home."""
+
+    __tablename__ = "managed_demo_homes"
+    __table_args__ = (UniqueConstraint("fixture_key", name="uq_managed_demo_fixture_key"),)
+    fixture_key: Mapped[str] = mapped_column(String(80), index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    fixture_type: Mapped[ManagedDemoType] = mapped_column(
+        Enum(ManagedDemoType, name="managed_demo_type")
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    status: Mapped[ManagedDemoStatus] = mapped_column(
+        Enum(ManagedDemoStatus, name="managed_demo_status"),
+        default=ManagedDemoStatus.enabled,
+        server_default=ManagedDemoStatus.enabled.value,
+    )
+    template_version: Mapped[str] = mapped_column(String(40), default="1", server_default="1")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Membership(UuidTimeMixin, Base):
@@ -265,6 +642,10 @@ class Membership(UuidTimeMixin, Base):
     )
     permission_overrides: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # NULL marks a membership created before explicit Family sponsorship was
+    # introduced. Those legacy members retain the old Home-level Family view
+    # while new invite/join flows persist an explicit yes/no decision.
+    family_sponsorship_decided: Mapped[bool | None] = mapped_column(Boolean)
     # Assigned once at creation via mykhaya.member_colours.assign_member_colour,
     # editable afterwards by the person themselves or a Home Admin. A palette
     # token, never a raw hex value — see mykhaya.colour_palette. Household-scoped,
@@ -278,13 +659,65 @@ class Membership(UuidTimeMixin, Base):
 
 class HomeCalendar(UuidTimeMixin, Base):
     __tablename__ = "home_calendars"
-    __table_args__ = (UniqueConstraint("group_id", "is_primary", name="uq_home_primary_calendar"),)
+    # Partial unique index, not a plain UniqueConstraint: exactly one primary
+    # calendar per Home is still enforced, but any number of secondary
+    # (is_primary=False) calendars is now allowed — see migration
+    # 0022_multi_calendar_entitlement and
+    # docs/architecture/commercial-entitlements.md#calendar-as-proof-of-architecture.
+    __table_args__ = (
+        Index(
+            "ix_home_calendar_one_primary_per_group",
+            "group_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+        # One Personal Calendar per member per Home. A plain (not partial)
+        # UniqueConstraint is correct here: SQL treats NULLs as distinct from
+        # each other, so shared calendars (owner_user_id IS NULL) are never
+        # constrained by this — only the personal ones are. See migration
+        # 0028_personal_calendars.
+        UniqueConstraint("group_id", "owner_user_id", name="uq_home_calendar_owner"),
+        # Defence in depth alongside the Pydantic-level HexColour validator
+        # (mykhaya.colour_palette.normalise_calendar_colour) — belt-and-braces
+        # so a row can never end up with a non-hex value regardless of how
+        # it's written. See migration 0045_calendar_colour_hex.
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="ck_home_calendar_colour_hex"),
+    )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(80), default="Home Calendar")
     timezone: Mapped[str] = mapped_column(String(100), default="Europe/London")
     is_primary: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # NULL = a shared/Home calendar (existing behaviour: entitlement-gated,
+    # managed at /calendar/calendars, visible per the normal
+    # calendar_view/calendar_view_all rules). Non-NULL = this member's
+    # private Personal Calendar — the structural privacy boundary itself;
+    # never entitlement-gated, and its events are visible/writable only to
+    # this user regardless of calendar_view_all (see
+    # routers.calendar's personal-calendar guards and
+    # notifications.visibility.can_view_event). Deliberately a real column,
+    # not inferred from `name` — see docs/security/threat-model.md on why
+    # privacy must never be represented by display text.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # The colour events on this calendar render with when they carry no
+    # CalendarEventLabel (label_id IS NULL) — a category's own colour still
+    # always takes precedence when one is assigned (see routers.calendar's
+    # _occurrence). A real hex value (e.g. "#3F7A5C"), not a palette token —
+    # see mykhaya.colour_palette.HexColour — so a custom colour never has to
+    # correspond to a predefined identifier. Same shape/validation and the
+    # same default ("teal", as hex) as CalendarEventLabel.color, so this is a
+    # pure enhancement: an uncategorised event's rendered colour is unchanged
+    # until someone deliberately customises it. User-editable (see
+    # update_calendar); the calendar's `name` deliberately is not — see
+    # migrations 0029_home_calendar_colour and 0045_calendar_colour_hex.
+    color: Mapped[str] = mapped_column(
+        String(7),
+        default=DEFAULT_LABEL_COLOUR_HEX,
+        server_default=DEFAULT_LABEL_COLOUR_HEX,
+    )
 
 
 class CalendarEventLabel(UuidTimeMixin, Base):
@@ -292,19 +725,25 @@ class CalendarEventLabel(UuidTimeMixin, Base):
     __table_args__ = (
         UniqueConstraint("group_id", "name", name="uq_event_label_group_name"),
         Index("ix_event_label_group_sort", "group_id", "sort_order"),
+        # Defence in depth alongside the Pydantic-level HexColour validator
+        # (mykhaya.colour_palette.normalise_calendar_colour). See migration
+        # 0045_calendar_colour_hex.
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="ck_event_label_colour_hex"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("groups.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(40))
-    # A palette token, never a raw hex value — see mykhaya.colour_palette. The
-    # same shared palette as member colours, but this is the calendar/category
-    # identity colour: event bars are coloured by their label, not by who
-    # created them. See docs/design/visual-identity.md.
-    color: Mapped[ColourToken] = mapped_column(
-        Enum(ColourToken, name="colour_token", create_type=False),
-        default=DEFAULT_LABEL_COLOUR,
-        server_default=DEFAULT_LABEL_COLOUR.value,
+    # A real hex value (e.g. "#3F7A5C"), not a palette token — see
+    # mykhaya.colour_palette.HexColour. Presets shown in the picker still come
+    # from the shared palette (mykhaya.colour_palette.PALETTE_HEX), but a
+    # custom colour never has to correspond to one of them. This is the
+    # calendar/category identity colour: event bars are coloured by their
+    # label, not by who created them. See docs/design/visual-identity.md.
+    color: Mapped[str] = mapped_column(
+        String(7),
+        default=DEFAULT_LABEL_COLOUR_HEX,
+        server_default=DEFAULT_LABEL_COLOUR_HEX,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
@@ -345,6 +784,9 @@ class CalendarEvent(UuidTimeMixin, Base):
     )
     recurrence_interval: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     recurrence_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # User-facing inclusive calendar date for the final recurrence occurrence.
+    # NULL preserves the existing indefinite recurrence behaviour.
+    recurrence_end_date: Mapped[date | None] = mapped_column(Date)
     recurrence_count: Mapped[int | None] = mapped_column(Integer)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     last_edited_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -370,6 +812,12 @@ class CalendarEventMember(UuidTimeMixin, Base):
         ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Existing rows are accepted by the migration default. Declining is a
+    # participant state, not a visibility state, and is therefore kept on the
+    # event membership row.
+    attendance_status: Mapped[str] = mapped_column(
+        String(10), default="accepted", server_default="accepted"
+    )
 
 
 class CalendarEventActivity(UuidTimeMixin, Base):
@@ -388,6 +836,76 @@ class CalendarEventActivity(UuidTimeMixin, Base):
     summary: Mapped[str] = mapped_column(String(300))
 
 
+class CalendarEventException(UuidTimeMixin, Base):
+    """A single occurrence-level divergence from a recurring CalendarEvent's
+    generated series — either "this occurrence is deleted" or "this
+    occurrence's effective values differ from the base event". Read by
+    mykhaya.calendar_occurrences.expand_occurrences, which is the only
+    place that turns a (base event, exception) pair into the effective
+    occurrence a client actually sees — see that module's docstring.
+
+    `occurrence_start` is the CANONICAL original generated occurrence
+    start (the exact instant expand_occurrences would have produced for
+    this event with no exception applied) — never the edited/moved value.
+    This is what keeps identity stable across a move: moving 15 Sep 18:00
+    to 16 Sep 19:00 still looks up/creates the exception row keyed by
+    "15 Sep 18:00", so reopening the moved event edits the same row rather
+    than creating a second one, and the original slot is never
+    regenerated. The effective (possibly moved) time lives in the
+    nullable `start_at`/`end_at` override columns below.
+    """
+
+    __tablename__ = "calendar_event_exceptions"
+    __table_args__ = (
+        # The core invariant this whole feature depends on: at most one
+        # exception per (event, canonical occurrence) — never two
+        # competing overrides/deletes for the same generated instance,
+        # including under concurrent double-submit/retry (see
+        # routers.calendar's upsert path, which relies on this constraint
+        # via ON CONFLICT / a race-safe read-then-write).
+        UniqueConstraint("event_id", "occurrence_start", name="uq_event_exception_occurrence"),
+        Index("ix_event_exception_event", "event_id"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_events.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Override fields. NULL means "use the base CalendarEvent's own
+    # current value" for every column below except start_at/end_at, which
+    # are always populated together on a non-deleted exception (an
+    # override always has a concrete effective time, even one identical
+    # to the canonical occurrence — e.g. a title-only edit still stores
+    # start_at/end_at so a later base-event time change can't silently
+    # drag an already-overridden occurrence along with it).
+    title: Mapped[str | None] = mapped_column(String(180))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_all_day: Mapped[bool | None] = mapped_column(Boolean)
+    location_text: Mapped[str | None] = mapped_column(String(200))
+    calendar_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="SET NULL")
+    )
+    label_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("calendar_event_labels.id", ondelete="SET NULL")
+    )
+    reminder_minutes: Mapped[int | None] = mapped_column(Integer)
+    # NULL = inherit the base event's current participants; a JSON array
+    # (including an empty one) = this occurrence's own explicit member
+    # list. Same "list[str] of UUIDs in a JSON column" shape as
+    # Invitation.shared_resources below — no new join table for what is,
+    # per occurrence, a small, infrequently-diverging list.
+    member_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    last_edited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
 class Invitation(UuidTimeMixin, Base):
     __tablename__ = "group_invitations"
     __table_args__ = (Index("ix_invitation_group_email", "group_id", "email"),)
@@ -401,11 +919,155 @@ class Invitation(UuidTimeMixin, Base):
         Enum(PermissionProfile, name="permission_profile", create_type=False)
     )
     shared_resources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    family_sponsorship: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeJoinRequestStatus(StrEnum):
+    pending = "pending"
+    approved = "approved"
+    declined = "declined"
+    cancelled = "cancelled"
+
+
+class HomeJoinRequest(UuidTimeMixin, Base):
+    """A request to join a Home via its join code (see Group.join_code_hash),
+    deliberately its own small model rather than forced into Invitation:
+    Invitation already means "an inviter picked a role and sent a token to a
+    specific email, accept is immediate" — this is the reverse shape (an
+    unknown-to-the-Admin user shows up holding a code, the Admin must review
+    and pick a relationship before anything is created), closer to
+    CalendarShare's pending_recipient/approve/decline dance than to
+    Invitation's accept(). No membership exists until an Admin approves —
+    see routers.home_join / routers.groups' join-request endpoints."""
+
+    __tablename__ = "home_join_requests"
+    __table_args__ = (
+        Index("ix_home_join_request_group_status", "group_id", "status"),
+        # Exactly one *pending* request per (Home, user) — re-requesting after
+        # a decline/cancel is allowed (a fresh row), just never two pending
+        # rows for the same pair at once.
+        Index(
+            "uq_home_join_request_pending_group_user",
+            "group_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    method: Mapped[str] = mapped_column(String(20), default="join_code", server_default="join_code")
+    status: Mapped[HomeJoinRequestStatus] = mapped_column(
+        Enum(HomeJoinRequestStatus, name="home_join_request_status"),
+        default=HomeJoinRequestStatus.pending,
+        server_default=HomeJoinRequestStatus.pending.value,
+    )
+    # Chosen by the approving Home Admin at approval time, not by the
+    # requester — see routers' approve endpoint. NULL until decided.
+    relationship: Mapped[HouseholdRelationship | None] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CalendarShare(UuidTimeMixin, Base):
+    """One recipient's access to one calendar, outside the calendar's own Home —
+    the external-sharing analogue of WishlistShare (see routers.wishlists), not
+    of Membership: accepting a CalendarShare never creates a Membership row and
+    never grants any capability beyond this one calendar. `resource_type` exists
+    so a future Wishlist/List external-share can reuse this table rather than
+    inventing a parallel one (see docs — "Connections foundation"), even though
+    "calendar" is the only value used today.
+
+    Unlike WishlistShare (access granted the instant the sharer confirms a
+    recipient), this carries the fuller Invitation-style token/expiry/accept
+    lifecycle plus an approval step, because product requirements call for an
+    explicit recipient accept/decline and, for non-admin-initiated requests, a
+    Home Admin approval gate — see docs/product and household_permissions
+    .Capability.sharing_external.
+
+    The public/email token is derived from this row's id (security.derived_token,
+    purpose "calendar_share") exactly like Invitation.token_hash and
+    WishlistShare's link token — decoding it yields only this row's id.
+
+    No unique constraint on (calendar_id, recipient_email): declined/revoked
+    history rows are kept for audit, so "no other active share exists for this
+    pair" is enforced in code under a per-(calendar, recipient) advisory lock
+    (mykhaya.routers.calendar_sharing), the same pattern routers.invitations
+    uses for home.max_members.
+    """
+
+    __tablename__ = "calendar_shares"
+    __table_args__ = (
+        Index("ix_calendar_share_calendar_status", "calendar_id", "status"),
+        Index("ix_calendar_share_recipient_email", "recipient_email"),
+        Index("ix_calendar_share_recipient_user", "recipient_user_id"),
+    )
+    resource_type: Mapped[str] = mapped_column(
+        String(20), default="calendar", server_default="calendar"
+    )
+    calendar_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalised: lets "shared by this Home"/notification copy show the
+    # source Home's name without a join through calendar_id, and survives
+    # even if the calendar itself is later deleted (FK is SET NULL, not
+    # CASCADE, unlike calendar_id above — deleting a shared calendar revokes
+    # access via calendar_id but this row, and its audit trail, persist).
+    source_group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    recipient_email: Mapped[str] = mapped_column(String(320))
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    permission: Mapped[CalendarSharePermission] = mapped_column(
+        Enum(CalendarSharePermission, name="calendar_share_permission")
+    )
+    status: Mapped[CalendarShareStatus] = mapped_column(
+        Enum(CalendarShareStatus, name="calendar_share_status"),
+        default=CalendarShareStatus.pending_recipient,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    declined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Recipient-owned, editable only by the recipient after acceptance — see
+    # spec's "muting a shared calendar must not revoke access."
+    notification_preference: Mapped[str] = mapped_column(
+        String(20), default="all", server_default="all"
+    )
+    include_in_briefing: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # NULL (the common case) = the entire calendar is shared. A JSON list of
+    # CalendarEventLabel id strings = only events carrying one of those
+    # categories are exposed through this share — a display/access *filter*
+    # layered on top of the same Home calendar, never a second calendar
+    # record (see docs on "category-scoped Home calendar sharing"). Only
+    # ever set when the shared calendar is the Home's own (owner_user_id
+    # IS NULL) — a Personal Calendar has no categories to filter by, see
+    # routers.calendar_sharing.create_share's validation. Checked by
+    # notifications.visibility._event_matches_share, the single place this
+    # filter is enforced (list, view, and notify all reuse it).
+    category_ids: Mapped[list[str] | None] = mapped_column(JSON)
 
 
 class AuditEvent(Base):
@@ -422,6 +1084,67 @@ class AuditEvent(Base):
     target_id: Mapped[uuid.UUID | None]
     request_id: Mapped[str | None] = mapped_column(String(80))
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class ProductUsageEvent(Base):
+    """Privacy-minimised product usage signal; never store user content here."""
+
+    __tablename__ = "product_usage_events"
+    __table_args__ = (
+        Index("ix_product_usage_events_occurred", "occurred_at"),
+        Index("ix_product_usage_events_user_occurred", "user_id", "occurred_at"),
+        Index("ix_product_usage_events_group_occurred", "group_id", "occurred_at"),
+        Index("ix_product_usage_events_event_occurred", "event_name", "occurred_at"),
+        UniqueConstraint("event_key", name="uq_product_usage_events_event_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    event_name: Mapped[ProductUsageEventName] = mapped_column(
+        Enum(ProductUsageEventName, name="product_usage_event_name"), nullable=False
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    platform: Mapped[ProductUsagePlatform] = mapped_column(
+        Enum(ProductUsagePlatform, name="product_usage_platform"), nullable=False
+    )
+    module: Mapped[ProductUsageModule | None] = mapped_column(
+        Enum(ProductUsageModule, name="product_usage_module"), nullable=True
+    )
+    app_version: Mapped[str | None] = mapped_column(String(80))
+    usage_session_id: Mapped[str | None] = mapped_column(String(64))
+    event_key: Mapped[str | None] = mapped_column(String(120))
+
+
+class ProductUsageDailyAggregate(Base):
+    __tablename__ = "product_usage_daily_aggregates"
+    __table_args__ = (
+        UniqueConstraint(
+            "reporting_date",
+            "metric",
+            "module",
+            "platform",
+            name="uq_product_usage_daily_dimension",
+        ),
+        Index("ix_product_usage_daily_reporting_date", "reporting_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    reporting_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric: Mapped[str] = mapped_column(String(40), nullable=False)
+    module: Mapped[ProductUsageModule | None] = mapped_column(
+        Enum(ProductUsageModule, name="product_usage_module", create_type=False)
+    )
+    platform: Mapped[ProductUsagePlatform | None] = mapped_column(
+        Enum(ProductUsagePlatform, name="product_usage_platform", create_type=False)
+    )
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class OutboxEvent(Base):
@@ -554,6 +1277,36 @@ class AdminWebAuthnCredential(UuidTimeMixin, Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class UserPasskey(UuidTimeMixin, Base):
+    """Public WebAuthn credential material for an adult MyKhaya user.
+
+    This is intentionally a separate security realm/table from PCC administrator
+    credentials. Private keys and biometric data remain on the authenticator.
+    """
+
+    __tablename__ = "user_passkeys"
+    __table_args__ = (Index("ix_user_passkeys_user_active", "user_id", "revoked_at"),)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    credential_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    label: Mapped[str] = mapped_column(String(100), default="Passkey 1")
+    # The browser-reported `authenticatorAttachment` from the registration
+    # ceremony ("platform" | "cross-platform"), or null for a credential
+    # registered before this was recorded, or if the browser didn't report
+    # it. Informational only — never used for a security decision (the
+    # WebAuthn assertion is what's actually verified either way) — purely so
+    # the Biometric sign-in UI can tell "this device's own Face ID/Touch
+    # ID/Windows Hello" apart from a roaming/password-manager-stored
+    # credential registered under the old generic "passkey" UX, and offer
+    # re-enrolment rather than silently misrepresenting it as biometric.
+    authenticator_attachment: Mapped[str | None] = mapped_column(String(20))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AdminRecoveryCode(UuidTimeMixin, Base):
     __tablename__ = "admin_recovery_codes"
     administrator_id: Mapped[uuid.UUID] = mapped_column(
@@ -644,8 +1397,9 @@ class SmtpConnectionSecurity(StrEnum):
 class PlatformSmtpSettings(UuidTimeMixin, Base):
     """Platform-Admin-managed SMTP configuration. Single row; app logic enforces that.
 
-    Used only when no MYKHAYA_SMTP_* environment override is active — see
-    mykhaya.mailer.resolve_smtp_config and docs/architecture/platform-control-centre.md.
+    Authoritative for application email whenever enabled; local environment SMTP is
+    only a development/test fallback — see mykhaya.mailer.resolve_smtp_config and
+    docs/architecture/platform-control-centre.md.
     """
 
     __tablename__ = "platform_smtp_settings"
@@ -710,6 +1464,224 @@ class FeatureOverride(UuidTimeMixin, Base):
     )
 
 
+class BudgetActualSource(StrEnum):
+    manual = "manual"
+    entries = "entries"
+
+
+class BudgetItemType(StrEnum):
+    fixed = "fixed"
+    variable = "variable"
+
+
+class BudgetSharingLevel(StrEnum):
+    summary = "summary"
+    categories = "categories"
+    full = "full"
+
+
+class BudgetProfile(UuidTimeMixin, Base):
+    """A personal Budget owned by one adult User, never by a Home."""
+
+    __tablename__ = "budget_profiles"
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="GBP", server_default="GBP")
+    month_start_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    default_view: Mapped[str] = mapped_column(
+        String(20), default="personal", server_default="personal"
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetMonth(UuidTimeMixin, Base):
+    __tablename__ = "budget_months"
+    __table_args__ = (UniqueConstraint("profile_id", "year", "month", name="uq_budget_month"),)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetCategory(UuidTimeMixin, Base):
+    __tablename__ = "budget_categories"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_budget_category_name"),
+        Index("ix_budget_category_profile_active", "profile_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetItem(UuidTimeMixin, Base):
+    """Reusable planned item inside a personal Budget category."""
+
+    __tablename__ = "budget_items"
+    __table_args__ = (
+        Index("ix_budget_item_profile_active", "profile_id", "archived_at"),
+        Index("ix_budget_item_category_active", "category_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    item_type: Mapped[BudgetItemType] = mapped_column(
+        Enum(
+            BudgetItemType,
+            name="budget_item_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+    )
+    default_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    recurring: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    starts_on: Mapped[date] = mapped_column(Date)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(String(1000))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetIncomeSource(UuidTimeMixin, Base):
+    __tablename__ = "budget_income_sources"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_budget_income_source_name"),
+        Index("ix_budget_income_source_profile_active", "profile_id", "archived_at"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    usual_payday_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    recurring: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetMonthCategory(UuidTimeMixin, Base):
+    __tablename__ = "budget_month_categories"
+    __table_args__ = (UniqueConstraint("month_id", "category_id", name="uq_budget_month_category"),)
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    category_name: Mapped[str] = mapped_column(String(100))
+    planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    actual_source: Mapped[BudgetActualSource] = mapped_column(
+        Enum(
+            BudgetActualSource,
+            name="budget_actual_source",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=BudgetActualSource.manual,
+        server_default=BudgetActualSource.manual.value,
+    )
+    manual_actual: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    fixed_actual: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), server_default="0"
+    )
+    note: Mapped[str | None] = mapped_column(String(1000))
+
+
+class BudgetMonthItem(UuidTimeMixin, Base):
+    """Historical planned-item snapshot; never used for actual calculations."""
+
+    __tablename__ = "budget_month_items"
+    __table_args__ = (
+        UniqueConstraint("month_id", "budget_item_id", name="uq_budget_month_item"),
+        Index("ix_budget_month_item_month_id", "month_id"),
+        Index("ix_budget_month_item_budget_item_id", "budget_item_id"),
+    )
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    budget_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("budget_items.id", ondelete="SET NULL"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_categories.id", ondelete="RESTRICT"), index=True
+    )
+    name_snapshot: Mapped[str] = mapped_column(String(160))
+    item_type_snapshot: Mapped[BudgetItemType] = mapped_column(
+        Enum(
+            BudgetItemType,
+            name="budget_item_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+    )
+    planned_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    note: Mapped[str | None] = mapped_column(String(1000))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetMonthIncome(UuidTimeMixin, Base):
+    __tablename__ = "budget_month_income"
+    __table_args__ = (UniqueConstraint("month_id", "source_id", name="uq_budget_month_income"),)
+    month_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_months.id", ondelete="CASCADE"), index=True
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_income_sources.id", ondelete="RESTRICT"), index=True
+    )
+    source_name: Mapped[str] = mapped_column(String(100))
+    expected_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    received_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    usual_payday_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    recurring: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    received_date: Mapped[date | None] = mapped_column(Date)
+
+
+class BudgetSpendingEntry(UuidTimeMixin, Base):
+    __tablename__ = "budget_spending_entries"
+    month_category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_month_categories.id", ondelete="CASCADE"), index=True
+    )
+    description: Mapped[str] = mapped_column(String(200))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    spent_on: Mapped[date] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(1000))
+    budget_month_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("budget_month_items.id", ondelete="SET NULL"), index=True
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BudgetPartnerShare(UuidTimeMixin, Base):
+    __tablename__ = "budget_partner_shares"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "partner_user_id", name="uq_budget_partner_share"),
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget_profiles.id", ondelete="CASCADE"), index=True
+    )
+    partner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    level: Mapped[BudgetSharingLevel] = mapped_column(
+        Enum(
+            BudgetSharingLevel,
+            name="budget_sharing_level",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=BudgetSharingLevel.summary,
+        server_default=BudgetSharingLevel.summary.value,
+    )
+    category_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ChildProfile(UuidTimeMixin, Base):
     __tablename__ = "child_profiles"
     __table_args__ = (
@@ -770,20 +1742,406 @@ class GuardianAssignment(UuidTimeMixin, Base):
     )
 
 
+class LegalAudience(StrEnum):
+    """Who a LegalDocument is written for and, therefore, which
+    LegalAcceptance record_type(s) it is ever accepted/acknowledged/
+    authorised through — see LegalRecordType. adult documents (Terms,
+    Privacy Policy, Cookie Policy) are acted on directly by a User via
+    user_acceptance/user_acknowledgement. child documents (the Family &
+    Children's Privacy Notice) are never "accepted" by anyone as a
+    contractual matter; they are authorised by a guardian on the child's
+    behalf (guardian_authorisation) and separately acknowledged as read by
+    the child's own managed sign-in (child_notice_acknowledgement)."""
+
+    adult = "adult"
+    child = "child"
+
+
+class LegalActionVerb(StrEnum):
+    """The verb PCC/consumer UI should use for an adult-audience document's
+    user_acceptance/user_acknowledgement record — e.g. Terms are "accepted",
+    a Privacy Policy is "acknowledged". Only meaningful for
+    LegalAudience.adult; child-audience documents use the fixed
+    authorise/acknowledge verbs implied by their record_type instead."""
+
+    accept = "accept"
+    acknowledge = "acknowledge"
+
+
+class LegalDocumentVersionStatus(StrEnum):
+    draft = "draft"
+    scheduled = "scheduled"
+    published = "published"
+    superseded = "superseded"
+
+
+class LegalReacceptanceScope(StrEnum):
+    """Who must act on THIS version for it to count as satisfied, decided
+    deliberately by the publishing administrator (never inferred) — see
+    routers.platform_legal's publish endpoint. Applies uniformly to both
+    audiences a document version can have action recorded against (adult
+    user_acceptance/user_acknowledgement, or child-document
+    guardian_authorisation/child_notice_acknowledgement): a user/guardian/
+    child who already has a record against an earlier version of this same
+    document is "grandfathered" (still compliant) unless this is
+    all_existing_users."""
+
+    # No one is required to act on this version specifically (e.g. a wording/
+    # formatting fix) — a prior acceptance of any earlier version of this
+    # document, if one exists, continues to satisfy compliance. A brand-new
+    # user/guardian/child with no prior record still is not asked to act on
+    # a none-scoped version; this scope is for genuinely non-substantive
+    # documents/edits only, never for a document's first published version.
+    none = "none"
+    # Existing users/guardians/children who already hold a record against an
+    # earlier version of this document remain compliant (identical effect to
+    # `none` for them); only a party with zero prior record for this
+    # document must act on this version.
+    new_users_only = "new_users_only"
+    # Every user/guardian/child must act on this exact version, including
+    # those who already accepted/acknowledged/were authorised under an
+    # earlier version.
+    all_existing_users = "all_existing_users"
+
+
+class LegalRecordType(StrEnum):
+    """Deliberately kept distinct rather than collapsed into one generic
+    "accepted" flag — see AGENTS.md/the Legal & Compliance brief's insistence
+    that a guardian authorising a child's access must never be displayed or
+    audited as though the child personally accepted the Terms."""
+
+    # An adult User accepting a contractual document (Terms) in their own
+    # right.
+    user_acceptance = "user_acceptance"
+    # An adult User acknowledging a non-contractual document (Privacy
+    # Policy, Cookie Policy) in their own right.
+    user_acknowledgement = "user_acknowledgement"
+    # A guardian (an adult User, via their own Membership as the child's
+    # GuardianAssignment) authorising MyKhaya to process a specific child's
+    # information, recorded against the guardian's own user_id AND the
+    # child_profile_id — never against the child's user_id.
+    guardian_authorisation = "guardian_authorisation"
+    # The child's own managed sign-in (SessionKind.managed_child) confirming
+    # they have been shown the current Family & Children's Privacy Notice.
+    # This is an acknowledgement of having seen the notice, not consent and
+    # not Terms acceptance.
+    child_notice_acknowledgement = "child_notice_acknowledgement"
+
+
+class LegalAcceptanceContext(StrEnum):
+    signup = "signup"
+    login_reauth = "login_reauth"
+    policy_update = "policy_update"
+    subscription_purchase = "subscription_purchase"
+    settings = "settings"
+    guardian_child_login_setup = "guardian_child_login_setup"
+    child_login_session = "child_login_session"
+
+
+class LegalPlatform(StrEnum):
+    web = "web"
+    ios = "ios"
+    android = "android"
+
+
+class LegalDocument(UuidTimeMixin, Base):
+    """Source-of-truth registry of legal/policy document *types* (Terms,
+    Privacy Policy, Family & Children's Privacy Notice, Cookie Policy, and
+    any future type) — see routers.platform_legal. `key` is a plain string,
+    not a DB enum, specifically so a new document type can be added by
+    inserting a row rather than by migration, per the brief's "support
+    adding future document types without requiring significant frontend
+    changes"."""
+
+    __tablename__ = "legal_documents"
+    __table_args__ = (UniqueConstraint("key", name="uq_legal_documents_key"),)
+
+    key: Mapped[str] = mapped_column(String(50))
+    display_name: Mapped[str] = mapped_column(String(200))
+    audience: Mapped[LegalAudience] = mapped_column(
+        Enum(
+            LegalAudience,
+            name="legal_audience",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    action_verb: Mapped[LegalActionVerb] = mapped_column(
+        Enum(
+            LegalActionVerb,
+            name="legal_action_verb",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalActionVerb.accept,
+        server_default=LegalActionVerb.accept.value,
+    )
+    # Whether ANY version of this document type is ever gated on
+    # acceptance/acknowledgement at all — a document type an administrator
+    # never intends to require action for (rare; most legal document types
+    # will be True) can still be published and displayed with this False,
+    # in which case it never appears as "required"/"pending" for any user.
+    acceptance_required: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LegalDocumentVersion(UuidTimeMixin, Base):
+    """One version of a LegalDocument's content. `content_markdown` of a
+    published or superseded version must never be edited in place — see
+    routers.platform_legal's publish/supersede handling, which is the only
+    place `status` moves off `draft`/`scheduled`. Editing a published
+    version's wording is done by creating a new draft version, never by
+    mutating this row, so a LegalAcceptance's document_version_id always
+    keeps meaning exactly what it meant when it was recorded."""
+
+    __tablename__ = "legal_document_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "version_sequence", name="uq_legal_document_version_sequence"
+        ),
+        Index("ix_legal_document_versions_document_status", "document_id", "status"),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_documents.id", ondelete="CASCADE"), index=True
+    )
+    # Monotonically increasing per document, assigned at creation — the
+    # reliable ordering key. `version` is the human-facing label (e.g.
+    # "1.0", "1.1", "2.0") an administrator types in and is never assumed
+    # to sort correctly on its own.
+    version_sequence: Mapped[int] = mapped_column(Integer)
+    version: Mapped[str] = mapped_column(String(20))
+    status: Mapped[LegalDocumentVersionStatus] = mapped_column(
+        Enum(
+            LegalDocumentVersionStatus,
+            name="legal_document_version_status",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalDocumentVersionStatus.draft,
+        server_default=LegalDocumentVersionStatus.draft.value,
+    )
+    # Test-channel versions share the immutable version/history model but are
+    # never considered by production public pages or compliance evaluation.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    content_markdown: Mapped[str] = mapped_column(Text)
+    change_summary: Mapped[str | None] = mapped_column(String(2000))
+    effective_date: Mapped[date | None] = mapped_column(Date)
+    reacceptance_scope: Mapped[LegalReacceptanceScope] = mapped_column(
+        Enum(
+            LegalReacceptanceScope,
+            name="legal_reacceptance_scope",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalReacceptanceScope.new_users_only,
+        server_default=LegalReacceptanceScope.new_users_only.value,
+    )
+    created_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    published_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_by_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("legal_document_versions.id", ondelete="SET NULL")
+    )
+
+
+class LegalAcceptance(Base):
+    """An immutable historical record that a specific action (adult
+    acceptance/acknowledgement, guardian authorisation, or child notice
+    acknowledgement) happened against an exact, immutable
+    LegalDocumentVersion. Deliberately has no updated_at and no PCC edit/
+    delete endpoint — see the brief's "never rewrite history". A genuine
+    correction must add a separate, audited corrective row, never mutate
+    this one.
+
+    record_type decides which of (user_id only) / (user_id + child_profile_id)
+    / (child_profile_id only) is populated — see LegalRecordType and the
+    ck_legal_acceptance_actor_shape constraint below. document_version_id is
+    RESTRICT, not CASCADE: a LegalDocumentVersion this table references must
+    never be deletable while acceptance history depends on it (in practice
+    versions are never deleted at all, only superseded)."""
+
+    __tablename__ = "legal_acceptances"
+    __table_args__ = (
+        Index("ix_legal_acceptances_document_version_id", "document_version_id"),
+        Index("ix_legal_acceptances_user_id", "user_id"),
+        Index("ix_legal_acceptances_child_profile_id", "child_profile_id"),
+        CheckConstraint(
+            "("
+            "  record_type IN ('user_acceptance', 'user_acknowledgement')"
+            "  AND user_id IS NOT NULL AND child_profile_id IS NULL"
+            ") OR ("
+            "  record_type = 'guardian_authorisation'"
+            "  AND user_id IS NOT NULL AND child_profile_id IS NOT NULL"
+            ") OR ("
+            "  record_type = 'child_notice_acknowledgement'"
+            "  AND user_id IS NULL AND child_profile_id IS NOT NULL"
+            ")",
+            name="ck_legal_acceptance_actor_shape",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    record_type: Mapped[LegalRecordType] = mapped_column(
+        Enum(
+            LegalRecordType,
+            name="legal_record_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_document_versions.id", ondelete="RESTRICT")
+    )
+    # The acting adult: the User themself for user_acceptance/
+    # user_acknowledgement, or the guardian's own User for
+    # guardian_authorisation. Null for child_notice_acknowledgement — the
+    # child's own managed-sign-in User id is intentionally NOT stored here;
+    # see child_profile_id, which identifies the child without conflating
+    # their managed User row with an adult "user acceptance".
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    child_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("child_profiles.id", ondelete="SET NULL")
+    )
+    context: Mapped[LegalAcceptanceContext] = mapped_column(
+        Enum(
+            LegalAcceptanceContext,
+            name="legal_acceptance_context",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    platform: Mapped[LegalPlatform] = mapped_column(
+        Enum(
+            LegalPlatform,
+            name="legal_platform",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    app_version: Mapped[str | None] = mapped_column(String(40))
+    # A hashed reference (mykhaya.platform_security.safe_session_reference-
+    # style), never the raw session token.
+    session_reference: Mapped[str | None] = mapped_column(String(64))
+    # Recorded only for the higher-stakes adult-performed actions
+    # (user_acceptance/user_acknowledgement/guardian_authorisation) — never
+    # for child_notice_acknowledgement, per data-minimisation for the child.
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+
+
+class IncidentLifecycleState(StrEnum):
+    """Where a status incident sits in its own investigation/communication
+    process — distinct from ServiceState, which is the customer-facing
+    *impact* an incident (or one of its affected services) has. A single
+    incident's lifecycle_state changes over time via its
+    StatusIncidentUpdate timeline; each affected service's ServiceState
+    impact (StatusIncidentService.impact) can independently change
+    alongside it (e.g. Monitoring + Degraded, once a fix is deployed but
+    not yet fully confirmed)."""
+
+    investigating = "investigating"
+    identified = "identified"
+    monitoring = "monitoring"
+    resolved = "resolved"
+
+
 class PublicIncident(UuidTimeMixin, Base):
+    """A customer-facing status incident (Platform Control Centre's "Status
+    & Incidents"). `service`/`state` are the pre-timeline single-service
+    columns this table originally had — kept, now nullable, only so
+    pre-existing rows stay readable; new code reads affected services and
+    their impact from StatusIncidentService instead, and public/lifecycle
+    history from StatusIncidentUpdate. See migration
+    0040_status_incident_timeline for the additive change that introduced
+    multi-service support and the update timeline."""
+
     __tablename__ = "public_incidents"
     title: Mapped[str] = mapped_column(String(160))
+    # The ORIGINAL public message (the first StatusIncidentUpdate's message
+    # duplicates this) — kept as a quick-reference/legacy-compat column,
+    # not re-read by new incident-detail code, which sources public text
+    # from the update timeline.
     message: Mapped[str] = mapped_column(String(1000))
-    service: Mapped[str] = mapped_column(String(40))
-    state: Mapped[ServiceState] = mapped_column(
+    service: Mapped[str | None] = mapped_column(String(40))
+    state: Mapped[ServiceState | None] = mapped_column(
         Enum(
             ServiceState,
             name="service_state",
             values_callable=lambda enum: [item.value for item in enum],
         )
     )
+    lifecycle_state: Mapped[IncidentLifecycleState] = mapped_column(
+        Enum(
+            IncidentLifecycleState,
+            name="incident_lifecycle_state",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=IncidentLifecycleState.investigating,
+    )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Platform-Admin-only context (e.g. the real Stripe error behind a
+    # "Billing & Subscriptions — Degraded Performance" public incident) —
+    # never returned by the public /status endpoint. See
+    # routers.status/.platform for the enforced boundary.
+    internal_notes: Mapped[str | None] = mapped_column(String(2000))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="RESTRICT")
+    )
+
+
+class StatusIncidentService(UuidTimeMixin, Base):
+    """One monitored service an incident affects, and the customer-facing
+    impact (ServiceState) it has on that service specifically — an incident
+    can list several of these, so e.g. a Stripe outage can mark Billing &
+    Subscriptions "Major Outage" while leaving other services untouched.
+    See status_aggregation.service_states_from_impacts for how several
+    concurrently-active incidents against the same service combine (highest
+    severity wins)."""
+
+    __tablename__ = "status_incident_services"
+    __table_args__ = (UniqueConstraint("incident_id", "service", name="uq_incident_service"),)
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="CASCADE"), index=True
+    )
+    service: Mapped[str] = mapped_column(String(40))
+    impact: Mapped[ServiceState] = mapped_column(
+        Enum(
+            ServiceState,
+            name="service_state",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+
+
+class StatusIncidentUpdate(UuidTimeMixin, Base):
+    """One entry in an incident's append-only public timeline (see the
+    task's worked example: Investigating -> Identified -> Monitoring ->
+    Resolved, each with its own message and timestamp). `occurred_at` is
+    the publicly-displayed time of the update — administrator-editable
+    (e.g. to backdate an update recorded after the fact) — while
+    UuidTimeMixin's `created_at` is when the row itself was written, for
+    audit purposes only."""
+
+    __tablename__ = "status_incident_updates"
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="CASCADE"), index=True
+    )
+    lifecycle_state: Mapped[IncidentLifecycleState] = mapped_column(
+        Enum(
+            IncidentLifecycleState,
+            name="incident_lifecycle_state",
+            values_callable=lambda enum: [item.value for item in enum],
+            create_type=False,
+        )
+    )
+    message: Mapped[str] = mapped_column(String(1000))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="RESTRICT")
     )
@@ -815,6 +2173,12 @@ class NotificationDeliveryStatus(StrEnum):
     sent = "sent"
     failed = "failed"
     cancelled = "cancelled"
+    # Suppressed because the recipient User or target Group had gone
+    # inactive (Disabled/Archived) by dispatch time — a policy decision,
+    # never retried, and distinct from `cancelled` (device/address is
+    # permanently invalid). See mykhaya.notifications.lifecycle and
+    # mykhaya.worker's _process_push/_process_native_push/_process_email.
+    skipped = "skipped"
 
 
 class LockScreenPreviewLevel(StrEnum):
@@ -834,6 +2198,16 @@ class RoutineReminderTiming(StrEnum):
     both = "both"
 
 
+class RoutineScope(StrEnum):
+    """Personal: owned by exactly one member, notifications go only to that owner.
+    Household: Home-level, notifications go to explicit HouseholdRoutineMember
+    assignees or (if none) the whole household. See
+    docs/architecture/notification-engine.md and mykhaya.notifications.routines."""
+
+    personal = "personal"
+    household = "household"
+
+
 class PushSubscription(UuidTimeMixin, Base):
     __tablename__ = "push_subscriptions"
     __table_args__ = (Index("ix_push_subscriptions_user", "user_id", "disabled_at"),)
@@ -848,6 +2222,65 @@ class PushSubscription(UuidTimeMixin, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class NativePushDisabledSource(StrEnum):
+    """Who/what most recently disabled a NativePushDevice row — distinct from
+    the free-text, human-readable `disabled_reason`. Exists specifically so
+    register_native_device()'s upsert can tell a Platform-Admin-initiated
+    disable apart from an ordinary provider rejection or consumer logout: the
+    former must never be silently cleared by the app's own next natural
+    re-registration, while the latter two are expected to reactivate (see
+    that function's own comment, and docs/architecture/notification-engine.md).
+    Nullable on the row — existing rows disabled before this column existed
+    have no recorded source and are treated the same as `provider`/`user`
+    (i.e. eligible to reactivate), never as `platform_admin`."""
+
+    provider = "provider"
+    user = "user"
+    platform_admin = "platform_admin"
+
+
+class NativePushDevice(UuidTimeMixin, Base):
+    """Authenticated native APNs/FCM registration, separate from Web Push keys."""
+
+    __tablename__ = "native_push_devices"
+    __table_args__ = (
+        CheckConstraint(
+            "apns_environment IN ('sandbox', 'production') OR apns_environment IS NULL",
+            name="ck_native_push_devices_apns_environment",
+        ),
+        Index(
+            "uq_native_push_device_legacy_installation",
+            "platform",
+            "installation_id",
+            unique=True,
+            postgresql_where=text("apns_environment IS NULL"),
+        ),
+        Index(
+            "uq_native_push_device_environment",
+            "platform",
+            "installation_id",
+            "apns_environment",
+            unique=True,
+            postgresql_where=text("apns_environment IS NOT NULL"),
+        ),
+        Index("ix_native_push_devices_user", "user_id", "disabled_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20))
+    token: Mapped[str] = mapped_column(String(512))
+    installation_id: Mapped[str] = mapped_column(String(128))
+    apns_environment: Mapped[str | None] = mapped_column(String(10))
+    device_label: Mapped[str | None] = mapped_column(String(120))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(200))
+    disabled_source: Mapped[NativePushDisabledSource | None] = mapped_column(
+        Enum(NativePushDisabledSource, name="native_push_disabled_source")
+    )
 
 
 class Notification(UuidTimeMixin, Base):
@@ -868,6 +2301,7 @@ class Notification(UuidTimeMixin, Base):
     related_entity_id: Mapped[uuid.UUID | None]
     deep_link: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class NotificationDelivery(Base):
@@ -894,6 +2328,9 @@ class NotificationDelivery(Base):
     )
     push_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("push_subscriptions.id", ondelete="SET NULL")
+    )
+    native_push_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("native_push_devices.id", ondelete="SET NULL")
     )
     scheduled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -927,6 +2364,35 @@ class NotificationPreferences(UuidTimeMixin, Base):
     event_reminders_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Calendar settings are intentionally stored with the existing per-user
+    # notification preferences record so they remain scoped to the signed-in
+    # person rather than to a Home or shared calendar.
+    #
+    # The two default-reminder toggles are opt-in (False), for new rows and — via the
+    # server default in migration 0106 — for every existing row: nobody starts receiving
+    # extra Calendar notifications because of a deploy. event_reminders_enabled (below)
+    # is a different thing: the category switch for reminders an event sets for itself.
+    default_event_reminder_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    default_event_reminder_minutes: Mapped[int] = mapped_column(
+        Integer, default=30, server_default="30"
+    )
+    all_day_reminder_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    all_day_reminder_time: Mapped[time] = mapped_column(
+        Time, default=time(9, 0), server_default="09:00:00"
+    )
+    default_calendar_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("home_calendars.id", ondelete="SET NULL"), nullable=True
+    )
+    week_starts_on: Mapped[str] = mapped_column(
+        String(9), default="monday", server_default="monday"
+    )
+    show_declined_events: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     event_invitations_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
@@ -934,6 +2400,12 @@ class NotificationPreferences(UuidTimeMixin, Base):
         Boolean, default=True, server_default="true"
     )
     household_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    list_assignments_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    wishlist_sharing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
     daily_briefing_enabled: Mapped[bool] = mapped_column(
@@ -948,6 +2420,27 @@ class NotificationPreferences(UuidTimeMixin, Base):
         server_default=BriefingDays.daily.value,
     )
     empty_day_briefing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    # Daily Nudge Summary — a separate, user-configurable *morning* digest of
+    # today's outstanding Routines/Reminders/To-dos. Distinct from
+    # daily_briefing_enabled/briefing_time above (which is unrelated to
+    # Nudges) and from the nudges_evening_* fields below (which cover the
+    # end of the day, not the morning). Default ON at 07:30, per product
+    # decision — see migration 0058_daily_nudge_summary.
+    daily_nudge_summary_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    daily_nudge_summary_time: Mapped[time] = mapped_column(
+        Time, default=time(7, 30), server_default="07:30:00"
+    )
+    nudges_evening_cleanup_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    nudges_evening_time: Mapped[time] = mapped_column(
+        Time, default=time(20, 30), server_default="20:30:00"
+    )
+    nudges_day_complete_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
     lock_screen_preview_level: Mapped[LockScreenPreviewLevel] = mapped_column(
@@ -967,6 +2460,16 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     __table_args__ = (
         CheckConstraint("char_length(title) >= 1", name="ck_routine_title_nonempty"),
         CheckConstraint("interval_weeks >= 1", name="ck_routine_interval_weeks"),
+        CheckConstraint("repeat_unit IN ('daily', 'weekly')", name="ck_routine_repeat_unit"),
+        # A personal routine must have an owner to notify; a household routine's
+        # recipients come from HouseholdRoutineMember/whole-household instead, so it
+        # must not carry a single owner that notification targeting could mistake for
+        # the recipient. See mykhaya.notifications.routines._recipients_for.
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_routine_scope_owner",
+        ),
         Index("ix_routine_group_enabled", "group_id", "enabled"),
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
@@ -974,7 +2477,26 @@ class HouseholdRoutine(UuidTimeMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(1000))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope"),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    # Set only for scope=personal — the sole notification recipient. Never trusted
+    # from client input; always inferred from the authenticated actor. Distinct from
+    # created_by, which is audit attribution and exists for every routine regardless
+    # of scope.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     interval_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # Weekly is the legacy behaviour. Daily routines keep the same anchor/date
+    # bounds while using a separate unit so existing interval_weeks data remains
+    # backwards compatible.
+    repeat_unit: Mapped[str] = mapped_column(String(10), default="weekly", server_default="weekly")
     week_anchor_date: Mapped[date] = mapped_column(Date)
     reminder_timing: Mapped[RoutineReminderTiming] = mapped_column(
         Enum(RoutineReminderTiming, name="routine_reminder_timing"),
@@ -1017,6 +2539,706 @@ class HouseholdRoutineCompletion(UuidTimeMixin, Base):
     )
 
 
+class ReminderRepeat(StrEnum):
+    """Never: a single occurrence on due_date. Daily/weekly: an occurrence every day
+    (or every same-weekday week) from due_date onward, indefinitely — unlike
+    HouseholdRoutine there is no interval_weeks/end_date; keep the model small
+    and let `enabled=False` (or deletion) be the only way to stop a series."""
+
+    never = "never"
+    daily = "daily"
+    weekly = "weekly"
+
+
+class ReminderCadence(StrEnum):
+    """How often an uncompleted, due occurrence re-notifies. `once` fires a single
+    notification at due_time and never again for that occurrence. The other three
+    keep nagging — hourly/daily/weekly — until the occurrence is completed; see
+    mykhaya.notifications.standalone_reminders for exactly how a missed cadence
+    window is resumed (not replayed) after downtime."""
+
+    once = "once"
+    hourly = "hourly"
+    daily = "daily"
+    weekly = "weekly"
+
+
+class Reminder(UuidTimeMixin, Base):
+    """A lightweight, standalone thing to remember — deliberately not a Routine (a
+    recurring responsibility with its own reminder_timing) and not a calendar event
+    reminder (attached to an Event). See docs/architecture/notification-engine.md.
+    Mirrors HouseholdRoutine's scope/owner/member shape (RoutineScope is reused
+    verbatim, not duplicated, via create_type=False on the `scope` column below)."""
+
+    __tablename__ = "reminders"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_reminder_title_nonempty"),
+        # Same ownership invariant as ck_routine_scope_owner: a personal reminder's
+        # sole notification recipient is its owner; a household reminder's recipients
+        # come from ReminderMember/whole-household instead, so it must not also carry
+        # an owner that notification targeting could mistake for the recipient.
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_reminder_scope_owner",
+        ),
+        Index("ix_reminder_group_enabled", "group_id", "enabled"),
+        # "List everything linked to this source entity" (e.g. a vehicle's
+        # reminders) — see mykhaya.driveway_reminders.reminders_for_vehicle.
+        Index("ix_reminder_source_type_id", "source_type", "source_id"),
+        # At most one active managed reminder per (source_type, source_id,
+        # source_event), except source_event='manual' which explicitly
+        # supports multiples (a vehicle can have many independent manual
+        # reminders) — see mykhaya.driveway_reminders.upsert_driveway_reminder.
+        Index(
+            "uq_reminder_source_event_active",
+            "source_type",
+            "source_id",
+            "source_event",
+            unique=True,
+            postgresql_where=text(
+                "source_type IS NOT NULL AND source_event <> 'manual' AND enabled = true"
+            ),
+        ),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    # Set only for scope=personal — the sole notification recipient. Never trusted
+    # from client input; always inferred from the authenticated actor. See
+    # HouseholdRoutine.owner_user_id, the same convention.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    due_date: Mapped[date] = mapped_column(Date)
+    due_time: Mapped[time] = mapped_column(Time)
+    repeat: Mapped[ReminderRepeat] = mapped_column(
+        Enum(ReminderRepeat, name="reminder_repeat"),
+        default=ReminderRepeat.never,
+        server_default=ReminderRepeat.never.value,
+    )
+    cadence: Mapped[ReminderCadence] = mapped_column(
+        Enum(ReminderCadence, name="reminder_cadence"),
+        default=ReminderCadence.once,
+        server_default=ReminderCadence.once.value,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Additive, nullable source-link (Phase 4 Driveway integration — see
+    # mykhaya.driveway_reminders). All three are null for every ordinary
+    # standalone reminder and are never touched by the generic reminder
+    # update/create paths (ReminderCreate/ReminderUpdate have no such
+    # fields) — a module-managed reminder is otherwise an entirely normal
+    # Reminder row. No FK on source_id: source_type is polymorphic (only
+    # "driveway" exists today), so a single column can't target one table.
+    source_type: Mapped[str | None] = mapped_column(String(20))
+    source_id: Mapped[uuid.UUID | None] = mapped_column()
+    source_event: Mapped[str | None] = mapped_column(String(30))
+
+
+class ReminderMember(UuidTimeMixin, Base):
+    __tablename__ = "reminder_members"
+    __table_args__ = (UniqueConstraint("reminder_id", "user_id", name="uq_reminder_member"),)
+    reminder_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reminders.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+class ReminderCompletion(UuidTimeMixin, Base):
+    """One row per completed occurrence — mirrors HouseholdRoutineCompletion exactly.
+    A repeating reminder's next occurrence is unaffected by completing this one;
+    only the deletion of this row (uncomplete) or a fresh occurrence_date makes it
+    due again."""
+
+    __tablename__ = "reminder_completions"
+    __table_args__ = (
+        UniqueConstraint("reminder_id", "occurrence_date", name="uq_reminder_occurrence"),
+    )
+    reminder_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reminders.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_date: Mapped[date] = mapped_column(Date, index=True)
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TodoCategory(UuidTimeMixin, Base):
+    """A user-created, Home-scoped To-do category.
+
+    Categories are deliberately separate from Lists and calendar labels.  They
+    can be removed without removing the To-dos that reference them.
+    """
+
+    __tablename__ = "todo_categories"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_todo_category_name_nonempty"),
+        UniqueConstraint("group_id", "name", name="uq_todo_category_home_name"),
+        Index("ix_todo_category_group", "group_id"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(80))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Null for every ordinary user-created category. Set to a module name
+    # (currently only "driveway") when a module auto-created this category —
+    # a marker rather than name-matching, so delete-protection never depends
+    # on the visible "Vehicles" label. See mykhaya.driveway_reminders and
+    # routers.todos.delete_category.
+    managed_source: Mapped[str | None] = mapped_column(String(20))
+
+
+class Todo(UuidTimeMixin, Base):
+    """A one-off action due on a calendar date; never a repeating Reminder."""
+
+    __tablename__ = "todos"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_todo_title_nonempty"),
+        CheckConstraint(
+            "(scope = 'personal' AND owner_user_id IS NOT NULL) OR "
+            "(scope = 'household' AND owner_user_id IS NULL)",
+            name="ck_todo_scope_owner",
+        ),
+        Index("ix_todo_group_due", "group_id", "due_date"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(1000))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False),
+        default=RoutineScope.household,
+        server_default=RoutineScope.household.value,
+    )
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("todo_categories.id", ondelete="SET NULL"), index=True
+    )
+    due_date: Mapped[date] = mapped_column(Date)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class TodoMember(UuidTimeMixin, Base):
+    __tablename__ = "todo_members"
+    __table_args__ = (UniqueConstraint("todo_id", "user_id", name="uq_todo_member"),)
+    todo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+class MealType(StrEnum):
+    """A saved Meal's category — deliberately the same short, closed list a
+    household actually thinks in, not a cuisine/dietary taxonomy. See
+    docs/architecture/meal-plans.md."""
+
+    breakfast = "breakfast"
+    lunch = "lunch"
+    dinner = "dinner"
+    snack = "snack"
+    dessert = "dessert"
+    other = "other"
+
+
+class MealSlot(StrEnum):
+    """Which part of the day a MealPlanEntry sits in. Deliberately narrower
+    than MealType (no snack/dessert/other slot) — the planner has exactly
+    three rows a day; a "dessert" or "snack" saved Meal can still be planned
+    into any of them."""
+
+    breakfast = "breakfast"
+    lunch = "lunch"
+    dinner = "dinner"
+
+
+class Meal(UuidTimeMixin, Base):
+    """A reusable household meal/recipe — the "Meals library". Soft-deleted
+    (deleted_at), never hard-deleted, so an existing MealPlanEntry.meal_id
+    never dangles or has to be nulled out from under a plan the household
+    already made — see MealPlanEntry's own docstring."""
+
+    __tablename__ = "meals"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_meal_name_nonempty"),
+        Index("ix_meal_group_type", "group_id", "meal_type"),
+        Index("ix_meal_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    # A plain external reference, not an uploaded/processed asset — V1
+    # deliberately doesn't add a second image-storage pipeline alongside
+    # mykhaya/avatars/. See docs/architecture/meal-plans.md "Deferred".
+    image_url: Mapped[str | None] = mapped_column(String(2000))
+    image_key: Mapped[str | None] = mapped_column(String(64))
+    meal_type: Mapped[MealType] = mapped_column(
+        Enum(MealType, name="meal_type"),
+        default=MealType.dinner,
+        server_default=MealType.dinner.value,
+    )
+    prep_minutes: Mapped[int | None] = mapped_column(Integer)
+    cook_minutes: Mapped[int | None] = mapped_column(Integer)
+    servings: Mapped[int | None] = mapped_column(Integer)
+    instructions: Mapped[str | None] = mapped_column(String(8000))
+    is_favourite: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Simple free-form tags — no bespoke taxonomy/tag-management table, per
+    # the explicit "avoid a complicated taxonomy system" scope decision.
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_url: Mapped[str | None] = mapped_column(String(2000))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MealIngredient(UuidTimeMixin, Base):
+    """One line of a Meal's ingredient list. Deliberately unstructured
+    beyond quantity/unit/text — no nutrition database, no ingredient
+    canonicalisation (see docs/architecture/meal-plans.md "Scope
+    exclusions") — this is exactly the shape "Add ingredients to list"
+    needs to hand off to a list item (text, with quantity/unit folded into
+    the display text) once MyKhaya has a Lists module to hand it to."""
+
+    __tablename__ = "meal_ingredients"
+    __table_args__ = (Index("ix_meal_ingredient_meal_position", "meal_id", "position"),)
+    meal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meals.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Free text throughout, deliberately — "500", "g", "beef mince" but
+    # equally just text="a pinch of salt" with quantity/unit both null.
+    quantity: Mapped[str | None] = mapped_column(String(40))
+    unit: Mapped[str | None] = mapped_column(String(40))
+    text: Mapped[str] = mapped_column(String(200))
+
+
+class MealPlanEntry(UuidTimeMixin, Base):
+    """A specific day's planned use of a Meal — or a one-off "quick meal"
+    that never touches the reusable library (quick_meal_name; see
+    docs/architecture/meal-plans.md "Quick meals"). Exactly one of
+    meal_id/quick_meal_name is set, enforced below.
+
+    `date`/`time` are deliberately plain (no timezone) — unlike
+    CalendarEvent, a meal isn't an instant with a duration to convert
+    across zones; it's "this Home's Tuesday dinner", read and written
+    as-is, the same way HouseholdRoutine.week_anchor_date is a plain date.
+    This is what keeps meal times free of the server-local timezone bugs
+    the brief warns about: there is no UTC conversion to get wrong because
+    none is ever performed. See docs/architecture/meal-plans.md
+    "Timezone approach"."""
+
+    __tablename__ = "meal_plan_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "(meal_id IS NOT NULL) OR (quick_meal_name IS NOT NULL)",
+            name="ck_meal_plan_entry_has_meal",
+        ),
+        Index("ix_meal_plan_entry_group_date", "group_id", "date"),
+        Index("ix_meal_plan_entry_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    meal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("meals.id", ondelete="SET NULL"), index=True
+    )
+    quick_meal_name: Mapped[str | None] = mapped_column(String(160))
+    date: Mapped[date] = mapped_column(Date, index=True)
+    meal_slot: Mapped[MealSlot] = mapped_column(Enum(MealSlot, name="meal_slot"))
+    # `clock_time`, not `time`: a field literally named `time` typed as
+    # `time | None` collides with Python 3.13's deferred-annotation
+    # evaluation (PEP 649) — by the time the annotation resolves, the
+    # class-body name `time` has already been rebound to this field's own
+    # value, so `time | None` looks up the wrong `time`. A *quoted*
+    # annotation doesn't fix it either (SQLAlchemy/pydantic's resolvers
+    # still see the class's own namespace) — the type import itself needs
+    # a distinct name.
+    time: Mapped[clock_time | None] = mapped_column(Time)
+    cook_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # "Plan leftovers for tomorrow" (an automatic linked next-day entry) is
+    # deferred — see docs/architecture/meal-plans.md "Deferred". This flag
+    # alone is V1, exactly as the brief allows.
+    makes_leftovers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MealPlanParticipant(UuidTimeMixin, Base):
+    """Who is eating a given MealPlanEntry — member ids, never copied
+    names (see docs/architecture/meal-plans.md "Eating members"). A
+    membership being removed later leaves this row pointing at a real but
+    no-longer-active user_id; readers resolve it against active
+    membership and simply omit a no-longer-active participant rather than
+    erroring — the same fail-safe-not-corrupting behaviour
+    CalendarEventMember already relies on elsewhere in this codebase."""
+
+    __tablename__ = "meal_plan_participants"
+    __table_args__ = (
+        UniqueConstraint("meal_plan_entry_id", "user_id", name="uq_meal_plan_participant"),
+    )
+    meal_plan_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meal_plan_entries.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+
+
+class HouseholdList(UuidTimeMixin, Base):
+    """A shared household list — groceries, packing, to-dos, and (via Meal
+    Plans' "Add ingredients to list") a meal's ingredients. Deliberately
+    generic, not meal- or shopping-specific: this is MyKhaya's one Lists
+    primitive, reused by any module that needs "put some items on a shared
+    list" rather than each module growing its own. Soft-deleted, matching
+    Meal's pattern, so nothing else has to null out a reference to it."""
+
+    __tablename__ = "household_lists"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_household_list_name_nonempty"),
+        Index("ix_household_list_group_active", "group_id", "deleted_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    # A presentation helper only — one of mykhaya.schemas.LIST_ICONS, or
+    # None. No category-administration table; adding a new preset is a code
+    # change, not a data migration.
+    icon: Mapped[str | None] = mapped_column(String(20))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    scope: Mapped[str] = mapped_column(
+        Enum("personal", "household", name="routine_scope", create_type=False),
+        default="household",
+        server_default="household",
+        nullable=False,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("list_templates.id", ondelete="SET NULL"), index=True
+    )
+    source_template_name: Mapped[str | None] = mapped_column(String(160))
+
+
+class ListTemplate(UuidTimeMixin, Base):
+    """A reusable, Home-scoped definition for creating independent Lists."""
+
+    __tablename__ = "list_templates"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_list_template_name_nonempty"),
+        Index("ix_list_template_home_scope_active", "group_id", "scope", "archived_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(500))
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False)
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ListTemplateSection(UuidTimeMixin, Base):
+    __tablename__ = "list_template_sections"
+    __table_args__ = (
+        Index("ix_list_template_section_template_position", "template_id", "position"),
+    )
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("list_templates.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class ListTemplateItem(UuidTimeMixin, Base):
+    __tablename__ = "list_template_items"
+    __table_args__ = (Index("ix_list_template_item_section_position", "section_id", "position"),)
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("list_template_sections.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(String(200))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class HouseholdListSection(UuidTimeMixin, Base):
+    """A copied section on a generated List; nullable for legacy Lists."""
+
+    __tablename__ = "household_list_sections"
+    __table_args__ = (Index("ix_household_list_section_list_position", "list_id", "position"),)
+    list_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class HouseholdListItem(UuidTimeMixin, Base):
+    """One line on a HouseholdList. Text plus a checked-off flag remains the
+    normal path — quantity/note/assignment are all optional additions for
+    Lists V1 (see docs/architecture/lists.md), layered on without disturbing
+    how Meal Plans' "Add ingredients to list" already writes items: a meal
+    ingredient still folds straight into `text` ("500 g beef mince"), never
+    into `quantity` — see mykhaya.routers.meal_plans.add_ingredients_to_list.
+    Hard-deleted on removal: unlike a Meal or a MealPlanEntry, nothing else
+    ever references a list item by id, so there's no dangling-reference risk
+    to guard against."""
+
+    __tablename__ = "household_list_items"
+    __table_args__ = (
+        CheckConstraint("char_length(text) >= 1", name="ck_household_list_item_text_nonempty"),
+        Index("ix_household_list_item_list_position", "list_id", "position"),
+        Index("ix_household_list_item_list_checked", "list_id", "is_checked"),
+    )
+    list_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("household_lists.id", ondelete="CASCADE"), index=True
+    )
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("household_list_sections.id", ondelete="SET NULL"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    text: Mapped[str] = mapped_column(String(200))
+    # A separate, optional multiplier-style quantity ("2 × Milk") for
+    # manually-added items — distinct from a Meal ingredient's quantity,
+    # which stays folded into `text` and never touches this column.
+    quantity: Mapped[str | None] = mapped_column(String(40))
+    note: Mapped[str | None] = mapped_column(String(500))
+    assigned_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    is_checked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+# --- Wishlists ---------------------------------------------------------------
+# A per-person module, not shared household structure like Meals/Lists: each
+# Wishlist has exactly one owner (owner_user_id), and the owner must never be
+# able to learn whether one of their own items has been reserved or bought —
+# see routers.wishlists for the server-side enforcement of that rule. Other
+# household members (and people outside the Home, via WishlistShare) can view
+# and reserve/buy items but cannot edit the owner's wishlist/items unless
+# they are the owner or a home_admin.
+
+
+class WishlistOccasion(StrEnum):
+    birthday = "birthday"
+    christmas = "christmas"
+    general = "general"
+    other = "other"
+
+
+class WishlistReservationStatus(StrEnum):
+    reserved = "reserved"
+    bought = "bought"
+
+
+class WishlistReservationActorType(StrEnum):
+    # A signed-in MyKhaya user — either a fellow member of the same Home, or
+    # someone the wishlist was explicitly shared with from another Home.
+    member = "member"
+    # Someone accessing via a guest WishlistShare link + PIN, with no
+    # MyKhaya account at all.
+    guest = "guest"
+
+
+class WishlistShareType(StrEnum):
+    mykhaya_user = "mykhaya_user"
+    guest = "guest"
+
+
+class Wishlist(UuidTimeMixin, Base):
+    __tablename__ = "wishlists"
+    __table_args__ = (
+        CheckConstraint("char_length(title) >= 1", name="ck_wishlist_title_nonempty"),
+        Index("ix_wishlist_home_owner", "home_id", "owner_user_id"),
+        Index("ix_wishlist_home_active", "home_id", "deleted_at"),
+        Index("ix_wishlist_home_visible", "home_id", "home_visible"),
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    # A User, not a Membership — matches the existing convention for "which
+    # person" references elsewhere (e.g. MealPlanEntry.cook_member_id,
+    # HouseholdListItem.assigned_member_id both target users.id). A managed
+    # Child is a normal User row, so this works for a Child-owned wishlist
+    # too (see routers.wishlists for who may create one on a Child's behalf).
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    occasion: Mapped[WishlistOccasion] = mapped_column(
+        Enum(
+            WishlistOccasion,
+            name="wishlist_occasion",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    occasion_date: Mapped[date | None] = mapped_column(Date)
+    description: Mapped[str | None] = mapped_column(String(1000))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Private by default (non-negotiable — see routers.wishlists' module
+    # docstring and the product brief this implements). Only when the owner
+    # explicitly flips this on does "any same-Home member with
+    # wishlists_view" become a valid access path (routers.wishlists'
+    # _resolve_non_owner_access) — fully independent of, and combinable
+    # with, per-recipient WishlistShare rows: toggling this never revokes a
+    # share, and revoking a share never touches this.
+    home_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistItem(UuidTimeMixin, Base):
+    __tablename__ = "wishlist_items"
+    __table_args__ = (
+        CheckConstraint("char_length(name) >= 1", name="ck_wishlist_item_name_nonempty"),
+        CheckConstraint("quantity >= 1", name="ck_wishlist_item_quantity_positive"),
+        Index("ix_wishlist_item_wishlist_position", "wishlist_id", "sort_order"),
+    )
+    wishlist_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlists.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str | None] = mapped_column(String(2000))
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    note: Mapped[str | None] = mapped_column(String(500))
+    image_url: Mapped[str | None] = mapped_column(String(2000))
+    quantity: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistShare(UuidTimeMixin, Base):
+    """One recipient's access to a wishlist — never a single global public
+    link (see routers.wishlists' link generation, which is always scoped to
+    one WishlistShare row). The share's own `id` is what the public/guest
+    token is derived from (security.derived_token, the same HMAC-signed,
+    non-sequential scheme invitation links already use) rather than storing
+    a second token column — decoding the token yields this row's id and
+    nothing else, so a compromised token exposes no wishlist/home/member id."""
+
+    __tablename__ = "wishlist_shares"
+    __table_args__ = (
+        Index("ix_wishlist_share_wishlist_active", "wishlist_id", "revoked_at"),
+        Index("ix_wishlist_share_recipient_user", "recipient_user_id"),
+    )
+    wishlist_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlists.id", ondelete="CASCADE"), index=True
+    )
+    recipient_name: Mapped[str] = mapped_column(String(100))
+    recipient_email: Mapped[str | None] = mapped_column(String(320))
+    # Populated only for share_type == mykhaya_user, once the sharer confirms
+    # sharing with that existing MyKhaya account (see routers.wishlists'
+    # lookup-by-email step, which never auto-shares just because an account
+    # was found).
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    share_type: Mapped[WishlistShareType] = mapped_column(
+        Enum(
+            WishlistShareType,
+            name="wishlist_share_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    # Guest shares only — a short numeric PIN, hashed with the same pwdlib
+    # hasher used for managed-Child sign-in PINs (security.password_hash),
+    # never stored in plaintext. Rate-limited at the verification endpoint,
+    # not compensated for by a stronger hash — see routers.wishlists.
+    pin_hash: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistGuestSession(UuidTimeMixin, Base):
+    """A short-lived, revocable access grant for one guest browser, issued
+    after successful link + PIN verification — deliberately not a normal
+    MyKhaya Session (that table is keyed to a real User; a guest has none).
+    Mirrors the same shape/spirit (hashed bearer token in an HttpOnly/Secure
+    cookie, a expiry, immediate revocation by deleting the row) without
+    reusing a table built around a different identity model."""
+
+    __tablename__ = "wishlist_guest_sessions"
+    __table_args__ = (Index("ix_wishlist_guest_session_share", "share_id"),)
+    share_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlist_shares.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WishlistItemReservation(UuidTimeMixin, Base):
+    """At most one row per item (uq_wishlist_item_reservation) — "Available"
+    is simply the absence of a row, and releasing a reservation deletes it
+    outright rather than soft-marking it, so re-reservation is a plain
+    insert. Never joined into any response the wishlist's own owner can
+    read — see routers.wishlists' privacy filtering, applied at the query/
+    serialization layer, not hidden client-side."""
+
+    __tablename__ = "wishlist_item_reservations"
+    __table_args__ = (UniqueConstraint("wishlist_item_id", name="uq_wishlist_item_reservation"),)
+    wishlist_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wishlist_items.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[WishlistReservationStatus] = mapped_column(
+        Enum(
+            WishlistReservationStatus,
+            name="wishlist_reservation_status",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    actor_type: Mapped[WishlistReservationActorType] = mapped_column(
+        Enum(
+            WishlistReservationActorType,
+            name="wishlist_reservation_actor_type",
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_share_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("wishlist_shares.id", ondelete="SET NULL")
+    )
+    # A display name captured at reservation time ("Grandad", "Megan") —
+    # kept even if the underlying share/user later changes, so "Reserved by
+    # ..." never has to re-resolve a live identity to render.
+    buyer_display_name: Mapped[str] = mapped_column(String(100))
+
+
 class PlatformPushSettings(UuidTimeMixin, Base):
     """Platform-Admin-managed Web Push (VAPID) configuration. Single row; app logic
     enforces that. Same environment-wins precedence model as PlatformSmtpSettings."""
@@ -1026,6 +3248,63 @@ class PlatformPushSettings(UuidTimeMixin, Base):
     vapid_public_key: Mapped[str | None] = mapped_column(Text)
     encrypted_vapid_private_key: Mapped[str | None] = mapped_column(Text)
     subject: Mapped[str | None] = mapped_column(String(320))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class StripeMode(StrEnum):
+    test = "test"
+    live = "live"
+
+
+class PlatformStripeSettings(UuidTimeMixin, Base):
+    """Platform-Admin-managed Stripe configuration. Single row; app logic enforces
+    that. Unlike PlatformSmtpSettings/PlatformPushSettings, this row — once
+    `enabled` — takes precedence *over* the MYKHAYA_STRIPE_* environment
+    variables, not the other way round; see mykhaya.billing.config.resolve_stripe_config
+    and docs/architecture/platform-control-centre.md#stripe-configuration-precedence.
+
+    Test and Live credentials are stored in entirely separate columns so switching
+    `mode` can never mix them, and each mode's secret/webhook columns are encrypted
+    independently (mykhaya.secrets_crypto.encrypt_stripe_secret) — this migration
+    only creates the ciphertext columns, it never writes a plaintext value.
+    """
+
+    __tablename__ = "platform_stripe_settings"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    acquisition_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    family_signups_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    ultimate_signups_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    mode: Mapped[StripeMode] = mapped_column(
+        Enum(
+            StripeMode,
+            name="stripe_mode",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=StripeMode.test,
+        server_default=StripeMode.test.value,
+    )
+    test_publishable_key: Mapped[str | None] = mapped_column(String(200))
+    encrypted_test_secret_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_test_webhook_secret: Mapped[str | None] = mapped_column(Text)
+    test_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_ultimate_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    test_ultimate_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_publishable_key: Mapped[str | None] = mapped_column(String(200))
+    encrypted_live_secret_key: Mapped[str | None] = mapped_column(Text)
+    encrypted_live_webhook_secret: Mapped[str | None] = mapped_column(Text)
+    live_family_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_family_annual_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_ultimate_monthly_price_id: Mapped[str | None] = mapped_column(String(200))
+    live_ultimate_annual_price_id: Mapped[str | None] = mapped_column(String(200))
     updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
@@ -1073,3 +3352,747 @@ class NotificationTemplateRevision(Base):
     replaced_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
+
+
+# ---------------------------------------------------------------------------
+# Commercial: plans, subscriptions, entitlements. See
+# docs/architecture/commercial-entitlements.md. A subscription belongs to a
+# Home (Group), never to an individual user — every member inherits the
+# Home's commercial capabilities, subject to their normal permissions.
+# Deliberately a separate layer from FeatureKey/FeatureOverride (platform
+# feature flags) and Capability (Home/user permissions): a feature can be
+# globally enabled but still unavailable to a Free Home, and a Family
+# subscription never grants a permission a role wouldn't otherwise have.
+# ---------------------------------------------------------------------------
+
+
+class SubscriptionPlan(StrEnum):
+    free = "free"
+    family = "family"
+    # Inherits everything in `family` and adds premium modules (Budget,
+    # Driveway, ...) — see PLAN_DEFINITIONS in mykhaya.entitlements.
+    ultimate = "ultimate"
+
+
+class SubscriptionProvider(StrEnum):
+    free = "free"
+    complimentary = "complimentary"
+    stripe = "stripe"
+    # Reserved for later phases — not implemented, not selectable via any
+    # current API. Present now so the enum doesn't need a migration when
+    # they arrive.
+    apple = "apple"
+    google = "google"
+
+
+class SubscriptionStatus(StrEnum):
+    """Normalised regardless of provider — mykhaya.entitlements.effective_plan
+    is the single place that decides which of these count as "paying"."""
+
+    active = "active"
+    trialing = "trialing"
+    past_due = "past_due"
+    cancel_at_period_end = "cancel_at_period_end"
+    cancelled = "cancelled"
+
+
+class BillingInterval(StrEnum):
+    """Monthly vs. annual are two billing intervals of the same `family`
+    plan — never separate MyKhaya plans. Null on HomeSubscription for
+    free/complimentary, where no billing interval applies."""
+
+    month = "month"
+    year = "year"
+
+
+class HomeSubscription(UuidTimeMixin, Base):
+    """One row per Home — the authoritative commercial state. Only ever
+    written through mykhaya.entitlements or a privileged Platform Control
+    Centre pathway; never accepts client-submitted plan/provider/status
+    (see routers.groups, which never exposes these fields on ordinary Home
+    update endpoints, and routers.platform's complimentary-grant endpoint,
+    which is the only writer of provider=complimentary)."""
+
+    __tablename__ = "home_subscriptions"
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    plan: Mapped[SubscriptionPlan] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan"),
+        default=SubscriptionPlan.free,
+        server_default=SubscriptionPlan.free.value,
+    )
+    provider: Mapped[SubscriptionProvider] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider"),
+        default=SubscriptionProvider.free,
+        server_default=SubscriptionProvider.free.value,
+    )
+    status: Mapped[SubscriptionStatus] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status"),
+        default=SubscriptionStatus.active,
+        server_default=SubscriptionStatus.active.value,
+    )
+    # Nominally responsible member for billing/plan questions — informational only
+    # in Phase 1 (no billing exists yet); not required for Free or Complimentary.
+    billing_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # External-provider metadata — meaningless for free/complimentary, populated
+    # only once Stripe (Phase 3) actually creates a customer/subscription. Kept
+    # minimal deliberately: Stripe remains authoritative for anything MyKhaya
+    # doesn't itself need for entitlement resolution or admin visibility.
+    # Unique: one Stripe Customer must never be attached to more than one Home.
+    external_customer_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    external_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # The exact Stripe Price this subscription is actually billed against right
+    # now — never the currently-configured signup price. A later change to
+    # Settings.stripe_family_*_price_id only affects new Checkout Sessions;
+    # this column is how an existing subscriber's grandfathered price is known.
+    external_price_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    billing_interval: Mapped[BillingInterval | None] = mapped_column(
+        Enum(BillingInterval, name="billing_interval")
+    )
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off
+    # Stripe subscription. Only ever set via the Platform Control Centre.
+    complimentary_reason: Mapped[str | None] = mapped_column(String(200))
+    # Operator-only context (e.g. "friend of the founder, see ticket #123") —
+    # never returned to household users. See routers.platform's household-facing
+    # response builder, which omits this field entirely for non-admin callers.
+    complimentary_note: Mapped[str | None] = mapped_column(String(1000))
+    complimentary_granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    complimentary_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Null = never expires. Evaluated dynamically at resolution time
+    # (mykhaya.entitlements.effective_plan) — no scheduler needed to "notice"
+    # an expiry; the very next resolution after the timestamp passes simply
+    # stops returning Family.
+    complimentary_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeSubscriptionEvent(Base):
+    """Append-only, structured commercial-state history — separate from the
+    free-text metadata on AuditEvent/AdministrativeAuditEvent so a future
+    billing-support investigation can query "every plan/provider/status
+    transition for this Home" directly, without parsing JSON blobs. Written
+    by mykhaya.entitlements.record_subscription_event alongside (not instead
+    of) the normal platform_audit()/audit() call for whatever action caused
+    the change."""
+
+    __tablename__ = "home_subscription_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(60))
+    from_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    to_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    from_provider: Mapped[SubscriptionProvider | None] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider", create_type=False)
+    )
+    to_provider: Mapped[SubscriptionProvider | None] = mapped_column(
+        Enum(SubscriptionProvider, name="subscription_provider", create_type=False)
+    )
+    from_status: Mapped[SubscriptionStatus | None] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status", create_type=False)
+    )
+    to_status: Mapped[SubscriptionStatus | None] = mapped_column(
+        Enum(SubscriptionStatus, name="subscription_status", create_type=False)
+    )
+    actor_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class HomeEntitlementGrant(UuidTimeMixin, Base):
+    """A Home-scoped commercial entitlement deliberately sponsored for a user.
+
+    This is separate from both ``Membership`` and ``HomeSubscription``:
+    membership says who belongs to a Home, while this row says whether the
+    Home has chosen to share a Family capability with a particular member.
+    Effective access still depends on the source Home's current subscription.
+    """
+
+    __tablename__ = "home_entitlement_grants"
+    __table_args__ = (
+        Index(
+            "uq_home_entitlement_grant_active",
+            "source_group_id",
+            "recipient_user_id",
+            "entitlement_key",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_home_entitlement_grant_recipient", "recipient_user_id"),
+    )
+    source_group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    recipient_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    entitlement_key: Mapped[str] = mapped_column(
+        String(100), default="family", server_default="family"
+    )
+    granted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class PlatformHolidaySource(UuidTimeMixin, Base):
+    """Platform-owned holiday catalogue and its last-known-good cache."""
+
+    __tablename__ = "platform_holiday_sources"
+    __table_args__ = (
+        UniqueConstraint("country_code", "region_code", name="uq_holiday_source_country_region"),
+        Index("ix_holiday_source_enabled", "enabled"),
+    )
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    country_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    flag_emoji: Mapped[str] = mapped_column(String(8), nullable=False)
+    region_code: Mapped[str | None] = mapped_column(String(40))
+    region_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    sync_status: Mapped[str] = mapped_column(
+        String(20),
+        default=HolidaySyncStatus.warning.value,
+        server_default=HolidaySyncStatus.warning.value,
+    )
+    last_successful_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_scheduled_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_error: Mapped[str | None] = mapped_column(String(500))
+    last_sync_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class PlatformHolidayDate(UuidTimeMixin, Base):
+    __tablename__ = "platform_holiday_dates"
+    __table_args__ = (
+        UniqueConstraint("source_id", "source_holiday_id", name="uq_holiday_date_source_key"),
+        Index("ix_holiday_date_source_date", "source_id", "holiday_date"),
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_holiday_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    source_holiday_id: Mapped[str] = mapped_column(String(180), nullable=False)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    observed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    source_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HomeCalendarHighlightSettings(UuidTimeMixin, Base):
+    __tablename__ = "home_calendar_highlight_settings"
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    birthdays_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class HomeHolidaySubscription(UuidTimeMixin, Base):
+    __tablename__ = "home_holiday_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("group_id", "source_id", name="uq_home_holiday_subscription"),
+        Index("ix_home_holiday_subscription_home_enabled", "group_id", "enabled"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_holiday_sources.id", ondelete="RESTRICT"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+
+class HomeRetentionState(StrEnum):
+    """Durable lifecycle state for Family data after paid access expires."""
+
+    retained_free = "retained_free"
+    restored = "restored"
+    purge_pending = "purge_pending"
+    purged = "purged"
+
+
+class HomeRetentionLifecycle(UuidTimeMixin, Base):
+    """One retention record created only when a Family Home actually expires.
+
+    A missing row means no Family retention cycle has started; it deliberately
+    does not backfill existing active Homes. The subscription remains the
+    authority for active Family, while this row is the durable retention and
+    purge state machine.
+    """
+
+    __tablename__ = "home_retention_lifecycles"
+    __table_args__ = (
+        UniqueConstraint("home_id", name="uq_home_retention_lifecycle_home"),
+        Index("ix_home_retention_due", "state", "retention_deadline"),
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    state: Mapped[HomeRetentionState] = mapped_column(
+        Enum(HomeRetentionState, name="home_retention_state"),
+        default=HomeRetentionState.retained_free,
+        server_default=HomeRetentionState.retained_free.value,
+    )
+    family_expired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retention_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    purge_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HomeRetentionMembership(UuidTimeMixin, Base):
+    """Restoration metadata for memberships disconnected at Family expiry."""
+
+    __tablename__ = "home_retention_memberships"
+    __table_args__ = (
+        UniqueConstraint("lifecycle_id", "membership_id", name="uq_retention_membership"),
+    )
+    lifecycle_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("home_retention_lifecycles.id", ondelete="CASCADE"), index=True
+    )
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("group_memberships.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    relationship: Mapped[HouseholdRelationship] = mapped_column(
+        Enum(HouseholdRelationship, name="household_relationship", create_type=False)
+    )
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PrivacyRequestType(StrEnum):
+    subject_access = "subject_access"
+    rectification = "rectification"
+    erasure = "erasure"
+    restriction = "restriction"
+    objection = "objection"
+    data_portability = "data_portability"
+    other = "other"
+
+
+class PrivacyRequestStatus(StrEnum):
+    received = "received"
+    identity_check = "identity_check"
+    in_progress = "in_progress"
+    awaiting_user = "awaiting_user"
+    completed = "completed"
+    declined = "declined"
+
+
+class PrivacyIdentityStatus(StrEnum):
+    pending = "pending"
+    verified = "verified"
+    failed = "failed"
+
+
+class PrivacyRequest(UuidTimeMixin, Base):
+    __tablename__ = "privacy_requests"
+    __table_args__ = (
+        UniqueConstraint("reference", name="uq_privacy_requests_reference"),
+        Index("ix_privacy_requests_status_due", "status", "due_date"),
+    )
+    reference: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    request_type: Mapped[PrivacyRequestType] = mapped_column(
+        Enum(PrivacyRequestType, name="privacy_request_type"), nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    identity_status: Mapped[PrivacyIdentityStatus] = mapped_column(
+        Enum(PrivacyIdentityStatus, name="privacy_identity_status"),
+        default=PrivacyIdentityStatus.pending,
+        server_default=PrivacyIdentityStatus.pending.value,
+        nullable=False,
+    )
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[PrivacyRequestStatus] = mapped_column(
+        Enum(PrivacyRequestStatus, name="privacy_request_status"),
+        default=PrivacyRequestStatus.received,
+        server_default=PrivacyRequestStatus.received.value,
+        nullable=False,
+    )
+    assigned_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    internal_notes: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    declined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SubprocessorState(StrEnum):
+    active = "active"
+    inactive = "inactive"
+    configuration_dependent = "configuration_dependent"
+
+
+class Subprocessor(Base):
+    __tablename__ = "subprocessors"
+    __table_args__ = (UniqueConstraint("provider", name="uq_subprocessors_provider"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    provider: Mapped[str] = mapped_column(String(160), nullable=False)
+    category: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    data_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    processing_location: Mapped[str | None] = mapped_column(String(160))
+    international_transfer: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    transfer_mechanism: Mapped[str | None] = mapped_column(String(300))
+    dpa_status: Mapped[str | None] = mapped_column(String(80))
+    privacy_url: Mapped[str | None] = mapped_column(String(500))
+    state: Mapped[SubprocessorState] = mapped_column(
+        Enum(SubprocessorState, name="subprocessor_state"),
+        default=SubprocessorState.configuration_dependent,
+        server_default=SubprocessorState.configuration_dependent.value,
+        nullable=False,
+    )
+    last_reviewed_at: Mapped[date | None] = mapped_column(Date)
+    internal_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class StripeWebhookEvent(Base):
+    """Durable, transactional deduplication for Stripe webhook delivery —
+    Stripe retries events, and can deliver the same event more than once even
+    without a retry (see docs/architecture/commercial-entitlements.md#webhooks).
+    The unique constraint on stripe_event_id, inserted in the same transaction
+    as any resulting HomeSubscription mutation, is the actual safety
+    mechanism — not an in-memory cache. Deliberately minimal: no full webhook
+    payload is stored, only enough to dedupe and to support troubleshooting a
+    failed/ignored event."""
+
+    __tablename__ = "stripe_webhook_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    stripe_event_id: Mapped[str] = mapped_column(String(255), unique=True)
+    event_type: Mapped[str] = mapped_column(String(100))
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "processed" | "ignored" (valid event, no handler / no material change).
+    # A processing failure never reaches this table at all — see
+    # StripeWebhookFailure below and the module docstring on
+    # mykhaya.billing.webhooks for why (a committed row here would
+    # permanently deduplicate away Stripe's retry of a failed attempt).
+    outcome: Mapped[str] = mapped_column(String(20))
+    # Unused by any current writer — retained only so an already-deployed
+    # database column isn't dropped and recreated without cause. See
+    # StripeWebhookFailure.error_message for where failure detail actually
+    # lives (Phase 7).
+    error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+class StripeWebhookFailure(Base):
+    """Append-only observability log for a webhook processing *failure*
+    (Phase 7) — deliberately separate from StripeWebhookEvent, which must
+    stay reserved for successful dedup so a failed attempt keeps being
+    retried by Stripe rather than being permanently swallowed (see
+    mykhaya.billing.webhooks's module docstring). This table is never
+    consulted for dedup/authorization — only for Platform Control Centre
+    diagnostics (docs/architecture/commercial-entitlements.md#webhook-observability).
+    The same stripe_event_id may appear here more than once if Stripe
+    retries and it fails again each time — that repetition is itself a
+    useful signal, not a bug."""
+
+    __tablename__ = "stripe_webhook_failures"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    stripe_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    event_type: Mapped[str | None] = mapped_column(String(100))
+    # Sanitised troubleshooting context only — never a raw Stripe payload.
+    error_message: Mapped[str] = mapped_column(String(500))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class StripeBillingDiagnostic(Base):
+    """Safe, durable Stripe billing stage diagnostics for Platform Control
+    Centre troubleshooting. Never stores secrets, payloads, payment details,
+    or customer contact data."""
+
+    __tablename__ = "stripe_billing_diagnostics"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    stripe_mode: Mapped[str | None] = mapped_column(String(10))
+    stage: Mapped[str] = mapped_column(String(60))
+    result: Mapped[str] = mapped_column(String(20), index=True)
+    stripe_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    checkout_session_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255))
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255))
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    stripe_subscription_status: Mapped[str | None] = mapped_column(String(40))
+    stored_subscription_status: Mapped[str | None] = mapped_column(String(40))
+    stored_plan: Mapped[str | None] = mapped_column(String(40))
+    effective_plan: Mapped[str | None] = mapped_column(String(40))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+class SupportTicket(UuidTimeMixin, Base):
+    """A lightweight, MyKhaya-owned support ticket (bug report, support
+    request, or feedback). MyKhaya/PCC is the system of record — email is a
+    notification/communication mechanism layered on top via the existing
+    Notification Engine, never the underlying store (Phase 2A decision:
+    "Email is a notification/communication mechanism only").
+
+    `reference` is a human-readable MK-#### identifier generated from a
+    dedicated PostgreSQL sequence (see mykhaya.support_reference) — gaps
+    from abandoned/rolled-back inserts are expected and acceptable, never
+    backfilled or reused. The sequence implementation is never exposed to
+    consumers; only the formatted reference is.
+
+    PRIVACY (Phase 2A decision 5): a ticket is visible only to its own
+    requester (requester_user_id == the authenticated user), never to other
+    members of the same Home merely because group_id matches — group_id is
+    contextual metadata only (which Home the reporter was using at the
+    time), not an access-control boundary. See routers.support's consumer
+    routes, which filter exclusively on requester_user_id, and
+    tests/test_support_tickets.py's cross-user isolation tests.
+    """
+
+    __tablename__ = "support_tickets"
+    reference: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    requester_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    type: Mapped[SupportTicketType] = mapped_column(
+        Enum(SupportTicketType, name="support_ticket_type")
+    )
+    status: Mapped[SupportTicketStatus] = mapped_column(
+        Enum(SupportTicketStatus, name="support_ticket_status"),
+        default=SupportTicketStatus.open,
+        server_default=SupportTicketStatus.open.value,
+        index=True,
+    )
+    priority: Mapped[SupportTicketPriority] = mapped_column(
+        Enum(SupportTicketPriority, name="support_ticket_priority"),
+        default=SupportTicketPriority.normal,
+        server_default=SupportTicketPriority.normal.value,
+    )
+    subject: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(4000))
+    source: Mapped[SupportTicketSource] = mapped_column(
+        Enum(SupportTicketSource, name="support_ticket_source")
+    )
+    app_area: Mapped[SupportTicketAppArea | None] = mapped_column(
+        Enum(SupportTicketAppArea, name="support_ticket_app_area")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL"), index=True
+    )
+    messages: Mapped[list["SupportTicketMessage"]] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan"
+    )
+    attachments: Mapped[list["SupportTicketAttachment"]] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan"
+    )
+    diagnostic: Mapped["SupportTicketDiagnostic | None"] = orm_relationship(
+        back_populates="ticket", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class SupportTicketMessage(UuidTimeMixin, Base):
+    """One entry in a ticket's conversation. At most one of author_user_id /
+    author_admin_id is ever set at creation time (ck_support_message_single_author)
+    — author_user_id for the requester's own message, author_admin_id for an
+    admin's reply; the application layer (routers.support, routers.platform_support)
+    always sets exactly one on create. The constraint itself only forbids
+    BOTH being set simultaneously, not requires exactly one — both columns
+    are `ondelete="SET NULL"`, so a later deleted User or PlatformAdministrator
+    can legitimately leave a historical message with neither set, without
+    violating this constraint (see tests/test_platform_support.py's admin
+    cleanup fixture, which exercises exactly this path).
+
+    `visibility` defaults to 'requester' (shown to the ticket's own
+    requester). 'internal' notes are modelled now as a structural option for
+    a possible future admin-only-notes feature but are never reachable by
+    any consumer-facing route: schemas.SupportTicketMessageCreate has no
+    visibility field at all, so a consumer request body can never set it,
+    and routers.support's message list filters visibility == requester
+    unconditionally."""
+
+    __tablename__ = "support_ticket_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (author_user_id IS NOT NULL AND author_admin_id IS NOT NULL)",
+            name="ck_support_message_single_author",
+        ),
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True
+    )
+    author_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    author_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    message: Mapped[str] = mapped_column(String(4000))
+    visibility: Mapped[SupportMessageVisibility] = mapped_column(
+        Enum(SupportMessageVisibility, name="support_message_visibility"),
+        default=SupportMessageVisibility.requester,
+        server_default=SupportMessageVisibility.requester.value,
+    )
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="messages")
+
+
+class SupportTicketAttachment(UuidTimeMixin, Base):
+    """Metadata only — file bytes live on disk
+    (mykhaya.attachments.storage), never in Postgres, mirroring the existing
+    avatar-storage architecture but via its own generic AttachmentStorage
+    (avatar-specific code is deliberately not reused). storage_key is always
+    a server-generated random filename (see
+    mykhaya.attachments.storage.attachment_filename), never derived from
+    original_filename, which is display-only and never used to build a
+    filesystem path — see AttachmentStorage._path_for's matching defence in
+    depth."""
+
+    __tablename__ = "support_ticket_attachments"
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(120), unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    uploaded_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="attachments")
+
+
+class SupportTicketDiagnostic(UuidTimeMixin, Base):
+    """A strict, explicitly-modelled technical snapshot attached to a ticket
+    — deliberately never an arbitrary JSON blob (Phase 2A security
+    requirement). A separate table (not a JSON column on SupportTicket)
+    specifically so its read access can be independently audited
+    (support.diagnostics.viewed — see routers.platform_support) rather than
+    being indistinguishable from reading the ticket itself.
+
+    Every field is technical client-state metadata only — never passwords,
+    tokens, cookies, or any consumer content (calendar/Nudge/list/meal/
+    budget data). The API layer (schemas.SupportTicketDiagnosticSubmit,
+    `extra="forbid"` via StrictModel) rejects any payload carrying an
+    unrecognised key outright rather than silently stripping it, so a future
+    client accidentally sending more can never succeed by surprise. One
+    snapshot per ticket (ticket_id is unique) — this is a point-in-time
+    "include diagnostics" attachment, not a history."""
+
+    __tablename__ = "support_ticket_diagnostics"
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    app_version: Mapped[str | None] = mapped_column(String(40))
+    build_number: Mapped[str | None] = mapped_column(String(40))
+    platform: Mapped[str | None] = mapped_column(String(20))
+    os_version: Mapped[str | None] = mapped_column(String(40))
+    runtime: Mapped[str | None] = mapped_column(String(20))
+    notification_permission: Mapped[str | None] = mapped_column(String(20))
+    push_registration_state: Mapped[str | None] = mapped_column(String(20))
+    api_connectivity: Mapped[str | None] = mapped_column(String(20))
+    network_state: Mapped[str | None] = mapped_column(String(20))
+    background_refresh_state: Mapped[str | None] = mapped_column(String(20))
+    client_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="diagnostic")
+
+
+# ---------------------------------------------------------------------------
+# Driveway — vehicle management (Ultimate-only). Phase 2 core model only:
+# no documents/service/insurance/compliance sub-tables yet (later phases),
+# no official-lookup provider state (Phase 5). See
+# docs/architecture/commercial-entitlements.md and mykhaya.entitlements
+# .PLAN_DEFINITIONS for "driveway.enabled".
+# ---------------------------------------------------------------------------
+
+
+class Vehicle(UuidTimeMixin, Base):
+    """A Home's vehicle. Deliberately international: `country_code` (ISO
+    3166-1 alpha-2, e.g. "GB", "ZA", "US") is the source of truth for which
+    official lookup provider (if any) applies — see
+    mykhaya.driveway.providers.VehicleLookupProvider — never a per-Group
+    setting, since a household can own vehicles registered in different
+    countries. A country with no provider integration still works through
+    manual entry; every field below is always manually editable regardless
+    of provider support.
+
+    `owner_user_id` is the authoritative Home-member owner. The legacy
+    `scope` column remains for compatibility with existing rows and is not
+    part of Driveway's API contract or authorization rules. VIN visibility is
+    — the column itself has no separate visibility flag; that's an API
+    presentation-layer rule, not a schema one, matching the "no new
+    encryption subsystem yet" Phase 1.5 decision. Never write vin/
+    registration/insurance values into audit metadata or logs."""
+
+    __tablename__ = "vehicles"
+    __table_args__ = (
+        CheckConstraint("char_length(nickname) >= 1", name="ck_vehicle_nickname_nonempty"),
+        CheckConstraint("char_length(country_code) = 2", name="ck_vehicle_country_code_iso2"),
+        Index("ix_vehicle_home_scope_active", "group_id", "scope", "archived_at"),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    scope: Mapped[RoutineScope] = mapped_column(
+        Enum(RoutineScope, name="routine_scope", create_type=False)
+    )
+    nickname: Mapped[str] = mapped_column(String(120))
+    make: Mapped[str | None] = mapped_column(String(80))
+    model: Mapped[str | None] = mapped_column(String(80))
+    colour: Mapped[str | None] = mapped_column(String(40))
+    year: Mapped[int | None] = mapped_column(Integer)
+    fuel_type: Mapped[str | None] = mapped_column(String(30))
+    engine_size: Mapped[str | None] = mapped_column(String(20))
+    # ISO 3166-1 alpha-2. Presentation-layer only decides UK-specific labels
+    # ("Road tax", "MOT") from this; the concepts stay generic (registration_
+    # renewal/tax_renewal/inspection) everywhere else in Driveway.
+    country_code: Mapped[str] = mapped_column(String(2))
+    registration: Mapped[str | None] = mapped_column(String(20))
+    first_registration_date: Mapped[date | None] = mapped_column(Date())
+    # Sensitive — defaults to Personal visibility even on a Household-scoped
+    # vehicle; never included in audit metadata/logs. See class docstring.
+    vin: Mapped[str | None] = mapped_column(String(32))
+    lookup_provider: Mapped[str | None] = mapped_column(String(40))
+    lookup_status: Mapped[str | None] = mapped_column(String(30))
+    last_successful_lookup: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tax_status: Mapped[str | None] = mapped_column(String(30))
+    tax_due_date: Mapped[date | None] = mapped_column(Date())
+    inspection_status: Mapped[str | None] = mapped_column(String(30))
+    inspection_due_date: Mapped[date | None] = mapped_column(Date())
+    photo_key: Mapped[str | None] = mapped_column(String(120))
+    photo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

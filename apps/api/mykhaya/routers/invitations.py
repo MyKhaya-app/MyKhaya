@@ -4,23 +4,31 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.entitlements import (
+    grant_home_family_sponsorship,
+    has_entitlement,
+    require_entitlement,
+    require_within_limit,
+)
 from mykhaya.household_permissions import (
     Capability,
     default_profile,
+    ensure_can_assign_relationship,
     legacy_role,
     require_capability,
 )
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
 from mykhaya.notifications.engine import notify
-from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     InvitationAccept,
@@ -46,7 +54,8 @@ async def invite(
     settings: Settings = Depends(get_settings),
 ) -> InvitationResponse:
     require_adult_session(auth)
-    await require_capability(body.group_id, Capability.members_invite, auth, db)
+    inviter = await require_capability(body.group_id, Capability.members_invite, auth, db)
+    ensure_can_assign_relationship(inviter, body.relationship)
     await enforce_rate_limit(request, settings, "household-invitation", 20, 3600)
     if body.relationship == HouseholdRelationship.child:
         raise HTTPException(
@@ -55,6 +64,44 @@ async def invite(
         )
     if body.relationship == HouseholdRelationship.review_required:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose a relationship.")
+
+    # Extended Family / Friend as a *Home member* relationship is retired in
+    # favour of external Calendar Sharing (mykhaya.routers.calendar_sharing)
+    # — see docs on the Connections/external-sharing model. This blocks only
+    # *new* invitations; existing accepted Memberships with either
+    # relationship (and their shared_resources) keep working completely
+    # unchanged — capabilities_for() and default_profile() are untouched for
+    # them. No migration/backfill is needed or attempted here.
+    if body.relationship in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Extended Family and Friends are no longer added as Home members. "
+            "Use calendar sharing to give someone outside the Home access instead.",
+        )
+
+    if body.family_sponsorship:
+        await require_entitlement(db, body.group_id, "family_plans.enabled")
+
+    # Race-safe Free-Home member limit — same per-Home advisory-lock pattern
+    # as routers.calendar's calendar-creation endpoint (see
+    # mykhaya.entitlements.require_within_limit's docstring). A Free Home's
+    # limit (1) is already met by its creator at Home-creation time, so
+    # there is no realistic race window today, but the lock keeps this
+    # endpoint correct if a future plan ever allows more than one but not
+    # unlimited members.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"members:{body.group_id}"}
+    )
+    member_count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == body.group_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    await require_within_limit(db, body.group_id, "home.max_members", member_count)
+
     active = await db.scalar(
         select(Invitation).where(
             Invitation.group_id == body.group_id,
@@ -80,6 +127,7 @@ async def invite(
         if body.relationship
         in {HouseholdRelationship.extended_family, HouseholdRelationship.friend}
         else [],
+        family_sponsorship=body.family_sponsorship,
         token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
         invited_by=auth.user.id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
@@ -90,8 +138,9 @@ async def invite(
     row.token_hash = hash_secret(raw, settings.secret_key.get_secret_value())
     home = await db.get(Group, row.group_id)
     assert home is not None
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "household_invitation",
         {
             "inviter_display_name": auth.user.display_name,
@@ -108,6 +157,7 @@ async def invite(
         title=subject,
         body=message,
         idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+        html_body=html,
     )
     audit(
         db,
@@ -129,6 +179,7 @@ async def invite(
         permission_profile=row.permission_profile,
         shared_resources=row.shared_resources,
         expires_at=row.expires_at,
+        family_sponsorship=row.family_sponsorship,
     )
 
 
@@ -187,6 +238,7 @@ async def list_invitations(
             relationship=invitation.relationship,
             permission_profile=invitation.permission_profile,
             shared_resources=invitation.shared_resources,
+            family_sponsorship=invitation.family_sponsorship,
             expires_at=invitation.expires_at,
             accepted_at=invitation.accepted_at,
             revoked_at=invitation.revoked_at,
@@ -217,8 +269,9 @@ async def resend_invitation(
     raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
     home = await db.get(Group, row.group_id)
     assert home is not None
-    subject, message = await render_notification(
+    subject, message, html = await render_notification_email(
         db,
+        settings,
         "household_invitation",
         {
             "inviter_display_name": auth.user.display_name,
@@ -235,6 +288,7 @@ async def resend_invitation(
         title=subject,
         body=message,
         idempotency_key=f"household_invitation:{row.id}:{row.expires_at.isoformat()}",
+        html_body=html,
     )
     audit(db, request, "invitation.resent", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()
@@ -247,6 +301,7 @@ async def resend_invitation(
         permission_profile=row.permission_profile,
         shared_resources=row.shared_resources,
         expires_at=row.expires_at,
+        family_sponsorship=row.family_sponsorship,
     )
 
 
@@ -343,6 +398,28 @@ async def accept(
         .where(Membership.group_id == row.group_id, Membership.user_id == auth.user.id)
         .with_for_update()
     )
+    # A Home's effective plan can change between an invitation being sent
+    # (checked against the limit at the time, in invite() above) and it
+    # being accepted — e.g. a Family Home invites several people then
+    # downgrades before they respond. Re-check here, under the same
+    # advisory lock invite() uses, so acceptance can never grow membership
+    # past the Home's current plan limit; a no-op re-accept of an already
+    # active membership is exempt since it doesn't increase the count.
+    will_increase_membership = existing is None or existing.removed_at is not None
+    if will_increase_membership:
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"members:{row.group_id}"},
+        )
+        member_count = (
+            await db.scalar(
+                select(func.count(Membership.id)).where(
+                    Membership.group_id == row.group_id, Membership.removed_at.is_(None)
+                )
+            )
+            or 0
+        )
+        await require_within_limit(db, row.group_id, "home.max_members", member_count)
     if existing is None:
         db.add(
             Membership(
@@ -353,6 +430,7 @@ async def accept(
                 permission_profile=row.permission_profile,
                 shared_resources=row.shared_resources,
                 colour=await assign_member_colour(db, row.group_id),
+                family_sponsorship_decided=row.family_sponsorship,
             )
         )
     else:
@@ -361,8 +439,18 @@ async def accept(
         existing.relationship = row.relationship
         existing.permission_profile = row.permission_profile
         existing.shared_resources = row.shared_resources
+        existing.family_sponsorship_decided = row.family_sponsorship
         if existing.colour is None:
             existing.colour = await assign_member_colour(db, row.group_id)
+    # Give the new/returning adult member their Personal Calendar up front —
+    # idempotent, so re-accepting an existing membership is safe too. Skips
+    # managed children (see mykhaya.calendar_provisioning); invitations are
+    # always for adult accounts in practice, but this stays correct even if
+    # that ever changes.
+    if row.relationship != HouseholdRelationship.child:
+        await ensure_personal_calendar(db, row.group_id, auth.user.id)
+    if row.family_sponsorship and await has_entitlement(db, row.group_id, "family_plans.enabled"):
+        await grant_home_family_sponsorship(db, row.group_id, auth.user.id, row.invited_by)
     row.accepted_at = datetime.now(UTC)
     audit(db, request, "invitation.accepted", auth.user.id, row.group_id, "invitation", row.id)
     await db.commit()

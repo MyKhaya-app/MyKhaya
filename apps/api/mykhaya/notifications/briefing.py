@@ -7,21 +7,30 @@ see mykhaya.notifications.visibility and mykhaya.calendar_occurrences.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from unicodedata import category
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mykhaya.calendar_occurrences import expand_occurrences, recurrence_candidate_filter
+from mykhaya.calendar_occurrences import (
+    expand_occurrences,
+    load_exceptions,
+    recurrence_candidate_filter,
+)
 from mykhaya.config import Settings
 from mykhaya.features import is_feature_enabled
 from mykhaya.household_permissions import Capability, capabilities_for
 from mykhaya.models import (
     BriefingDays,
     CalendarEvent,
+    CalendarShare,
+    CalendarShareStatus,
     ChildProfile,
     FeatureKey,
+    Group,
     Membership,
     NotificationPreferences,
     OutboxEvent,
@@ -30,8 +39,11 @@ from mykhaya.models import (
 from mykhaya.notifications.birthday_occurrences import is_birthday_date
 from mykhaya.notifications.deep_links import target
 from mykhaya.notifications.engine import get_or_create_preferences, notify
+from mykhaya.notifications.lifecycle import is_home_operationally_active
+from mykhaya.notifications.meal_plans import MealBriefingItem, briefing_items_for_user
 from mykhaya.notifications.quiet_hours import effective_timezone
-from mykhaya.notifications.visibility import viewer_ids_for_event
+from mykhaya.notifications.templates import render_notification
+from mykhaya.notifications.visibility import event_matches_share, viewer_ids_for_event
 
 # Matches the reminder scan's cadence — short enough that the scan reliably catches each
 # user's chosen minute exactly once per day without needing sub-minute precision.
@@ -46,6 +58,15 @@ EMPTY_DAY_MESSAGES = (
     "Nothing planned just yet — enjoy the quieter day.",
     "Today looks wonderfully open.",
 )
+MAX_DISPLAYED_EVENTS = 5
+
+
+@dataclass(frozen=True)
+class BriefingOccurrence:
+    event_id: uuid.UUID
+    title: str
+    start_at: datetime
+    is_all_day: bool
 
 
 def empty_day_message(for_date: date) -> str:
@@ -69,9 +90,83 @@ def _describe_occurrence(event: CalendarEvent, occurrence_start: datetime, tz: t
     return f"{event.title} at {local_start.strftime('%H:%M')}"
 
 
+def _safe_push_text(value: str, *, max_length: int = 180) -> str:
+    """Keep user-provided text on one safe, readable push-notification line."""
+    cleaned = "".join(" " if category(char).startswith("C") else char for char in value)
+    return " ".join(cleaned.split())[:max_length].strip() or "Untitled event"
+
+
+def _briefing_event_line(occurrence: BriefingOccurrence, tz: tzinfo) -> str:
+    title = _safe_push_text(occurrence.title)
+    if occurrence.is_all_day:
+        return f"• All day – {title}"
+    local_start = occurrence.start_at.astimezone(tz)
+    return f"• {local_start.strftime('%H:%M')} {title}"
+
+
+def format_daily_briefing(
+    occurrences: list[BriefingOccurrence],
+    *,
+    local_date: date,
+    tz: tzinfo,
+    birthday_phrases: list[str] | None = None,
+    meal_items: list[MealBriefingItem] | None = None,
+    title_override: str | None = None,
+    intro_line: str = "Please take care of yourself!",
+) -> tuple[str, str]:
+    """Build the stable title/body while keeping event ordering deterministic.
+
+    `title_override`/`intro_line` let the two fixed, non-computed lines of
+    the briefing (see PCC template keys briefing.title/briefing.intro) be
+    resolved through the template registry by the caller — which has the
+    `db` access this function deliberately doesn't need — while every other
+    line here stays exactly the same *computed* content it always was:
+    which events/meals/birthdays appear, their ordering, the empty-day
+    rotation, and the "+N more" overflow are never editable wording, so
+    they're never routed through the template registry. Calling this with
+    no new arguments (as every existing caller/test does) reproduces the
+    exact previous defaults, byte for byte.
+    """
+    ordered = sorted(
+        occurrences,
+        key=lambda item: (
+            item.start_at,
+            _safe_push_text(item.title).casefold(),
+            str(item.event_id),
+        ),
+    )
+    meals = meal_items or []
+    count = len(ordered) + len(meals)
+    title = title_override or f"You have {count} event{'s' if count != 1 else ''} today."
+    lines = [intro_line]
+
+    # Birthdays are an existing briefing feature. Preserve them without allowing
+    # display names to introduce control characters into the push payload.
+    for phrase in birthday_phrases or []:
+        safe_phrase = _safe_push_text(phrase).capitalize()
+        lines.append(f"{safe_phrase}.")
+
+    lines.extend(_briefing_event_line(item, tz) for item in ordered[:MAX_DISPLAYED_EVENTS])
+    remaining_slots = max(0, MAX_DISPLAYED_EVENTS - len(ordered))
+    for item in meals[:remaining_slots]:
+        meal_line = f"• {item.slot}: {item.name}"
+        if item.meal_time is not None:
+            meal_line += f" at {item.meal_time.strftime('%H:%M')}"
+        if item.is_cooking:
+            meal_line += " · You're cooking"
+        elif item.cook_name:
+            meal_line += f" · {_safe_push_text(item.cook_name)} cooking"
+        lines.append(meal_line)
+    if count > MAX_DISPLAYED_EVENTS:
+        lines.append(f"• +{count - MAX_DISPLAYED_EVENTS} more events")
+    if not ordered and not meals and not (birthday_phrases or []):
+        lines.append(empty_day_message(local_date))
+    return title, "\n".join(lines)
+
+
 async def _events_for_user_today(
     db: AsyncSession, user_id: uuid.UUID, local_date: date, tz: tzinfo
-) -> list[str]:
+) -> list[BriefingOccurrence]:
     day_start_local = datetime.combine(local_date, datetime.min.time(), tzinfo=tz)
     day_end_local = day_start_local + timedelta(days=1)
     day_start = day_start_local.astimezone(UTC)
@@ -79,11 +174,19 @@ async def _events_for_user_today(
 
     memberships = (
         await db.scalars(
-            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            select(Membership)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                # Slice 4.5: a Disabled/Archived Home's events never appear
+                # in the briefing, even for a user with other active Homes.
+                Group.is_active.is_(True),
+            )
         )
     ).all()
 
-    descriptions: list[tuple[datetime, str]] = []
+    occurrences: list[BriefingOccurrence] = []
     for membership in memberships:
         if not await is_feature_enabled(db, FeatureKey.calendar, membership.group_id):
             continue
@@ -103,18 +206,81 @@ async def _events_for_user_today(
                 )
             )
         ).all()
+        exceptions_by_event = await load_exceptions(db, [event.id for event in events])
         for event in events:
-            if not view_all:
-                if event.created_by != user_id and user_id not in await viewer_ids_for_event(
-                    db, event
-                ):
-                    continue
-            for occurrence_start, _occurrence_end in expand_occurrences(event, day_start, day_end):
-                description = _describe_occurrence(event, occurrence_start, tz)
-                descriptions.append((occurrence_start, description))
+            exceptions = exceptions_by_event.get(event.id, {})
+            for effective in expand_occurrences(event, day_start, day_end, exceptions):
+                if not view_all and event.created_by != user_id:
+                    # Checked per-occurrence, not once per event: an
+                    # occurrence-level member override (see
+                    # EffectiveOccurrence.member_ids_override) can add or
+                    # remove this user from just this one occurrence of a
+                    # recurring event, independent of the base event's own
+                    # membership.
+                    visible = user_id in await viewer_ids_for_event(
+                        db, event, member_ids_override=effective.member_ids_override
+                    )
+                    if not visible:
+                        continue
+                occurrences.append(
+                    BriefingOccurrence(
+                        event_id=event.id,
+                        title=effective.title,
+                        start_at=effective.start_at,
+                        is_all_day=effective.is_all_day,
+                    )
+                )
 
-    descriptions.sort(key=lambda item: item[0])
-    return [description for _start, description in descriptions]
+    # Externally shared calendars: a share recipient has no Membership in the
+    # source Home, so the loop above never considers them — this is the
+    # separate path spec'd for shared-calendar events, gated by the
+    # recipient's own include_in_briefing toggle (independent of
+    # notification_preference, which only governs push/email/in-app).
+    seen_event_ids = {occurrence.event_id for occurrence in occurrences}
+    shares = (
+        await db.scalars(
+            select(CalendarShare).where(
+                CalendarShare.recipient_user_id == user_id,
+                CalendarShare.status == CalendarShareStatus.accepted,
+                CalendarShare.revoked_at.is_(None),
+                CalendarShare.include_in_briefing.is_(True),
+            )
+        )
+    ).all()
+    for share in shares:
+        if not await is_home_operationally_active(db, share.source_group_id):
+            continue
+        if not await is_feature_enabled(db, FeatureKey.calendar, share.source_group_id):
+            continue
+        if not await is_feature_enabled(db, FeatureKey.notifications, share.source_group_id):
+            continue
+        events = (
+            await db.scalars(
+                select(CalendarEvent).where(
+                    CalendarEvent.calendar_id == share.calendar_id,
+                    CalendarEvent.deleted_at.is_(None),
+                    recurrence_candidate_filter(day_start, day_end),
+                )
+            )
+        ).all()
+        exceptions_by_event = await load_exceptions(db, [event.id for event in events])
+        for event in events:
+            if event.id in seen_event_ids:
+                continue  # belt-and-braces: never double-count if ever also a Home member
+            if not event_matches_share(event, share):
+                continue
+            exceptions = exceptions_by_event.get(event.id, {})
+            for effective in expand_occurrences(event, day_start, day_end, exceptions):
+                occurrences.append(
+                    BriefingOccurrence(
+                        event_id=event.id,
+                        title=effective.title,
+                        start_at=effective.start_at,
+                        is_all_day=effective.is_all_day,
+                    )
+                )
+
+    return occurrences
 
 
 async def _birthdays_for_user_today(
@@ -124,7 +290,13 @@ async def _birthdays_for_user_today(
     just another calendar occurrence — see mykhaya.notifications.birthdays."""
     memberships = (
         await db.scalars(
-            select(Membership).where(Membership.user_id == user_id, Membership.removed_at.is_(None))
+            select(Membership)
+            .join(Group, Group.id == Membership.group_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+                Group.is_active.is_(True),
+            )
         )
     ).all()
 
@@ -144,6 +316,8 @@ async def _birthdays_for_user_today(
         for co_membership in co_members:
             user = await db.get(User, co_membership.user_id)
             if user is None or user.birth_month is None or user.birth_day is None:
+                continue
+            if not user.is_active:
                 continue
             if not is_birthday_date(user.birth_month, user.birth_day, local_date):
                 continue
@@ -190,7 +364,7 @@ async def scan_due_briefings(db: AsyncSession, settings: Settings) -> None:
     ).all()
     for prefs in prefs_rows:
         user = await db.get(User, prefs.user_id)
-        if user is None:
+        if user is None or not user.is_active:
             continue
         tz = effective_timezone(user.timezone, settings.default_timezone)
         now_local = now_utc.astimezone(tz)
@@ -220,8 +394,8 @@ async def deliver_daily_briefing(
     db: AsyncSession, settings: Settings, user_id: str, date_iso: str
 ) -> None:
     user = await db.get(User, uuid.UUID(user_id))
-    if user is None:
-        return
+    if user is None or not user.is_active:
+        return  # gone, or Disabled/Archived since this was scanned
     prefs = await get_or_create_preferences(db, user.id)
     if not prefs.daily_briefing_enabled:
         return  # disabled since this was scanned — do not send
@@ -229,24 +403,39 @@ async def deliver_daily_briefing(
     tz = effective_timezone(user.timezone, settings.default_timezone)
     local_date = date.fromisoformat(date_iso)
     birthday_phrases = await _birthdays_for_user_today(db, user.id, local_date)
-    event_descriptions = await _events_for_user_today(db, user.id, local_date, tz)
-    descriptions = birthday_phrases + event_descriptions
+    occurrences = await _events_for_user_today(db, user.id, local_date, tz)
+    meal_items = await briefing_items_for_user(db, user.id, local_date)
 
-    if not descriptions and not prefs.empty_day_briefing_enabled:
+    if (
+        not occurrences
+        and not meal_items
+        and not birthday_phrases
+        and not prefs.empty_day_briefing_enabled
+    ):
         return
 
-    if descriptions:
-        sentence = oxford_join(descriptions)
-        body = f"{sentence[0].upper()}{sentence[1:]}."
-    else:
-        body = empty_day_message(local_date)
+    count = len(occurrences) + len(meal_items)
+    count_phrase = f"{count} event{'s' if count != 1 else ''}"
+    _subject, title_override = await render_notification(
+        db, "briefing.title", {"count_phrase": count_phrase}
+    )
+    _subject, intro_line = await render_notification(db, "briefing.intro", {})
+    title, body = format_daily_briefing(
+        occurrences,
+        local_date=local_date,
+        tz=tz,
+        birthday_phrases=birthday_phrases,
+        meal_items=meal_items,
+        title_override=title_override,
+        intro_line=intro_line,
+    )
     await notify(
         db,
         settings=settings,
         recipient_user_id=user.id,
         notification_type="daily_briefing",
-        title="Your day at a glance",
+        title=title,
         body=body,
         idempotency_key=f"briefing:{user_id}:{date_iso}",
-        deep_link=target("home"),
+        deep_link=target("calendar_today"),
     )

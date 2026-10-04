@@ -1,0 +1,306 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { NotificationPreferences } from "@mykhaya/shared-types";
+import NotificationSettings from "./page";
+
+// Coverage for the Daily Nudge Summary preference: its own section (rendered
+// above Daily briefing, per the desired settings order), its own default
+// on/off + delivery-time state independent from Daily Briefing's, and that
+// the two never cross-contaminate each other's saved values.
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/settings/notifications",
+}));
+
+vi.mock("@/components/use-active-home", () => ({
+  useActiveHome: () => ({
+    activeHome: { id: "home-1", name: "Hales Home" },
+    activeHomeId: "home-1",
+    homes: [{ id: "home-1", name: "Hales Home" }],
+    setActiveHomeId: vi.fn(),
+    loading: false,
+  }),
+}));
+
+let nativeShell = false;
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => nativeShell,
+  nativePlatform: () => (nativeShell ? "ios" : "web"),
+}));
+
+const nativePermission = vi.hoisted(() => ({
+  status: "not_requested" as "not_requested" | "granted" | "denied" | "restricted" | "unsupported",
+  loading: false,
+  requestPermission: vi.fn(),
+  openSettings: vi.fn(),
+  refresh: vi.fn(),
+}));
+vi.mock("@/components/use-notification-permission", () => ({
+  useNotificationPermission: () => nativePermission,
+}));
+
+vi.mock("@/components/install-prompt", () => ({
+  isStandalone: () => false,
+}));
+
+vi.mock("@mykhaya/api-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      me: vi.fn(),
+      notificationPreferences: vi.fn(),
+      updateNotificationPreferences: vi.fn(),
+      listPushSubscriptions: vi.fn(),
+    },
+  };
+});
+
+const { api } = await import("@mykhaya/api-client");
+
+function basePrefs(overrides: Partial<NotificationPreferences> = {}): NotificationPreferences {
+  return {
+    push_enabled: true,
+    in_app_enabled: true,
+    email_enabled: false,
+    event_reminders_enabled: true,
+    default_event_reminder_enabled: true,
+    default_event_reminder_minutes: 30,
+    all_day_reminder_enabled: true,
+    all_day_reminder_time: "09:00",
+    default_calendar_id: null,
+    week_starts_on: "monday",
+    show_declined_events: false,
+    event_invitations_enabled: true,
+    event_changes_enabled: true,
+    household_reminders_enabled: true,
+    list_assignments_enabled: true,
+    wishlist_sharing_enabled: true,
+    daily_briefing_enabled: true,
+    briefing_time: "07:00",
+    briefing_days: "daily",
+    empty_day_briefing_enabled: true,
+    daily_nudge_summary_enabled: true,
+    daily_nudge_summary_time: "07:30",
+    nudges_evening_cleanup_enabled: true,
+    nudges_evening_time: "20:30",
+    nudges_day_complete_enabled: true,
+    lock_screen_preview_level: "title_only",
+    quiet_hours_start: null,
+    quiet_hours_end: null,
+    quiet_hours_critical_only: true,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  nativeShell = false;
+  nativePermission.status = "not_requested";
+  nativePermission.loading = false;
+  nativePermission.requestPermission.mockReset().mockResolvedValue("granted");
+  nativePermission.openSettings.mockReset().mockResolvedValue(undefined);
+  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Owner" });
+  (api.notificationPreferences as ReturnType<typeof vi.fn>).mockResolvedValue(basePrefs());
+  (api.updateNotificationPreferences as ReturnType<typeof vi.fn>).mockImplementation(
+    async (body: NotificationPreferences) => body,
+  );
+  (api.listPushSubscriptions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+});
+
+describe("Notification settings — Nudges section", () => {
+  it("renders the Nudges heading before the Daily briefing heading", async () => {
+    render(<NotificationSettings />);
+    const headings = await screen.findAllByRole("heading", { level: 2 });
+    const labels = headings.map((heading) => heading.textContent);
+    expect(labels.indexOf("Nudges")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Daily briefing")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Nudges")).toBeLessThan(labels.indexOf("Daily briefing"));
+  });
+
+  // Both sections' delivery-time <select> share the accessible name
+  // "Delivery time" (same label wording by design, matching Daily
+  // Briefing's existing pattern) — the Nudges one renders first in DOM
+  // order (it now sits above Daily briefing), so index 0 is always it.
+  function nudgeSummaryTimeSelect(): HTMLElement {
+    const [nudgeSelect] = screen.getAllByRole("combobox", { name: /delivery time/i });
+    if (!nudgeSelect) throw new Error("Nudge summary delivery-time select not found");
+    return nudgeSelect;
+  }
+  function briefingTimeSelect(): HTMLElement {
+    const [, briefingSelect] = screen.getAllByRole("combobox", { name: /delivery time/i });
+    if (!briefingSelect) throw new Error("Daily briefing delivery-time select not found");
+    return briefingSelect;
+  }
+
+  it("defaults the toggle on and the time to 07:30 for a fresh preference row", async () => {
+    render(<NotificationSettings />);
+    const toggle = await screen.findByRole("checkbox", { name: "Send me a daily Nudge summary" });
+    expect(toggle).toBeChecked();
+    await screen.findAllByRole("combobox", { name: /delivery time/i });
+    expect(nudgeSummaryTimeSelect()).toHaveValue("07:30");
+  });
+
+  it("lets the delivery time be changed independently and saves it", async () => {
+    render(<NotificationSettings />);
+    await screen.findByRole("checkbox", { name: "Send me a daily Nudge summary" });
+    await userEvent.selectOptions(nudgeSummaryTimeSelect(), "18:00");
+    await userEvent.click(screen.getByRole("button", { name: /save preferences/i }));
+
+    await waitFor(() =>
+      expect(api.updateNotificationPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ daily_nudge_summary_time: "18:00", daily_nudge_summary_enabled: true }),
+      ),
+    );
+  });
+
+  it("keeps Daily briefing's delivery time untouched when only the Nudge summary time changes", async () => {
+    render(<NotificationSettings />);
+    await screen.findByRole("checkbox", { name: "Send me a daily Nudge summary" });
+    expect(briefingTimeSelect()).toHaveValue("custom");
+    await userEvent.selectOptions(nudgeSummaryTimeSelect(), "18:00");
+    await userEvent.click(screen.getByRole("button", { name: /save preferences/i }));
+
+    await waitFor(() =>
+      expect(api.updateNotificationPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ briefing_time: "07:00" }),
+      ),
+    );
+    // Untouched — still whatever it resolved to before saving.
+    expect(briefingTimeSelect()).toHaveValue("custom");
+  });
+
+  it("switching the Nudge summary toggle off does not change Daily briefing's settings", async () => {
+    render(<NotificationSettings />);
+    const nudgeToggle = await screen.findByRole("checkbox", {
+      name: "Send me a daily Nudge summary",
+    });
+    await userEvent.click(nudgeToggle);
+    expect(nudgeToggle).not.toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: /save preferences/i }));
+
+    await waitFor(() =>
+      expect(api.updateNotificationPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          daily_nudge_summary_enabled: false,
+          daily_briefing_enabled: true,
+          briefing_time: "07:00",
+          briefing_days: "daily",
+        }),
+      ),
+    );
+  });
+
+  it("disables the delivery-time selector while off, and retains the previous time when saved", async () => {
+    render(<NotificationSettings />);
+    const nudgeToggle = await screen.findByRole("checkbox", {
+      name: "Send me a daily Nudge summary",
+    });
+    await screen.findAllByRole("combobox", { name: /delivery time/i });
+    const timeSelect = nudgeSummaryTimeSelect();
+    expect(timeSelect).not.toBeDisabled();
+
+    await userEvent.click(nudgeToggle);
+    expect(timeSelect).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /save preferences/i }));
+    await waitFor(() =>
+      expect(api.updateNotificationPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ daily_nudge_summary_time: "07:30" }),
+      ),
+    );
+  });
+
+  it("persists the saved value after a reload (re-fetch)", async () => {
+    const { unmount } = render(<NotificationSettings />);
+    await screen.findByRole("checkbox", { name: "Send me a daily Nudge summary" });
+    unmount();
+
+    (api.notificationPreferences as ReturnType<typeof vi.fn>).mockResolvedValue(
+      basePrefs({ daily_nudge_summary_enabled: false, daily_nudge_summary_time: "09:00" }),
+    );
+
+    // A fresh mount simulates a page reload re-fetching preferences from the
+    // server — the previously-saved value should come back, not a default.
+    render(<NotificationSettings />);
+    const toggle = await screen.findByRole("checkbox", {
+      name: "Send me a daily Nudge summary",
+    });
+    expect(toggle).not.toBeChecked();
+  });
+});
+
+describe("Notification settings — Daily briefing unaffected", () => {
+  it("still shows its own independent toggle and time", async () => {
+    render(<NotificationSettings />);
+    await screen.findByRole("heading", { name: "Daily briefing" });
+    expect(
+      screen.getByRole("checkbox", { name: "Send me a morning summary" }),
+    ).toBeChecked();
+  });
+});
+
+describe("Notification settings — 'This device' reflects live OS permission only", () => {
+  it("shows 'Enabled ✓' when the OS permission is granted, regardless of any backend push registration", async () => {
+    nativeShell = true;
+    nativePermission.status = "granted";
+    // No native push devices are ever surfaced to this page (only Web Push
+    // `devices` exist in its state) — this asserts the root-cause fix
+    // directly: status comes from the live adapter, never from whether any
+    // push subscription/device row exists.
+    (api.listPushSubscriptions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    render(<NotificationSettings />);
+
+    await screen.findByText("Enabled ✓");
+    expect(screen.queryByRole("button", { name: /enable notifications/i })).not.toBeInTheDocument();
+  });
+
+  it("shows 'Off' and an 'Enable in phone settings' button when denied — never re-requesting permission", async () => {
+    nativeShell = true;
+    nativePermission.status = "denied";
+    render(<NotificationSettings />);
+
+    await screen.findByText("Off");
+    const button = screen.getByRole("button", { name: /enable in phone settings/i });
+    await userEvent.click(button);
+
+    expect(nativePermission.openSettings).toHaveBeenCalledTimes(1);
+    expect(nativePermission.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("shows an 'Enable notifications' button that requests permission when not yet requested", async () => {
+    nativeShell = true;
+    nativePermission.status = "not_requested";
+    render(<NotificationSettings />);
+
+    const button = await screen.findByRole("button", { name: /^enable notifications$/i });
+    await userEvent.click(button);
+
+    expect(nativePermission.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it("individual preference toggles stay independently represented regardless of device permission status", async () => {
+    nativeShell = true;
+    nativePermission.status = "granted";
+    (api.notificationPreferences as ReturnType<typeof vi.fn>).mockResolvedValue(
+      basePrefs({ daily_briefing_enabled: false, event_reminders_enabled: true }),
+    );
+    render(<NotificationSettings />);
+
+    await screen.findByText("Enabled ✓");
+    expect(screen.getByRole("checkbox", { name: "Send me a morning summary" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Event reminders" })).toBeChecked();
+  });
+
+  it("does not show a native device section outside the native shell (browser/PWA unaffected)", async () => {
+    nativeShell = false;
+    render(<NotificationSettings />);
+
+    await screen.findByRole("heading", { name: "This device" });
+    expect(screen.queryByText("Enabled ✓")).not.toBeInTheDocument();
+    expect(screen.queryByText("Off")).not.toBeInTheDocument();
+  });
+});

@@ -10,6 +10,8 @@ import { api } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
 import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
+import { isNativeShell } from "@/components/native-runtime";
+import { useNotificationPermission } from "@/components/use-notification-permission";
 
 const STAGE_LABELS: Record<SubscribeStage, string> = {
   "checking-support": "Checking browser support…",
@@ -33,11 +35,19 @@ export default function NotificationSettings() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [devices, setDevices] = useState<PushSubscriptionSummary[]>([]);
   const [briefingPreset, setBriefingPreset] = useState<string>("custom");
+  const [nudgeSummaryEnabled, setNudgeSummaryEnabled] = useState(true);
+  const [nudgeSummaryPreset, setNudgeSummaryPreset] = useState<string>("custom");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [subscribing, setSubscribing] = useState(false);
   const [subscribeStage, setSubscribeStage] = useState<SubscribeStage | null>(null);
+  const {
+    status: nativePermissionStatus,
+    loading: nativePermissionLoading,
+    requestPermission: requestNativePermission,
+    openSettings: openSystemNotificationSettings,
+  } = useNotificationPermission();
 
   const load = useCallback(async () => {
     const [preferences, subscriptions] = await Promise.all([
@@ -48,6 +58,9 @@ export default function NotificationSettings() {
     setDevices(subscriptions);
     const preset = BRIEFING_PRESETS.find(([time]) => time === preferences.briefing_time);
     setBriefingPreset(preset ? preset[0] : "custom");
+    setNudgeSummaryEnabled(preferences.daily_nudge_summary_enabled);
+    const nudgePreset = BRIEFING_PRESETS.find(([time]) => time === preferences.daily_nudge_summary_time);
+    setNudgeSummaryPreset(nudgePreset ? nudgePreset[0] : "custom");
   }, []);
 
   useEffect(() => {
@@ -65,19 +78,42 @@ export default function NotificationSettings() {
       briefingPreset === "custom"
         ? (form.get("briefing_time_custom") as string | null) ?? prefs.briefing_time
         : briefingPreset;
+    // The delivery-time selector is disabled (and so absent from FormData)
+    // whenever the toggle above it is off — read from React state instead
+    // of the form in that case, which is exactly what keeps the previously
+    // chosen time intact for when the user re-enables it later.
+    const nudgeSummaryTime = !nudgeSummaryEnabled
+      ? prefs.daily_nudge_summary_time
+      : nudgeSummaryPreset === "custom"
+        ? (form.get("daily_nudge_summary_time_custom") as string | null) ?? prefs.daily_nudge_summary_time
+        : nudgeSummaryPreset;
     try {
       const updated = await api.updateNotificationPreferences({
         push_enabled: form.get("push_enabled") === "on",
         in_app_enabled: form.get("in_app_enabled") === "on",
         email_enabled: form.get("email_enabled") === "on",
         event_reminders_enabled: form.get("event_reminders_enabled") === "on",
+        default_event_reminder_enabled: prefs.default_event_reminder_enabled,
+        default_event_reminder_minutes: prefs.default_event_reminder_minutes,
+        all_day_reminder_enabled: prefs.all_day_reminder_enabled,
+        all_day_reminder_time: prefs.all_day_reminder_time,
+        default_calendar_id: prefs.default_calendar_id,
+        week_starts_on: prefs.week_starts_on,
+        show_declined_events: prefs.show_declined_events,
         event_invitations_enabled: form.get("event_invitations_enabled") === "on",
         event_changes_enabled: form.get("event_changes_enabled") === "on",
         household_reminders_enabled: form.get("household_reminders_enabled") === "on",
+        list_assignments_enabled: form.get("list_assignments_enabled") === "on",
+        wishlist_sharing_enabled: form.get("wishlist_sharing_enabled") === "on",
         daily_briefing_enabled: form.get("daily_briefing_enabled") === "on",
         briefing_time: briefingTime,
         briefing_days: form.get("briefing_days") === "weekdays" ? "weekdays" : "daily",
         empty_day_briefing_enabled: form.get("empty_day_briefing_enabled") === "on",
+        daily_nudge_summary_enabled: nudgeSummaryEnabled,
+        daily_nudge_summary_time: nudgeSummaryTime,
+        nudges_evening_cleanup_enabled: form.get("nudges_evening_cleanup_enabled") === "on",
+        nudges_evening_time: (form.get("nudges_evening_time") as string) || prefs.nudges_evening_time,
+        nudges_day_complete_enabled: form.get("nudges_day_complete_enabled") === "on",
         lock_screen_preview_level:
           (form.get("lock_screen_preview_level") as NotificationPreferences["lock_screen_preview_level"]) ??
           "title_only",
@@ -133,6 +169,13 @@ export default function NotificationSettings() {
     }
   }
 
+  async function enableNativeOnThisDevice() {
+    setError("");
+    const result = await requestNativePermission();
+    if (result === "granted") setMessage("Notifications are enabled on this device.");
+    else if (result === "denied") setError("Notifications are disabled for MyKhaya in iOS Settings.");
+  }
+
   async function removeDevice(id: string) {
     await api.deletePushSubscription(id);
     setDevices((current) => current.filter((device) => device.id !== id));
@@ -161,7 +204,32 @@ export default function NotificationSettings() {
 
       <section className="card details">
         <h2>This device</h2>
-        {!isStandalone() ? (
+        {isNativeShell() ? (
+          <>
+            <p>
+              <strong>Notifications on this device</strong>
+              <br />
+              {nativePermissionLoading
+                ? "Checking…"
+                : nativePermissionStatus === "granted"
+                  ? "Enabled ✓"
+                  : nativePermissionStatus === "denied"
+                    ? "Off"
+                    : nativePermissionStatus === "restricted"
+                      ? "Restricted by this device"
+                      : "Not yet turned on"}
+            </p>
+            {nativePermissionStatus === "denied" ? (
+              <button type="button" className="secondary" onClick={() => void openSystemNotificationSettings()}>
+                <Bell size={16} aria-hidden="true" /> Enable in phone settings
+              </button>
+            ) : nativePermissionStatus === "not_requested" ? (
+              <button type="button" className="secondary" onClick={() => void enableNativeOnThisDevice()}>
+                <Bell size={16} aria-hidden="true" /> Enable notifications
+              </button>
+            ) : null}
+          </>
+        ) : !isStandalone() ? (
           <p>Install MyKhaya to your Home Screen first to enable notifications.</p>
         ) : (
           <button type="button" className="secondary" onClick={enableOnThisDevice} disabled={subscribing}>
@@ -238,6 +306,69 @@ export default function NotificationSettings() {
             defaultChecked={prefs.household_reminders_enabled}
           />{" "}
           Household reminders (bins, routines)
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            name="list_assignments_enabled"
+            defaultChecked={prefs.list_assignments_enabled}
+          /> List item assignments
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            name="wishlist_sharing_enabled"
+            defaultChecked={prefs.wishlist_sharing_enabled}
+          /> Wishlist sharing
+        </label>
+
+        <h2>Nudges</h2>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={nudgeSummaryEnabled}
+            onChange={(event) => setNudgeSummaryEnabled(event.target.checked)}
+          />{" "}
+          Send me a daily Nudge summary
+        </label>
+        <p className="muted">One notification with today&rsquo;s routines, reminders and assigned to-dos.</p>
+        <label>
+          Delivery time
+          <select
+            value={nudgeSummaryPreset}
+            disabled={!nudgeSummaryEnabled}
+            onChange={(event) => setNudgeSummaryPreset(event.target.value)}
+          >
+            {BRIEFING_PRESETS.map(([time, label]) => (
+              <option key={time} value={time}>
+                {label} ({time})
+              </option>
+            ))}
+            <option value="custom">Custom time</option>
+          </select>
+        </label>
+        {nudgeSummaryPreset === "custom" && (
+          <label>
+            Custom time
+            <input
+              type="time"
+              name="daily_nudge_summary_time_custom"
+              defaultValue={prefs.daily_nudge_summary_time}
+              disabled={!nudgeSummaryEnabled}
+            />
+          </label>
+        )}
+        <label className="check-row">
+          <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
+          Evening Clean-up
+        </label>
+        <label>
+          Evening Clean-up time
+          <input type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />
+        </label>
+        <label className="check-row">
+          <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
+          Day Complete acknowledgement
         </label>
 
         <h2>Daily briefing</h2>

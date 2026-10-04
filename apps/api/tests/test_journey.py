@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -8,8 +9,9 @@ from sqlalchemy import select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import ActionToken, TokenPurpose, User
+from mykhaya.models import ActionToken, SubscriptionPlan, TokenPurpose, User
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -45,12 +47,19 @@ async def latest_token(email: str, purpose: TokenPurpose) -> str:
         return derived_token(row.id, purpose.value, get_settings().secret_key.get_secret_value())
 
 
-async def create_verified_user(client: AsyncClient, email: str, name: str) -> None:
+async def create_verified_user(
+    client: AsyncClient, email: str, name: str, **registration_fields: object
+) -> None:
     response = await unsafe(
         client,
         "POST",
         "/api/v1/auth/register",
-        json={"email": email, "display_name": name, "password": PASSWORD},
+        json={
+            "email": email,
+            "display_name": name,
+            "password": PASSWORD,
+            **registration_fields,
+        },
     )
     assert response.status_code == 202
     token = await latest_token(email, TokenPurpose.verify_email)
@@ -130,6 +139,14 @@ async def test_onboarding_invitation_tenant_denial_and_removed_member(client: As
     created = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Hales Home"})
     assert created.status_code == 201
     group_id = created.json()["id"]
+    # home.max_members restricts Free to a single person — this test is
+    # about tenant isolation/mass-assignment, not commercial gating, so
+    # upgrade to Family to invite at all.
+    async with SessionFactory() as db:
+        subscription = await get_home_subscription(db, uuid.UUID(group_id))
+        assert subscription is not None
+        subscription.plan = SubscriptionPlan.family
+        await db.commit()
     invitation = await unsafe(
         client,
         "POST",
@@ -139,7 +156,7 @@ async def test_onboarding_invitation_tenant_denial_and_removed_member(client: As
     assert invitation.status_code == 201
     invitation_id = invitation.json()["id"]
     raw_invitation = derived_token(
-        __import__("uuid").UUID(invitation_id),
+        uuid.UUID(invitation_id),
         "invitation",
         get_settings().secret_key.get_secret_value(),
     )

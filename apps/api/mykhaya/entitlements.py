@@ -1,0 +1,990 @@
+"""The single authoritative path from a Home to its effective commercial plan
+and entitlements. See docs/architecture/commercial-entitlements.md.
+
+    Home -> HomeSubscription -> effective plan -> PlanDefinition -> entitlements/limits
+
+Deliberately provider-agnostic: nothing here mentions Stripe. The application
+asks "does this Home have entitlement X" / "what's this Home's limit for Y" —
+never "does this Home have a stripe_subscription_id". See "API/domain
+separation" in the architecture doc.
+
+Fails safe throughout: a missing HomeSubscription row, an unrecognised
+plan/provider/status, or expired complimentary access all resolve to Free,
+never to Family. An unknown entitlement/limit key resolves to "not entitled" /
+zero, never to unlimited.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
+
+from fastapi import HTTPException, status
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mykhaya.models import (
+    CalendarEventLabel,
+    CalendarShare,
+    CalendarShareStatus,
+    Group,
+    HomeCalendar,
+    HomeEntitlementGrant,
+    HomeSubscription,
+    HomeSubscriptionEvent,
+    HouseholdList,
+    HouseholdRelationship,
+    HouseholdRoutine,
+    Membership,
+    RoutineScope,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    SubscriptionStatus,
+)
+from mykhaya.schemas import CalendarUsageResponse
+
+# Statuses under which a subscription's own `plan` is actually honoured.
+# past_due deliberately still counts as active — this is Phase 3's explicit
+# dunning policy, not a placeholder: Stripe's own Smart Retries handle
+# reattempting payment, and MyKhaya only reacts to the terminal outcome
+# (customer.subscription.deleted -> cancelled) rather than running a second,
+# competing downgrade timer of its own. A single missed payment never causes
+# an instant downgrade; retain access, let the customer fix their payment
+# method via the Stripe Customer Portal, and downgrade only once Stripe
+# itself gives up. See "past_due and dunning" in
+# docs/architecture/commercial-entitlements.md. A fully `cancelled`
+# subscription (or one whose complimentary access has expired) resolves to
+# Free.
+_PLAN_HONOURED_STATUSES = frozenset(
+    {
+        SubscriptionStatus.active,
+        SubscriptionStatus.trialing,
+        SubscriptionStatus.past_due,
+        SubscriptionStatus.cancel_at_period_end,
+    }
+)
+
+
+@dataclass(frozen=True)
+class PlanDefinition:
+    plan: SubscriptionPlan
+    # Boolean feature entitlements, e.g. "lists.enabled".
+    booleans: dict[str, bool]
+    # Numeric limits, e.g. "calendar.max_tags". None means unlimited.
+    limits: dict[str, int | None]
+
+
+# The one place plan capabilities are defined. Adding an entitlement later is
+# "add a key here" — never `if home.plan == "family"` scattered through
+# routers.
+#
+# Enforced today (a real endpoint calls require_entitlement/require_within_limit
+# against it): calendar.max_tags, calendar.max_calendars, home.max_members,
+# routines.personal.max_active, routines.household.enabled, meals.enabled,
+# lists.enabled + lists.max_lists (mykhaya.routers.lists, reusing
+# FeatureKey.shopping's release slot — see docs/architecture/meal-plans.md
+# "Lists integration"; lists.enabled is True on both plans, with
+# lists.max_lists as the actual Free/Family differentiator, Phase 2B),
+# nudges.enabled (mykhaya.routers.household_routines/reminders/todos —
+# independent of, and checked in addition to, FeatureKey.nudges's
+# platform/Home module gating, Phase 2B).
+# members.external_invites.enabled now also gates creating an external
+# Calendar Share (mykhaya.routers.calendar_sharing.create_share) — the
+# source Home's plan, never the recipient's, per the "Deferred enforcement"
+# design this resolves.
+#
+# Declared as commercial data only — no live enforcement, because either the
+# underlying module doesn't exist/isn't released yet (chores/wishlists/
+# notes — see mykhaya.module_registry), or the correct enforcement design is
+# a deliberate follow-up task rather than something to improvise here
+# (events.shared.enabled, family_plans.enabled, support.priority.enabled —
+# see "Deferred enforcement" in docs/architecture/commercial-entitlements.md):
+PLAN_DEFINITIONS: dict[SubscriptionPlan, PlanDefinition] = {
+    SubscriptionPlan.free: PlanDefinition(
+        plan=SubscriptionPlan.free,
+        booleans={
+            # Notes is included on both plans (it's a core-organiser feature,
+            # not a household-coordination one) — the module itself is still
+            # unreleased (mykhaya.module_registry), so this is data only
+            # until it ships.
+            "notes.enabled": True,
+            # Lists is included on Free too (Phase 2B) — bounded by the
+            # lists.max_lists numeric limit below, not a boolean gate. The
+            # key stays here (rather than being removed) because module
+            # access still requires it to be True on both plans — see
+            # "Module flag vs commercial entitlement" in
+            # docs/architecture/commercial-entitlements.md.
+            "lists.enabled": True,
+            "chores.enabled": False,
+            "wishlists.enabled": False,
+            "routines.household.enabled": False,
+            "events.shared.enabled": False,
+            "members.external_invites.enabled": False,
+            "family_plans.enabled": False,
+            "support.priority.enabled": False,
+            # Meal Plans (mykhaya.routers.meal_plans) — Family-only, per
+            # docs/architecture/meal-plans.md.
+            "meals.enabled": False,
+            # Nudges (Routines + Reminders + To-dos) — Family-only (Phase
+            # 2B). Independent of FeatureKey.nudges (platform/Home module
+            # gating) — see mykhaya.routers.household_routines/reminders/
+            # todos, which require both.
+            "nudges.enabled": False,
+            # Ultimate-only premium modules. Independent of FeatureKey.budget/
+            # driveway (platform/Home module gating) — see
+            # mykhaya.routers.budget/driveway, which require both.
+            "budget.enabled": False,
+            "driveway.enabled": False,
+        },
+        limits={
+            # User-created Calendar Tags; the primary Home calendar is a
+            # separate resource governed by calendar.max_calendars.
+            "calendar.max_tags": 2,
+            # Retained as a read-only compatibility key for existing billing
+            # diagnostics; all Calendar Tag enforcement uses max_tags.
+            "calendar.max_categories": 1,
+            # Phase 2C: the total number of usable HomeCalendar rows — both
+            # the Home's own shared/"Home Calendar" (owner_user_id IS NULL)
+            # and every member's Personal Calendar (owner_user_id IS NOT
+            # NULL) count against this one combined limit. Deliberately
+            # distinct from calendar.max_categories, which continues to
+            # govern only CalendarEventLabel ("event category") count and
+            # is otherwise unchanged. See mykhaya.routers.calendar's
+            # _calendar_access for how the single retained calendar is
+            # chosen (always the retained Free member's own Personal
+            # Calendar — see mykhaya.entitlements.retained_member_id) —
+            # this reintroduces, under a new name and a materially
+            # different combined-resource-type meaning, the restriction the
+            # "Commercial plan cleanup" task deliberately renamed away from
+            # calendar.max_calendars to calendar.max_categories; see that
+            # migration's own comment in routers/calendar.py for the prior,
+            # different, abandoned meaning.
+            "calendar.max_calendars": 1,
+            "home.max_members": 1,
+            "routines.personal.max_active": 3,
+            # Household Lists a Free Home may have active at once — Phase
+            # 2B. See mykhaya.routers.lists' numeric-limit enforcement and
+            # classify_ordered_resources-based downgrade classification.
+            "lists.max_lists": 2,
+        },
+    ),
+    SubscriptionPlan.family: PlanDefinition(
+        plan=SubscriptionPlan.family,
+        booleans={
+            "notes.enabled": True,
+            "lists.enabled": True,
+            "chores.enabled": True,
+            "wishlists.enabled": True,
+            "routines.household.enabled": True,
+            "events.shared.enabled": True,
+            "members.external_invites.enabled": True,
+            "family_plans.enabled": True,
+            "support.priority.enabled": True,
+            "meals.enabled": True,
+            "nudges.enabled": True,
+            # Family does not include the Ultimate-only premium modules.
+            "budget.enabled": False,
+            "driveway.enabled": False,
+        },
+        limits={
+            "calendar.max_tags": None,
+            "calendar.max_categories": None,
+            "calendar.max_calendars": None,
+            "home.max_members": None,
+            "routines.personal.max_active": None,
+            "lists.max_lists": None,
+        },
+    ),
+    SubscriptionPlan.ultimate: PlanDefinition(
+        plan=SubscriptionPlan.ultimate,
+        booleans={
+            # Inherits every Family entitlement...
+            "notes.enabled": True,
+            "lists.enabled": True,
+            "chores.enabled": True,
+            "wishlists.enabled": True,
+            "routines.household.enabled": True,
+            "events.shared.enabled": True,
+            "members.external_invites.enabled": True,
+            "family_plans.enabled": True,
+            "support.priority.enabled": True,
+            "meals.enabled": True,
+            "nudges.enabled": True,
+            # ...and adds the premium modules Family does not include.
+            "budget.enabled": True,
+            "driveway.enabled": True,
+        },
+        limits={
+            # Same unlimited limits as Family — Ultimate never restricts
+            # anything Family already leaves uncapped.
+            "calendar.max_tags": None,
+            "calendar.max_categories": None,
+            "calendar.max_calendars": None,
+            "home.max_members": None,
+            "routines.personal.max_active": None,
+            "lists.max_lists": None,
+        },
+    ),
+}
+
+
+class CommercialRestrictionCode(StrEnum):
+    """Stable, provider-neutral codes a frontend can branch on without
+    parsing human-readable text. See "Future module enforcement standard" in
+    docs/architecture/commercial-entitlements.md — every module that gates a
+    boolean entitlement or a numeric limit should raise through
+    `commercial_restriction_error` with one of these, rather than inventing
+    its own error shape."""
+
+    plan_feature_unavailable = "plan_feature_unavailable"
+    plan_limit_reached = "plan_limit_reached"
+    resource_restricted_by_plan = "resource_restricted_by_plan"
+
+
+def commercial_restriction_error(
+    code: CommercialRestrictionCode, message: str, **metadata: Any
+) -> HTTPException:
+    """Builds the one standard shape for a commercial-restriction response:
+    `{"detail": {"code": ..., "message": ..., ...metadata}}`. `metadata` is
+    safe, provider-neutral context only (an entitlement key, a numeric
+    limit) — never a subscription/provider implementation detail (no Stripe
+    status, no Complimentary reason/note, no internal IDs). The existing
+    `detail: str` convention used everywhere else in this codebase keeps
+    working unchanged; `packages/api-client`'s error handling additively
+    recognises this richer shape without breaking that convention."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": code.value, "message": message, **metadata},
+    )
+
+
+def classify_ordered_resources(
+    ordered_ids: Sequence[uuid.UUID], limit: int | None
+) -> dict[uuid.UUID, bool]:
+    """Given resource ids already placed in the caller's own deterministic
+    priority order (e.g. a Home's primary calendar first, then its other
+    calendars oldest-first), returns which ids fall within `limit` — `True`
+    for the ones a Free-limited Home keeps full access to, `False` for the
+    excess ones a downgrade leaves over the limit. `limit=None` means
+    unlimited (every id is `True`). Pure and reusable: any future
+    numeric-limited resource (a second calendar today, something else
+    later) can reuse this instead of re-deriving the same "first N stay
+    normal" rule. This never deletes or mutates anything — it only answers
+    "is this one within the entitled count right now."""
+    if limit is None:
+        return {resource_id: True for resource_id in ordered_ids}
+    return {resource_id: index < limit for index, resource_id in enumerate(ordered_ids)}
+
+
+async def retained_member_id(db: AsyncSession, home_id: uuid.UUID) -> uuid.UUID | None:
+    """Phase 2C: the single member whose access stays fully unrestricted
+    when a Home's effective plan is Free — every other existing member is
+    preserved (never evicted, never deleted; see "Safe downgrade
+    principle") but loses access to household-collaboration resources
+    (see calendar.max_calendars) until the Home returns to Family.
+    home.max_members only ever blocked *new* growth — this is the first
+    place a *retained* single member is chosen from among Homes that
+    already have several, so it is its own function rather than folded
+    into an existing one.
+
+    Deterministic priority order, inspected against the actual
+    role/relationship data (mykhaya.models.HouseholdRelationship) rather
+    than assumed:
+
+    1. A `home_admin` relationship — the Home's own administering account,
+       semantically the right "single person" for a Free personal
+       organiser. A Home can (rarely) have more than one home_admin; the
+       earliest-created one wins, for the same reason as (2).
+    2. Otherwise, the oldest active membership by `created_at`.
+    3. A stable `id` tie-break (UUIDv7 ids are themselves time-ordered, so
+       this only matters for the vanishingly unlikely case of two rows
+       sharing a `created_at` timestamp).
+
+    Returns the member's `user_id` (not the Membership row's own id) since
+    every caller compares it against `HomeCalendar.owner_user_id` or a
+    request's own viewer identity, both of which key off `user_id`.
+    Returns `None` only if the Home has no active membership at all (not
+    reachable in practice — every Home has at least its creator)."""
+    memberships = (
+        await db.scalars(
+            select(Membership)
+            .where(Membership.group_id == home_id, Membership.removed_at.is_(None))
+            .order_by(Membership.created_at.asc(), Membership.id.asc())
+        )
+    ).all()
+    if not memberships:
+        return None
+    admins = [row for row in memberships if row.relationship == HouseholdRelationship.home_admin]
+    retained = admins[0] if admins else memberships[0]
+    return retained.user_id
+
+
+async def get_home_subscription(db: AsyncSession, home_id: uuid.UUID) -> HomeSubscription | None:
+    result: HomeSubscription | None = await db.scalar(
+        select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+    )
+    return result
+
+
+async def ensure_home_subscription(db: AsyncSession, home_id: uuid.UUID) -> HomeSubscription:
+    """Idempotent: returns the existing row if present, otherwise creates the
+    Free/free/active default and records the "created" history event. Called
+    at Home-creation time (routers.groups.create_group) and safe to call
+    again for a pre-existing Home (the migration backfill uses the same
+    default for every existing Group — see migration 0020)."""
+    existing = await get_home_subscription(db, home_id)
+    if existing is not None:
+        return existing
+    subscription = HomeSubscription(group_id=home_id)
+    db.add(subscription)
+    await db.flush()
+    await record_subscription_event(
+        db,
+        home_id,
+        event_type="created",
+        to_plan=SubscriptionPlan.free,
+        to_provider=SubscriptionProvider.free,
+        to_status=SubscriptionStatus.active,
+    )
+    return subscription
+
+
+async def record_subscription_event(
+    db: AsyncSession,
+    home_id: uuid.UUID,
+    *,
+    event_type: str,
+    from_plan: SubscriptionPlan | None = None,
+    to_plan: SubscriptionPlan | None = None,
+    from_provider: SubscriptionProvider | None = None,
+    to_provider: SubscriptionProvider | None = None,
+    from_status: SubscriptionStatus | None = None,
+    to_status: SubscriptionStatus | None = None,
+    actor_administrator_id: uuid.UUID | None = None,
+    reason: str | None = None,
+) -> None:
+    db.add(
+        HomeSubscriptionEvent(
+            group_id=home_id,
+            event_type=event_type,
+            from_plan=from_plan,
+            to_plan=to_plan,
+            from_provider=from_provider,
+            to_provider=to_provider,
+            from_status=from_status,
+            to_status=to_status,
+            actor_administrator_id=actor_administrator_id,
+            reason=reason,
+        )
+    )
+
+
+def _complimentary_active(subscription: HomeSubscription) -> bool:
+    if subscription.complimentary_expires_at is None:
+        return True
+    return subscription.complimentary_expires_at > datetime.now(UTC)
+
+
+def _stripe_entitlement_expired(subscription: HomeSubscription, now: datetime) -> bool:
+    """Whether a Stripe cancellation has reached its paid period end."""
+    if subscription.provider != SubscriptionProvider.stripe:
+        return False
+    if subscription.current_period_end is None or subscription.current_period_end > now:
+        return False
+    return subscription.status in (
+        SubscriptionStatus.cancel_at_period_end,
+        SubscriptionStatus.cancelled,
+    )
+
+
+def resolve_effective_plan(subscription: HomeSubscription | None) -> SubscriptionPlan:
+    """The pure resolution rule — no DB access — shared by `effective_plan()`
+    (single Home) and any bulk listing/summary query that has already fetched
+    a batch of `HomeSubscription` rows and wants to resolve each one without
+    an extra query per row. This is still the one place the rule is written;
+    `effective_plan()` is a thin fetch-then-call-this wrapper, not a second
+    implementation. See module docstring for the fail-safe rules enforced
+    here."""
+    if subscription is None:
+        return SubscriptionPlan.free
+    if subscription.status not in _PLAN_HONOURED_STATUSES:
+        return SubscriptionPlan.free
+    if _stripe_entitlement_expired(subscription, datetime.now(UTC)):
+        return SubscriptionPlan.free
+    if subscription.provider == SubscriptionProvider.complimentary and not _complimentary_active(
+        subscription
+    ):
+        return SubscriptionPlan.free
+    if subscription.plan not in PLAN_DEFINITIONS:
+        return SubscriptionPlan.free  # unrecognised/corrupt value — never trust it
+    return subscription.plan
+
+
+@dataclass(frozen=True)
+class EffectiveStateResolution:
+    plan: SubscriptionPlan
+    # None when the effective plan matches the stored plan exactly (the
+    # common case). Populated with a short, human-readable explanation
+    # whenever they diverge — e.g. expired complimentary access, a
+    # cancelled/lapsed status — for display in the Platform Control Centre.
+    reason: str | None
+
+
+class EntitlementSource(StrEnum):
+    """The authority that granted a scoped access decision."""
+
+    personal = "personal"
+    home_sponsored = "home_sponsored"
+    legacy_home_member = "legacy_home_member"
+    resource_share = "resource_share"
+
+
+@dataclass(frozen=True)
+class UserEntitlementDecision:
+    user_id: uuid.UUID
+    home_id: uuid.UUID
+    entitlement: str
+    source: EntitlementSource
+
+
+async def explain_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> UserEntitlementDecision | None:
+    """Resolve a commercial entitlement for one user inside one Home.
+
+    A Home subscription is personal only when the Home is the user's own
+    Home. A member of another Home receives Family access there only through
+    an explicit, active sponsorship grant from that same Home. The source
+    subscription is checked on every call, so a downgrade or expiry removes
+    sponsored access without rewriting membership or grant history.
+
+    Resource shares intentionally do not participate in this resolver: a
+    calendar share is permission for that calendar, not plan inheritance.
+    """
+    if key not in PLAN_DEFINITIONS[SubscriptionPlan.family].booleans:
+        return None
+
+    personal_home = await db.scalar(
+        select(Group.id)
+        .join(Membership, Membership.group_id == Group.id)
+        .where(
+            Group.id == home_id,
+            Group.created_by == user_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if personal_home is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.personal)
+
+    # Compatibility window: memberships created before Phase 3 have no
+    # explicit yes/no sponsorship decision. Preserve their existing paid-Home
+    # Family access without creating grants or changing their own Home plan.
+    legacy_membership = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == home_id,
+            Membership.user_id == user_id,
+            Membership.removed_at.is_(None),
+            Membership.family_sponsorship_decided.is_(None),
+        )
+    )
+    if legacy_membership is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.legacy_home_member)
+
+    grant = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == home_id,
+            HomeEntitlementGrant.recipient_user_id == user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    member_id = None
+    if grant is not None:
+        member_id = await db.scalar(
+            select(Membership.id).where(
+                Membership.group_id == home_id,
+                Membership.user_id == user_id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    if member_id is not None and await has_entitlement(db, home_id, key):
+        return UserEntitlementDecision(user_id, home_id, key, EntitlementSource.home_sponsored)
+    return None
+
+
+async def has_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> bool:
+    """Whether ``user_id`` has ``key`` in ``home_id`` through a valid source."""
+    return await explain_user_entitlement(db, user_id, home_id, key) is not None
+
+
+async def require_user_entitlement(
+    db: AsyncSession, user_id: uuid.UUID, home_id: uuid.UUID, key: str
+) -> UserEntitlementDecision:
+    """Require a scoped commercial entitlement and return its authority."""
+    decision = await explain_user_entitlement(db, user_id, home_id, key)
+    if decision is None:
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "This feature isn't included in your current access.",
+            entitlement=key,
+        )
+    return decision
+
+
+async def grant_home_family_sponsorship(
+    db: AsyncSession,
+    source_home_id: uuid.UUID,
+    recipient_user_id: uuid.UUID,
+    granted_by_user_id: uuid.UUID | None = None,
+) -> HomeEntitlementGrant:
+    """Create or return a Family sponsorship for an active Home member.
+
+    Caller authorization (normally Home Admin capability checking) remains at
+    the route/service boundary; this function enforces the commercial and
+    membership invariants inside the transaction that writes the grant.
+    """
+    if await effective_plan(db, source_home_id) != SubscriptionPlan.family:
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "Family sponsorship requires an active Family subscription.",
+            entitlement="family",
+        )
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.group_id == source_home_id,
+            Membership.user_id == recipient_user_id,
+            Membership.removed_at.is_(None),
+        )
+    )
+    if membership is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user is not an active Home member.")
+    home_owner_id = await db.scalar(select(Group.created_by).where(Group.id == source_home_id))
+    if (
+        recipient_user_id == home_owner_id
+        or membership.relationship == HouseholdRelationship.home_admin
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The Home Admin receives Family access from this Home's subscription, not sponsorship.",
+        )
+    existing = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == source_home_id,
+            HomeEntitlementGrant.recipient_user_id == recipient_user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    if existing is not None:
+        return existing
+    grant = HomeEntitlementGrant(
+        source_group_id=source_home_id,
+        recipient_user_id=recipient_user_id,
+        entitlement_key="family",
+        granted_by_user_id=granted_by_user_id,
+    )
+    db.add(grant)
+    await db.flush()
+    return grant
+
+
+async def revoke_home_family_sponsorship(
+    db: AsyncSession, source_home_id: uuid.UUID, recipient_user_id: uuid.UUID
+) -> bool:
+    """Revoke only this Home's sponsorship; membership remains untouched."""
+    grant = await db.scalar(
+        select(HomeEntitlementGrant).where(
+            HomeEntitlementGrant.source_group_id == source_home_id,
+            HomeEntitlementGrant.recipient_user_id == recipient_user_id,
+            HomeEntitlementGrant.entitlement_key == "family",
+            HomeEntitlementGrant.revoked_at.is_(None),
+        )
+    )
+    if grant is None:
+        return False
+    grant.revoked_at = datetime.now(UTC)
+    return True
+
+
+async def transition_expired_family_home(
+    db: AsyncSession, home_id: uuid.UUID, *, now: datetime | None = None
+) -> bool:
+    """Materialise the reversible membership transition only at expiry.
+
+    Deployment and migration never call this. Billing reconciliation/status
+    paths may call it after Stripe has recorded cancellation and the paid
+    period has ended. The advisory lock and history marker make retries safe.
+    """
+    effective_now = now or datetime.now(UTC)
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"family-retention:{home_id}"},
+    )
+    subscription = await get_home_subscription(db, home_id)
+    if subscription is None or not _stripe_entitlement_expired(subscription, effective_now):
+        return False
+    # Keep lifecycle timestamps anchored to the authoritative Stripe expiry,
+    # even when a webhook/reconciliation read arrives later.
+    effective_expiry = subscription.current_period_end
+    assert effective_expiry is not None
+    already_transitioned = await db.scalar(
+        select(HomeSubscriptionEvent.id).where(
+            HomeSubscriptionEvent.group_id == home_id,
+            HomeSubscriptionEvent.event_type == "family_entitlement_expired",
+        )
+    )
+    if already_transitioned is not None:
+        return False
+
+    retained_user_id = await retained_member_id(db, home_id)
+    memberships = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.group_id == home_id,
+                Membership.removed_at.is_(None),
+            )
+        )
+    ).all()
+    for membership in memberships:
+        if membership.user_id != retained_user_id:
+            membership.removed_at = effective_expiry
+
+    grants = (
+        await db.scalars(
+            select(HomeEntitlementGrant).where(
+                HomeEntitlementGrant.source_group_id == home_id,
+                HomeEntitlementGrant.entitlement_key == "family",
+                HomeEntitlementGrant.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    for grant in grants:
+        grant.revoked_at = effective_expiry
+
+    await record_subscription_event(
+        db,
+        home_id,
+        event_type="family_entitlement_expired",
+        from_plan=subscription.plan,
+        to_plan=SubscriptionPlan.free,
+        from_provider=subscription.provider,
+        to_provider=subscription.provider,
+        from_status=subscription.status,
+        to_status=subscription.status,
+        reason="Family entitlement reached its paid period end.",
+    )
+    return True
+
+
+async def explain_resource_access(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    resource_type: str,
+    resource_id: uuid.UUID,
+) -> UserEntitlementDecision | None:
+    """Resolve explicit resource permission without granting plan access."""
+    if resource_type != "calendar":
+        return None
+    share = await db.scalar(
+        select(CalendarShare).where(
+            CalendarShare.recipient_user_id == user_id,
+            CalendarShare.resource_type == resource_type,
+            CalendarShare.calendar_id == resource_id,
+            CalendarShare.status == CalendarShareStatus.accepted,
+            CalendarShare.revoked_at.is_(None),
+            CalendarShare.expires_at > datetime.now(UTC),
+        )
+    )
+    if share is None:
+        return None
+    return UserEntitlementDecision(
+        user_id, share.source_group_id, resource_type, EntitlementSource.resource_share
+    )
+
+
+def resolve_effective_state(subscription: HomeSubscription | None) -> EffectiveStateResolution:
+    """Like resolve_effective_plan, but also explains *why* when the
+    effective plan differs from the stored one — for Platform Control Centre
+    diagnostics (mykhaya.routers.platform's subscription detail endpoint).
+    Never used for authorization; only for display."""
+    plan = resolve_effective_plan(subscription)
+    if subscription is None:
+        return EffectiveStateResolution(plan=plan, reason=None)
+    if plan == subscription.plan:
+        return EffectiveStateResolution(plan=plan, reason=None)
+    if subscription.provider == SubscriptionProvider.complimentary and not _complimentary_active(
+        subscription
+    ):
+        return EffectiveStateResolution(plan=plan, reason="Complimentary access expired")
+    if subscription.status == SubscriptionStatus.cancelled:
+        return EffectiveStateResolution(plan=plan, reason="Subscription cancelled")
+    if subscription.status not in _PLAN_HONOURED_STATUSES:
+        return EffectiveStateResolution(plan=plan, reason="Subscription not currently active")
+    if subscription.plan not in PLAN_DEFINITIONS:
+        return EffectiveStateResolution(plan=plan, reason="Unrecognised stored plan value")
+    return EffectiveStateResolution(plan=plan, reason=None)
+
+
+def effective_plan_sql_filter(plan: SubscriptionPlan) -> ColumnElement[bool]:
+    """A SQL-expressible mirror of resolve_effective_plan's tier resolution,
+    for filtering a listing query (mykhaya.routers.platform's subscription
+    list/summary endpoints) without fetching every row into Python first.
+
+    This is a *filter*, never an authorization decision — resolve_effective_plan
+    (via effective_plan()) remains the only authoritative per-Home resolution.
+    Query against an outer join of Group -> HomeSubscription, since a Home
+    with no subscription row must count as Free here exactly as it does in
+    resolve_effective_plan. Kept in sync with resolve_effective_plan by
+    test_effective_plan_sql_filter_matches_python_resolution."""
+    complimentary_expired = and_(
+        HomeSubscription.provider == SubscriptionProvider.complimentary,
+        HomeSubscription.complimentary_expires_at.is_not(None),
+        HomeSubscription.complimentary_expires_at <= func.now(),
+    )
+    stripe_period_expired = and_(
+        HomeSubscription.provider == SubscriptionProvider.stripe,
+        HomeSubscription.status.in_(
+            (SubscriptionStatus.cancel_at_period_end, SubscriptionStatus.cancelled)
+        ),
+        HomeSubscription.current_period_end.is_not(None),
+        HomeSubscription.current_period_end <= func.now(),
+    )
+    is_effectively_free = or_(
+        HomeSubscription.id.is_(None),
+        HomeSubscription.status.not_in(_PLAN_HONOURED_STATUSES),
+        complimentary_expired,
+        stripe_period_expired,
+        HomeSubscription.plan == SubscriptionPlan.free,
+    )
+    if plan == SubscriptionPlan.free:
+        return is_effectively_free
+    # A non-free effective plan is whatever the stored plan says, as long as
+    # the subscription is honoured (not lapsed/expired) — narrow to the
+    # exact requested tier so a 3+-tier PLAN_DEFINITIONS (e.g. family vs.
+    # ultimate) is never conflated into a single "not free" bucket.
+    return and_(
+        HomeSubscription.id.is_not(None), not_(is_effectively_free), HomeSubscription.plan == plan
+    )
+
+
+def complimentary_expired_sql_filter() -> ColumnElement[bool]:
+    """SQL mirror of the complimentary-expiry check in resolve_effective_plan,
+    for the "expired complimentary" summary count and list filter."""
+    return and_(
+        HomeSubscription.provider == SubscriptionProvider.complimentary,
+        HomeSubscription.complimentary_expires_at.is_not(None),
+        HomeSubscription.complimentary_expires_at <= func.now(),
+    )
+
+
+async def effective_plan(db: AsyncSession, home_id: uuid.UUID) -> SubscriptionPlan:
+    """The single authoritative resolution. See module docstring for the
+    fail-safe rules this enforces."""
+    subscription = await get_home_subscription(db, home_id)
+    return resolve_effective_plan(subscription)
+
+
+def plan_definition_for(plan: SubscriptionPlan) -> PlanDefinition:
+    return PLAN_DEFINITIONS.get(plan, PLAN_DEFINITIONS[SubscriptionPlan.free])
+
+
+async def _plan_definition(db: AsyncSession, home_id: uuid.UUID) -> PlanDefinition:
+    plan = await effective_plan(db, home_id)
+    return plan_definition_for(plan)
+
+
+async def has_entitlement(db: AsyncSession, home_id: uuid.UUID, key: str) -> bool:
+    definition = await _plan_definition(db, home_id)
+    return definition.booleans.get(key, False)  # unknown key -> not entitled
+
+
+async def require_entitlement(db: AsyncSession, home_id: uuid.UUID, key: str) -> None:
+    if not await has_entitlement(db, home_id, key):
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_feature_unavailable,
+            "This feature isn't included in your current plan.",
+            entitlement=key,
+        )
+
+
+async def get_limit(db: AsyncSession, home_id: uuid.UUID, key: str) -> int | None:
+    """Returns the numeric limit, or None for unlimited. An unrecognised key
+    fails safe to 0 (not unlimited) — see has_entitlement's docstring."""
+    definition = await _plan_definition(db, home_id)
+    if key not in definition.limits:
+        return 0
+    return definition.limits[key]
+
+
+async def require_within_limit(
+    db: AsyncSession, home_id: uuid.UUID, key: str, current_count: int
+) -> None:
+    """Raises if `current_count` (the count *before* adding one more) has
+    already reached the Home's limit for `key`.
+
+    Concurrency note: this function only compares numbers — it does not
+    itself protect against two concurrent requests both reading the same
+    `current_count` and both proceeding. A caller enforcing a limit on
+    resource *creation* must take the same precaution the codebase already
+    uses for other Home-scoped invariants that can't be expressed as a plain
+    unique constraint (see routers.platform's
+    `SELECT pg_advisory_xact_lock(...)` around the last-Owner check): acquire
+    an advisory lock (or `SELECT ... FOR UPDATE` on the parent Home row)
+    before counting and inserting, within the same transaction, so the count
+    this function checks can't go stale before the insert commits. No caller
+    does this yet in Phase 1 — MyKhaya has no user-facing "create another
+    calendar" endpoint at all (see docs/architecture/commercial-entitlements.md
+    "Calendar as proof of architecture"), so there is nothing to enforce this
+    against yet.
+
+    Phase 6 note: this is now used — see routers.calendar's calendar-creation
+    endpoint, which wraps the count-then-call sequence in a
+    `pg_advisory_xact_lock` per this docstring's own precaution."""
+    limit = await get_limit(db, home_id, key)
+    if limit is not None and current_count >= limit:
+        raise commercial_restriction_error(
+            CommercialRestrictionCode.plan_limit_reached,
+            "This would exceed what your current plan allows. Upgrade to add more.",
+            entitlement=key,
+            limit=limit,
+        )
+
+
+async def calendar_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many HomeCalendar rows a Home currently has vs. its plan's
+    calendar.max_categories. HomeCalendar itself is *not* the resource
+    customers manage as "event categories" day to day — see category_usage
+    below for that — but it shares the same limit key and is independently
+    enforced (routers.calendar's create_calendar), so this stays accurate
+    for the Platform Control Centre's commercial-detail diagnostics.
+
+    Personal Calendars (owner_user_id IS NOT NULL) are excluded — they are a
+    core per-member capability, not a Home-administered/entitlement-gated
+    resource, and must never count against a Free Home's single shared
+    calendar allowance just because it has members. See
+    routers.calendar._ordered_calendars for the matching exclusion on the
+    enforcement side."""
+    count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(HomeCalendar)
+            .where(HomeCalendar.group_id == home_id, HomeCalendar.owner_user_id.is_(None))
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "calendar.max_calendars")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def category_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many *active* CalendarEventLabel rows a Home currently has vs.
+    calendar.max_categories. This is the actual resource shown on Settings
+    -> Home settings' "Calendars & categories" page — the one customers
+    experience as "event categories" (every event belongs to one; its
+    colour is what Calendar renders) — see "Event categories are
+    CalendarEventLabel, not HomeCalendar" in
+    docs/architecture/commercial-entitlements.md. Shares the same limit key
+    as calendar_usage/HomeCalendar by design (one entitlement, two
+    independently-tracked resources), not a second plan-checking system."""
+    count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(CalendarEventLabel)
+            .where(CalendarEventLabel.group_id == home_id, CalendarEventLabel.is_active.is_(True))
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "calendar.max_tags")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def member_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many active members a Home currently has vs. its plan's
+    home.max_members. Same shared-diagnostic role as calendar_usage — see
+    its docstring."""
+    count = (
+        await db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == home_id, Membership.removed_at.is_(None)
+            )
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "home.max_members")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def personal_routine_usage(
+    db: AsyncSession, home_id: uuid.UUID, user_id: uuid.UUID
+) -> CalendarUsageResponse:
+    """How many *enabled* personal routines a specific member currently owns
+    vs. the Home's plan limit for routines.personal.max_active — the limit
+    is per person (see mykhaya.routers.household_routines.create_routine),
+    not per Home, so this always takes a user_id rather than aggregating
+    across the whole Home."""
+    count = (
+        await db.scalar(
+            select(func.count(HouseholdRoutine.id)).where(
+                HouseholdRoutine.group_id == home_id,
+                HouseholdRoutine.scope == RoutineScope.personal,
+                HouseholdRoutine.owner_user_id == user_id,
+                HouseholdRoutine.enabled.is_(True),
+            )
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "routines.personal.max_active")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def list_usage(db: AsyncSession, home_id: uuid.UUID) -> CalendarUsageResponse:
+    """How many active (non-deleted) HouseholdList rows a Home currently has
+    vs. its plan's lists.max_lists — same shared-diagnostic shape/purpose as
+    calendar_usage. See mykhaya.routers.lists' _ordered_lists/_list_access
+    for the matching enforcement-side classification (same rows, same
+    ordering)."""
+    count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(HouseholdList)
+            .where(HouseholdList.group_id == home_id, HouseholdList.deleted_at.is_(None))
+        )
+        or 0
+    )
+    limit = await get_limit(db, home_id, "lists.max_lists")
+    return CalendarUsageResponse(
+        count=count, limit=limit, over_limit=limit is not None and count > limit
+    )
+
+
+async def personal_routines_total(db: AsyncSession, home_id: uuid.UUID) -> int:
+    """Total enabled personal routines across every member of a Home — an
+    informational aggregate for Platform Control Centre display only (the
+    limit itself is per person, so this number is never compared directly
+    against the limit — see personal_routine_usage for the per-person
+    check that's actually enforced)."""
+    return (
+        await db.scalar(
+            select(func.count(HouseholdRoutine.id)).where(
+                HouseholdRoutine.group_id == home_id,
+                HouseholdRoutine.scope == RoutineScope.personal,
+                HouseholdRoutine.enabled.is_(True),
+            )
+        )
+        or 0
+    )

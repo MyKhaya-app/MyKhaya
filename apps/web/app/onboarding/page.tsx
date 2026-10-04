@@ -1,27 +1,430 @@
 "use client";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { FamilyPricing, HomeJoinCodeLookup } from "@mykhaya/shared-types";
+import type { PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { api, ApiError } from "@mykhaya/api-client";
 import { Logo } from "@/components/logo";
 import { FormStatus } from "@/components/form-status";
+import { intervalSuffix } from "@/components/billing-logic";
+import {
+  canStartFamilyCheckout,
+  canStartUltimateCheckout,
+  isBestValueInterval,
+  pricingOptionFor,
+  savingLabelFor,
+  ultimatePricingOptionFor,
+} from "@/components/family-pricing-logic";
+import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
+import type { BillingIntervalChoice } from "@/components/onboarding-intent";
+import { nativeLogout } from "@/components/native-auth";
+import { isNativeShell } from "@/components/native-runtime";
+
+type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "plan";
+
+// Home creation always establishes the normal Free/free/active default
+// first (see mykhaya.entitlements.ensure_home_subscription, called from
+// POST /groups) — the plan step below only ever offers to *upgrade* an
+// already-Free Home via the existing authenticated Checkout endpoint. A
+// visitor who never reaches this page (an invited member joining an
+// existing Home via /invitations/accept) never sees it either — see
+// docs/architecture/commercial-entitlements.md#phase-5.
+//
+// The "choice" step below is the entry point for every genuinely Home-less
+// authenticated account (see components/app-shell.tsx's redirect) — Join an
+// existing Home (via a Home join code, see mykhaya.routers.home_join) or
+// Create a new Home (the pre-existing "home"/"plan" steps, unchanged).
+// Neither branch is forced: an account may sit Home-less indefinitely.
 export default function Onboarding() {
   const router = useRouter();
+  const [step, setStep] = useState<Step>("choice");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent<HTMLFormElement>) {
+  const [homeId, setHomeId] = useState<string | null>(null);
+  const [pricing, setPricing] = useState<FamilyPricing | null>(null);
+  const [pricingError, setPricingError] = useState(false);
+  const [legalDocuments, setLegalDocuments] = useState<PublicLegalDocumentSummary[] | null>(null);
+  const [billingInterval, setBillingInterval] = useState<BillingIntervalChoice>("month");
+  const [requestedPlan, setRequestedPlan] = useState<"family" | "ultimate">("family");
+  const [joinCodeInput, setJoinCodeInput] = useState("");
+  const [matchedHome, setMatchedHome] = useState<HomeJoinCodeLookup | null>(null);
+
+  useEffect(() => {
+    if (step !== "plan") return;
+    const intent = readOnboardingIntent();
+    if (intent) {
+      setBillingInterval(intent.interval);
+      if (intent.plan === "ultimate") setRequestedPlan("ultimate");
+    }
+    api.familyPricing().then(setPricing).catch(() => setPricingError(true));
+    api.publicLegalDocuments().then(setLegalDocuments).catch(() => setLegalDocuments([]));
+  }, [step]);
+
+  async function submitHome(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
+    setError("");
     const d = new FormData(e.currentTarget);
     try {
-      await api.post("/groups", { name: d.get("name") });
-      router.push("/home");
+      const group = await api.post<{ id: string }>("/groups", { name: d.get("name") });
+      setHomeId(group.id);
+      setStep("plan");
     } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : "We couldn’t create your Home.",
-      );
+      setError(err instanceof ApiError ? err.message : "We couldn’t create your Home.");
+    } finally {
       setBusy(false);
     }
   }
+
+  async function findHome(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const match = await api.lookupHomeJoinCode(joinCodeInput);
+      setMatchedHome(match);
+      setStep("join-confirm");
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "That Home join code was not recognised.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestToJoin() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.requestHomeJoin(joinCodeInput);
+      setStep("join-sent");
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "We couldn’t send that request. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    if (isNativeShell()) {
+      await nativeLogout();
+    } else {
+      await api.post("/auth/logout", {});
+    }
+    router.push("/login");
+  }
+
+  function continueWithFree() {
+    clearOnboardingIntent();
+    router.push("/home");
+  }
+
+  async function upgradeToFamily(plan: "family" | "ultimate" = requestedPlan) {
+    if (!homeId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { checkout_url: checkoutUrl } = await api.createCheckoutSession(
+        homeId,
+        billingInterval,
+        plan,
+      );
+      clearOnboardingIntent();
+      window.location.href = checkoutUrl;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        setError("Billing is not available right now. You can continue on Free and try again later.");
+      } else if (err instanceof ApiError && err.status === 409) {
+        setError("This Home already has an active subscription.");
+      } else {
+        setError("We couldn’t start checkout. You can continue on Free and try again later.");
+      }
+      setBusy(false);
+    }
+  }
+
+  if (step === "choice") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Get started</p>
+          <h1>How would you like to use MyKhaya?</h1>
+          <div className="onboarding-choice-grid">
+            <article className="card feature-card onboarding-choice-card">
+              <h3>Join an existing Home</h3>
+              <p className="muted">
+                Choose this if your partner, family member or housemate already uses MyKhaya.
+                Ask the Home Admin for their Home join code or use an invitation they have sent
+                you.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setError("");
+                  setStep("join-code");
+                }}
+              >
+                Join an existing Home
+              </button>
+            </article>
+            <article className="card feature-card onboarding-choice-card">
+              <h3>Create a new Home</h3>
+              <p className="muted">
+                Choose this if you are setting up MyKhaya for your household for the first time.
+                You&rsquo;ll become the Home Admin and can invite others afterwards.
+              </p>
+              <p className="notice" role="status">
+                If someone in your household already has a MyKhaya Home, choose &ldquo;Join an
+                existing Home&rdquo; instead. Creating a new Home will create a separate
+                household.
+              </p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setError("");
+                  setStep("home");
+                }}
+              >
+                Create a new Home
+              </button>
+            </article>
+            {pricing?.ultimate_options?.length ? (
+              <article className="card feature-card">
+                <div className="feature-card-heading"><h3>Ultimate</h3></div>
+                <p className="muted">Everything in Family, plus Budget, Driveway and future premium modules.</p>
+                <p className="pricing-amount">
+                  <strong>{ultimatePricingOptionFor(pricing, billingInterval)?.formatted_amount ?? "—"}</strong>
+                  <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                </p>
+                {!canStartUltimateCheckout(pricing) ? (
+                  <p className="notice" role="status">New Ultimate sign-ups are temporarily paused.</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
+                    onClick={() => {
+                      setRequestedPlan("ultimate");
+                      void upgradeToFamily("ultimate");
+                    }}
+                  >
+                    {busy ? "One moment…" : "Upgrade to Ultimate"}
+                  </button>
+                )}
+              </article>
+            ) : null}
+          </div>
+          <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
+            Sign out
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-code") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>Join an existing Home</h1>
+          <p className="muted">
+            If someone in your household already uses MyKhaya, ask the Home Admin for their Home
+            join code.
+          </p>
+          <form onSubmit={findHome}>
+            <label>
+              Home join code
+              <input
+                name="code"
+                placeholder="XXXX-XXXX"
+                maxLength={20}
+                required
+                autoFocus
+                autoCapitalize="characters"
+                autoComplete="off"
+                value={joinCodeInput}
+                onChange={(event) => setJoinCodeInput(event.target.value)}
+              />
+            </label>
+            <FormStatus error={error} />
+            <button disabled={busy}>{busy ? "Looking…" : "Find Home"}</button>
+          </form>
+          <button type="button" className="tertiary" onClick={() => setStep("choice")}>
+            Back
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-confirm" && matchedHome) {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>{matchedHome.group_name}</h1>
+          <p className="muted">
+            You&rsquo;re requesting to join this Home. A Home Admin will need to approve your
+            request.
+          </p>
+          <FormStatus error={error} />
+          <button type="button" disabled={busy} onClick={requestToJoin}>
+            {busy ? "Sending…" : "Request to join"}
+          </button>
+          <button
+            type="button"
+            className="tertiary"
+            onClick={() => {
+              setMatchedHome(null);
+              setStep("join-code");
+            }}
+          >
+            Back
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "join-sent") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Join an existing Home</p>
+          <h1>Request sent</h1>
+          <p className="muted">
+            {matchedHome?.group_name ?? "The Home"}&rsquo;s Home Admin will review your request.
+            You&rsquo;ll get access as soon as they approve it.
+          </p>
+          <button type="button" onClick={() => router.push("/home")}>
+            Continue
+          </button>
+          <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
+            Sign out
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "plan") {
+    const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
+    const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
+    const bestValue = pricing ? isBestValueInterval(pricing, billingInterval) : false;
+    const paidCheckoutLegalReady = Boolean(
+      legalDocuments?.some((document) => document.key === "terms" && document.current_version_id) &&
+      legalDocuments?.some((document) => document.key === "privacy" && document.current_version_id),
+    );
+    return (
+      <main className="onboarding">
+        <Logo />
+        <section>
+          <p className="step">Your plan</p>
+          <h1>Choose your MyKhaya plan</h1>
+          <p className="muted">You can change this at any time from Settings.</p>
+
+          <div className="feature-card-grid pricing-cards">
+            <article className="card feature-card">
+              <div className="feature-card-heading">
+                <h3>Free</h3>
+              </div>
+              <p className="muted">A useful personal organiser for one person.</p>
+              <ul className="plan-points">
+                <li>Calendar, events and notes</li>
+                <li>1 Calendar Tag</li>
+                <li>Up to 3 personal routines</li>
+                <li>No payment details required</li>
+              </ul>
+              <button type="button" disabled={busy} onClick={continueWithFree}>
+                Continue with Free
+              </button>
+            </article>
+
+            <article className="card feature-card">
+              <div className="feature-card-heading">
+                <h3>Family</h3>
+                {bestValue && <span className="release-badge core">Best value</span>}
+              </div>
+              <p className="muted">The complete MyKhaya experience for your whole household.</p>
+              <div className="interval-toggle" role="group" aria-label="Billing interval">
+                <button
+                  type="button"
+                  className={billingInterval === "month" ? "toggle-active" : "secondary"}
+                  aria-pressed={billingInterval === "month"}
+                  onClick={() => setBillingInterval("month")}
+                >
+                  Monthly
+                </button>
+                <button
+                  type="button"
+                  className={billingInterval === "year" ? "toggle-active" : "secondary"}
+                  aria-pressed={billingInterval === "year"}
+                  onClick={() => setBillingInterval("year")}
+                >
+                  Annual
+                </button>
+              </div>
+              {pricingError ? (
+                <p className="notice error" role="alert">
+                  Family pricing is temporarily unavailable.
+                  <br />
+                  You can still continue on Free and upgrade later.
+                </p>
+              ) : !selected ? (
+                <p role="status">Loading pricing…</p>
+              ) : (
+                <>
+                  <p className="pricing-amount">
+                    <strong>{selected.formatted_amount}</strong>
+                    <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                    <span className="sr-only"> per {billingInterval}</span>
+                  </p>
+                  <p className="hint">
+                    Renews {billingInterval === "month" ? "monthly" : "annually"} until cancelled.
+                    {saving ? ` ${saving}.` : ""}
+                  </p>
+              <p className="hint">
+                Before checkout, review the current <a href="/legal/terms">Terms &amp; Conditions</a>{" "}
+                and <a href="/legal/privacy">Privacy Policy</a>.
+              </p>
+              {legalDocuments && !paidCheckoutLegalReady && (
+                <p className="notice error" role="alert">
+                  Paid checkout is temporarily unavailable until the current legal documents are available.
+                </p>
+              )}
+                </>
+              )}
+              <FormStatus error={error} />
+              {pricing && !canStartFamilyCheckout(pricing) ? (
+                <p className="notice" role="status">
+                  New Family sign-ups are temporarily paused. Continue on Free — you can upgrade
+                  later from Settings.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy || pricingError || !selected || !paidCheckoutLegalReady}
+                  onClick={() => void upgradeToFamily()}
+                >
+                  {busy ? "One moment…" : "Upgrade to Family"}
+                </button>
+              )}
+            </article>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="onboarding">
       <Logo />
@@ -31,7 +434,7 @@ export default function Onboarding() {
         <p className="muted">
           Choose a warm, familiar name. You can change it later.
         </p>
-        <form onSubmit={submit}>
+        <form onSubmit={submitHome}>
           <label>
             Home name
             <input
@@ -47,6 +450,9 @@ export default function Onboarding() {
             {busy ? "Creating Home…" : "Create our Home"}
           </button>
         </form>
+        <button type="button" className="tertiary" onClick={() => setStep("choice")}>
+          Back
+        </button>
       </section>
     </main>
   );

@@ -269,13 +269,46 @@ health_checks() {
   die "liveness/readiness checks failed; the previous data volumes were not deleted"
 }
 
+check_network_drift() {
+  if ! compose config --format json | "$PYTHON" infrastructure/scripts/check_dev_networks.py; then
+    die "network drift detected; no application services were stopped. Run '$SCRIPT_DIR/dev-deploy.sh migrate-networks' during a planned application-tier maintenance window"
+  fi
+}
+
+migrate_networks() {
+  preflight
+  if compose config --format json | "$PYTHON" infrastructure/scripts/check_dev_networks.py; then
+    say "Development networks already match; no migration required"
+    return 0
+  fi
+
+  say "Stopping only the application/proxy tier for declared network migration"
+  compose stop caddy web api worker scheduler
+  compose rm --force caddy web api worker scheduler
+  docker network rm mykhaya_edge mykhaya_app
+  compose up -d --no-build --no-deps api worker scheduler
+  wait_healthy api
+  compose up -d --no-build --no-deps web
+  wait_healthy web
+  compose up -d --no-build --no-deps caddy
+  wait_healthy caddy
+  check_network_drift
+  say "Development network migration completed; data services and volumes were preserved"
+}
+
 deploy() {
   preflight
+  check_network_drift
   report_new_env_variables
   set_build_metadata
 
   say "Building new images while the current stack remains running"
   compose build || die "image build failed; currently running containers were left in place"
+
+  say "Validating merged backend runtime configuration"
+  if ! "$PYTHON" infrastructure/scripts/validate_backend_config.py; then
+    die "backend runtime configuration validation failed; currently running containers were left in place"
+  fi
 
   say "Starting private data services"
   compose up -d --no-build postgres redis || die "private data services failed to start"
@@ -293,7 +326,10 @@ deploy() {
   wait_healthy api
   compose up -d --no-build --no-deps web || die "web service failed to start"
   wait_healthy web
-  compose up -d --no-build --no-deps caddy mailpit || \
+  # Caddy reads its bind-mounted configuration at process start. Recreate it
+  # after an update so a changed CSP policy cannot remain stale in memory while
+  # the web image has already been replaced.
+  compose up -d --force-recreate --no-build --no-deps caddy mailpit || \
     die "Caddy or Mailpit failed to start"
   wait_healthy caddy
 
@@ -345,5 +381,6 @@ case "${1:-}" in
     [ -f .env ] || die "missing .env"
     health_checks
     ;;
-  *) die "usage: $0 {preflight|up|update|down|logs|health}" ;;
+  migrate-networks) migrate_networks ;;
+  *) die "usage: $0 {preflight|up|update|down|logs|health|migrate-networks}" ;;
 esac

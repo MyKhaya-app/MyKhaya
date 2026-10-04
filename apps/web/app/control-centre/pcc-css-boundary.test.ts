@@ -1,0 +1,118 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const pccCss = readFileSync(join(process.cwd(), "app", "control-centre", "pcc.css"), "utf8");
+const globalCss = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8");
+const routeLayout = readFileSync(join(process.cwd(), "app", "control-centre", "layout.tsx"), "utf8");
+
+describe("PCC stylesheet ownership", () => {
+  it("loads PCC CSS from the route layout", () => {
+    expect(routeLayout).toContain('import "./pcc.css"');
+  });
+
+  it("keeps PCC tokens and core component styles out of consumer global CSS", () => {
+    expect(pccCss).toContain("--cc-bg: #f3f6f8");
+    expect(pccCss).toContain("--cc-surface-elevated: #ffffff");
+    expect(pccCss).toContain("--cc-focus-ring: #2f6f6b");
+    expect(pccCss).toContain("--cc-shadow-modal: 0 24px 64px");
+    expect(pccCss).toContain(".cc-page-header");
+    expect(pccCss).toContain(".cc-card");
+    expect(pccCss).toContain(".pcc-root button");
+    expect(pccCss).toContain(".pcc-root input");
+    expect(pccCss).toContain(".pcc-root .notice");
+    expect(globalCss).not.toContain("--cc-bg: #f4f7f8");
+    expect(globalCss).not.toContain(".cc-page-header {");
+    expect(globalCss).not.toContain("background: var(--cc-surface);\n  border: 1px solid var(--cc-border);\n  border-radius: var(--cc-radius-md);\n  padding: 1.1rem;");
+  });
+
+  it("keeps the Phase 2A foundation route-owned", () => {
+    for (const selector of [
+      ".pcc-root .platform-shell",
+      ".pcc-root .platform-topbar",
+      ".pcc-root .cc-page-header",
+      ".pcc-root .cc-card",
+      ".pcc-root .table-scroll",
+      ".pcc-root .platform-modal",
+    ]) {
+      expect(pccCss).toContain(selector);
+    }
+    expect(globalCss).not.toContain(".pcc-root .platform-shell");
+    expect(globalCss).not.toContain(".pcc-root .cc-card");
+  });
+
+  it("keeps the Users proof-page presentation in PCC CSS", () => {
+    expect(pccCss).toContain(".cc-users-proof .cc-toolbar");
+    expect(pccCss).toContain(".cc-users-proof .cc-list-toolbar-form");
+    expect(globalCss).not.toContain(".cc-users-proof");
+  });
+
+  it("owns the legacy PCC shell and page selectors in the PCC stylesheet", () => {
+    for (const selector of [
+      ".platform-login",
+      ".platform-shell",
+      ".platform-page",
+      ".platform-subnav",
+      ".platform-columns",
+      ".system-list",
+      ".metric-grid",
+      ".table-scroll",
+      ".table-link",
+      ".platform-settings-section",
+      ".settings-section-rows",
+      ".setting-row-heading",
+      ".overview-grid",
+      ".overview-panel",
+      ".health-summary",
+      ".primary-metrics",
+      ".compact-metrics",
+      ".summary-groups",
+      ".test-email-form",
+      ".deployment-strip",
+      ".attention-panel",
+      ".overall-status",
+      ".diagnostic-list",
+      ".usage-metric-grid",
+      ".platform-holiday-table",
+      ".platform-modal-backdrop",
+      ".platform-modal",
+    ]) {
+      expect(pccCss).toContain(selector);
+      expect(globalCss).not.toMatch(new RegExp(`^${selector.replaceAll(".", "\\.")}\\s*\\{`, "m"));
+    }
+  });
+
+  it("keeps the PCC component foundation out of global consumer CSS", () => {
+    const pccSelectors = new Set(
+      [...pccCss.matchAll(/^(\.cc-[A-Za-z0-9_-]+)(?=[\s:.,{])/gm)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      ),
+    );
+
+    expect(pccSelectors.size).toBeGreaterThan(20);
+    for (const selector of pccSelectors) {
+      expect(globalCss).not.toMatch(
+        new RegExp(`^${selector.replaceAll(".", "\\.")}\\s*[{,:]`, "m"),
+      );
+    }
+  });
+
+  it("retains shared and consumer-owned selectors in global CSS", () => {
+    for (const selector of [
+      ".quiet-state",
+      ".link-button",
+      ".state-label",
+      ".security-mfa-status",
+      ".security-mfa-preferred",
+    ]) {
+      expect(globalCss).toContain(selector);
+    }
+    expect(globalCss).not.toContain(".platform-modal");
+    expect(globalCss).not.toContain(".platform-subnav");
+  });
+
+  it("does not add a PCC stylesheet import to the shared root layout", () => {
+    const rootLayout = readFileSync(join(process.cwd(), "app", "layout.tsx"), "utf8");
+    expect(rootLayout).not.toContain("control-centre/pcc.css");
+  });
+});

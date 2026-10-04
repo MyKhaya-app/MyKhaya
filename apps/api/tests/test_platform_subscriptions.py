@@ -1,0 +1,669 @@
+"""Platform Control Centre endpoints for Phase 1 commercial entitlements:
+granting/revoking complimentary Family access, and the subscription block on
+GET /platform/homes/{id}. Authorization, IDOR, mass-assignment, audit and
+data-safety coverage — service-level resolution logic is covered separately
+in test_entitlements.py.
+"""
+
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, select
+
+from mykhaya.config import get_settings
+from mykhaya.db import SessionFactory
+from mykhaya.main import app
+from mykhaya.models import (
+    ActionToken,
+    AdministrativeAuditEvent,
+    Group,
+    HomeSubscription,
+    HomeSubscriptionEvent,
+    PlatformAdministrator,
+    PlatformRole,
+    SubscriptionPlan,
+    SubscriptionProvider,
+    TokenPurpose,
+    User,
+)
+from mykhaya.security import derived_token, password_hash
+
+ADMIN_ORIGIN = "http://admin.localhost:8080"
+ORIGIN = "http://localhost:8080"
+ADMIN_PASSWORD = "A separate operator password!"
+USER_PASSWORD = "Correct horse battery staple!"
+
+
+@pytest.fixture
+async def admin_client() -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("172.16.0.2", 44100)),
+        base_url=ADMIN_ORIGIN,
+        headers={"Origin": ADMIN_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
+    ) as value:
+        yield value
+
+
+@pytest.fixture
+async def household_client() -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as value:
+        yield value
+
+
+@pytest.fixture
+async def admin_factory() -> AsyncIterator[
+    Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
+]:
+    identifiers: list[uuid.UUID] = []
+
+    async def factory(role: PlatformRole = PlatformRole.owner) -> PlatformAdministrator:
+        suffix = datetime.now(UTC).strftime("%H%M%S%f")
+        async with SessionFactory() as db:
+            row = PlatformAdministrator(
+                email=f"operator-{suffix}@example.com",
+                display_name="Test Operator",
+                password_hash=password_hash.hash(ADMIN_PASSWORD),
+                role=role,
+                mfa_enrolled=True,
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+        identifiers.append(row.id)
+        return row
+
+    yield factory
+    if identifiers:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(AdministrativeAuditEvent).where(
+                    AdministrativeAuditEvent.administrator_id.in_(identifiers)
+                )
+            )
+            await db.execute(
+                delete(PlatformAdministrator).where(PlatformAdministrator.id.in_(identifiers))
+            )
+            await db.commit()
+
+
+async def admin_login(client: AsyncClient, admin: PlatformAdministrator) -> None:
+    response = await client.post(
+        "/api/v1/platform/auth/login",
+        json={"email": admin.email, "password": ADMIN_PASSWORD},
+    )
+    assert response.status_code == 200, response.text
+
+
+async def unsafe(client: AsyncClient, method: str, path: str, **kwargs: object):
+    headers = dict(kwargs.pop("headers", {}))
+    csrf_cookie_name = "mk_admin_csrf" if "admin" in str(client.base_url) else "mk_csrf"
+    csrf = client.cookies.get(csrf_cookie_name)
+    if csrf:
+        headers["X-CSRF-Token"] = csrf
+    return await client.request(method, path, headers=headers, **kwargs)
+
+
+async def make_household(client: AsyncClient, suffix: str) -> uuid.UUID:
+    email = f"member-{suffix}@example.com"
+    register = await unsafe(
+        client,
+        "POST",
+        "/api/v1/auth/register",
+        json={"email": email, "display_name": "Member", "password": USER_PASSWORD},
+    )
+    assert register.status_code == 202
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        token = await db.scalar(
+            select(ActionToken)
+            .where(
+                ActionToken.user_id == user.id,
+                ActionToken.purpose == TokenPurpose.verify_email,
+            )
+            .order_by(ActionToken.created_at.desc())
+        )
+        assert token is not None
+        raw = derived_token(
+            token.id,
+            TokenPurpose.verify_email.value,
+            get_settings().secret_key.get_secret_value(),
+        )
+    verified = await unsafe(client, "POST", "/api/v1/auth/verify-email", json={"token": raw})
+    assert verified.status_code == 200
+    login = await unsafe(
+        client, "POST", "/api/v1/auth/login", json={"email": email, "password": USER_PASSWORD}
+    )
+    assert login.status_code == 200
+    group = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Test Home"})
+    assert group.status_code == 201
+    return uuid.UUID(group.json()["id"])
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_requires_operator_role(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    support = await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, support)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"complimentary_reason": "Beta tester", "confirmed": True, "reason": "Beta access"},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ordinary_household_user_cannot_reach_platform_subscription_endpoints(
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    response = await unsafe(
+        household_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"complimentary_reason": "Self-granted", "confirmed": True, "reason": "Nice try"},
+    )
+    assert response.status_code in (401, 403, 404)
+
+
+@pytest.mark.asyncio
+async def test_household_user_cannot_mass_assign_plan_via_group_update(
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    response = await unsafe(
+        household_client,
+        "PATCH",
+        f"/api/v1/groups/{home_id}",
+        json={"name": "Renamed Home", "plan": "family", "provider": "complimentary"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_grants_family_access_and_is_audited(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "complimentary_reason": "Friends and family beta",
+            "complimentary_note": "Internal note, never shown to the household",
+            "confirmed": True,
+            "reason": "Approved beta access",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["plan"] == "family"
+    assert payload["provider"] == "complimentary"
+    assert payload["effective_plan"] == "family"
+    assert payload["complimentary_reason"] == "Friends and family beta"
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    assert detail.json()["subscription"]["plan"] == "family"
+    assert detail.json()["subscription"]["provider"] == "complimentary"
+
+    async with SessionFactory() as db:
+        audit_event = await db.scalar(
+            select(AdministrativeAuditEvent)
+            .where(
+                AdministrativeAuditEvent.administrator_id == owner.id,
+                AdministrativeAuditEvent.action == "home.complimentary_granted",
+            )
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.reason == "Approved beta access"
+        history = (
+            await db.scalars(
+                select(HomeSubscriptionEvent).where(
+                    HomeSubscriptionEvent.group_id == home_id,
+                    HomeSubscriptionEvent.event_type == "complimentary_granted",
+                )
+            )
+        ).all()
+        assert len(history) == 1
+        assert history[0].to_plan == SubscriptionPlan.family
+        assert history[0].to_provider == SubscriptionProvider.complimentary
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_grants_ultimate_access_and_is_audited(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """Mirrors test_grant_complimentary_grants_family_access_and_is_audited
+    for the Ultimate tier — regression coverage for a real bug where the PCC
+    grant dialog's plan selection was never included in the request body, so
+    every grant silently persisted Family regardless of what the operator
+    picked (see apps/web/.../subscriptions/[id]/page.tsx's grantComplimentary
+    and its own test coverage). This test exercises the backend directly:
+    when `plan` genuinely is sent as "ultimate", it must be genuinely stored
+    and reflected everywhere — including Budget/Driveway entitlements, which
+    only Ultimate grants."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Friends and family beta",
+            "complimentary_note": "Internal note, never shown to the household",
+            "confirmed": True,
+            "reason": "Approved beta access",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["plan"] == "ultimate"
+    assert payload["provider"] == "complimentary"
+    assert payload["effective_plan"] == "ultimate"
+    assert payload["complimentary_reason"] == "Friends and family beta"
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload["subscription"]["plan"] == "ultimate"
+    assert detail_payload["subscription"]["effective_plan"] == "ultimate"
+    assert detail_payload["entitlements"]["plan"] == "ultimate"
+    assert detail_payload["entitlements"]["booleans"]["budget.enabled"] is True
+    assert detail_payload["entitlements"]["booleans"]["driveway.enabled"] is True
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.ultimate
+        history = (
+            await db.scalars(
+                select(HomeSubscriptionEvent).where(
+                    HomeSubscriptionEvent.group_id == home_id,
+                    HomeSubscriptionEvent.event_type == "complimentary_granted",
+                )
+            )
+        ).all()
+        assert len(history) == 1
+        assert history[0].to_plan == SubscriptionPlan.ultimate
+
+
+@pytest.mark.asyncio
+async def test_updating_existing_complimentary_family_to_ultimate_persists_new_plan(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """The exact reported bug's backend-side reproduction/regression case:
+    a Home already has complimentary Family; updating it with plan=ultimate
+    must genuinely change the stored plan, not merely refresh reason/expiry
+    while leaving the old plan in place."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    first = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "family",
+            "complimentary_reason": "Beta tester",
+            "confirmed": True,
+            "reason": "Initial grant",
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["plan"] == "family"
+
+    updated = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Upgraded to Ultimate for beta",
+            "confirmed": True,
+            "reason": "Approved Ultimate upgrade",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plan"] == "ultimate"
+    assert updated.json()["effective_plan"] == "ultimate"
+    assert updated.json()["complimentary_reason"] == "Upgraded to Ultimate for beta"
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.ultimate
+        assert subscription.complimentary_reason == "Upgraded to Ultimate for beta"
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.json()["subscription"]["plan"] == "ultimate"
+    assert detail.json()["entitlements"]["booleans"]["budget.enabled"] is True
+    assert detail.json()["entitlements"]["booleans"]["driveway.enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_updating_existing_complimentary_ultimate_to_family_persists_new_plan(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """The symmetric downgrade case — Ultimate -> Family must genuinely
+    persist Family again, including losing the Ultimate-only entitlements."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    first = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "ultimate",
+            "complimentary_reason": "Beta tester",
+            "confirmed": True,
+            "reason": "Initial grant",
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["plan"] == "ultimate"
+
+    updated = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "plan": "family",
+            "complimentary_reason": "Downgraded back to Family",
+            "confirmed": True,
+            "reason": "Approved downgrade",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plan"] == "family"
+    assert updated.json()["effective_plan"] == "family"
+
+    async with SessionFactory() as db:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == home_id)
+        )
+        assert subscription is not None
+        assert subscription.plan == SubscriptionPlan.family
+
+    detail = await admin_client.get(f"/api/v1/platform/subscriptions/{home_id}")
+    assert detail.json()["subscription"]["plan"] == "family"
+    assert detail.json()["entitlements"]["booleans"]["budget.enabled"] is False
+    assert detail.json()["entitlements"]["booleans"]["driveway.enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_requires_recent_auth_confirmation(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    unconfirmed = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"complimentary_reason": "Beta tester", "reason": "Beta access"},
+    )
+    assert unconfirmed.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_grant_complimentary_against_unknown_home_is_404(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+) -> None:
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{uuid.uuid4()}/subscription/complimentary",
+        json={"complimentary_reason": "Beta tester", "confirmed": True, "reason": "Beta access"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_revoke_complimentary_downgrades_to_free_without_deleting_the_home(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    granted = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"complimentary_reason": "Beta tester", "confirmed": True, "reason": "Beta access"},
+    )
+    assert granted.status_code == 200
+
+    revoked = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"confirmed": True, "reason": "Beta programme ended"},
+    )
+    assert revoked.status_code == 200
+    payload = revoked.json()
+    assert payload["plan"] == "free"
+    assert payload["provider"] == "free"
+    assert payload["complimentary_reason"] is None
+    assert payload["effective_plan"] == "free"
+
+    async with SessionFactory() as db:
+        home = await db.get(Group, home_id)
+        assert home is not None
+        history = (
+            await db.scalars(
+                select(HomeSubscriptionEvent).where(
+                    HomeSubscriptionEvent.group_id == home_id,
+                    HomeSubscriptionEvent.event_type == "downgraded",
+                )
+            )
+        ).all()
+        assert len(history) == 1
+
+
+@pytest.mark.asyncio
+async def test_revoke_complimentary_without_existing_complimentary_access_conflicts(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    response = await unsafe(
+        admin_client,
+        "DELETE",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={"confirmed": True, "reason": "Nothing to revoke"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_new_home_defaults_to_free_in_platform_home_detail(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    subscription = detail.json()["subscription"]
+    assert subscription["plan"] == "free"
+    assert subscription["provider"] == "free"
+    assert subscription["effective_plan"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_complimentary_expiry_in_the_future_can_be_granted(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    expires_at = (datetime.now(UTC) + timedelta(days=14)).isoformat()
+    response = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "complimentary_reason": "14-day trial extension",
+            "expires_at": expires_at,
+            "confirmed": True,
+            "reason": "Time-limited beta extension",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["complimentary_expires_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# PCC Polish Phase 1 — GET /platform/homes/{id}'s "modules" field: reuses
+# mykhaya.routers.features.module_state (the same resolver the Home Admin
+# Module Management screen and consumer navigation already share) rather
+# than a second parallel computation, restricted to the current optional
+# Home modules exactly like that screen already is.
+# ---------------------------------------------------------------------------
+
+
+def _module(modules: list[dict], module_id: str) -> dict:
+    return next(row for row in modules if row["id"] == module_id)
+
+
+@pytest.mark.asyncio
+async def test_free_home_module_state_shows_calendar_included_and_nudges_plan_blocked(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    modules = detail.json()["modules"]
+
+    calendar = _module(modules, "calendar")
+    assert calendar["entitled"] is True
+    assert calendar["platform_enabled"] is True
+    assert calendar["effective_enabled"] is True
+    assert calendar["blocked_by"] is None
+
+    for module_id in ("nudges", "meals", "wish_lists"):
+        module = _module(modules, module_id)
+        assert module["entitled"] is False
+        assert module["effective_enabled"] is False
+        assert module["blocked_by"] == "plan"
+
+    module_ids = {row["id"] for row in modules}
+    # Part C: never shown as ordinary Home modules on this screen.
+    for excluded in ("notifications", "external_sharing", "tasks", "plans"):
+        assert excluded not in module_ids
+
+
+@pytest.mark.asyncio
+async def test_family_home_module_state_shows_every_optional_module_entitled(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    granted = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/subscription/complimentary",
+        json={
+            "complimentary_reason": "Test Family entitlement",
+            "confirmed": True,
+            "reason": "Verifying module state for Family",
+        },
+    )
+    assert granted.status_code == 200, granted.text
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    modules = detail.json()["modules"]
+    for module_id in ("calendar", "shopping", "nudges", "meals", "wish_lists"):
+        module = _module(modules, module_id)
+        assert module["entitled"] is True, module_id
+        assert module["effective_enabled"] is True, module_id
+        assert module["blocked_by"] is None, module_id
+
+
+@pytest.mark.asyncio
+async def test_home_admin_disabling_a_module_shows_home_blocked_reason(
+    admin_client: AsyncClient,
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    household_client: AsyncClient,
+) -> None:
+    """A module the Home's own FeatureOverride currently disables must be
+    distinguishable from platform/plan blocked (Part B) — and toggling that
+    override can never make an actually plan-blocked module read as
+    effectively enabled (a Home override can only narrow/opt back into what
+    platform+plan already allow — see mykhaya.features.is_feature_enabled)."""
+    home_id = await make_household(household_client, datetime.now(UTC).strftime("%H%M%S%f"))
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    disabled = await unsafe(
+        admin_client,
+        "PUT",
+        f"/api/v1/platform/homes/{home_id}/feature-flags/calendar",
+        json={"enabled": False, "confirmed": True, "reason": "Testing Home-disabled state"},
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    detail = await admin_client.get(f"/api/v1/platform/homes/{home_id}")
+    assert detail.status_code == 200
+    calendar = _module(detail.json()["modules"], "calendar")
+    assert calendar["platform_enabled"] is True
+    assert calendar["entitled"] is True
+    assert calendar["home_override"] is False
+    assert calendar["effective_enabled"] is False
+    assert calendar["blocked_by"] == "home"

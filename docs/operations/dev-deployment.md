@@ -40,13 +40,18 @@ Create or delegate these names to NetBird Proxy:
 - `dev.mykhaya.app`
 - `admin.dev.mykhaya.app`
 - `status.dev.mykhaya.app`
+- `api.dev.mykhaya.app` — the dev equivalent of production's `api.mykhaya.app`
+  (ADR 0010): a direct-to-API origin for native/bearer clients, never proxied
+  through the web app. No browser-facing behaviour depends on this hostname
+  existing yet; it only needs to be routed once native-client testing begins.
 
-Configure three HTTPS proxy routes and preserve the incoming `Host` header:
+Configure HTTPS proxy routes and preserve the incoming `Host` header:
 
 ```text
 dev.mykhaya.app        -> http://SERVER_NETBIRD_IP:8089
 admin.dev.mykhaya.app  -> http://SERVER_NETBIRD_IP:8089
 status.dev.mykhaya.app -> http://SERVER_NETBIRD_IP:8089
+api.dev.mykhaya.app    -> http://SERVER_NETBIRD_IP:8089
 ```
 
 The host port defaults to `8089` (`MYKHAYA_DEV_HOST_PORT`, set in `compose.dev.yml`) —
@@ -252,3 +257,148 @@ these at once, permanently, rather than requiring every new test file to remembe
 clean up after itself. Do not point `MYKHAYA_DATABASE_URL`/`MYKHAYA_REDIS_URL` for the
 `test` service back at `postgres`/`redis`, and do not add application-code cleanup
 (e.g. deleting `@example.com` users) as a substitute for this isolation.
+
+**The test stack is also its own Compose project** — `compose.test.yml` declares
+`name: mykhaya-test`, distinct from `compose.yml`'s `name: mykhaya` (Compose uses the
+last `name:` seen across `-f` files, and `run-tests.sh` always passes `compose.test.yml`
+last). This means every test-stack container, network *and volume* lives in a
+Compose project entirely separate from the persistent dev stack's — an unscoped
+`docker compose -f compose.yml -f compose.test.yml down -v` can only ever remove
+`mykhaya-test` project resources (which hold nothing persistent: `postgres-test`/
+`redis-test` are tmpfs-backed) and is structurally incapable of reaching `mykhaya`'s
+`postgres_data`/`redis_data`/`caddy_data`/`avatar_data` volumes, regardless of which
+service names are (or aren't) passed on the command line. `run-tests.sh`'s own
+`cleanup()` additionally names exact services as a second, defence-in-depth layer, but
+the project-name separation is what makes this safe even without that. If a previous
+`make test`/`lint`/`typecheck`/`format` run was interrupted and left
+`postgres-test`/`redis-test` containers behind, run `make test-clean` — it is scoped to
+the `mykhaya-test` project the same way and cannot affect the dev stack. Never run a
+bare `docker compose down -v` (no `-f compose.test.yml`, or no service names) against
+the dev stack itself — that targets the real `mykhaya` project and its persistent
+volumes.
+
+The automated suite's own login/register volume grew with Phase 3's Stripe billing
+tests (each does a full register/verify/login/create-Home round trip); `MYKHAYA_RATE_LIMIT_LOGIN`/
+`MYKHAYA_RATE_LIMIT_REGISTER` for the `test` service were raised from 100/300 to
+1000/1000 accordingly — see the field comments on `rate_limit_login`/`rate_limit_register`
+in `mykhaya/config.py`, which already anticipated this. If the full suite starts
+returning 429s from `/auth/login` again, this is the first thing to check.
+
+## Stripe sandbox (Phase 3)
+
+Stripe billing is entirely optional and off by default (`MYKHAYA_STRIPE_BILLING_CONFIGURED=false`)
+— Free and Complimentary Homes need no Stripe setup at all. This section is only for
+actually exercising Checkout/Portal/webhooks locally.
+
+### One-time setup (Stripe test-mode account)
+
+1. Create or use an existing Stripe account, switch to **test mode** (toggle in the
+   Stripe Dashboard).
+2. Create one Product ("MyKhaya Family") with two recurring Prices: monthly and
+   annual, in GBP. Copy both Price IDs (`price_...`).
+3. Copy the test-mode secret key (`sk_test_...`) from
+   `dashboard.stripe.com/test/apikeys`. Never copy the live-mode key for local
+   development — `Settings.validate_stripe_configuration` rejects a live key
+   outside `MYKHAYA_ENVIRONMENT=production` anyway, but don't rely on that as the
+   only safeguard.
+4. Set in `.env` (never commit real values — `.env` is gitignored):
+   ```
+   MYKHAYA_STRIPE_BILLING_CONFIGURED=true
+   MYKHAYA_STRIPE_SECRET_KEY=sk_test_...
+   MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID=price_...
+   MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID=price_...
+   MYKHAYA_STRIPE_PUBLISHABLE_KEY=pk_test_...   # only if a future phase needs it client-side
+   ```
+5. `MYKHAYA_STRIPE_WEBHOOK_SECRET` comes from the Stripe CLI, not the Dashboard, for
+   local development — see below.
+
+### Local webhook forwarding (Stripe CLI)
+
+Stripe cannot reach a developer's machine directly, so local verification uses the
+[Stripe CLI](https://stripe.com/docs/stripe-cli) to forward test-mode events:
+
+```
+stripe login
+stripe listen --forward-to localhost:8089/api/v1/billing/stripe/webhook
+```
+
+The CLI prints a webhook signing secret (`whsec_...`) each time it starts — put that
+in `MYKHAYA_STRIPE_WEBHOOK_SECRET` and restart `api`. This secret is ephemeral to the
+CLI session; do not treat it as a stable value, and never commit it. A production
+deployment instead registers a webhook endpoint in the Stripe Dashboard and uses
+*that* endpoint's own permanent signing secret.
+
+With `stripe listen` running, trigger individual test events without a real Checkout:
+
+```
+stripe trigger customer.subscription.created
+stripe trigger invoice.payment_failed
+```
+
+or drive the full flow through the actual UI — `/settings/billing` on the household
+app starts a real test-mode Checkout Session; Stripe's documented test card
+`4242 4242 4242 4242` (any future expiry, any CVC) completes it.
+
+Do not assume every deployment runs the Stripe CLI — it's a local-development
+convenience only; production uses a registered webhook endpoint as above.
+
+### Going live
+
+Phase 3 was test-mode only. Phase 7 (`docs/operations/billing-production-readiness.md`)
+is the full go-live checklist, readiness command, price/key/webhook-secret rotation
+runbooks, outage behaviour, reconciliation, and billing disable/rollback procedure —
+this section stays as a short summary; treat that document as authoritative.
+
+1. Create the equivalent live-mode Product/Prices in the Stripe Dashboard (live and
+   test mode have entirely separate catalogues — a test Price ID is never valid in
+   live mode and vice versa).
+2. Register a permanent webhook endpoint in the live Dashboard pointing at the
+   production `/api/v1/billing/stripe/webhook` URL, and copy its signing secret.
+3. Set `MYKHAYA_ENVIRONMENT=production`, `MYKHAYA_STRIPE_SECRET_KEY=sk_live_...`, the
+   live Price IDs, and the live webhook secret — all as real deployment secrets, never
+   committed. `Settings.validate_stripe_configuration` requires a live key when
+   `MYKHAYA_ENVIRONMENT=production` and rejects a test key there, so a stale test key
+   left in production configuration fails startup rather than silently taking no
+   payments. Leave `MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED=false` until every
+   item in the Phase 7 go-live checklist is genuinely complete — this is the
+   separate, deliberate flag that actually allows new paid signups; being
+   "configured" is not the same as being "live."
+4. Rotate the webhook secret by registering a second endpoint alongside the first,
+   confirming events arrive successfully, then removing the old endpoint — Stripe
+   supports multiple simultaneous webhook endpoints for exactly this overlap.
+5. Verify the full lifecycle (Checkout → activation → renewal → cancellation) against
+   Stripe test mode using the procedure in `billing-production-readiness.md` before
+   ever touching live mode — none of the mocked automated test coverage substitutes
+   for this.
+
+### Public pricing (Phase 5)
+
+The homepage pricing section and the signup/onboarding plan step read `GET
+/billing/pricing` — the same endpoint, same 5-minute in-process cache, same
+Stripe Price IDs (`MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID` /
+`MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID`) as everywhere else in the app. There is
+nothing to configure specifically for Phase 5:
+
+- If Stripe billing is not configured at all
+  (`MYKHAYA_STRIPE_BILLING_CONFIGURED=false`), the homepage shows the Free card
+  normally and the Family card's "temporarily unavailable" message — Free signup
+  is unaffected. This is the expected state for any deployment that hasn't set up
+  Stripe yet, not an error condition to chase.
+- Changing the configured Price IDs (e.g. a price increase — see "Price increases
+  and grandfathering" in the architecture doc) changes what the public homepage
+  shows on its own once the in-process cache expires (up to 5 minutes) — no
+  frontend deploy, migration, or restart required. A restart clears the cache
+  immediately if a change needs to show up sooner than that.
+- The public pricing/plan endpoints are rate-limited (`billing-pricing`,
+  `billing-plans`; 60 requests/60s per client IP) the same way every other public
+  endpoint in this app is — see `mykhaya/rate_limit.py`. There is no separate
+  public-pricing-specific rate limit to configure.
+- Real Stripe test-mode verification of the full public → signup → Checkout →
+  webhook journey is a manual step, same as Phase 3/4 — see "Real Stripe test-mode
+  checkpoint" in the relevant phase's final report. Automated CI always uses a
+  mocked Stripe SDK (`stripe.Price.retrieve` monkeypatched), never a real sandbox
+  call, per this repository's test-isolation rules above.
+- Before enabling **live** billing (see "Going live" above), the public pricing
+  section and signup plan step should be included in that phase's real-card
+  verification pass — they are the first surfaces a real customer sees, and
+  neither has been exercised against a real Stripe account by any phase so far.

@@ -1,17 +1,31 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { X } from "lucide-react";
+import { isNativeShell } from "./native-runtime";
+import { registerDismissible } from "./dismissal-stack";
 
 export function BottomSheet({
   title,
   onDismiss,
   children,
   fullHeight = false,
+  headerAction,
+  showCloseButton = true,
+  footer,
 }: {
   title: string;
   onDismiss: () => void;
   children: React.ReactNode;
   fullHeight?: boolean;
+  /** An optional action rendered between the title and the close button —
+   *  e.g. the "Edit" action on a read-only event detail sheet. Kept generic
+   *  (not calendar-specific) so any sheet can use it. */
+  headerAction?: React.ReactNode;
+  /** Some focused flows provide their own footer close action. */
+  showCloseButton?: boolean;
+  /** Actions rendered outside the scrollable body, attached to the sheet footer. */
+  footer?: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -21,17 +35,37 @@ export function BottomSheet({
     dismiss.current = onDismiss;
   }, [onDismiss]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     restoreFocus.current = document.activeElement as HTMLElement | null;
     const element = dialog.current;
     const scrollY = window.scrollY;
     const initialFocus = element?.querySelector<HTMLElement>(".bottom-sheet-close");
+    const hadSheetOpenClass = document.body.classList.contains("sheet-open");
     // Focus the sheet control, never a form field. iOS Safari zooms when it
     // programmatically focuses a small input as a sheet opens.
     (initialFocus ?? element)?.focus();
-    document.body.style.position = "fixed";
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.width = "100%";
+    // Browser/PWA: the document itself is what scrolls, so the classic
+    // iOS Safari body-lock trick applies to document.body. Inside the
+    // native shell, body/html never scroll at all (see the native-shell
+    // viewport rules in styles.css) — the thing that actually needs
+    // locking there is the one scrollable content region instead, or a
+    // long Settings/Lists page would keep scrolling underneath the sheet.
+    const nativeScrollRegion = isNativeShell()
+      ? document.querySelector<HTMLElement>(".app-content-scroll-region")
+      : null;
+    const previousNativeOverflow = nativeScrollRegion?.style.overflow ?? "";
+    const previousBodyStyles = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+    };
+    if (nativeScrollRegion) {
+      nativeScrollRegion.style.overflow = "hidden";
+    } else {
+      document.body.style.position = "fixed";
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.width = "100%";
+    }
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") dismiss.current();
       if (event.key !== "Tab" || !element) return;
@@ -53,21 +87,54 @@ export function BottomSheet({
     };
     document.addEventListener("keydown", keydown);
     document.body.classList.add("sheet-open");
+    // Registers this sheet as the thing an Android hardware/gesture Back
+    // press should close, instead of navigating away or exiting the app —
+    // see native-back-button.ts and dismissal-stack.ts. `dismiss.current()`
+    // rather than `onDismiss` directly so a parent re-render that passes a
+    // new callback identity is still honoured without re-registering.
+    const unregisterDismissible = registerDismissible(() => dismiss.current());
     return () => {
+      unregisterDismissible();
+      // Blur a still-focused field (e.g. Save tapped straight from a text
+      // input, keyboard still open) *before* React removes this sheet's DOM
+      // — this cleanup is a layout effect specifically so it runs
+      // synchronously while `element` and its focused descendant are still
+      // mounted, not after. Letting the browser instead discover the focused
+      // node has vanished (implicit unmount-while-focused) races the
+      // keyboard-dismiss animation against the focus-restore call below, and
+      // on iOS WKWebView that race is what produces the visible
+      // zoom/viewport glitch on Save — blurring here first makes keyboard
+      // dismissal deterministic and ordered before anything else changes.
+      if (element?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement | null)?.blur();
+      }
       document.removeEventListener("keydown", keydown);
-      document.body.classList.remove("sheet-open");
-      document.body.style.position = "";
-      document.body.style.top = "";
-      document.body.style.width = "";
-      window.scrollTo(0, scrollY);
-      restoreFocus.current?.focus();
+      if (!hadSheetOpenClass) document.body.classList.remove("sheet-open");
+      if (nativeScrollRegion) {
+        nativeScrollRegion.style.overflow = previousNativeOverflow;
+      } else {
+        document.body.style.position = previousBodyStyles.position;
+        document.body.style.top = previousBodyStyles.top;
+        document.body.style.width = previousBodyStyles.width;
+        window.scrollTo(0, scrollY);
+      }
+      // preventScroll: restoring focus must not itself scroll/jump the page
+      // — the calendar's scroll position is exactly what must stay stable.
+      restoreFocus.current?.focus({ preventScroll: true });
     };
   }, []);
 
   return (
     <div
       className="sheet-backdrop"
-      onMouseDown={(event) =>
+      // Dismiss from a genuine backdrop interaction only.  Using click here
+      // is intentional: on iOS a state change caused by a button's click can
+      // replace the sheet contents before the synthetic mouse sequence has
+      // finished.  A mousedown handler can then observe the backdrop as the
+      // target and dismiss a sheet whose control was just pressed.  Click
+      // target identity preserves backdrop dismissal while making internal
+      // view/edit transitions inert to the dismiss path.
+      onClick={(event) =>
         event.target === event.currentTarget && onDismiss()
       }
     >
@@ -78,20 +145,28 @@ export function BottomSheet({
         aria-labelledby="sheet-title"
         tabIndex={-1}
         ref={dialog}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="sheet-handle" aria-hidden="true" />
         <header>
           <h2 id="sheet-title">{title}</h2>
-          <button
-            className="icon-button secondary bottom-sheet-close"
-            type="button"
-            onClick={onDismiss}
-            aria-label="Close dialog"
-          >
-            ×
-          </button>
+          <div className="sheet-header-actions">
+            {headerAction}
+            {showCloseButton && (
+              <button
+                className="icon-button secondary bottom-sheet-close"
+                type="button"
+                onClick={onDismiss}
+                aria-label="Close dialog"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            )}
+          </div>
         </header>
         <div className="sheet-content">{children}</div>
+        {footer ? <div className="sheet-footer">{footer}</div> : null}
       </div>
     </div>
   );
