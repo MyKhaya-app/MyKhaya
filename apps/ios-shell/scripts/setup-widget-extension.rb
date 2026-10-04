@@ -26,9 +26,9 @@ require 'fileutils'
 PROJECT_PATH = 'ios/App/App.xcodeproj'
 APP_TARGET_NAME = 'App'
 WIDGET_TARGET_NAME = 'MyKhayaWidgets'
-APP_BUNDLE_ID = 'app.mykhaya.mobile'
+APP_BUNDLE_ID = 'app.mykhaya.mobile.prod'
 WIDGET_BUNDLE_ID = "#{APP_BUNDLE_ID}.widgets"
-APP_GROUP_ID = 'group.app.mykhaya.mobile'
+APP_GROUP_ID = 'group.app.mykhaya.mobile.prod'
 # Conservative floor — see native/widgets/Timeline/NextEventProvider.swift's
 # deployment-target comment. Raise this only after confirming the actual
 # generated project's own main-target minimum on the Mac (Step 0 below).

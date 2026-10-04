@@ -75,17 +75,17 @@ else
   echo "WARNING: $STORYBOARD not found — inspect manually (see ensure-storyboard-scene-delegate.sh)." >&2
 fi
 
-echo "== 5. Register the mykhaya:// URL scheme (widget deep links only — see native/widgets/Shared/DeepLink.swift) =="
+echo "== 5. Register the mykhaya-prod:// URL scheme (widget deep links only — see native/widgets/Shared/DeepLink.swift) =="
 INFO_PLIST="ios/App/App/Info.plist"
-if [ -f "$INFO_PLIST" ] && ! grep -q '<string>mykhaya</string>' "$INFO_PLIST"; then
+if [ -f "$INFO_PLIST" ] && ! grep -q '<string>mykhaya-prod</string>' "$INFO_PLIST"; then
   /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$INFO_PLIST" 2>/dev/null || true
   /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string app.mykhaya.mobile.widgets" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string app.mykhaya.mobile.prod.widgets" "$INFO_PLIST"
   /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string mykhaya" "$INFO_PLIST"
-  echo "Added mykhaya:// URL scheme to $INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string mykhaya-prod" "$INFO_PLIST"
+  echo "Added mykhaya-prod:// URL scheme to $INFO_PLIST"
 else
-  echo "mykhaya:// URL scheme already present or Info.plist missing"
+  echo "mykhaya-prod:// URL scheme already present or Info.plist missing"
 fi
 
 echo "== 6. Create/update the MyKhayaWidgets Xcode target, App Group, entitlements, embed phase =="

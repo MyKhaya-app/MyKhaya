@@ -17,11 +17,14 @@ console.log(`API: ${shellConfiguration.api}`);
 // invented fresh — see docs/architecture/adr/0012-capacitor-ios-shell.md
 // for why. Reverse-DNS under the mykhaya.app domain. Confirm with Anthony
 // before this is ever registered against a real Apple Developer account.
-const appId = "app.mykhaya.mobile";
+const appId =
+  environment === "production"
+    ? "app.mykhaya.mobile.prod"
+    : "app.mykhaya.mobile";
 
 const config: CapacitorConfig = {
   appId,
-  appName: "MyKhaya",
+  appName: environment === "production" ? "MyKhaya" : "MyKhaya-Dev",
   // Required by Capacitor even in "live remote frontend" mode — never
   // actually shown except as a brief loading flash before the WebView
   // navigates to server.url below, or as an offline fallback if the
