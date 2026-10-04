@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from mykhaya.config import Settings
+from mykhaya.models import SignupMode
 from mykhaya.url_validation import is_valid_http_url
 
 SettingValueType = Literal["text", "email", "url", "boolean", "integer", "list"]
@@ -33,6 +34,16 @@ class SettingDefinition:
 
 
 SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
+    "signup_mode": SettingDefinition(
+        key="signup_mode",
+        label="Signup Mode",
+        description="Controls whether new accounts use normal signup, Founding Beta signup, both, or neither.",
+        section="Signup",
+        value_type="text",
+        python_type=str,
+        risk="sensitive",
+        runtime_effect="effective",
+    ),
     "driveway_dvla_enabled": SettingDefinition(
         key="driveway_dvla_enabled",
         label="DVLA vehicle lookup",
@@ -217,6 +228,8 @@ def validate_setting_value(definition: SettingDefinition, value: Any) -> None:
         return
     if not isinstance(value, definition.python_type):
         raise ValueError("That setting or value is not valid.")
+    if definition.key == "signup_mode" and value not in {item.value for item in SignupMode}:
+        raise ValueError("Signup Mode must be normal, beta_only, mixed, or closed.")
     # isinstance narrows `value` to `object` here (definition.python_type is a
     # plain `type`, not a literal class mypy can use to narrow further) —
     # re-widen back to Any rather than fighting the checker with casts at

@@ -835,6 +835,7 @@ class HomeSubscriptionResponse(BaseModel):
     current_period_start: datetime | None
     current_period_end: datetime | None
     complimentary_reason: str | None
+    complimentary_source: str | None
     complimentary_note: str | None
     complimentary_granted_by: uuid.UUID | None
     complimentary_granted_by_display_name: str | None

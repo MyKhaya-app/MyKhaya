@@ -288,7 +288,7 @@ export function SettingsPage({
           <HeroFlower />
         </div>
       )}
-      <main className={`standard-page${className ? ` ${className}` : ""}`}>
+      <main className={`standard-page${children ? " module-page" : ""}${className ? ` ${className}` : ""}`}>
         {children ? (
           <>
             {backLink && <SupportBackLink href={backLink.href} label={backLink.label} />}

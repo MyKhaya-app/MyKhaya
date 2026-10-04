@@ -104,6 +104,7 @@ const navGroups: NavGroup[] = [
     label: "Platform",
     items: [
       { label: "Settings", href: "/settings", icon: Settings },
+      { label: "Founding Beta", href: "/founding-beta", icon: FlaskConical },
       { label: "Calendar & Dates", href: "/settings/calendar-dates", icon: CalendarDays },
       { label: "Modules & Features", href: "/modules", icon: ToggleLeft },
       { label: "Security", href: "/security", icon: Shield },

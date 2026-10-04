@@ -27,6 +27,7 @@ from mykhaya.routers import (
     communications_admin,
     driveway,
     features,
+    founding_beta,
     groups,
     health,
     home_join,
@@ -325,4 +326,7 @@ for router in (
     status_router.router,
 ):
     app.include_router(router, prefix="/api/v1")
+app.include_router(founding_beta.public_router, prefix="/api/v1")
+app.include_router(founding_beta.router, prefix="/api/v1")
+app.include_router(founding_beta.platform_router, prefix="/api/v1")
 app.include_router(usage_admin.router, prefix="/api/v1")

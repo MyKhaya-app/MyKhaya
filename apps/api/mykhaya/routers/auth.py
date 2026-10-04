@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
@@ -47,10 +47,12 @@ from mykhaya.consumer_mfa_policy import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.founding_beta import current_programme, invitation_token_hash, join_beta, signup_mode
 from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
+    BetaPendingRegistration,
     ChildProfile,
     ExternalIdentity,
     ExternalIdentityProvider,
@@ -1221,6 +1223,11 @@ async def authenticate_credentials(
     duplicated between transports."""
     await enforce_rate_limit(request, settings, bucket, settings.rate_limit_login, 60)
     email = normalise_email(str(body.email))
+    await db.execute(
+        delete(BetaPendingRegistration).where(
+            BetaPendingRegistration.expires_at <= datetime.now(UTC),
+        )
+    )
     result = await db.execute(
         select(User, AuthIdentity)
         .join(AuthIdentity, AuthIdentity.user_id == User.id)
@@ -1247,6 +1254,11 @@ async def register(
 ) -> RegistrationResponse:
     await enforce_rate_limit(request, settings, "register", settings.rate_limit_register, 300)
     email = normalise_email(str(body.email))
+    mode = await signup_mode(db, settings.registration_mode)
+    if mode.value == "beta_only" and not body.beta_home_name:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Use the Founding Beta onboarding flow to register.")
+    if body.beta_home_name and mode.value not in {"beta_only", "mixed"}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is not currently open.")
 
     invitation_row: Invitation | None = None
     if settings.registration_mode == "closed":
@@ -1297,6 +1309,21 @@ async def register(
         db.add(user)
         await db.flush()
         db.add(AuthIdentity(user_id=user.id, password_hash=password_hash.hash(body.password)))
+        if body.beta_home_name:
+            programme = await current_programme(db)
+            if body.beta_terms_version is None:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Founding Beta terms are required.")
+            db.add(
+                BetaPendingRegistration(
+                    user_id=user.id,
+                    programme_id=programme.id,
+                    home_name=body.beta_home_name,
+                    terms_version=body.beta_terms_version,
+                    token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
+                    invitation_token_hash=invitation_token_hash(body.beta_invitation_token) if body.beta_invitation_token else None,
+                    expires_at=datetime.now(UTC) + timedelta(hours=24),
+                )
+            )
         for resolved in resolved_legal_acceptances:
             record_type = (
                 LegalRecordType.user_acceptance
@@ -1364,6 +1391,31 @@ async def verify_email(
     if user is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     user.email_verified_at = user.email_verified_at or datetime.now(UTC)
+    pending = await db.scalar(
+        select(BetaPendingRegistration)
+        .where(
+            BetaPendingRegistration.user_id == user.id,
+            BetaPendingRegistration.consumed_at.is_(None),
+            BetaPendingRegistration.expires_at > datetime.now(UTC),
+        )
+        .order_by(BetaPendingRegistration.created_at.desc())
+        .with_for_update()
+    )
+    if pending is not None:
+        try:
+            await join_beta(
+                db,
+                user=user,
+                home_name=pending.home_name,
+                terms_version=pending.terms_version,
+                invitation_token_hash_value=pending.invitation_token_hash,
+            )
+            pending.consumed_at = datetime.now(UTC)
+        except HTTPException:
+            # Verification remains successful; the short-lived pending state
+            # can be retried through /beta/join after capacity/eligibility is
+            # repaired, without consuming a place prematurely.
+            pass
     audit(db, request, "user.email_verified", user.id, target_type="user", target_id=user.id)
     await db.commit()
     return MessageResponse(message="Your email is verified. You can sign in now.")

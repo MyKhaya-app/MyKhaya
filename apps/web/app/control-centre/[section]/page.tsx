@@ -11,6 +11,7 @@ import { CcNotice } from "@/components/control-centre/status-message";
 import { CcTable, type CcTableColumn } from "@/components/control-centre/table";
 import { CcToolbar } from "@/components/control-centre/toolbar";
 import { CcBadge, type CcBadgeTone } from "@/components/control-centre/badge";
+import { FoundingBetaPcc } from "@/components/founding-beta-pcc";
 
 // "security", "administrators", "subscriptions", "incidents" and
 // "settings" are deliberately not listed here — they now have dedicated
@@ -415,6 +416,7 @@ export default function PlatformSection({
   params: Promise<{ section: string }>;
 }) {
   const { section } = use(params);
+  if (section === "founding-beta") return <FoundingBetaPcc />;
   return section === "users" || section === "homes" ? (
     <ManagedList section={section} />
   ) : (
