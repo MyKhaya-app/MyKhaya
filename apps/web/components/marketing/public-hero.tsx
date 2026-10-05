@@ -1,4 +1,6 @@
 import Link from "next/link";
+import type { PublicSignupState } from "@mykhaya/api-client";
+import { signupCtaLabel, signupDestination } from "@/components/public-signup";
 
 const REASSURANCE_POINTS = [
   "Free to start",
@@ -6,7 +8,7 @@ const REASSURANCE_POINTS = [
   "Set up in minutes",
 ] as const;
 
-export function PublicHero() {
+export function PublicHero({ signupState = null }: { signupState?: PublicSignupState | null }) {
   return (
     <section className="mk-hero">
       <div className="mk-hero-copy">
@@ -17,8 +19,8 @@ export function PublicHero() {
           stress, more time for what really matters.
         </p>
         <div className="mk-hero-actions">
-          <Link className="button large" href="/register">
-            Get started free
+          <Link className="button large" href={signupDestination(signupState)}>
+            {signupCtaLabel(signupState)}
           </Link>
           <Link className="button secondary large" href="/login">
             Sign in

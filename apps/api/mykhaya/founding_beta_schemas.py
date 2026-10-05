@@ -14,6 +14,7 @@ class SignupStateResponse(StrictModel):
     beta_joining_available: bool
     waitlist_available: bool
     joinable_count: int | None = None
+    beta_terms_version: str | None = None
 
 
 class BetaWaitlistCreate(StrictModel):
@@ -45,6 +46,13 @@ class BetaJoinRequest(StrictModel):
 class BetaJoinResponse(StrictModel):
     home_id: uuid.UUID
     entitlement_source: str
+
+
+class BetaEligibilityResponse(StrictModel):
+    eligible: bool
+    home_id: uuid.UUID | None = None
+    home_name: str | None = None
+    reason: str | None = None
 
 
 class BetaInviteCreate(StrictModel):

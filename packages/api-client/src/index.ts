@@ -223,6 +223,45 @@ export type PublicSignupState = {
   beta_joining_available: boolean;
   waitlist_available: boolean;
   joinable_count: number | null;
+  beta_terms_version?: string | null;
+};
+
+export type BetaInvitationState = {
+  valid: boolean;
+  programme: string | null;
+  expires_at: string | null;
+};
+
+export type BetaWaitlistRequest = {
+  name: string;
+  email: string;
+  country: string;
+  household_size?: number;
+  use_case?: string;
+  marketing_consent: boolean;
+};
+
+export type BetaWaitlistResponse = {
+  accepted: boolean;
+  status: string;
+};
+
+export type BetaJoinRequest = {
+  home_name: string;
+  terms_version: string;
+  invitation_token?: string;
+};
+
+export type BetaJoinResponse = {
+  home_id: string;
+  entitlement_source: string;
+};
+
+export type BetaEligibilityState = {
+  eligible: boolean;
+  home_id: string | null;
+  home_name: string | null;
+  reason: string | null;
 };
 
 export type BudgetProfile = {
@@ -425,6 +464,21 @@ export class MyKhayaClient {
   me = () => this.request<User>("/users/me");
   publicConfig = () => this.request<PublicConfig>("/config/public");
   publicSignupState = () => this.request<PublicSignupState>("/public/signup-state");
+  publicBetaInvitation = (token: string) =>
+    this.request<BetaInvitationState>(
+      `/public/beta/invitations/${encodeURIComponent(token)}`,
+    );
+  joinBetaWaitlist = (body: BetaWaitlistRequest) =>
+    this.request<BetaWaitlistResponse>("/public/beta/waitlist", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  joinBeta = (body: BetaJoinRequest) =>
+    this.request<BetaJoinResponse>("/beta/join", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  betaEligibility = () => this.request<BetaEligibilityState>("/beta/eligibility");
   createSupportTicket = (body: SupportTicketCreateRequest) =>
     this.request<SupportTicketResponse>("/support/tickets", {
       method: "POST",

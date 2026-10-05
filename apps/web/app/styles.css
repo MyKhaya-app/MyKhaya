@@ -1,6 +1,64 @@
 * {
   box-sizing: border-box;
 }
+
+.mk-beta-hero,
+.mk-choice {
+  margin: 0 auto;
+  max-width: 900px;
+  padding: 7rem 2rem;
+  text-align: center;
+}
+
+.mk-beta-hero h1,
+.mk-choice h1 {
+  margin: 0 auto 1.25rem;
+  max-width: 720px;
+}
+
+.mk-beta-hero > p:not(.eyebrow),
+.mk-choice > p:not(.eyebrow) {
+  margin: 0.75rem auto;
+  max-width: 650px;
+}
+
+.mk-beta-places {
+  color: var(--mk-green, #55705a);
+  font-weight: 700;
+}
+
+.mk-closed-state {
+  margin: 0 auto;
+  max-width: 720px;
+  padding: 8rem 2rem;
+  text-align: center;
+}
+
+.mk-choice-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 2.5rem;
+  text-align: left;
+}
+
+.mk-choice-grid article {
+  border: 1px solid var(--mk-border, #d8ded5);
+  border-radius: 1.25rem;
+  padding: 2rem;
+}
+
+@media (max-width: 700px) {
+  .mk-beta-hero,
+  .mk-choice,
+  .mk-closed-state {
+    padding: 4rem 1.25rem;
+  }
+
+  .mk-choice-grid {
+    grid-template-columns: 1fr;
+  }
+}
 :root {
   /* Shared page-header rhythm (see .module-page, .support-back-link and
      .page-heading). One definition for: gap beneath the global app header,

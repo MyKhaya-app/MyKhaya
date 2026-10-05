@@ -25,6 +25,7 @@ from mykhaya.founding_beta_schemas import (
     BetaInvitationItem,
     BetaInvitationResponse,
     BetaInvitationResponsePage,
+    BetaEligibilityResponse,
     BetaInviteCreate,
     BetaInviteResponse,
     BetaJoinRequest,
@@ -45,7 +46,10 @@ from mykhaya.models import (
     BetaProgramme,
     BetaWaitlistEntry,
     BetaWaitlistStatus,
+    Group,
+    HomeSubscription,
     PlatformRole,
+    SubscriptionPlan,
 )
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_runtime import evaluate_signup_policy
@@ -77,6 +81,7 @@ async def public_signup_state(
         beta_joining_available=beta_available,
         waitlist_available=policy.beta_path and programme.waitlist_enabled and (not beta_available),
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
+        beta_terms_version=programme.terms_version if policy.beta_path else None,
     )
 
 
@@ -175,6 +180,39 @@ async def join(
     )
     await db.commit()
     return BetaJoinResponse(home_id=home.id, entitlement_source=FOUNDING_BETA_SOURCE)
+
+
+@router.get("/eligibility", response_model=BetaEligibilityResponse)
+async def eligibility(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BetaEligibilityResponse:
+    require_adult_session(auth)
+    owned = list(
+        await db.scalars(
+            select(Group).where(Group.created_by == auth.user.id, Group.is_active.is_(True))
+        )
+    )
+    if len(owned) > 1:
+        return BetaEligibilityResponse(
+            eligible=False,
+            reason="Founding Beta joining is limited to one eligible Free Home.",
+        )
+    if owned:
+        subscription = await db.scalar(
+            select(HomeSubscription).where(HomeSubscription.group_id == owned[0].id)
+        )
+        if subscription is not None and subscription.plan != SubscriptionPlan.free:
+            return BetaEligibilityResponse(
+                eligible=False,
+                home_id=owned[0].id,
+                home_name=owned[0].name,
+                reason="A paid Home cannot be enrolled through the Founding Beta.",
+            )
+        return BetaEligibilityResponse(
+            eligible=True, home_id=owned[0].id, home_name=owned[0].name
+        )
+    return BetaEligibilityResponse(eligible=True)
 
 
 @platform_router.get("/overview", response_model=BetaOverviewResponse)
