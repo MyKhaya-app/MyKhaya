@@ -33,7 +33,7 @@ export function AppShell({
 }) {
   const path = usePathname();
   const router = useRouter();
-  const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
+  const { user, status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
   const [familyAccess, setFamilyAccess] = useState(false);
   // Sequences the two one-shot native onboarding overlays so they never
@@ -106,6 +106,15 @@ export function AppShell({
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
+  if (status === "legal_check_error") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>We could not check your legal documents</h1>
+        <p>{legalStatusError ?? "Please try again before continuing to MyKhaya."}</p>
+        <button onClick={retryLegalStatus}>Try again</button>
+      </main>
+    );
+  }
   if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">

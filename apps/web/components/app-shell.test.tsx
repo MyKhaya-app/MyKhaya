@@ -20,11 +20,16 @@ vi.mock("./notification-permission-prompt", () => ({
   NotificationPermissionPrompt: () => <div data-testid="notification-prompt-stub" />,
 }));
 
-const authState: { status: string } = { status: "ready" };
+const authState: { status: string; legalStatusError: string | null } = {
+  status: "ready",
+  legalStatusError: null,
+};
 vi.mock("./auth-provider", () => ({
   useAuth: () => ({
     user: { id: "u1", display_name: "Owner", principal_type: "adult" },
     status: authState.status,
+    legalStatusError: authState.legalStatusError,
+    retryLegalStatus: vi.fn(),
     initialSessionLoading: false,
     sessionRefreshing: false,
     retryInitialSession: vi.fn(),
@@ -231,6 +236,22 @@ describe("AppShell — maintenance", () => {
       expect(screen.queryByText("app content")).toBeNull();
     } finally {
       authState.status = "ready";
+    }
+  });
+});
+
+describe("AppShell — legal status errors", () => {
+  it("renders a retryable legal-check error instead of a blank page", () => {
+    authState.status = "legal_check_error";
+    authState.legalStatusError = "Legal service unavailable";
+    try {
+      render(<AppShell><div>app content</div></AppShell>);
+      expect(screen.getByRole("alert")).toHaveTextContent("Legal service unavailable");
+      expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+      expect(screen.queryByText("app content")).toBeNull();
+    } finally {
+      authState.status = "ready";
+      authState.legalStatusError = null;
     }
   });
 });

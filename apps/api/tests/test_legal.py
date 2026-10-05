@@ -21,8 +21,23 @@ from test_platform_support import ADMIN_ORIGIN, admin_factory, admin_login, admi
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
+from mykhaya.legal import _status_from_records
 from mykhaya.main import app
-from mykhaya.models import AdministrativeAuditEvent, LegalDocument, PlatformRole
+from mykhaya.models import (
+    AdministrativeAuditEvent,
+    LegalAcceptance,
+    LegalAcceptanceContext,
+    LegalActionVerb,
+    LegalAudience,
+    LegalDocument,
+    LegalDocumentScope,
+    LegalDocumentVersion,
+    LegalDocumentVersionStatus,
+    LegalPlatform,
+    LegalReacceptanceScope,
+    LegalRecordType,
+    PlatformRole,
+)
 from mykhaya.platform_schemas import AcceptanceUserRow, PlatformLoginRequest
 
 __all__ = [
@@ -57,6 +72,49 @@ async def _archive_adult_legal_documents_after_test() -> AsyncIterator[None]:
 
 def unique(prefix: str) -> str:
     return f"{prefix}-{datetime.now(UTC).strftime('%H%M%S%f')}"
+
+
+def test_legacy_terms_key_acceptance_satisfies_canonical_terms_version() -> None:
+    legacy_version = LegalDocumentVersion(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        version_sequence=1,
+        version="1.0",
+        status=LegalDocumentVersionStatus.superseded,
+        content_markdown="# Terms",
+        reacceptance_scope=LegalReacceptanceScope.all_existing_users,
+    )
+    current_version = LegalDocumentVersion(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        version_sequence=1,
+        version="1.0",
+        status=LegalDocumentVersionStatus.published,
+        content_markdown="# Terms",
+        reacceptance_scope=LegalReacceptanceScope.all_existing_users,
+    )
+    legacy_acceptance = LegalAcceptance(
+        record_type=LegalRecordType.user_acceptance,
+        document_version_id=legacy_version.id,
+        user_id=uuid.uuid4(),
+        context=LegalAcceptanceContext.signup,
+        platform=LegalPlatform.web,
+    )
+    status = _status_from_records(
+        LegalDocument(
+            key="terms",
+            display_name="Terms & Conditions",
+            audience=LegalAudience.adult,
+            scope=LegalDocumentScope.global_,
+            action_verb=LegalActionVerb.accept,
+            acceptance_required=True,
+        ),
+        current_version,
+        [(legacy_acceptance, legacy_version)],
+        action_verb=LegalActionVerb.accept,
+    )
+    assert status.required is True
+    assert status.satisfied is True
 
 
 @pytest.fixture

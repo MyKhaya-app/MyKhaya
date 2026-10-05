@@ -52,10 +52,14 @@ function OutstandingDocument({
   const [expanded, setExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [contentError, setContentError] = useState(false);
 
   useEffect(() => {
     if (!document.current_version_id) return;
-    api.legalVersion(document.current_version_id).then(setContent).catch(() => undefined);
+    setContentError(false);
+    api.legalVersion(document.current_version_id)
+      .then(setContent)
+      .catch(() => setContentError(true));
   }, [document.current_version_id]);
 
   async function complete() {
@@ -103,6 +107,24 @@ function OutstandingDocument({
         <div className="legal-document-reader">
           {content ? (
             <LegalMarkdown content={content.content_markdown} className="legal-prose" />
+          ) : contentError ? (
+            <div role="alert">
+              <p>We could not load this document.</p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setContentError(false);
+                  if (document.current_version_id) {
+                    api.legalVersion(document.current_version_id)
+                      .then(setContent)
+                      .catch(() => setContentError(true));
+                  }
+                }}
+              >
+                Retry
+              </button>
+            </div>
           ) : (
             <p role="status">Loading…</p>
           )}

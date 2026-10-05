@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Login from "./page";
 
@@ -52,7 +52,7 @@ vi.mock("@/components/passkey-client", async (importOriginal) => {
   };
 });
 
-const { api } = await import("@mykhaya/api-client");
+const { api, ApiError } = await import("@mykhaya/api-client");
 const passkeyClient = await import("@/components/passkey-client");
 
 const user = { id: "user-1", display_name: "Anthony", avatar_version: null } as const;
@@ -361,5 +361,77 @@ describe("Login — browser/PWA still uses the cookie transport when not native"
       password: "correct horse",
     });
     expect(nativeLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe("Login — one sign-in action is exactly one login request", () => {
+  async function fill(typist: ReturnType<typeof userEvent.setup>) {
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+  }
+
+  it("one click on Sign in sends one native login and navigates once", async () => {
+    nativeShell = true;
+    nativeLogin.mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+    await fill(typist);
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(nativeLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("pressing Enter in the password field sends one login", async () => {
+    nativeShell = true;
+    nativeLogin.mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+    await fill(typist);
+    await typist.type(screen.getByLabelText("Password"), "{Enter}");
+
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(nativeLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("repeated submits while a login is pending are ignored (guard is not just the disabled button)", async () => {
+    nativeShell = true;
+    let finish!: (value: unknown) => void;
+    nativeLogin.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const typist = userEvent.setup();
+    render(<Login />);
+    await fill(typist);
+
+    const form = screen.getByRole("button", { name: /^sign in$/i }).closest("form") as HTMLFormElement;
+    // Two submit events in the same tick: React state (`busy`) has not rendered yet.
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(nativeLogin).toHaveBeenCalledTimes(1);
+
+    finish(user);
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(nativeLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 401 is shown once, is not retried automatically, and leaves the form usable", async () => {
+    nativeShell = true;
+    nativeLogin.mockRejectedValueOnce(new ApiError(401, "The email or password is not correct."));
+    const typist = userEvent.setup();
+    render(<Login />);
+    await fill(typist);
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await screen.findByText("The email or password is not correct.");
+    expect(nativeLogin).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: /^sign in$/i });
+    expect(button).toBeEnabled();
+
+    // The user can try again; that is a second, deliberate attempt.
+    nativeLogin.mockResolvedValueOnce(user);
+    await typist.click(button);
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(nativeLogin).toHaveBeenCalledTimes(2);
   });
 });

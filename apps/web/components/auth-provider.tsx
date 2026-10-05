@@ -25,6 +25,7 @@ type AuthStatus =
   | "offline"
   | "locked"
   | "maintenance"
+  | "legal_check_error"
   | "legal_action_required"
   | "signed_out";
 type AuthContextValue = {
@@ -39,6 +40,7 @@ type AuthContextValue = {
    *  "legal_action_required"; may be null otherwise (not yet checked, or the
    *  check failed and the gate fails open — see `refreshLegalStatus`). */
   legalStatus: LegalStatusResponse | null;
+  legalStatusError: string | null;
   /** Re-fetches GET /legal/status and updates `status`/`legalStatus`
    *  accordingly — released back to "ready" only once the backend itself
    *  reports full compliance, never optimistically from client-side state.
@@ -47,6 +49,7 @@ type AuthContextValue = {
    *  authenticated, not a second security boundary, so a transient failure
    *  here must never behave like a lost/expired session. */
   refreshLegalStatus: () => Promise<LegalStatusResponse | null>;
+  retryLegalStatus: () => void;
   retryInitialSession: () => void;
   refreshSession: () => Promise<boolean>;
   setAuthenticatedUser: (user: User) => Promise<void>;
@@ -98,6 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
+  const [legalStatusError, setLegalStatusError] = useState<string | null>(null);
   const bootstrapped = useRef(false);
 
   // The single place that turns "session is authenticated" into either
@@ -110,13 +114,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await api.legalStatus();
       setLegalStatus(result);
+      setLegalStatusError(null);
       setStatus(result.action_required ? "legal_action_required" : "ready");
       return result;
     } catch {
-      // Fail open — see refreshLegalStatus's doc comment on the context
-      // type above.
       setLegalStatus(null);
-      setStatus("ready");
+      setLegalStatusError("We could not check the required legal documents.");
+      setStatus("legal_check_error");
       return null;
     }
   }, []);
@@ -323,7 +327,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initialSessionLoading,
     sessionRefreshing,
     legalStatus,
+    legalStatusError,
     refreshLegalStatus: applyLegalStatus,
+    retryLegalStatus: () => void applyLegalStatus(),
     retryInitialSession: () => void loadSession(true),
     refreshSession: () => loadSession(false),
     setAuthenticatedUser: async (authenticatedUser) => {

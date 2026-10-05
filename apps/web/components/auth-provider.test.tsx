@@ -109,6 +109,14 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it("shows a recoverable legal-check error instead of failing into an empty shell", async () => {
+    legalStatus.mockRejectedValueOnce(new Error("legal API unavailable"));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("legal_check_error")).toBeInTheDocument());
+  });
+
   it("still treats a generic 503 as offline, not maintenance", async () => {
     const { ApiError } = await import("@mykhaya/api-client");
     me.mockRejectedValue(Object.assign(new ApiError(503, "Down"), { status: 503 }));

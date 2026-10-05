@@ -106,13 +106,16 @@ async def _records_with_versions(
     document_id: uuid.UUID,
     where_clause: ColumnElement[bool],
     *,
+    compatible_document_keys: tuple[str, ...] = (),
     is_test: bool = False,
 ) -> list[tuple[LegalAcceptance, LegalDocumentVersion]]:
     rows = await db.execute(
         select(LegalAcceptance, LegalDocumentVersion)
         .join(LegalDocumentVersion, LegalDocumentVersion.id == LegalAcceptance.document_version_id)
+        .join(LegalDocument, LegalDocument.id == LegalDocumentVersion.document_id)
         .where(
-            LegalDocumentVersion.document_id == document_id,
+            (LegalDocumentVersion.document_id == document_id)
+            | LegalDocument.key.in_(compatible_document_keys),
             where_clause,
             LegalDocumentVersion.is_test.is_(is_test),
         )
@@ -138,6 +141,7 @@ async def user_document_status(
         (LegalAcceptance.user_id == user_id)
         & (LegalAcceptance.record_type == record_type)
         & LegalAcceptance.child_profile_id.is_(None),
+        compatible_document_keys=("terms_and_conditions",) if document.key == "terms" else (),
         is_test=is_test,
     )
     return _status_from_records(document, current, records, action_verb=document.action_verb)
@@ -203,7 +207,19 @@ def _status_from_records(
     satisfied_directly = any(
         acceptance.document_version_id == current.id for acceptance, _ in records
     )
-    satisfied = satisfied_directly or _grandfathered(current.reacceptance_scope, bool(records))
+    # The original Terms model used `terms_and_conditions` as its document
+    # key. A migration to the canonical `terms` key must preserve a valid
+    # acceptance of the same published version without manufacturing a new
+    # row. Context is deliberately not part of this identity: it records where
+    # acceptance happened, not whether the document/version was accepted.
+    compatible_terms_version = document.key == "terms" and any(
+        version.version == current.version for _, version in records
+    )
+    satisfied = (
+        satisfied_directly
+        or compatible_terms_version
+        or _grandfathered(current.reacceptance_scope, bool(records))
+    )
     return ActionRecordStatus(
         document_key=document.key,
         display_name=document.display_name,

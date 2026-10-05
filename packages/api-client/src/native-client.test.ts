@@ -163,8 +163,8 @@ describe("NativeMyKhayaClient — unauthenticated account flow", () => {
 });
 
 describe("NativeMyKhayaClient — DEV diagnostic probe", () => {
-  it("probes GET and progressively adds native headers without logging sensitive data", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "invalid" }));
+  it("only issues credential-free GETs to a public endpoint, never the login endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { support_enabled: false }));
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), {
       fetch: fetchMock,
@@ -172,17 +172,32 @@ describe("NativeMyKhayaClient — DEV diagnostic probe", () => {
     });
 
     await expect(client.diagnosticProbe()).resolves.toEqual([
-      "GET base: status 401",
-      "POST content-type: status 401",
-      "POST + client: status 401",
-      "POST + platform: status 401",
-      "POST + app-version: status 401",
+      "GET base: status 200",
+      "GET + client: status 200",
+      "GET + platform: status 200",
+      "GET + app-version: status 200",
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(5);
-    const serializedLogs = JSON.stringify(info.mock.calls);
-    expect(serializedLogs).not.toContain("native-diagnostic-invalid");
-    expect(serializedLogs).not.toContain("password");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(url).toBe(`${BASE_URL}/config/public`);
+      expect((init as RequestInit).method).toBe("GET");
+      expect((init as RequestInit).body).toBeUndefined();
+    }
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/auth/"))).toBe(false);
+    expect(JSON.stringify(info.mock.calls)).not.toContain("password");
     info.mockRestore();
+  });
+});
+
+describe("NativeMyKhayaClient — login is a single, non-retried POST", () => {
+  it("one login() call sends exactly one /auth/mobile/login request and a 401 is not retried", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "no" }));
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), {
+      fetch: fetchMock,
+    });
+    await expect(client.login("a@example.com", "pw")).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${BASE_URL}/auth/mobile/login`);
   });
 });
 
