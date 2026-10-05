@@ -55,6 +55,12 @@ class BetaEligibilityResponse(StrictModel):
     reason: str | None = None
 
 
+class BetaPendingResponse(StrictModel):
+    pending: bool
+    home_name: str | None = None
+    terms_version: str | None = None
+
+
 class BetaInviteCreate(StrictModel):
     waitlist_entry_id: uuid.UUID
 

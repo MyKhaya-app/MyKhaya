@@ -51,7 +51,6 @@ from mykhaya.founding_beta import (
     beta_invitation_valid,
     current_programme,
     invitation_token_hash,
-    join_beta,
 )
 from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
@@ -1437,31 +1436,9 @@ async def verify_email(
     if user is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     user.email_verified_at = user.email_verified_at or datetime.now(UTC)
-    pending = await db.scalar(
-        select(BetaPendingRegistration)
-        .where(
-            BetaPendingRegistration.user_id == user.id,
-            BetaPendingRegistration.consumed_at.is_(None),
-            BetaPendingRegistration.expires_at > datetime.now(UTC),
-        )
-        .order_by(BetaPendingRegistration.created_at.desc())
-        .with_for_update()
-    )
-    if pending is not None:
-        try:
-            await join_beta(
-                db,
-                user=user,
-                home_name=pending.home_name,
-                terms_version=pending.terms_version,
-                invitation_token_hash_value=pending.invitation_token_hash,
-            )
-            pending.consumed_at = datetime.now(UTC)
-        except HTTPException:
-            # Verification remains successful; the short-lived pending state
-            # can be retried through /beta/join after capacity/eligibility is
-            # repaired, without consuming a place prematurely.
-            pass
+    # Beta registration remains staged here. Home creation, capacity allocation
+    # and the entitlement grant happen only through the authenticated
+    # /beta/join contract after the user signs in.
     audit(db, request, "user.email_verified", user.id, target_type="user", target_id=user.id)
     await db.commit()
     return MessageResponse(message="Your email is verified. You can sign in now.")

@@ -264,6 +264,12 @@ export type BetaEligibilityState = {
   reason: string | null;
 };
 
+export type BetaPendingState = {
+  pending: boolean;
+  home_name: string | null;
+  terms_version: string | null;
+};
+
 export type BudgetProfile = {
   id: string;
   owner_user_id: string;
@@ -479,6 +485,7 @@ export class MyKhayaClient {
       body: JSON.stringify(body),
     });
   betaEligibility = () => this.request<BetaEligibilityState>("/beta/eligibility");
+  betaPending = () => this.request<BetaPendingState>("/beta/pending");
   createSupportTicket = (body: SupportTicketCreateRequest) =>
     this.request<SupportTicketResponse>("/support/tickets", {
       method: "POST",

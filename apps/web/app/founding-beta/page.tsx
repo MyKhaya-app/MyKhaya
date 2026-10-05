@@ -21,6 +21,7 @@ export default function FoundingBeta() {
   const [joinBusy, setJoinBusy] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [invitationValid, setInvitationValid] = useState<boolean | null>(invitation ? null : false);
+  const [invitationExpiresAt, setInvitationExpiresAt] = useState<string | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     api.publicSignupState().then(setState).catch((reason: ApiError) => setError(reason.message));
@@ -29,7 +30,10 @@ export default function FoundingBeta() {
   useEffect(() => {
     if (!invitation) return;
     api.publicBetaInvitation(invitation)
-      .then((result) => setInvitationValid(result.valid))
+      .then((result) => {
+        setInvitationValid(result.valid);
+        setInvitationExpiresAt(result.expires_at);
+      })
       .catch(() => setInvitationValid(false));
   }, [invitation]);
   const canJoin = Boolean(state?.beta_joining_available || invitationValid === true);
@@ -58,6 +62,11 @@ export default function FoundingBeta() {
         There is no cost to join, and places are limited while we test and improve MyKhaya.
       </p>
       {invitation && invitationValid === false && <p className="notice error" role="alert">This Beta invitation is invalid, expired, cancelled or already used.</p>}
+      {invitation && invitationValid === true && invitationExpiresAt && (
+        <p className="notice success" role="status">
+          This place is reserved for you until {new Date(invitationExpiresAt).toLocaleString("en-GB")}.
+        </p>
+      )}
       {error && <FormStatus error={error} />}
       {joined && <p className="notice success" role="status">Your Home is now enrolled with complimentary Ultimate access.</p>}
       {eligibility?.reason && <p className="notice" role="status">{eligibility.reason}</p>}

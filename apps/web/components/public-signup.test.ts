@@ -23,6 +23,8 @@ describe("public signup routing", () => {
   });
 
   it("keeps the sign-in path available when registration is closed", () => {
-    expect(signupDestination(state("closed"))).toBe("/register");
+    expect(signupDestination(state("closed"))).toBe("/login");
+    expect(signupCtaLabel(state("closed"))).toBe("Sign in");
+    expect(signupDestination({ ...state("closed"), waitlist_available: true })).toBe("/waitlist");
   });
 });

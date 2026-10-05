@@ -31,6 +31,7 @@ from mykhaya.founding_beta_schemas import (
     BetaJoinRequest,
     BetaJoinResponse,
     BetaOverviewResponse,
+    BetaPendingResponse,
     BetaProgrammeResponse,
     BetaProgrammeUpdate,
     BetaWaitlistCreate,
@@ -52,7 +53,7 @@ from mykhaya.models import (
     SubscriptionPlan,
 )
 from mykhaya.platform_audit import platform_audit
-from mykhaya.platform_runtime import evaluate_signup_policy
+from mykhaya.platform_runtime import evaluate_signup_policy, registration_enabled
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import normalise_email
@@ -79,7 +80,13 @@ async def public_signup_state(
         invitation_required=policy.invitation_required,
         normal_signup_available=policy.normal_path,
         beta_joining_available=beta_available,
-        waitlist_available=policy.beta_path and programme.waitlist_enabled and (not beta_available),
+        waitlist_available=(
+            programme.waitlist_enabled
+            and (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
+            and settings.registration_mode != "closed"
+            and (await registration_enabled(db))
+            and (not beta_available)
+        ),
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
         beta_terms_version=programme.terms_version if policy.beta_path else None,
     )
@@ -101,7 +108,9 @@ async def join_waitlist(
     state = await capacity(db, programme)
     if (
         not programme.waitlist_enabled
-        or not policy.beta_path
+        or not (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
+        or settings.registration_mode == "closed"
+        or not await registration_enabled(db)
         or (state["joinable"] > 0 and state["waiting"] == 0)
     ):
         raise HTTPException(
@@ -180,6 +189,30 @@ async def join(
     )
     await db.commit()
     return BetaJoinResponse(home_id=home.id, entitlement_source=FOUNDING_BETA_SOURCE)
+
+
+@router.get("/pending", response_model=BetaPendingResponse)
+async def pending(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BetaPendingResponse:
+    require_adult_session(auth)
+    from mykhaya.models import BetaPendingRegistration
+
+    row = await db.scalar(
+        select(BetaPendingRegistration)
+        .where(
+            BetaPendingRegistration.user_id == auth.user.id,
+            BetaPendingRegistration.consumed_at.is_(None),
+            BetaPendingRegistration.expires_at > datetime.now(UTC),
+        )
+        .order_by(BetaPendingRegistration.created_at.desc())
+    )
+    return BetaPendingResponse(
+        pending=row is not None,
+        home_name=row.home_name if row else None,
+        terms_version=row.terms_version if row else None,
+    )
 
 
 @router.get("/eligibility", response_model=BetaEligibilityResponse)
