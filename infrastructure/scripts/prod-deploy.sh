@@ -45,12 +45,10 @@ update() {
   [ "$head_commit" = "$tag_commit" ] || die "HEAD does not match release tag $MYKHAYA_RELEASE_TAG"
   git describe --exact-match --tags HEAD 2>/dev/null | grep -Fx "$MYKHAYA_RELEASE_TAG" >/dev/null ||
     die "HEAD is not exactly the requested release tag $MYKHAYA_RELEASE_TAG"
-  MYKHAYA_VERSION=$(sed -n '1p' VERSION | tr -d '\r')
-  [ "$MYKHAYA_RELEASE_TAG" = "v$MYKHAYA_VERSION" ] ||
-    die "release tag $MYKHAYA_RELEASE_TAG does not match VERSION $MYKHAYA_VERSION"
+  MYKHAYA_VERSION="$MYKHAYA_RELEASE_TAG"
   export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit" \
     MYKHAYA_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" MYKHAYA_BUILD_CHANNEL=stable
-  GITHUB_REF="refs/tags/$MYKHAYA_RELEASE_TAG" python3 infrastructure/scripts/validate_version.py
+  python3 infrastructure/scripts/validate_version.py "$MYKHAYA_RELEASE_TAG"
   validate
   [ -f "${MYKHAYA_BACKUP_MARKER:-/var/lib/mykhaya/last-backup.ok}" ] ||
     die "verified backup marker is missing"

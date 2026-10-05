@@ -207,6 +207,22 @@ export type SupportTicketMessageCreateRequest = {
 export type PublicConfig = {
   service_status_url: string | null;
   support_enabled: boolean;
+  /** PCC maintenance mode. Always present: GET /config/public stays reachable
+   *  during maintenance so the maintenance screen can detect recovery. */
+  maintenance_mode: boolean;
+};
+
+/** GET /public/signup-state - the server's resolved answer to "can a new
+ *  account be created, and how?". Display-only: registration is enforced
+ *  server-side regardless of what a client shows. */
+export type PublicSignupState = {
+  signup_mode: "normal" | "beta_only" | "mixed" | "closed";
+  registration_open: boolean;
+  invitation_required: boolean;
+  normal_signup_available: boolean;
+  beta_joining_available: boolean;
+  waitlist_available: boolean;
+  joinable_count: number | null;
 };
 
 export type BudgetProfile = {
@@ -408,6 +424,7 @@ export class MyKhayaClient {
 
   me = () => this.request<User>("/users/me");
   publicConfig = () => this.request<PublicConfig>("/config/public");
+  publicSignupState = () => this.request<PublicSignupState>("/public/signup-state");
   createSupportTicket = (body: SupportTicketCreateRequest) =>
     this.request<SupportTicketResponse>("/support/tickets", {
       method: "POST",

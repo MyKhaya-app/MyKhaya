@@ -11,6 +11,7 @@ import { PublicHero } from "@/components/marketing/public-hero";
 import { PublicPricing } from "@/components/marketing/public-pricing";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
+import { MaintenanceScreen } from "@/components/maintenance";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
 
 function PublicWelcome() {
@@ -39,6 +40,7 @@ function NativeRootGate() {
     if (status === "ready") router.replace("/home");
   }, [router, status]);
 
+  if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
   if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">

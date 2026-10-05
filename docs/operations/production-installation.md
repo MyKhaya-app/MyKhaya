@@ -33,7 +33,7 @@ Cloudflare -> NetBird Proxy -> Caddy -> web/API
 ## Updates and rollback
 
 Create `/var/lib/mykhaya/last-backup.ok` only after an encrypted off-host backup has
-been verified. Then run `make prod-update RELEASE=v<VERSION>` for the approved
+been verified. Then run `make prod-update RELEASE=vX.Y.Z` for the approved
 GitHub release tag.
 
 The command refuses dirty trees, non-release commits, missing configuration, and

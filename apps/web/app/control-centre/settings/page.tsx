@@ -615,7 +615,7 @@ export default function PlatformSettingsPage() {
                   {syslogResult && <p role="status" className="cc-page-meta">{syslogResult}</p>}
                 </CcCard>
               )}
-                  {groupBySection(data.settings.filter((item) => !["signup_mode", "registration_enabled", "invite_only_mode"].includes(item.key))).map(([section, items]) => (
+                  {groupBySection(data.settings.filter((item) => item.key !== "signup_mode")).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">
                   <h2>{section}</h2>
                   <div className="settings-section-rows">

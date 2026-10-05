@@ -1,9 +1,7 @@
 import os
 from email.utils import parseaddr
 from functools import lru_cache
-from importlib import metadata as importlib_metadata
 from ipaddress import ip_network
-from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -12,45 +10,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mykhaya.url_validation import is_valid_http_url
 
-_DISTRIBUTION_NAME = "mykhaya-api"
-
-
-def _read_repo_version_file() -> str | None:
-    here = Path(__file__).resolve()
-    candidates = [Path("/app/VERSION"), Path.cwd() / "VERSION"]
-    candidates.extend(parent / "VERSION" for parent in here.parents[:4])
-    for path in candidates:
-        if path.exists():
-            value = path.read_text(encoding="utf-8").strip()
-            if value:
-                return value
-    return None
-
-
 def resolve_app_version() -> str:
-    """The single source of truth for the running application's version.
+    """Use deployment-injected metadata; local source runs identify as dev.
 
-    Precedence: an explicit MYKHAYA_VERSION override > installed package
-    metadata (infrastructure/scripts/validate_version.py already enforces
-    apps/api/pyproject.toml's version stays equal to the repository VERSION
-    file, so this is never stale) > the repository VERSION file when running
-    from source > a safe non-empty fallback.
+    Production deployment injects the Git release tag through MYKHAYA_VERSION.
+    Development deployment injects the literal value ``dev``.
 
     "unknown" is deliberately not treated as a meaningful override even
     though it's present as a literal env var value in several places
     (compose.yml's `${MYKHAYA_VERSION:-unknown}` substitution, the
     Dockerfiles' `ARG MYKHAYA_VERSION=unknown`) — those exist so a build/run
-    never fails for lacking the var, not to assert "the version really is
-    unknown" over a better source that's actually available.
+    never fails for lacking the var, so local source runs fall back to ``dev``.
     """
     override = os.environ.get("MYKHAYA_VERSION", "").strip()
     if override and override != "unknown":
         return override
-    try:
-        return importlib_metadata.version(_DISTRIBUTION_NAME)
-    except importlib_metadata.PackageNotFoundError:
-        pass
-    return _read_repo_version_file() or "unknown"
+    return "dev"
 
 
 class Settings(BaseSettings):

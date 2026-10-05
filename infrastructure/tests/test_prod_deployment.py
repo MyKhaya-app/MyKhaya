@@ -25,9 +25,16 @@ class ProductionDeploymentTests(unittest.TestCase):
             self.script,
         )
 
-    def test_release_tag_matches_version(self) -> None:
-        self.assertIn('"$MYKHAYA_RELEASE_TAG" = "v$MYKHAYA_VERSION"', self.script)
-        self.assertIn('GITHUB_REF="refs/tags/$MYKHAYA_RELEASE_TAG"', self.script)
+    def test_production_version_comes_from_release_tag(self) -> None:
+        self.assertIn('MYKHAYA_VERSION="$MYKHAYA_RELEASE_TAG"', self.script)
+        self.assertNotIn("cat VERSION", self.script)
+
+    def test_production_channel_and_commit_metadata_are_exported_before_build(self) -> None:
+        metadata = self.script.index('export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit"')
+        build = self.script.index("$COMPOSE build web api worker scheduler migrate")
+        self.assertLess(metadata, build)
+        self.assertIn("MYKHAYA_BUILD_CHANNEL=stable", self.script)
+        self.assertIn("git rev-parse HEAD", self.script)
 
     def test_tag_commit_belongs_to_origin_main(self) -> None:
         self.assertIn('git merge-base --is-ancestor "$tag_commit" origin/main', self.script)

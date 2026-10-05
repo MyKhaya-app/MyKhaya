@@ -94,6 +94,30 @@ beforeEach(() => {
 });
 
 describe("AuthProvider", () => {
+  it("shows the maintenance status — not signed-out or offline — when the API answers 503 maintenance_mode", async () => {
+    const { ApiError } = await import("@mykhaya/api-client");
+    const maintenance = Object.assign(new ApiError(503, "Maintenance"), {
+      status: 503,
+      code: "maintenance_mode",
+    });
+    me.mockRejectedValue(maintenance);
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("maintenance")).toBeInTheDocument());
+    expect(renew).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("still treats a generic 503 as offline, not maintenance", async () => {
+    const { ApiError } = await import("@mykhaya/api-client");
+    me.mockRejectedValue(Object.assign(new ApiError(503, "Down"), { status: 503 }));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("offline")).toBeInTheDocument());
+  });
+
   it("does not bootstrap or redirect a browser MFA pre-auth route", async () => {
     // usePathname() excludes the query string; the MFA page reads the
     // transaction separately through useSearchParams().

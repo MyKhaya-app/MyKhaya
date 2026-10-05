@@ -772,6 +772,12 @@ async def test_pcc_reports_every_setting_as_enforced_or_informational(
     await login(admin_client, admin)
     rows = (await admin_client.get("/api/v1/platform/settings")).json()["settings"]
     by_key = {row["key"]: row["runtime_effect"] for row in rows}
-    assert "not_enforced" not in by_key.values()
+    # The only settings allowed to be disconnected are the two regional
+    # defaults documented in platform-control-centre.md as not safely wireable
+    # yet. A new disconnected setting must not slip in unnoticed.
+    assert {key for key, effect in by_key.items() if effect == "not_enforced"} == {
+        "default_locale",
+        "default_timezone",
+    }
     for key in CONTROLLED_KEYS:
         assert by_key[key] == "effective", key

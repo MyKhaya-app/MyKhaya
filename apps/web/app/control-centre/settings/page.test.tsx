@@ -426,3 +426,56 @@ describe("PCC Settings — Driveway/DVLA integration", () => {
     expect(await within(card).findByText("DVLA UAT connection successful.")).toBeInTheDocument();
   });
 });
+
+describe("PCC Settings — enforced access controls", () => {
+  function enforcedSettings() {
+    const base = baseSettings();
+    const registration = ["registration_enabled", "invite_only_mode"].map((key) => ({
+      key,
+      label: key === "registration_enabled" ? "Allow new registrations" : "Invite-only registration",
+      description: "Server-enforced signup control.",
+      section: "Registration & Access",
+      value_type: "boolean",
+      risk: "sensitive",
+      runtime_effect: "effective",
+      editable: true,
+      consumer_visible: false,
+      value: key === "registration_enabled",
+      state: "unset",
+    }));
+    return {
+      ...base,
+      settings: [
+        ...base.settings.map((item) =>
+          item.key === "maintenance_mode" ? { ...item, runtime_effect: "effective" } : item,
+        ),
+        ...registration,
+      ],
+    };
+  }
+
+  it("shows no 'not enforced' warning for a setting the server enforces", async () => {
+    mockRoutes(enforcedSettings());
+    render(<PlatformSettingsPage />);
+
+    await screen.findByRole("heading", { name: "Maintenance mode" });
+    expect(screen.queryByText("Not yet enforced by the application.")).not.toBeInTheDocument();
+  });
+
+  it("lists the registration controls and warns about real access effects when saving", async () => {
+    const user = userEvent.setup();
+    mockRoutes(enforcedSettings());
+    render(<PlatformSettingsPage />);
+
+    const heading = await screen.findByRole("heading", { name: "Allow new registrations" });
+    expect(screen.getByRole("heading", { name: "Invite-only registration" })).toBeInTheDocument();
+    const row = heading.closest(".setting-row") as HTMLElement;
+    await user.click(within(row).getByRole("checkbox"));
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+
+    expect(
+      await screen.findByText(/affects real user access or availability/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/not yet enforced/i)).not.toBeInTheDocument();
+  });
+});

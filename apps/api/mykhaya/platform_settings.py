@@ -204,7 +204,7 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
         value_type="text",
         python_type=str,
         risk="normal",
-        runtime_effect="informational",
+        runtime_effect="not_enforced",
     ),
     "default_timezone": SettingDefinition(
         key="default_timezone",
@@ -214,7 +214,7 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
         value_type="text",
         python_type=str,
         risk="normal",
-        runtime_effect="informational",
+        runtime_effect="not_enforced",
     ),
     "privacy_notice_version": SettingDefinition(
         key="privacy_notice_version",

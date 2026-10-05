@@ -3,7 +3,6 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
-COPY VERSION ./VERSION
 COPY apps/api/pyproject.toml ./
 COPY apps/api/mykhaya ./mykhaya
 RUN pip install --upgrade pip && pip install .
@@ -42,7 +41,6 @@ LABEL org.opencontainers.image.title="MyKhaya API" \
 RUN groupadd --system --gid 10001 mykhaya && useradd --system --uid 10001 --gid mykhaya --home-dir /app mykhaya
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
-COPY --chown=mykhaya:mykhaya VERSION /app/VERSION
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
 COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
 # A fresh named volume mounted here inherits this directory's ownership on first

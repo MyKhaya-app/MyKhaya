@@ -8,7 +8,6 @@
 .gitignore
 .npmrc
 .prettierignore
-VERSION
 apps/api/alembic.ini
 apps/api/Dockerfile
 apps/api/migrations/env.py

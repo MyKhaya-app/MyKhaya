@@ -68,6 +68,9 @@ the old key as compromised.
 
 ## Release ownership
 
-Codex validates and reports `dev` readiness. Anthony alone merges `dev` to `main`, creates the matching `v<VERSION>` tag and deploys that tagged revision. Workflows validate and build; they do not publish or deploy automatically.
+Codex validates and reports `dev` readiness. Anthony alone merges `dev` to
+`main`, creates the GitHub release tag `vX.Y.Z` and deploys that tagged revision
+with `make prod-update RELEASE=vX.Y.Z`. Workflows validate and build; they do
+not publish or deploy automatically.
 
 Containers log JSON or structured records to stdout. Alert on health failures, repeated authentication denials, queue failures, backup failures and storage capacity. Keep exactly one scheduler replica.

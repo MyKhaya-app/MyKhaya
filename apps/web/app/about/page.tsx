@@ -182,7 +182,7 @@ function useLegalCompliance() {
   return { rows, loading: !documents || !legalStatus, error };
 }
 
-/** "unknown" is `resolve_app_version()`'s deliberate last-resort fallback
+/** "unknown" is an unavailable build fallback
  * (see apps/api/mykhaya/config.py) for when no package metadata, VERSION
  * file, or override can be found — genuinely rare, but the raw word must
  * never be shown to a user as if it were a real version string. */

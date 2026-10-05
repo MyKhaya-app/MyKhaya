@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -107,17 +108,24 @@ class RealRepositoryValidationTests(unittest.TestCase):
             "this test is stale.",
         )
 
-    def test_component_versions_excludes_mobile_and_matches_version_file(self) -> None:
+    def test_component_versions_are_independent_package_versions(self) -> None:
         versions = validate_version.component_versions()
         self.assertNotIn("apps/mobile/package.json", versions)
         self.assertIn("apps/web/package.json", versions)
         self.assertIn("apps/api/pyproject.toml", versions)
-        expected = validate_version.root_version()
-        for path, value in versions.items():
-            self.assertEqual(value, expected, f"{path} does not match VERSION={expected}")
+
+    def test_release_tags_require_leading_semver_v(self) -> None:
+        for tag in ("v0.3.2", "v1.0.0", "v1.4.7", "v2.0.0-rc.1", "v2.0.0-beta.2"):
+            validate_version.validate_release_tag(tag)
+
+    def test_malformed_release_tags_are_rejected(self) -> None:
+        for tag in ("0.3.2", "release-0.3.2", "v1", "v1.2", "latest", "production"):
+            with self.assertRaises(validate_version.ValidationError):
+                validate_version.validate_release_tag(tag)
 
     def test_main_passes_against_the_real_repository(self) -> None:
-        self.assertEqual(validate_version.main(), 0)
+        with mock.patch.object(sys, "argv", ["validate_version.py"]):
+            self.assertEqual(validate_version.main(), 0)
 
 
 if __name__ == "__main__":

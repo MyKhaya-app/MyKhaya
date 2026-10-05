@@ -172,24 +172,54 @@ cache to invalidate, no restart required. The consumer Help & Support page
 `openExternalUrl` (native `Browser.open`/browser `window.open`) — it never links to a
 hardcoded environment-specific URL.
 
-**Runtime enforcement is tracked explicitly, not assumed** — `SettingDefinition`'s
+**Runtime enforcement is tracked explicitly, not assumed** - `SettingDefinition`'s
 `runtime_effect` field records whether a setting is actually consumed by running code
-today (`"effective"`), purely informational with no behavioural claim
-(`"informational"`), or a placeholder nothing reads yet (`"not_enforced"`). As of this
-writing: `registration_enabled`/`invite_only_mode` (the real gate is the env-only
-`Settings.registration_mode`), `email_verification_required` (the real gate is the
-similarly-but-confusingly-named env `Settings.email_verification_enabled`),
-`maintenance_mode` (no maintenance-mode mechanism exists at all), `maximum_homes_per_user`
-(nothing enforces it), `maximum_members_per_home` (the real per-plan limit is
-`entitlements.py`'s `home.max_members`), and `invitation_expiry_days` (invitations use a
-hardcoded `timedelta(days=7)` in `routers/invitations.py`) are all `"not_enforced"`. PCC
-renders this as an honest "Not yet enforced by the application" caption, and a
-sensitive+not-enforced setting's confirmation dialog says exactly that rather than
-describing an operational effect that doesn't currently exist. Wiring any of these up to
-real enforcement — and resolving the `registration_mode`/`registration_enabled`
-duplication in particular — is future work, not done here; when it happens, flip that
-key's `runtime_effect` to `"effective"` and the PCC confirmation copy for sensitive
-settings automatically switches to the stronger operational warning.
+(`"effective"`), purely informational with no behavioural claim (`"informational"`), or
+a placeholder nothing reads yet (`"not_enforced"`). PCC renders a "Not yet enforced by
+the application" caption for `"not_enforced"` only, and a sensitive+not-enforced
+setting's confirmation dialog says exactly that. Today `default_locale` and
+`default_timezone` are the only `"not_enforced"` settings (see below); every other
+access/security/availability setting is `"effective"` and has tests for both states in
+`apps/api/tests/test_platform_runtime_enforcement.py`.
+
+All enforcement reads the `platform_settings` row **per request** through
+`mykhaya.platform_runtime` (never cached, never copied into `Settings`), so a PCC change
+applies on the next request on every API worker - no redeploy or restart.
+
+| Setting | Enforced by |
+| --- | --- |
+| `maintenance_mode` | `main.maintenance_gate`, a router dependency on every consumer router (inside CORS, so the 503 is readable by browsers/native). Answers HTTP 503 `{code: "maintenance_mode"}` + `Retry-After`. Exempt: health, `/config/public`, `/status`, every `/platform/*` (PCC) router. Web/native show `MaintenanceScreen`. Background workers are **not** paused. |
+| `registration_enabled` | `platform_runtime.evaluate_signup_policy` -> `POST /auth/register`, Apple account creation, `join_beta`, waitlist, `GET /public/signup-state`. |
+| `invite_only_mode` | Same resolver. Ordinary signup needs a valid Home invitation; Founding Beta needs a valid Beta (waitlist) invitation, validated by the API; `join_beta` rejects uninvited joins. Apple sign-up is refused (it cannot carry an invitation). |
+| `signup_mode` | Same resolver (Normal / Beta only / Mixed / Closed). Closed now also stops the ordinary password path (previously only the deployment value did). |
+| `allowed_registration_domains` | Same resolver; exact, case-insensitive domain match on every new-account path, invited or not. Empty = no restriction. |
+| `email_verification_required` | `platform_runtime.email_verification_required` in register + login. No stored value -> deployment default (`email_verification_enabled`). In production it can never be lowered (PUT is rejected and the resolver refuses to relax it). |
+| `invitation_expiry_days` | `routers/invitations.py` create + resend (default 7). Already-issued invitations keep their expiry. Calendar-share invitations are a different mechanism and unchanged. |
+| `maximum_homes_per_user` | `require_home_capacity_for_user` on create-Home, accept-invitation, approve-join-request and Beta Home creation. Unset = no cap; existing memberships untouched. |
+| `maximum_members_per_home` | `entitlements.get_limit("home.max_members")` - a platform-wide ceiling that can only *lower* a plan limit, so every existing member-limit check (invite, accept, join approve, child create, calendar) honours it. |
+| `driveway_dvla_enabled`, `service_status_url` | Already enforced (`routers/driveway.py`, `routers/public_config.py`). |
+
+**Signup precedence** (most restrictive wins; no combination can be looser than any one
+input; sign-in is never consulted): maintenance (503 everywhere) > deployment
+`registration_mode == "closed"` > `registration_enabled == false` > `signup_mode ==
+"closed"` > `signup_mode` selects the open path (normal / beta / both) > invitation
+requirement (`invite_only_mode` OR deployment `invitation_only`) narrows that path >
+`allowed_registration_domains` applies to every path. Beta flow: waitlist -> reserved Beta
+invitation -> registration -> email verification -> `join_beta`; with invite-only on, a
+Beta registration without a valid reserved invitation for that email is refused at
+`/auth/register`.
+
+**Deliberately not wired - `default_locale`, `default_timezone`.** Both duplicate
+deployment settings that already exist (`MYKHAYA_DEFAULT_LOCALE`, `MYKHAYA_DEFAULT_TIMEZONE`).
+No code consumes a locale at all, and the timezone fallback is read from `Settings` at ~10
+notification/worker call sites; routing a second source of truth into those without a
+single resolver would create exactly the duplicate-configuration problem this change
+avoids. They stay `"not_enforced"` (PCC says so) until a decision is made to either
+retire them or give the notification engine one shared resolver.
+`platform_display_name`, `support_contact_address`, `privacy_notice_version` and
+`terms_version` are `"informational"` (administrator-facing labels / reference values);
+the legal-document version that users actually accept is governed by the Legal documents
+mechanism, not by these.
 
 **What stays environment/secret-only and must never become a PCC-editable
 `platform_settings` row**: database URL, Redis URL, `secret_key`, SMTP

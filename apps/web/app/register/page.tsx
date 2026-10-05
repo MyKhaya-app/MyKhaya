@@ -3,13 +3,20 @@ export const dynamic = "force-dynamic";
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
+import {
+  api,
+  ApiError,
+  type PublicLegalDocumentSummary,
+  type PublicSignupState,
+} from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
 import { intervalName } from "@/components/billing-logic";
 import { parseIntentFromParams, saveOnboardingIntent } from "@/components/onboarding-intent";
 import { nativeRegister } from "@/components/native-auth";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
+import { isMaintenanceError } from "@/components/maintenance";
+import { registrationUnavailableReason } from "@/components/registration-availability";
 
 const LEGAL_PAGE_BY_KEY: Record<string, string> = {
   terms: "/legal/terms",
@@ -51,6 +58,16 @@ export default function Register() {
       invited_by_display_name: string;
       recipient_email: string;
     } | null>(null);
+  const [signupState, setSignupState] = useState<PublicSignupState | null>(null),
+    [maintenance, setMaintenance] = useState(false);
+  useEffect(() => {
+    // Display-only: the API enforces registration regardless. A failed lookup
+    // never blocks the form — the server's own rejection is the authority.
+    api
+      .publicSignupState()
+      .then(setSignupState)
+      .catch((cause) => setMaintenance(isMaintenanceError(cause)));
+  }, []);
   useEffect(() => {
     api
       .publicLegalDocuments()
@@ -153,6 +170,9 @@ export default function Register() {
       setBusy(false);
     }
   }
+  const unavailableReason = maintenance
+    ? "MyKhaya is undergoing maintenance. Please try again shortly."
+    : registrationUnavailableReason(signupState, Boolean(invitation));
   return (
     <AuthCard
       title="Create your account"
@@ -174,6 +194,11 @@ export default function Register() {
         </span>
       }
     >
+      {unavailableReason && (
+        <p className="notice" role="status">
+          {unavailableReason}
+        </p>
+      )}
       {inviteContext && (
         <p className="notice success">
           {inviteContext.invited_by_display_name} invited you to join {inviteContext.group_name}.
@@ -269,7 +294,7 @@ export default function Register() {
           />
         </label>
         <FormStatus error={error} />
-        <button disabled={busy}>
+        <button disabled={busy || Boolean(unavailableReason)}>
           {busy ? "Creating account…" : "Create account"}
         </button>
       </form>
