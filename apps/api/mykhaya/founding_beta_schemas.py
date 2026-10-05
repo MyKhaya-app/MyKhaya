@@ -8,6 +8,8 @@ from mykhaya.schemas import StrictModel
 
 class SignupStateResponse(StrictModel):
     signup_mode: SignupMode
+    registration_open: bool
+    invitation_required: bool
     normal_signup_available: bool
     beta_joining_available: bool
     waitlist_available: bool

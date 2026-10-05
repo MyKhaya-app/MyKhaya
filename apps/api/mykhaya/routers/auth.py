@@ -47,7 +47,12 @@ from mykhaya.consumer_mfa_policy import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
-from mykhaya.founding_beta import current_programme, invitation_token_hash, join_beta, signup_mode
+from mykhaya.founding_beta import (
+    beta_invitation_valid,
+    current_programme,
+    invitation_token_hash,
+    join_beta,
+)
 from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
     ActionToken,
@@ -86,6 +91,7 @@ from mykhaya.platform_mfa import (
     verify_family_authentication,
     verify_family_registration,
 )
+from mykhaya.platform_runtime import email_verification_required, evaluate_signup_policy
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     AuthContinuationResponse,
@@ -889,6 +895,19 @@ async def apple_callback(
                 return _apple_redirect(settings, "apple=link_required")
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
+            # Apple creates a brand-new account, so it is subject to the same
+            # signup policy as password registration. It carries no Home/Beta
+            # invitation and is not the Founding Beta path, so it is available
+            # only while ordinary signup is open and not invitation-gated.
+            policy = await evaluate_signup_policy(db, settings)
+            if (
+                not policy.normal_path
+                or policy.invitation_required
+                or not policy.domain_allowed(provider_email)
+            ):
+                _apple_audit_failure(db, request)
+                await db.commit()
+                return _apple_redirect(settings, "apple=registration_unavailable")
             linked_user = User(
                 email=provider_email,
                 display_name=_apple_name(user),
@@ -1238,7 +1257,7 @@ async def authenticate_credentials(
     if pair is None or not valid or not pair[0].is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The email or password is not correct.")
     user = pair[0]
-    if settings.email_verification_enabled and user.email_verified_at is None:
+    if await email_verification_required(db, settings) and user.email_verified_at is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Please verify your email before signing in."
         )
@@ -1254,16 +1273,39 @@ async def register(
 ) -> RegistrationResponse:
     await enforce_rate_limit(request, settings, "register", settings.rate_limit_register, 300)
     email = normalise_email(str(body.email))
-    mode = await signup_mode(db, settings.registration_mode)
-    if mode.value == "beta_only" and not body.beta_home_name:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Use the Founding Beta onboarding flow to register.")
-    if body.beta_home_name and mode.value not in {"beta_only", "mixed"}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is not currently open.")
+    # Every gate below is decided by the one resolver in mykhaya.platform_runtime
+    # (see SignupPolicy for the documented precedence) and runs before the
+    # existing-email lookup, so an existing and a new address are rejected
+    # identically — none of these checks can become an account-discovery signal.
+    policy = await evaluate_signup_policy(db, settings)
+    if not policy.open:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
+    if body.beta_home_name:
+        if not policy.beta_path:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Founding Beta joining is not currently open."
+            )
+    elif not policy.normal_path:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Use the Founding Beta onboarding flow to register."
+        )
+    if not policy.domain_allowed(email):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Registration is not available for that email address.",
+        )
+    verification_required = await email_verification_required(db, settings)
 
     invitation_row: Invitation | None = None
-    if settings.registration_mode == "closed":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
-    if settings.registration_mode == "invitation_only":
+    if policy.invitation_required and body.beta_home_name:
+        if not body.beta_invitation_token or not await beta_invitation_valid(
+            db, body.beta_invitation_token, email
+        ):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Registration is invitation-only. A valid Beta invitation is required.",
+            )
+    elif policy.invitation_required:
         if not body.invitation_token:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
@@ -1304,7 +1346,7 @@ async def register(
         user = User(
             email=email,
             display_name=body.display_name,
-            email_verified_at=None if settings.email_verification_enabled else datetime.now(UTC),
+            email_verified_at=None if verification_required else datetime.now(UTC),
         )
         db.add(user)
         await db.flush()
@@ -1341,7 +1383,7 @@ async def register(
                     user_agent=request.headers.get("user-agent", "")[:300] or None,
                 )
             )
-        if settings.email_verification_enabled:
+        if verification_required:
             token = await create_action_token(
                 db, user.id, TokenPurpose.verify_email, settings, 60 * 24
             )
@@ -1371,11 +1413,11 @@ async def register(
         verify_password(body.password, DUMMY_HASH)
     message = (
         GENERIC_EMAIL_MESSAGE
-        if settings.email_verification_enabled
+        if verification_required
         else "Your account is ready. You can sign in now."
     )
     return RegistrationResponse(
-        message=message, verification_required=settings.email_verification_enabled
+        message=message, verification_required=verification_required
     )
 
 

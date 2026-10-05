@@ -317,6 +317,11 @@ export default function Login() {
           Sign in with your existing account first. Apple can then be linked from your security settings.
         </p>
       )}
+      {appleResult === "registration_unavailable" && (
+        <p className="notice">
+          New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
+        </p>
+      )}
       {appleResult === "error" && (
         <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
       )}

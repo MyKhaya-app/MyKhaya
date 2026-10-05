@@ -4,16 +4,18 @@ from collections.abc import Awaitable, Callable
 from typing import TypedDict
 
 import structlog
-from fastapi import FastAPI, Request, Response, status
+from fastapi import APIRouter, Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import Message
 
 from mykhaya.config import get_settings
-from mykhaya.db import SessionFactory
+from mykhaya.db import SessionFactory, get_db
 from mykhaya.models import PlatformSetting
+from mykhaya.platform_runtime import require_not_in_maintenance
 from mykhaya.routers import (
     activity,
     auth,
@@ -286,6 +288,42 @@ async def security_and_limits(
     return response
 
 
+async def maintenance_gate(db: AsyncSession = Depends(get_db)) -> None:
+    """Router dependency, not middleware: it runs inside CORSMiddleware, so the
+    503 carries CORS headers and the browser/native client can read its
+    structured `maintenance_mode` error rather than seeing an opaque network
+    failure. The setting is read from the database on every request, so toggling
+    it in PCC takes effect immediately and on every API worker."""
+    await require_not_in_maintenance(db)
+
+
+# Routers that stay reachable during maintenance so it can be observed and
+# switched off: health/readiness probes, the public config + status surfaces
+# the maintenance screen itself reads, and every Platform Control Centre
+# (operator-authenticated) router. Everything else is consumer functionality.
+MAINTENANCE_EXEMPT_ROUTERS = (
+    health.router,
+    public_config.router,
+    status_router.router,
+    platform.router,
+    platform_support.router,
+    platform_compliance.router,
+    platform_legal.router,
+    communications_admin.router,
+    founding_beta.platform_router,
+    usage_admin.router,
+)
+
+
+def include_with_maintenance_gate(api_router: APIRouter) -> None:
+    exempt = any(api_router is item for item in MAINTENANCE_EXEMPT_ROUTERS)
+    app.include_router(
+        api_router,
+        prefix="/api/v1",
+        dependencies=[] if exempt else [Depends(maintenance_gate)],
+    )
+
+
 for router in (
     health.router,
     auth.router,
@@ -325,8 +363,8 @@ for router in (
     billing.group_router,
     status_router.router,
 ):
-    app.include_router(router, prefix="/api/v1")
-app.include_router(founding_beta.public_router, prefix="/api/v1")
-app.include_router(founding_beta.router, prefix="/api/v1")
-app.include_router(founding_beta.platform_router, prefix="/api/v1")
-app.include_router(usage_admin.router, prefix="/api/v1")
+    include_with_maintenance_gate(router)
+include_with_maintenance_gate(founding_beta.public_router)
+include_with_maintenance_gate(founding_beta.router)
+include_with_maintenance_gate(founding_beta.platform_router)
+include_with_maintenance_gate(usage_admin.router)

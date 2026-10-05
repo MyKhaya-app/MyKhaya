@@ -35,6 +35,11 @@ from mykhaya.models import (
     SubscriptionProvider,
     SubscriptionStatus,
 )
+from mykhaya.platform_runtime import (
+    invite_only_enabled,
+    registration_enabled,
+    require_home_capacity_for_user,
+)
 from mykhaya.security import generate_home_code, normalise_email
 
 FOUNDING_BETA_SLUG = "founding-beta"
@@ -69,6 +74,27 @@ async def signup_mode(db: AsyncSession, deployment_mode: str) -> SignupMode:
     # independent invitation constraint, not a competing Signup Mode.
     return {"open": SignupMode.normal, "closed": SignupMode.closed}.get(
         deployment_mode, SignupMode.normal
+    )
+
+
+async def beta_invitation_valid(db: AsyncSession, token: str, email: str) -> bool:
+    """Whether `token` is a live (reserved, unexpired) Beta invitation issued to
+    `email` for the active programme. Read-only: the invitation is consumed
+    later, inside join_beta, under the programme lock."""
+    invitation = await db.scalar(
+        select(BetaInvitation)
+        .join(BetaProgramme, BetaProgramme.id == BetaInvitation.programme_id)
+        .where(
+            BetaInvitation.token_hash == invitation_token_hash(token),
+            BetaProgramme.slug == FOUNDING_BETA_SLUG,
+            BetaProgramme.status == BetaProgrammeStatus.active,
+        )
+    )
+    return (
+        invitation is not None
+        and invitation.status == BetaInvitationStatus.reserved
+        and invitation.expires_at > datetime.now(UTC)
+        and normalise_email(invitation.email) == normalise_email(email)
     )
 
 
@@ -201,7 +227,7 @@ async def join_beta(
     await lock_programme(db, programme)
     await expire_invitations(db, programme)
     mode = await signup_mode(db, "open")
-    if mode not in (SignupMode.beta_only, SignupMode.mixed):
+    if mode not in (SignupMode.beta_only, SignupMode.mixed) or not await registration_enabled(db):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is not open.")
     if terms_version != programme.terms_version:
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta terms have changed.")
@@ -228,6 +254,9 @@ async def join_beta(
         if invitation is None or invitation.status != BetaInvitationStatus.reserved or invitation.expires_at <= datetime.now(UTC) or normalise_email(invitation.email) != normalized:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Beta invitation is invalid or expired.")
 
+    if invitation is None and await invite_only_enabled(db):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is invitation-only.")
+
     owned = list(await db.scalars(select(Group).where(Group.created_by == user.id, Group.is_active.is_(True)).with_for_update()))
     from mykhaya.models import HomeSubscription
     subscriptions = {row.group_id: row for row in await db.scalars(select(HomeSubscription).where(HomeSubscription.group_id.in_([g.id for g in owned])).with_for_update())} if owned else {}
@@ -243,6 +272,8 @@ async def join_beta(
     if invitation is None and state["joinable"] <= 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta is currently full.")
 
+    if not owned:
+        await require_home_capacity_for_user(db, user.id)
     home = owned[0] if owned else await create_beta_home(db, user.id, home_name)
     if failure_injector:
         result = failure_injector("home_creation")

@@ -29,21 +29,41 @@ validate() {
 }
 
 update() {
-  validate
+  production
   [ -n "${MYKHAYA_RELEASE_TAG:-}" ] || die "set MYKHAYA_RELEASE_TAG to an approved release tag"
+  git status --porcelain --untracked-files=all | grep . >/dev/null && die "worktree is not clean"
+  git check-ref-format "refs/tags/$MYKHAYA_RELEASE_TAG" >/dev/null 2>&1 ||
+    die "invalid release tag $MYKHAYA_RELEASE_TAG"
+  git fetch origin main "refs/tags/$MYKHAYA_RELEASE_TAG:refs/tags/$MYKHAYA_RELEASE_TAG"
+  git rev-parse --verify "refs/tags/$MYKHAYA_RELEASE_TAG^{commit}" >/dev/null 2>&1 ||
+    die "release tag does not exist: $MYKHAYA_RELEASE_TAG"
+  tag_commit=$(git rev-parse "refs/tags/$MYKHAYA_RELEASE_TAG^{commit}")
+  git merge-base --is-ancestor "$tag_commit" origin/main ||
+    die "release tag $MYKHAYA_RELEASE_TAG is not contained in origin/main"
+  git checkout --detach "refs/tags/$MYKHAYA_RELEASE_TAG"
+  head_commit=$(git rev-parse HEAD)
+  [ "$head_commit" = "$tag_commit" ] || die "HEAD does not match release tag $MYKHAYA_RELEASE_TAG"
   git describe --exact-match --tags HEAD 2>/dev/null | grep -Fx "$MYKHAYA_RELEASE_TAG" >/dev/null ||
-    die "HEAD is not the approved release tag $MYKHAYA_RELEASE_TAG"
+    die "HEAD is not exactly the requested release tag $MYKHAYA_RELEASE_TAG"
+  MYKHAYA_VERSION=$(sed -n '1p' VERSION | tr -d '\r')
+  [ "$MYKHAYA_RELEASE_TAG" = "v$MYKHAYA_VERSION" ] ||
+    die "release tag $MYKHAYA_RELEASE_TAG does not match VERSION $MYKHAYA_VERSION"
+  export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit" \
+    MYKHAYA_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" MYKHAYA_BUILD_CHANNEL=stable
+  GITHUB_REF="refs/tags/$MYKHAYA_RELEASE_TAG" python3 infrastructure/scripts/validate_version.py
+  validate
   [ -f "${MYKHAYA_BACKUP_MARKER:-/var/lib/mykhaya/last-backup.ok}" ] ||
     die "verified backup marker is missing"
   printf '%s\n' 'Current image digests:'
   $COMPOSE images --quiet caddy web api worker scheduler migrate postgres redis
   previous_revision=$($COMPOSE exec -T postgres psql -U postgres -d mykhaya -Atc 'select version_num from alembic_version' 2>/dev/null || true)
   printf 'Previous migration revision: %s\n' "${previous_revision:-unknown}"
+  $COMPOSE build web api worker scheduler migrate
   $COMPOSE run --rm --no-deps migrate
   $COMPOSE up -d --no-build caddy web api worker scheduler
   sh infrastructure/scripts/prod-health.sh
   printf 'Deployed release: %s\n' "$MYKHAYA_RELEASE_TAG"
-  git rev-parse HEAD
+  printf 'Deployed commit: %s\n' "$MYKHAYA_COMMIT_SHA"
   printf '%s\n' 'Deployed image digests:'
   $COMPOSE images --quiet caddy web api worker scheduler migrate postgres redis
 }

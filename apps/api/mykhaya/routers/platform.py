@@ -6146,6 +6146,16 @@ async def update_setting(
         validate_setting_value(definition, body.value)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if (
+        key == "email_verification_required"
+        and body.value is False
+        and settings.environment == "production"
+        and settings.email_verification_enabled
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Email verification cannot be switched off in production.",
+        )
     row = await db.scalar(
         select(PlatformSetting).where(PlatformSetting.key == key).with_for_update()
     )

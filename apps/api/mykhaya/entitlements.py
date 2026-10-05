@@ -820,7 +820,16 @@ async def get_limit(db: AsyncSession, home_id: uuid.UUID, key: str) -> int | Non
     definition = await _plan_definition(db, home_id)
     if key not in definition.limits:
         return 0
-    return definition.limits[key]
+    limit = definition.limits[key]
+    if key == "home.max_members":
+        # The PCC `maximum_members_per_home` setting is a platform-wide ceiling
+        # on top of the plan limit — it can only ever lower it, never raise it.
+        from mykhaya.platform_runtime import members_per_home_cap
+
+        cap = await members_per_home_cap(db)
+        if cap is not None:
+            return cap if limit is None else min(limit, cap)
+    return limit
 
 
 async def require_within_limit(

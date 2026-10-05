@@ -51,6 +51,7 @@ from mykhaya.models import (
     Role,
     User,
 )
+from mykhaya.platform_runtime import require_home_capacity_for_user
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     FamilySponsorshipChange,
@@ -146,6 +147,7 @@ async def create_group(
     db: AsyncSession = Depends(get_db),
 ) -> GroupResponse:
     require_adult_session(auth)
+    await require_home_capacity_for_user(db, auth.user.id)
     group = Group(
         name=body.name,
         created_by=auth.user.id,
@@ -909,6 +911,7 @@ async def approve_join_request(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That person is already a member of this Home."
         )
+    await require_home_capacity_for_user(db, join_request.user_id)
 
     role = legacy_role(body.relationship)
     permission_profile = default_profile(body.relationship)

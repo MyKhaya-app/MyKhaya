@@ -1,7 +1,7 @@
 import hmac
 import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select, text
@@ -29,6 +29,7 @@ from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import Group, HouseholdRelationship, Invitation, Membership, User
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
+from mykhaya.platform_runtime import invitation_expiry, require_home_capacity_for_user
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     InvitationAccept,
@@ -130,7 +131,7 @@ async def invite(
         family_sponsorship=body.family_sponsorship,
         token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
         invited_by=auth.user.id,
-        expires_at=datetime.now(UTC) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + await invitation_expiry(db),
     )
     db.add(row)
     await db.flush()
@@ -265,7 +266,7 @@ async def resend_invitation(
     await require_capability(row.group_id, Capability.members_invite, auth, db)
     if row.accepted_at is not None or row.revoked_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This invitation is no longer active.")
-    row.expires_at = datetime.now(UTC) + timedelta(days=7)
+    row.expires_at = datetime.now(UTC) + await invitation_expiry(db)
     raw = derived_token(row.id, "invitation", settings.secret_key.get_secret_value())
     home = await db.get(Group, row.group_id)
     assert home is not None
@@ -407,6 +408,7 @@ async def accept(
     # active membership is exempt since it doesn't increase the count.
     will_increase_membership = existing is None or existing.removed_at is not None
     if will_increase_membership:
+        await require_home_capacity_for_user(db, auth.user.id)
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
             {"key": f"members:{row.group_id}"},

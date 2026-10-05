@@ -12,8 +12,9 @@ SettingValueType = Literal["text", "email", "url", "boolean", "integer", "list"]
 SettingRisk = Literal["normal", "sensitive"]
 # "effective": actually consumed by running code today.
 # "informational": stored/displayed with no behavioural claim either way.
-# "not_enforced": a placeholder — no code path reads it yet. See the
-# grep-verified runtime-consumption audit in
+# "not_enforced": a placeholder — no code path reads it yet. Today every
+# setting is "effective" or "informational"; the value stays in the schema so a
+# future placeholder can be shown honestly. See the runtime-consumption audit in
 # docs/architecture/platform-control-centre.md before changing this for any
 # key; PCC confirmation copy is driven directly by this field and must never
 # claim an operational effect a "not_enforced" setting doesn't have.
@@ -37,7 +38,10 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
     "signup_mode": SettingDefinition(
         key="signup_mode",
         label="Signup Mode",
-        description="Controls whether new accounts use normal signup, Founding Beta signup, both, or neither.",
+        description=(
+            "Controls whether new accounts use normal signup, Founding Beta signup, both, "
+            "or neither."
+        ),
         section="Signup",
         value_type="text",
         python_type=str,
@@ -88,82 +92,109 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
     "registration_enabled": SettingDefinition(
         key="registration_enabled",
         label="Allow new registrations",
-        description="Whether new accounts may be created.",
+        description=(
+            "Master switch for new account creation (password, Founding Beta and Apple). "
+            "Existing users can still sign in. Overrides Signup Mode: when off, no signup "
+            "path is open."
+        ),
         section="Registration & Access",
         value_type="boolean",
         python_type=bool,
         risk="sensitive",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "invite_only_mode": SettingDefinition(
         key="invite_only_mode",
         label="Invite-only registration",
-        description="Restrict new registrations to holders of a valid invitation.",
+        description=(
+            "Require a valid invitation to register: a Home invitation for ordinary signup, "
+            "a Beta invitation for Founding Beta. Applies on top of Signup Mode."
+        ),
         section="Registration & Access",
         value_type="boolean",
         python_type=bool,
         risk="sensitive",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "email_verification_required": SettingDefinition(
         key="email_verification_required",
         label="Require email verification",
-        description="Require a new account to verify its email address before use.",
+        description=(
+            "Require a new account to verify its email address before signing in. In "
+            "production this cannot be switched off here - it is a deployment-level "
+            "safeguard."
+        ),
         section="Registration & Access",
         value_type="boolean",
         python_type=bool,
         risk="sensitive",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "allowed_registration_domains": SettingDefinition(
         key="allowed_registration_domains",
         label="Allowed registration domains",
-        description="If set, new registrations are limited to these email domains.",
+        description=(
+            "If set, new registrations (every signup path) are limited to these email "
+            "domains. Leave empty for no restriction."
+        ),
         section="Registration & Access",
         value_type="list",
         python_type=list,
         risk="sensitive",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "invitation_expiry_days": SettingDefinition(
         key="invitation_expiry_days",
         label="Invitation expiry",
-        description="How many days a Home invitation remains valid for, in days.",
+        description=(
+            "How many days a new or resent Home invitation remains valid for. Already- "
+            "issued invitations keep their original expiry. Defaults to 7."
+        ),
         section="Registration & Access",
         value_type="integer",
         python_type=int,
         risk="normal",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "maximum_homes_per_user": SettingDefinition(
         key="maximum_homes_per_user",
         label="Maximum Homes per user",
-        description="The most Homes a single user may belong to.",
+        description=(
+            "The most Homes a single user may belong to. Blocks creating, joining or "
+            "accepting an invitation to another Home once reached. Existing memberships are "
+            "unaffected."
+        ),
         section="Home Limits",
         value_type="integer",
         python_type=int,
         risk="normal",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "maximum_members_per_home": SettingDefinition(
         key="maximum_members_per_home",
         label="Maximum members per Home",
-        description="The most members a single Home may have.",
+        description=(
+            "A platform-wide ceiling on members per Home. It can only lower a plan member "
+            "limit, never raise it."
+        ),
         section="Home Limits",
         value_type="integer",
         python_type=int,
         risk="normal",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "maintenance_mode": SettingDefinition(
         key="maintenance_mode",
         label="Maintenance mode",
-        description="Take MyKhaya offline for maintenance.",
+        description=(
+            "Take MyKhaya offline for everyone except Platform Control Centre operators. "
+            "The consumer API answers HTTP 503 and the apps show the maintenance screen."
+        ),
         section="General",
         value_type="boolean",
         python_type=bool,
         risk="sensitive",
-        runtime_effect="not_enforced",
+        runtime_effect="effective",
     ),
     "default_locale": SettingDefinition(
         key="default_locale",

@@ -38,7 +38,8 @@ from mykhaya.founding_beta_schemas import (
     BetaWaitlistItem,
     BetaWaitlistResponsePage,
 )
-from mykhaya.models import BetaEnrollment, BetaInvitation, BetaInvitationStatus, BetaProgramme, BetaWaitlistEntry, BetaWaitlistStatus, SignupMode
+from mykhaya.models import BetaEnrollment, BetaInvitation, BetaInvitationStatus, BetaProgramme, BetaWaitlistEntry, BetaWaitlistStatus
+from mykhaya.platform_runtime import evaluate_signup_policy
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
@@ -54,17 +55,20 @@ platform_router = APIRouter(prefix="/platform/beta", tags=["founding-beta-platfo
 async def public_signup_state(
     db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)
 ) -> SignupStateResponse:
-    mode = await signup_mode(db, settings.registration_mode)
+    policy = await evaluate_signup_policy(db, settings)
+    mode = policy.mode
     programme = await current_programme(db)
     await expire_invitations(db, programme)
     await db.commit()
     state = await capacity(db, programme)
-    beta_available = mode in (SignupMode.beta_only, SignupMode.mixed) and state["joinable"] > 0 and state["waiting"] == 0
+    beta_available = policy.beta_path and state["joinable"] > 0 and state["waiting"] == 0
     return SignupStateResponse(
         signup_mode=mode,
-        normal_signup_available=mode in (SignupMode.normal, SignupMode.mixed),
+        registration_open=policy.open,
+        invitation_required=policy.invitation_required,
+        normal_signup_available=policy.normal_path,
         beta_joining_available=beta_available,
-        waitlist_available=programme.waitlist_enabled and (not beta_available),
+        waitlist_available=policy.beta_path and programme.waitlist_enabled and (not beta_available),
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
     )
 
@@ -79,9 +83,9 @@ async def join_waitlist(
     await enforce_rate_limit(request, settings, "beta-waitlist", 10, 3600)
     programme = await current_programme(db)
     await expire_invitations(db, programme)
-    mode = await signup_mode(db, settings.registration_mode)
+    policy = await evaluate_signup_policy(db, settings)
     state = await capacity(db, programme)
-    if not programme.waitlist_enabled or mode not in (SignupMode.beta_only, SignupMode.mixed) or (state["joinable"] > 0 and state["waiting"] == 0):
+    if not programme.waitlist_enabled or not policy.beta_path or (state["joinable"] > 0 and state["waiting"] == 0):
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta waitlist is not currently available.")
     email = normalise_email(str(body.email))
     existing = await db.scalar(select(BetaWaitlistEntry).where(BetaWaitlistEntry.programme_id == programme.id, BetaWaitlistEntry.normalized_email == email))

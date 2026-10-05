@@ -8,6 +8,7 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.features import platform_feature_enabled
 from mykhaya.models import FeatureKey, PlatformSetting
+from mykhaya.platform_runtime import maintenance_active
 from mykhaya.platform_settings import SETTINGS_SCHEMA, resolve_environment_fallback
 from mykhaya.status_aggregation import overall_message, overall_public_state
 
@@ -71,6 +72,11 @@ async def public_config(
         for key in consumer_visible_keys
     }
     payload["support_enabled"] = await platform_feature_enabled(db, FeatureKey.support)
+    # maintenance_mode is the other deliberate exception: this endpoint is
+    # exempt from the maintenance gate precisely so the web/native maintenance
+    # screen can ask "is maintenance still on?" and recover on its own. Just
+    # the boolean - the real enforcement is the 503 on every consumer route.
+    payload["maintenance_mode"] = await maintenance_active(db)
     if settings.status_public_enabled:
         overall = await overall_public_state(db)
         payload["status_overall"] = overall

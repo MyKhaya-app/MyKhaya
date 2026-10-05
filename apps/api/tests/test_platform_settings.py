@@ -76,7 +76,7 @@ async def test_owner_can_read_settings_with_friendly_metadata(
 
     maintenance = by_key["maintenance_mode"]
     assert maintenance["risk"] == "sensitive"
-    assert maintenance["runtime_effect"] == "not_enforced"
+    assert maintenance["runtime_effect"] == "effective"
 
 
 @pytest.mark.asyncio

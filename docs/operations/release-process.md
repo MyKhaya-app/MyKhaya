@@ -32,11 +32,10 @@
 
 ## Anthony's release actions
 
-1. Review `dev` and its passing checks.
-2. Merge `dev` into `main` manually.
-3. Confirm `main` checks pass.
-4. Create tag `v<VERSION>` on the intended `main` commit.
-5. Run or review release validation.
-6. Deploy the tagged revision manually.
+1. Merge approved `dev` into `main`.
+2. Confirm main CI passes.
+3. Create GitHub Release/tag `v<VERSION>` on the intended main commit.
+4. On production run `make prod-update RELEASE=v<VERSION>`.
+5. Confirm the reported deployed tag, SHA and health checks.
 
 No workflow creates a tag, GitHub Release, merge or deployment automatically.

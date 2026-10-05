@@ -55,7 +55,8 @@ prod:
 prod-install:
 	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-install.sh
 prod-update:
-	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-deploy.sh update
+	@test -n "$(RELEASE)" || (echo "Use make prod-update RELEASE=vX.Y.Z" && exit 1)
+	MYKHAYA_PRODUCTION=1 MYKHAYA_RELEASE_TAG="$(RELEASE)" sh infrastructure/scripts/prod-deploy.sh update
 prod-health:
 	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/prod-health.sh
 prod-logs:
