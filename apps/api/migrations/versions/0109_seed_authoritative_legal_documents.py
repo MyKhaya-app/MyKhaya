@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0109_authoritative_legal_documents"
+revision: str = "0109_legal_documents"
 down_revision: str | None = "0108_legal_scopes_contexts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
