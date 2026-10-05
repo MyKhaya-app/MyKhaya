@@ -12,12 +12,15 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
   return {
     ...actual,
+    api: { ...actual.api, publicSignupState: vi.fn() },
     platformApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   };
 });
 
 const { platformApi } = await import("@mykhaya/api-client");
+const { api } = await import("@mykhaya/api-client");
 const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
+const publicSignupState = api.publicSignupState as unknown as ReturnType<typeof vi.fn>;
 const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
 const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
 
@@ -117,6 +120,15 @@ function mockRoutes(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  publicSignupState.mockResolvedValue({
+    signup_mode: "normal",
+    registration_open: true,
+    invitation_required: false,
+    normal_signup_available: true,
+    beta_joining_available: false,
+    waitlist_available: false,
+    joinable_count: 0,
+  });
   mockRoutes();
 });
 
