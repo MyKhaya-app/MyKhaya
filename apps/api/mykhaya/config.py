@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mykhaya.url_validation import is_valid_http_url
 
+
 def resolve_app_version() -> str:
     """Use deployment-injected metadata; local source runs identify as dev.
 

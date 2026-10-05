@@ -1354,15 +1354,21 @@ async def register(
         if body.beta_home_name:
             programme = await current_programme(db)
             if body.beta_terms_version is None:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Founding Beta terms are required.")
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "Founding Beta terms are required."
+                )
             db.add(
                 BetaPendingRegistration(
                     user_id=user.id,
                     programme_id=programme.id,
                     home_name=body.beta_home_name,
                     terms_version=body.beta_terms_version,
-                    token_hash=hash_secret(secrets.token_urlsafe(32), settings.secret_key.get_secret_value()),
-                    invitation_token_hash=invitation_token_hash(body.beta_invitation_token) if body.beta_invitation_token else None,
+                    token_hash=hash_secret(
+                        secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                    ),
+                    invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
+                    if body.beta_invitation_token
+                    else None,
                     expires_at=datetime.now(UTC) + timedelta(hours=24),
                 )
             )
@@ -1416,9 +1422,7 @@ async def register(
         if verification_required
         else "Your account is ready. You can sign in now."
     )
-    return RegistrationResponse(
-        message=message, verification_required=verification_required
-    )
+    return RegistrationResponse(message=message, verification_required=verification_required)
 
 
 @router.post("/verify-email", response_model=MessageResponse)

@@ -126,8 +126,16 @@ def _diagnostic_response(
         network_state=diagnostic.network_state,
         background_refresh_state=diagnostic.background_refresh_state,
         client_timestamp=diagnostic.client_timestamp,
-        beta_programme=(diagnostic.beta_programme if diagnostic.beta_programme in APPROVED_BETA_PROGRAMMES else None),
-        entitlement_source=(diagnostic.entitlement_source if diagnostic.entitlement_source in APPROVED_BETA_ENTITLEMENT_SOURCES else None),
+        beta_programme=(
+            diagnostic.beta_programme
+            if diagnostic.beta_programme in APPROVED_BETA_PROGRAMMES
+            else None
+        ),
+        entitlement_source=(
+            diagnostic.entitlement_source
+            if diagnostic.entitlement_source in APPROVED_BETA_ENTITLEMENT_SOURCES
+            else None
+        ),
     )
 
 
@@ -225,14 +233,24 @@ async def create_ticket(
                 platform=body.diagnostics.platform if body.diagnostics else None,
                 os_version=body.diagnostics.os_version if body.diagnostics else None,
                 runtime=body.diagnostics.runtime if body.diagnostics else None,
-                notification_permission=body.diagnostics.notification_permission if body.diagnostics else None,
-                push_registration_state=body.diagnostics.push_registration_state if body.diagnostics else None,
+                notification_permission=body.diagnostics.notification_permission
+                if body.diagnostics
+                else None,
+                push_registration_state=body.diagnostics.push_registration_state
+                if body.diagnostics
+                else None,
                 api_connectivity=body.diagnostics.api_connectivity if body.diagnostics else None,
                 network_state=body.diagnostics.network_state if body.diagnostics else None,
-                background_refresh_state=body.diagnostics.background_refresh_state if body.diagnostics else None,
+                background_refresh_state=body.diagnostics.background_refresh_state
+                if body.diagnostics
+                else None,
                 client_timestamp=body.diagnostics.client_timestamp if body.diagnostics else None,
-                beta_programme=beta_context[0] if beta_context and beta_context[0] in APPROVED_BETA_PROGRAMMES else None,
-                entitlement_source=beta_context[1] if beta_context and beta_context[1] in APPROVED_BETA_ENTITLEMENT_SOURCES else None,
+                beta_programme=beta_context[0]
+                if beta_context and beta_context[0] in APPROVED_BETA_PROGRAMMES
+                else None,
+                entitlement_source=beta_context[1]
+                if beta_context and beta_context[1] in APPROVED_BETA_ENTITLEMENT_SOURCES
+                else None,
             )
         )
         audit(

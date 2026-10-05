@@ -66,8 +66,8 @@ async def signup_mode(db: AsyncSession, deployment_mode: str) -> SignupMode:
     if row is not None:
         value = row.value.get("value")
         try:
-            return SignupMode(value)
-        except (TypeError, ValueError):
+            return SignupMode(str(value))
+        except ValueError:
             return SignupMode.closed
     # Bootstrap only: once the migration's row exists, deployment configuration
     # is no longer consulted. The legacy invitation_only gate remains an
@@ -107,7 +107,9 @@ async def current_programme(db: AsyncSession, *, for_update: bool = False) -> Be
         query = query.with_for_update()
     programme = await db.scalar(query)
     if programme is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "The Founding Beta programme is unavailable.")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The Founding Beta programme is unavailable."
+        )
     return programme
 
 
@@ -117,7 +119,9 @@ async def programme_for_admin(db: AsyncSession, *, for_update: bool = False) -> 
         query = query.with_for_update()
     programme = await db.scalar(query)
     if programme is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "The Founding Beta programme could not be found.")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "The Founding Beta programme could not be found."
+        )
     return programme
 
 
@@ -143,23 +147,35 @@ async def capacity(db: AsyncSession, programme: BetaProgramme) -> dict[str, int]
         )
     )
     joinable = max(0, programme.max_homes - (joined or 0) - (reserved or 0))
-    return {"max_homes": programme.max_homes, "joined": joined or 0, "reserved": reserved or 0, "waiting": waiting or 0, "joinable": joinable}
+    return {
+        "max_homes": programme.max_homes,
+        "joined": joined or 0,
+        "reserved": reserved or 0,
+        "waiting": waiting or 0,
+        "joinable": joinable,
+    }
 
 
 async def expire_invitations(db: AsyncSession, programme: BetaProgramme | None = None) -> int:
     """Materialise elapsed reservations without ever counting them as active."""
     now = datetime.now(UTC)
-    query = select(BetaInvitation).where(
-        BetaInvitation.status == BetaInvitationStatus.reserved,
-        BetaInvitation.expires_at <= now,
-    ).with_for_update()
+    query = (
+        select(BetaInvitation)
+        .where(
+            BetaInvitation.status == BetaInvitationStatus.reserved,
+            BetaInvitation.expires_at <= now,
+        )
+        .with_for_update()
+    )
     if programme is not None:
         query = query.where(BetaInvitation.programme_id == programme.id)
     invitations = list(await db.scalars(query))
     for invitation in invitations:
         invitation.status = BetaInvitationStatus.expired
         if invitation.waitlist_entry_id:
-            entry = await db.get(BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True)
+            entry = await db.get(
+                BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True
+            )
             if entry and entry.status == BetaWaitlistStatus.invited:
                 entry.status = BetaWaitlistStatus.expired
     if invitations:
@@ -222,7 +238,9 @@ async def join_beta(
     failure_injector: Any | None = None,
 ) -> Group:
     if user.email_verified_at is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Verify your email before joining the Founding Beta.")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Verify your email before joining the Founding Beta."
+        )
     programme = programme or await current_programme(db, for_update=True)
     await lock_programme(db, programme)
     await expire_invitations(db, programme)
@@ -236,39 +254,76 @@ async def join_beta(
     prior = await db.scalar(
         select(BetaEnrollment.id).where(
             BetaEnrollment.programme_id == programme.id,
-            (BetaEnrollment.joined_user_id == user.id) | (BetaEnrollment.normalized_email == normalized),
+            (BetaEnrollment.joined_user_id == user.id)
+            | (BetaEnrollment.normalized_email == normalized),
         )
     )
     if prior is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "This person has already claimed a Founding Beta Home.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This person has already claimed a Founding Beta Home."
+        )
 
     invitation = None
     if invitation_token or invitation_token_hash_value:
         token_hash = invitation_token_hash_value or invitation_token_hash(invitation_token or "")
         invitation = await db.scalar(
-            select(BetaInvitation).where(
+            select(BetaInvitation)
+            .where(
                 BetaInvitation.token_hash == token_hash,
                 BetaInvitation.programme_id == programme.id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
-        if invitation is None or invitation.status != BetaInvitationStatus.reserved or invitation.expires_at <= datetime.now(UTC) or normalise_email(invitation.email) != normalized:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Beta invitation is invalid or expired.")
+        if (
+            invitation is None
+            or invitation.status != BetaInvitationStatus.reserved
+            or invitation.expires_at <= datetime.now(UTC)
+            or normalise_email(invitation.email) != normalized
+        ):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "This Beta invitation is invalid or expired."
+            )
 
     if invitation is None and await invite_only_enabled(db):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is invitation-only.")
 
-    owned = list(await db.scalars(select(Group).where(Group.created_by == user.id, Group.is_active.is_(True)).with_for_update()))
+    owned = list(
+        await db.scalars(
+            select(Group)
+            .where(Group.created_by == user.id, Group.is_active.is_(True))
+            .with_for_update()
+        )
+    )
     from mykhaya.models import HomeSubscription
-    subscriptions = {row.group_id: row for row in await db.scalars(select(HomeSubscription).where(HomeSubscription.group_id.in_([g.id for g in owned])).with_for_update())} if owned else {}
+
+    subscriptions = (
+        {
+            row.group_id: row
+            for row in await db.scalars(
+                select(HomeSubscription)
+                .where(HomeSubscription.group_id.in_([g.id for g in owned]))
+                .with_for_update()
+            )
+        }
+        if owned
+        else {}
+    )
     paid = [row for row in subscriptions.values() if row.plan != SubscriptionPlan.free]
     if paid:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A paid Home cannot be converted through public Founding Beta joining.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A paid Home cannot be converted through public Founding Beta joining.",
+        )
     if len(owned) > 1:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Founding Beta joining is limited to one eligible Free Home.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Founding Beta joining is limited to one eligible Free Home."
+        )
 
     state = await capacity(db, programme)
     if state["waiting"] and invitation is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "The waitlist has priority for the next available place.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The waitlist has priority for the next available place."
+        )
     if invitation is None and state["joinable"] <= 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta is currently full.")
 
@@ -293,14 +348,22 @@ async def join_beta(
         if inspect.isawaitable(result):
             await result
     await record_subscription_event(
-        db, home.id, event_type="founding_beta_granted", from_plan=previous_plan,
-        to_plan=SubscriptionPlan.ultimate, from_provider=previous_provider,
-        to_provider=SubscriptionProvider.complimentary, to_status=SubscriptionStatus.active,
+        db,
+        home.id,
+        event_type="founding_beta_granted",
+        from_plan=previous_plan,
+        to_plan=SubscriptionPlan.ultimate,
+        from_provider=previous_provider,
+        to_provider=SubscriptionProvider.complimentary,
+        to_status=SubscriptionStatus.active,
         reason=FOUNDING_BETA_SOURCE,
     )
     enrollment = BetaEnrollment(
-        programme_id=programme.id, home_id=home.id, joined_user_id=user.id,
-        normalized_email=normalized, joined_by_user_id=user.id,
+        programme_id=programme.id,
+        home_id=home.id,
+        joined_user_id=user.id,
+        normalized_email=normalized,
+        joined_by_user_id=user.id,
         terms_version=programme.terms_version,
         source_invitation_id=invitation.id if invitation else None,
         capacity_exempt=False,
@@ -318,7 +381,9 @@ async def join_beta(
         invitation.status = BetaInvitationStatus.redeemed
         invitation.accepted_home_id = home.id
         if invitation.waitlist_entry_id:
-            entry = await db.get(BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True)
+            entry = await db.get(
+                BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True
+            )
             if entry:
                 entry.status = BetaWaitlistStatus.joined
         if failure_injector:

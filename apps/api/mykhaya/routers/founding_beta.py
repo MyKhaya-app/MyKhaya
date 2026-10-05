@@ -17,33 +17,40 @@ from mykhaya.founding_beta import (
     expire_invitations,
     invitation_token_hash,
     join_beta,
-    signup_mode,
     programme_for_admin,
+    signup_mode,
 )
 from mykhaya.founding_beta_schemas import (
+    BetaCapacityExemptionUpdate,
+    BetaInvitationItem,
     BetaInvitationResponse,
+    BetaInvitationResponsePage,
     BetaInviteCreate,
     BetaInviteResponse,
     BetaJoinRequest,
     BetaJoinResponse,
-    BetaWaitlistCreate,
-    BetaWaitlistResponse,
-    SignupStateResponse,
     BetaOverviewResponse,
-    BetaCapacityExemptionUpdate,
-    BetaInvitationItem,
-    BetaInvitationResponsePage,
     BetaProgrammeResponse,
     BetaProgrammeUpdate,
+    BetaWaitlistCreate,
     BetaWaitlistItem,
+    BetaWaitlistResponse,
     BetaWaitlistResponsePage,
+    SignupStateResponse,
 )
-from mykhaya.models import BetaEnrollment, BetaInvitation, BetaInvitationStatus, BetaProgramme, BetaWaitlistEntry, BetaWaitlistStatus
-from mykhaya.platform_runtime import evaluate_signup_policy
-from mykhaya.rate_limit import enforce_rate_limit
+from mykhaya.models import (
+    BetaEnrollment,
+    BetaInvitation,
+    BetaInvitationStatus,
+    BetaProgramme,
+    BetaWaitlistEntry,
+    BetaWaitlistStatus,
+    PlatformRole,
+)
 from mykhaya.platform_audit import platform_audit
+from mykhaya.platform_runtime import evaluate_signup_policy
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
-from mykhaya.models import PlatformRole
+from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import normalise_email
 
 public_router = APIRouter(prefix="/public", tags=["founding-beta-public"])
@@ -73,7 +80,9 @@ async def public_signup_state(
     )
 
 
-@public_router.post("/beta/waitlist", response_model=BetaWaitlistResponse, status_code=status.HTTP_202_ACCEPTED)
+@public_router.post(
+    "/beta/waitlist", response_model=BetaWaitlistResponse, status_code=status.HTTP_202_ACCEPTED
+)
 async def join_waitlist(
     body: BetaWaitlistCreate,
     request: Request,
@@ -85,24 +94,58 @@ async def join_waitlist(
     await expire_invitations(db, programme)
     policy = await evaluate_signup_policy(db, settings)
     state = await capacity(db, programme)
-    if not programme.waitlist_enabled or not policy.beta_path or (state["joinable"] > 0 and state["waiting"] == 0):
-        raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta waitlist is not currently available.")
+    if (
+        not programme.waitlist_enabled
+        or not policy.beta_path
+        or (state["joinable"] > 0 and state["waiting"] == 0)
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The Founding Beta waitlist is not currently available."
+        )
     email = normalise_email(str(body.email))
-    existing = await db.scalar(select(BetaWaitlistEntry).where(BetaWaitlistEntry.programme_id == programme.id, BetaWaitlistEntry.normalized_email == email))
+    existing = await db.scalar(
+        select(BetaWaitlistEntry).where(
+            BetaWaitlistEntry.programme_id == programme.id,
+            BetaWaitlistEntry.normalized_email == email,
+        )
+    )
     if existing is not None:
         return BetaWaitlistResponse(accepted=True, status=existing.status.value)
-    db.add(BetaWaitlistEntry(programme_id=programme.id, name=body.name, email=email, normalized_email=email, country=body.country.upper(), household_size=body.household_size, use_case=body.use_case, marketing_consent=body.marketing_consent))
+    db.add(
+        BetaWaitlistEntry(
+            programme_id=programme.id,
+            name=body.name,
+            email=email,
+            normalized_email=email,
+            country=body.country.upper(),
+            household_size=body.household_size,
+            use_case=body.use_case,
+            marketing_consent=body.marketing_consent,
+        )
+    )
     await db.commit()
     return BetaWaitlistResponse(accepted=True, status=BetaWaitlistStatus.waiting.value)
 
 
 @public_router.get("/beta/invitations/{token}", response_model=BetaInvitationResponse)
-async def inspect_invitation(token: str, db: AsyncSession = Depends(get_db)) -> BetaInvitationResponse:
-    invitation = await db.scalar(select(BetaInvitation).where(BetaInvitation.token_hash == invitation_token_hash(token)))
-    if invitation is None or invitation.status != BetaInvitationStatus.reserved or invitation.expires_at <= datetime.now(UTC):
+async def inspect_invitation(
+    token: str, db: AsyncSession = Depends(get_db)
+) -> BetaInvitationResponse:
+    invitation = await db.scalar(
+        select(BetaInvitation).where(BetaInvitation.token_hash == invitation_token_hash(token))
+    )
+    if (
+        invitation is None
+        or invitation.status != BetaInvitationStatus.reserved
+        or invitation.expires_at <= datetime.now(UTC)
+    ):
         return BetaInvitationResponse(valid=False)
     programme = await db.get(BetaProgramme, invitation.programme_id)
-    return BetaInvitationResponse(valid=True, programme=programme.name if programme else None, expires_at=invitation.expires_at.isoformat())
+    return BetaInvitationResponse(
+        valid=True,
+        programme=programme.name if programme else None,
+        expires_at=invitation.expires_at.isoformat(),
+    )
 
 
 @router.post("/join", response_model=BetaJoinResponse)
@@ -113,15 +156,32 @@ async def join(
     db: AsyncSession = Depends(get_db),
 ) -> BetaJoinResponse:
     require_adult_session(auth)
-    home = await join_beta(db, user=auth.user, home_name=body.home_name, terms_version=body.terms_version, invitation_token=body.invitation_token)
-    audit(db, request, "beta.joined", auth.user.id, home.id, "beta_enrollment", home.id, {"source": FOUNDING_BETA_SOURCE})
+    home = await join_beta(
+        db,
+        user=auth.user,
+        home_name=body.home_name,
+        terms_version=body.terms_version,
+        invitation_token=body.invitation_token,
+    )
+    audit(
+        db,
+        request,
+        "beta.joined",
+        auth.user.id,
+        home.id,
+        "beta_enrollment",
+        home.id,
+        {"source": FOUNDING_BETA_SOURCE},
+    )
     await db.commit()
     return BetaJoinResponse(home_id=home.id, entitlement_source=FOUNDING_BETA_SOURCE)
 
 
 @platform_router.get("/overview", response_model=BetaOverviewResponse)
 async def overview(
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> BetaOverviewResponse:
@@ -130,12 +190,16 @@ async def overview(
     if await expire_invitations(db, programme):
         await db.commit()
     state = await capacity(db, programme)
-    return BetaOverviewResponse(signup_mode=await signup_mode(db, settings.registration_mode), **state)
+    return BetaOverviewResponse(
+        signup_mode=await signup_mode(db, settings.registration_mode), **state
+    )
 
 
 @platform_router.get("/programme", response_model=BetaProgrammeResponse)
 async def programme_settings(
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> BetaProgrammeResponse:
     del context
@@ -147,17 +211,38 @@ async def programme_settings(
 async def update_programme_settings(
     body: BetaProgrammeUpdate,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> BetaProgrammeResponse:
     require_recent_auth(context, settings)
     programme = await programme_for_admin(db, for_update=True)
-    previous = {key: getattr(programme, key) for key in ("max_homes", "waitlist_enabled", "show_remaining_publicly", "invitation_ttl_days", "terms_version")}
+    previous = {
+        key: getattr(programme, key)
+        for key in (
+            "max_homes",
+            "waitlist_enabled",
+            "show_remaining_publicly",
+            "invitation_ttl_days",
+            "terms_version",
+        )
+    }
     for key in previous:
         setattr(programme, key, getattr(body, key))
     programme.updated_by = context.administrator.id
-    platform_audit(db, request, context, "beta.programme_settings_changed", "beta_programme", programme.id, reason=body.reason, previous=previous, new={key: getattr(programme, key) for key in previous})
+    platform_audit(
+        db,
+        request,
+        context,
+        "beta.programme_settings_changed",
+        "beta_programme",
+        programme.id,
+        reason=body.reason,
+        previous=previous,
+        new={key: getattr(programme, key) for key in previous},
+    )
     await db.commit()
     return BetaProgrammeResponse.model_validate(programme, from_attributes=True)
 
@@ -166,7 +251,9 @@ async def update_programme_settings(
 async def waitlist(
     status_filter: BetaWaitlistStatus | None = Query(default=None, alias="status"),
     search: str | None = Query(default=None, max_length=200),
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> BetaWaitlistResponsePage:
     del context
@@ -176,47 +263,108 @@ async def waitlist(
         query = query.where(BetaWaitlistEntry.status == status_filter)
     if search:
         needle = f"%{search.strip()}%"
-        query = query.where(or_(BetaWaitlistEntry.name.ilike(needle), BetaWaitlistEntry.email.ilike(needle)))
+        query = query.where(
+            or_(BetaWaitlistEntry.name.ilike(needle), BetaWaitlistEntry.email.ilike(needle))
+        )
     rows = list(await db.scalars(query.order_by(BetaWaitlistEntry.created_at.asc())))
-    return BetaWaitlistResponsePage(items=[BetaWaitlistItem(id=row.id, name=row.name, email=row.email, country=row.country, household_size=row.household_size, joined_at=row.created_at.isoformat(), status=row.status.value) for row in rows], total=len(rows), status=status_filter.value if status_filter else None, search=search)
+    return BetaWaitlistResponsePage(
+        items=[
+            BetaWaitlistItem(
+                id=row.id,
+                name=row.name,
+                email=row.email,
+                country=row.country,
+                household_size=row.household_size,
+                joined_at=row.created_at.isoformat(),
+                status=row.status.value,
+            )
+            for row in rows
+        ],
+        total=len(rows),
+        status=status_filter.value if status_filter else None,
+        search=search,
+    )
 
 
 @platform_router.get("/invitations", response_model=BetaInvitationResponsePage)
 async def invitations(
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.support)
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> BetaInvitationResponsePage:
     del context
     programme = await programme_for_admin(db, for_update=True)
     if await expire_invitations(db, programme):
         await db.commit()
-    rows = list(await db.scalars(select(BetaInvitation).where(BetaInvitation.programme_id == programme.id).order_by(BetaInvitation.created_at.desc())))
-    entries = {row.id: row for row in await db.scalars(select(BetaWaitlistEntry).where(BetaWaitlistEntry.programme_id == programme.id))}
-    return BetaInvitationResponsePage(items=[BetaInvitationItem(id=row.id, applicant=entries[row.waitlist_entry_id].name if row.waitlist_entry_id in entries else row.email, email=row.email, status=row.status.value, invited_at=row.created_at.isoformat(), expires_at=row.expires_at.isoformat(), reservation_state="active" if row.status == BetaInvitationStatus.reserved and row.expires_at > datetime.now(UTC) else row.status.value, accepted_home_id=row.accepted_home_id) for row in rows], total=len(rows))
+    rows = list(
+        await db.scalars(
+            select(BetaInvitation)
+            .where(BetaInvitation.programme_id == programme.id)
+            .order_by(BetaInvitation.created_at.desc())
+        )
+    )
+    entries = {
+        row.id: row
+        for row in await db.scalars(
+            select(BetaWaitlistEntry).where(BetaWaitlistEntry.programme_id == programme.id)
+        )
+    }
+    return BetaInvitationResponsePage(
+        items=[
+            BetaInvitationItem(
+                id=row.id,
+                applicant=entries[row.waitlist_entry_id].name
+                if row.waitlist_entry_id in entries
+                else row.email,
+                email=row.email,
+                status=row.status.value,
+                invited_at=row.created_at.isoformat(),
+                expires_at=row.expires_at.isoformat(),
+                reservation_state="active"
+                if row.status == BetaInvitationStatus.reserved
+                and row.expires_at > datetime.now(UTC)
+                else row.status.value,
+                accepted_home_id=row.accepted_home_id,
+            )
+            for row in rows
+        ],
+        total=len(rows),
+    )
 
 
 @platform_router.post("/waitlist/{entry_id}/remove", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_waitlist_entry(
     entry_id: uuid.UUID,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> None:
     require_recent_auth(context, settings)
-    entry = await db.scalar(select(BetaWaitlistEntry).where(BetaWaitlistEntry.id == entry_id).with_for_update())
+    entry = await db.scalar(
+        select(BetaWaitlistEntry).where(BetaWaitlistEntry.id == entry_id).with_for_update()
+    )
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That waitlist entry could not be found.")
     entry.status = BetaWaitlistStatus.removed
-    platform_audit(db, request, context, "beta.waitlist_entry_removed", "beta_waitlist_entry", entry.id)
+    platform_audit(
+        db, request, context, "beta.waitlist_entry_removed", "beta_waitlist_entry", entry.id
+    )
     await db.commit()
 
 
-@platform_router.post("/invitations", response_model=BetaInviteResponse, status_code=status.HTTP_201_CREATED)
+@platform_router.post(
+    "/invitations", response_model=BetaInviteResponse, status_code=status.HTTP_201_CREATED
+)
 async def invite(
     body: BetaInviteCreate,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> BetaInviteResponse:
@@ -227,13 +375,17 @@ async def invite(
     await lock_programme(db, programme)
     state = await capacity(db, programme)
     if state["joinable"] <= 0:
-        raise HTTPException(status.HTTP_409_CONFLICT, "No unreserved Founding Beta capacity is available.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "No unreserved Founding Beta capacity is available."
+        )
     entry = await db.scalar(
-        select(BetaWaitlistEntry).where(
+        select(BetaWaitlistEntry)
+        .where(
             BetaWaitlistEntry.id == body.waitlist_entry_id,
             BetaWaitlistEntry.programme_id == programme.id,
             BetaWaitlistEntry.status == BetaWaitlistStatus.waiting,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That waitlist entry is unavailable.")
@@ -248,21 +400,35 @@ async def invite(
     )
     db.add(invitation)
     entry.status = BetaWaitlistStatus.invited
-    platform_audit(db, request, context, "beta.invitation_created", "beta_invitation", invitation.id, new={"programme": programme.slug})
+    platform_audit(
+        db,
+        request,
+        context,
+        "beta.invitation_created",
+        "beta_invitation",
+        invitation.id,
+        new={"programme": programme.slug},
+    )
     await db.commit()
-    return BetaInviteResponse(invitation_id=invitation.id, token=raw, expires_at=invitation.expires_at.isoformat())
+    return BetaInviteResponse(
+        invitation_id=invitation.id, token=raw, expires_at=invitation.expires_at.isoformat()
+    )
 
 
 @platform_router.post("/invitations/{invitation_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
 async def cancel_invitation(
     invitation_id: uuid.UUID,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> None:
     require_recent_auth(context, settings)
-    invitation = await db.scalar(select(BetaInvitation).where(BetaInvitation.id == invitation_id).with_for_update())
+    invitation = await db.scalar(
+        select(BetaInvitation).where(BetaInvitation.id == invitation_id).with_for_update()
+    )
     if invitation is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That invitation could not be found.")
     invitation.status = BetaInvitationStatus.cancelled
@@ -270,27 +436,37 @@ async def cancel_invitation(
         entry = await db.get(BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True)
         if entry and entry.status == BetaWaitlistStatus.invited:
             entry.status = BetaWaitlistStatus.waiting
-    platform_audit(db, request, context, "beta.invitation_cancelled", "beta_invitation", invitation.id)
+    platform_audit(
+        db, request, context, "beta.invitation_cancelled", "beta_invitation", invitation.id
+    )
     await db.commit()
 
 
-@platform_router.post("/invitations/{invitation_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+@platform_router.post(
+    "/invitations/{invitation_id}/restore", status_code=status.HTTP_204_NO_CONTENT
+)
 async def restore_expired_invitation(
     invitation_id: uuid.UUID,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> None:
     require_recent_auth(context, settings)
-    invitation = await db.scalar(select(BetaInvitation).where(BetaInvitation.id == invitation_id).with_for_update())
+    invitation = await db.scalar(
+        select(BetaInvitation).where(BetaInvitation.id == invitation_id).with_for_update()
+    )
     if invitation is None or invitation.status != BetaInvitationStatus.expired:
         raise HTTPException(status.HTTP_409_CONFLICT, "Only an expired invitation can be restored.")
     if invitation.waitlist_entry_id:
         entry = await db.get(BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True)
         if entry is not None:
             entry.status = BetaWaitlistStatus.waiting
-    platform_audit(db, request, context, "beta.invitation_restored", "beta_invitation", invitation.id)
+    platform_audit(
+        db, request, context, "beta.invitation_restored", "beta_invitation", invitation.id
+    )
     await db.commit()
 
 
@@ -299,22 +475,32 @@ async def set_capacity_exemption(
     home_id: uuid.UUID,
     body: BetaCapacityExemptionUpdate,
     request: Request,
-    context: PlatformContext = Depends(require_roles(PlatformRole.owner, PlatformRole.administrator)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> None:
     require_recent_auth(context, settings)
     programme = await current_programme(db, for_update=True)
-    enrollment = await db.scalar(select(BetaEnrollment).where(
-        BetaEnrollment.programme_id == programme.id,
-        BetaEnrollment.home_id == home_id,
-    ).with_for_update())
+    enrollment = await db.scalar(
+        select(BetaEnrollment)
+        .where(
+            BetaEnrollment.programme_id == programme.id,
+            BetaEnrollment.home_id == home_id,
+        )
+        .with_for_update()
+    )
     if enrollment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home has no Founding Beta enrollment.")
     enrollment.capacity_exempt = body.exempt
     platform_audit(
-        db, request, context, "beta.capacity_exemption_changed", "beta_enrollment", enrollment.id,
+        db,
+        request,
+        context,
+        "beta.capacity_exemption_changed",
+        "beta_enrollment",
+        enrollment.id,
         new={"capacity_exempt": body.exempt, "reason": body.reason},
     )
     await db.commit()
-

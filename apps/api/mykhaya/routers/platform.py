@@ -67,10 +67,10 @@ from mykhaya.models import (
     AdminRecoveryCode,
     AdminWebAuthnCredential,
     AuditEvent,
-    BetaEnrollment,
-    BetaProgramme,
     AuthIdentity,
     BackupRun,
+    BetaEnrollment,
+    BetaProgramme,
     BillingInterval,
     CalendarEvent,
     CalendarEventLabel,
@@ -2865,7 +2865,12 @@ async def user_detail(
     ).all()
     beta_participation = (
         await db.execute(
-            select(BetaProgramme.slug, BetaEnrollment.home_id, BetaEnrollment.terms_version, BetaEnrollment.joined_at)
+            select(
+                BetaProgramme.slug,
+                BetaEnrollment.home_id,
+                BetaEnrollment.terms_version,
+                BetaEnrollment.joined_at,
+            )
             .join(BetaEnrollment, BetaEnrollment.programme_id == BetaProgramme.id)
             .where(BetaEnrollment.joined_user_id == user_id)
         )
@@ -3940,7 +3945,9 @@ async def home_detail(
                 "terms_version": beta_row[0].terms_version,
                 "entitlement_source": subscription.complimentary_source if subscription else None,
                 "capacity_exempt": beta_row[0].capacity_exempt,
-                "complimentary_ultimate": bool(subscription and subscription.complimentary_source == "founding_beta_lifetime"),
+                "complimentary_ultimate": bool(
+                    subscription and subscription.complimentary_source == "founding_beta_lifetime"
+                ),
             }
             if beta_row
             else None

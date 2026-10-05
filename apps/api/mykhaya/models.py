@@ -1511,7 +1511,9 @@ class BetaProgramme(UuidTimeMixin, Base):
 class BetaWaitlistEntry(UuidTimeMixin, Base):
     __tablename__ = "beta_waitlist_entries"
     __table_args__ = (
-        UniqueConstraint("programme_id", "normalized_email", name="uq_beta_waitlist_programme_email"),
+        UniqueConstraint(
+            "programme_id", "normalized_email", name="uq_beta_waitlist_programme_email"
+        ),
         Index("ix_beta_waitlist_programme_status", "programme_id", "status"),
     )
     programme_id: Mapped[uuid.UUID] = mapped_column(
@@ -1543,7 +1545,9 @@ class BetaInvitation(UuidTimeMixin, Base):
     )
     email: Mapped[str] = mapped_column(String(320))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[BetaInvitationStatus] = mapped_column(
         Enum(BetaInvitationStatus, name="beta_invitation_status"),
@@ -1562,8 +1566,12 @@ class BetaEnrollment(UuidTimeMixin, Base):
     __tablename__ = "beta_enrollments"
     __table_args__ = (
         UniqueConstraint("programme_id", "home_id", name="uq_beta_enrollment_programme_home"),
-        UniqueConstraint("programme_id", "joined_user_id", name="uq_beta_enrollment_programme_user"),
-        UniqueConstraint("programme_id", "normalized_email", name="uq_beta_enrollment_programme_email"),
+        UniqueConstraint(
+            "programme_id", "joined_user_id", name="uq_beta_enrollment_programme_user"
+        ),
+        UniqueConstraint(
+            "programme_id", "normalized_email", name="uq_beta_enrollment_programme_email"
+        ),
         Index("ix_beta_enrollment_programme_counted", "programme_id", "capacity_exempt"),
     )
     programme_id: Mapped[uuid.UUID] = mapped_column(
@@ -1577,7 +1585,9 @@ class BetaEnrollment(UuidTimeMixin, Base):
     )
     normalized_email: Mapped[str] = mapped_column(String(320), index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    joined_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    joined_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
     terms_version: Mapped[str] = mapped_column(String(80))
     source_invitation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("beta_invitations.id", ondelete="SET NULL")

@@ -126,8 +126,7 @@ async def evaluate_signup_policy(db: AsyncSession, settings: Settings) -> Signup
     enabled = await registration_enabled(db)
     is_open = enabled and settings.registration_mode != "closed" and mode != SignupMode.closed
     invitation_required = (
-        settings.registration_mode == "invitation_only"
-        or await invite_only_enabled(db)
+        settings.registration_mode == "invitation_only" or await invite_only_enabled(db)
     )
     raw_domains = await get_platform_setting(db, "allowed_registration_domains")
     domains = tuple(
