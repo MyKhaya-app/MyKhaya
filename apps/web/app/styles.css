@@ -32,9 +32,21 @@
 }
 
 .mk-beta-public-list {
+  list-style: none;
   margin: 1.65rem auto;
   max-width: 40rem;
-  text-align: left;
+  padding: 0;
+  text-align: center;
+}
+
+.mk-beta-public-list li {
+  justify-content: center;
+}
+
+.mk-beta-hero .auth-footer {
+  justify-content: center;
+  margin-inline: auto;
+  text-align: center;
 }
 
 .mk-beta-offer-card {

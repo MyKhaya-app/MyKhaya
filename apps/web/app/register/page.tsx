@@ -111,6 +111,7 @@ export default function Register() {
         (document) =>
           document.audience === "adult" &&
           document.acceptance_required &&
+          document.action_verb === "accept" &&
           (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
       );
       const missingLegal = requiredLegal.filter(
@@ -190,6 +191,24 @@ export default function Register() {
     : betaRequested
       ? registrationUnavailableReason(signupState, Boolean(betaInvitation), true)
       : registrationUnavailableReason(signupState, Boolean(invitation));
+  const requiredContractualDocuments = legalDocuments.filter(
+    (document) =>
+      document.audience === "adult" &&
+      document.acceptance_required &&
+      document.action_verb === "accept" &&
+      (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
+  );
+  const sharedBetaTerms = requiredContractualDocuments.find(
+    (document) => document.scope === "founding_beta",
+  );
+  const legacyBetaTermsRequired = betaRequested && !sharedBetaTerms;
+  const contractualAcceptanceComplete =
+    !legalLoading &&
+    !legalLoadFailed &&
+    requiredContractualDocuments.every(
+      (document) => Boolean(document.current_version_id && legalChecked[document.key]),
+    ) &&
+    (!legacyBetaTermsRequired || betaTermsAccepted);
   return (
     <AuthCard
       title="Create your account"
@@ -253,21 +272,19 @@ export default function Register() {
           <fieldset className="auth-legal-consent">
             <legend>Before you create your account</legend>
             <p className="muted">
-              Please review the current documents. The version shown is recorded with your
-              account.
+              Please review the documents that apply to your account.
             </p>
-            {legalDocuments
-              .filter((document) => document.scope === "global" || betaRequested)
-              .map((document) => {
-              const required =
-                document.audience === "adult" &&
-                document.acceptance_required &&
-                (document.scope === "global" || betaRequested);
-              return (
-                <label className="check-row" key={document.key}>
-                  {required && (
+            {requiredContractualDocuments.length > 0 && (
+              <>
+                <p>
+                  <strong>Required contractual acceptance</strong>
+                </p>
+                {requiredContractualDocuments.map((document) => (
+                  <label className="check-row" key={document.key}>
                     <input
                       type="checkbox"
+                      required
+                      aria-label={`I accept the ${document.display_name} (version ${document.current_version ?? "current"})`}
                       checked={legalChecked[document.key] === true}
                       onChange={(event) =>
                         setLegalChecked((current) => ({
@@ -276,25 +293,32 @@ export default function Register() {
                         }))
                       }
                     />
-                  )}
-                  <span>
-                    <Link href={LEGAL_PAGE_BY_KEY[document.key] ?? `/legal/${document.key}`}>
-                      {document.display_name}
-                    </Link>
-                    {document.current_version ? ` · version ${document.current_version}` : ""}
-                    {required
-                      ? document.action_verb === "acknowledge"
-                        ? " (I acknowledge this)"
-                        : " (I accept this)"
-                      : " (please review)"}
-                  </span>
-                </label>
-              );
-              })}
+                    <span>
+                      I accept the{" "}
+                      <Link href={LEGAL_PAGE_BY_KEY[document.key] ?? `/legal/${document.key}`}>
+                        {document.display_name}
+                      </Link>{" "}
+                      (version {document.current_version ?? "current"})
+                    </span>
+                  </label>
+                ))}
+              </>
+            )}
+            <p>
+              <strong>Informational notices</strong>
+            </p>
+            <p className="muted">
+              <Link href="/legal/privacy">Privacy Notice</Link> ·{" "}
+              <Link href="/legal/children">Family &amp; Children&rsquo;s Privacy Notice</Link> ·{" "}
+              <Link href="/legal/cookies">Cookie Policy</Link>
+            </p>
+            <p className="hint">
+              By creating an account, you confirm that these notices have been made available to
+              you.
+            </p>
           </fieldset>
         )}
-        {betaRequested && !unavailableReason &&
-          !legalDocuments.some((document) => document.scope === "founding_beta") && (
+        {betaRequested && !unavailableReason && legacyBetaTermsRequired && (
           <fieldset className="auth-legal-consent">
             <legend>Founding Beta registration</legend>
             <label>
@@ -352,7 +376,9 @@ export default function Register() {
           />
         </label>
         <FormStatus error={error} />
-        <button disabled={busy || Boolean(unavailableReason)}>
+        <button
+          disabled={busy || Boolean(unavailableReason) || !contractualAcceptanceComplete}
+        >
           {busy ? "Creating account…" : "Create account"}
         </button>
       </form>
